@@ -11,11 +11,13 @@ function esc(s: string): string {
 async function ensureInstance(): Promise<DuckDBInstance> {
   if (_instance) return _instance;
   _setupLock ??= (async () => {
-    // Set token in env so MotherDuck extension picks it up at LOAD time.
+    // DuckDB reads HOME at instance-creation time to set home_directory.
+    // Vercel/Lambda don't set $HOME, so default it to /tmp before the
+    // instance is created — this covers both manual LOAD and autoload
+    // (cached extensions in /tmp trigger autoload on warm starts before
+    // any SET home_directory SQL can run).
+    process.env["HOME"] = process.env["HOME"] || "/tmp";
     process.env["motherduck_token"] = env.MOTHERDUCK_TOKEN;
-    // Use :memory: so we can SET home_directory via SQL before MotherDuck
-    // loads — the md: path auto-loads the extension before we get a chance
-    // to SET home_directory, which fails on Vercel/Lambda (no $HOME).
     const inst = await DuckDBInstance.create(":memory:");
     const c = await inst.connect();
     try {

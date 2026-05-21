@@ -24,6 +24,7 @@ async function ensureInstance(): Promise<DuckDBInstance> {
       await c.run(`SET home_directory='/tmp';`);
       await c.run(`INSTALL motherduck;`);
       await c.run(`LOAD motherduck;`);
+      await c.run(`ATTACH 'md:${esc(env.MOTHERDUCK_DATABASE)}' AS "${esc(env.MOTHERDUCK_DATABASE)}";`);
     } finally {
       c.closeSync();
     }

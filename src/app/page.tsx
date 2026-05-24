@@ -122,6 +122,8 @@ export default function HomePage() {
           </section>
           )}
 
+          <McpSetup />
+
           <section>
             <div className="flex items-baseline justify-between mb-3">
               <h2 className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">
@@ -161,6 +163,70 @@ export default function HomePage() {
         </>
       )}
     </main>
+  );
+}
+
+function Copyable({ value, multiline }: { value: string; multiline?: boolean }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="relative">
+      <pre className={`text-xs bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded p-2 overflow-auto ${multiline ? "whitespace-pre" : "whitespace-pre-wrap break-all"}`}>
+        {value}
+      </pre>
+      <button
+        onClick={async () => { await navigator.clipboard.writeText(value); setCopied(true); setTimeout(() => setCopied(false), 1200); }}
+        className="absolute top-1.5 right-1.5 text-[10px] px-2 py-0.5 rounded bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700"
+      >
+        {copied ? "copied" : "copy"}
+      </button>
+    </div>
+  );
+}
+
+function McpSetup() {
+  const [origin, setOrigin] = useState("");
+  useEffect(() => { setOrigin(window.location.origin); }, []);
+  const mcpUrl = `${origin || "https://malloyyo.vercel.app"}/mcp`;
+
+  return (
+    <section className="border border-gray-200 dark:border-gray-800 rounded p-4 space-y-4">
+      <h2 className="text-sm font-semibold">Connect to Claude</h2>
+
+      <div className="space-y-1">
+        <p className="text-xs text-gray-500 dark:text-gray-400">Your MCP server URL</p>
+        <Copyable value={mcpUrl} />
+      </div>
+
+      <div className="space-y-2 text-xs text-gray-700 dark:text-gray-300">
+        <p className="font-medium">claude.ai (web)</p>
+        <ol className="list-decimal list-inside space-y-1 text-gray-600 dark:text-gray-400">
+          <li>Go to <strong>claude.ai</strong> → Settings → Integrations</li>
+          <li>Click <strong>Add MCP server</strong> and paste the URL above</li>
+          <li>claude.ai will open a Google sign-in → grant access on the consent page</li>
+          <li>Done — malloyyo tools appear in every new conversation</li>
+        </ol>
+      </div>
+
+      <div className="space-y-2 text-xs text-gray-700 dark:text-gray-300">
+        <p className="font-medium">Anthropic Console (Workbench)</p>
+        <ol className="list-decimal list-inside space-y-1 text-gray-600 dark:text-gray-400">
+          <li>Go to <strong>console.anthropic.com</strong> → Workbench</li>
+          <li>In the right panel, click <strong>MCP Servers → Add server</strong></li>
+          <li>Paste the URL above and follow the OAuth sign-in flow</li>
+        </ol>
+      </div>
+
+      <div className="space-y-2 text-xs text-gray-700 dark:text-gray-300">
+        <p className="font-medium">Claude Code (CLI)</p>
+        <Copyable value={`claude mcp add malloyyo --transport http ${mcpUrl}`} />
+        <p className="text-gray-500 dark:text-gray-400">Run the command above, then follow the browser OAuth flow.</p>
+      </div>
+
+      <div className="text-xs text-gray-500 dark:text-gray-400">
+        Available tools: <code>list_datasets</code>, <code>describe_semantic_model</code>,{" "}
+        <code>sample_rows</code>, <code>compile_analytical_query</code>, <code>run_analytical_query</code>
+      </div>
+    </section>
   );
 }
 

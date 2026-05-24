@@ -1,4 +1,5 @@
-import { getUserBySlug } from "@/lib/getUserBySlug";
+import { db, users } from "@/db";
+import { eq } from "drizzle-orm";
 import { TOOL_DESCRIPTORS, callTool } from "@/lib/mcp-tools";
 import { recordAccessTokenUse, validateAccessToken } from "@/lib/oauth/tokens";
 import { corsPreflight, withCors } from "@/lib/oauth/cors";
@@ -40,11 +41,7 @@ function unauthorized(description: string, request: Request): Response {
 const PROTOCOL_VERSION = "2025-03-26";
 const SERVER_INFO = { name: "malloyyo", version: "0.1.0" };
 
-export async function POST(req: Request, ctx: RouteContext<"/mcp/[slug]">) {
-  const { slug } = await ctx.params;
-  const user = await getUserBySlug(slug);
-  if (!user) return withCors(Response.json({ error: "invalid slug" }, { status: 404 }));
-
+export async function POST(req: Request) {
   const authHeader = req.headers.get("authorization");
   if (!authHeader || !authHeader.toLowerCase().startsWith("bearer ")) {
     return unauthorized("Missing Bearer token. OAuth against this server to obtain one.", req);
@@ -52,12 +49,10 @@ export async function POST(req: Request, ctx: RouteContext<"/mcp/[slug]">) {
   const raw = authHeader.slice(7).trim();
   const validated = await validateAccessToken(raw);
   if (!validated.ok) return unauthorized("Invalid or revoked token", req);
-  if (validated.userId !== user.id) {
-    return withCors(new Response(
-      JSON.stringify({ error: "forbidden", error_description: "Token does not match this endpoint's owner." }),
-      { status: 403, headers: { "Content-Type": "application/json" } },
-    ));
-  }
+
+  // Identify user from the token — no slug needed.
+  const [user] = await db.select().from(users).where(eq(users.id, validated.userId)).limit(1);
+  if (!user) return unauthorized("Token user not found", req);
 
   // Fire-and-forget last_used_at update.
   void recordAccessTokenUse(validated.tokenHash);

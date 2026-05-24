@@ -35,14 +35,12 @@ const STAGE_INFO: Record<string, { label: string; detail: string }> = {
       "Workflow is about to start — usually picks up within a couple seconds.",
   },
   ingesting: {
-    label: "Streaming the file into blob storage",
-    detail:
-      "Pulling from the source URL straight into Cloudflare R2. A 50 MiB Parquet finishes in ~10–30s.",
+    label: "Loading into MotherDuck",
+    detail: "Pulling from the source URL directly into MotherDuck. Larger files take longer.",
   },
   introspecting: {
     label: "Reading the schema with DuckDB",
-    detail:
-      "Running DESCRIBE and pulling 50 sample rows directly from the Parquet on R2 — no full scan.",
+    detail: "Running DESCRIBE and pulling 50 sample rows — no full scan.",
   },
   modeling: {
     label: "Asking Claude to author a Malloy model",
@@ -51,8 +49,7 @@ const STAGE_INFO: Record<string, { label: string; detail: string }> = {
   },
   ready: {
     label: "Ready",
-    detail:
-      "Your dataset is live and queryable through the MCP endpoint below.",
+    detail: "Your dataset is live and queryable via the MCP server.",
   },
   failed: {
     label: "Failed",
@@ -136,10 +133,6 @@ export default function DatasetPage({
             {data.statusError}
           </pre>
         </section>
-      )}
-
-      {data.status === "ready" && data.userSlug && (
-        <McpPanel slug={data.userSlug} datasetName={data.name} />
       )}
 
       {data.schema && (
@@ -355,97 +348,5 @@ function StatusBadge({ status }: { status: string }) {
     <span className={`inline-block px-2 py-0.5 rounded text-xs ${color}`}>
       {status}
     </span>
-  );
-}
-
-function McpPanel({ slug, datasetName }: { slug: string; datasetName: string }) {
-  const [origin, setOrigin] = useState("");
-  useEffect(() => {
-    setOrigin(window.location.origin);
-  }, []);
-  const url = origin ? `${origin}/mcp/${slug}` : `/mcp/${slug}`;
-
-  const claudeConfig = JSON.stringify(
-    {
-      mcpServers: {
-        malloyyo: { url },
-      },
-    },
-    null,
-    2,
-  );
-
-  const curlExample = `curl -s -X POST ${url} \\
-  -H 'content-type: application/json' \\
-  -d '{
-    "jsonrpc": "2.0", "id": 1, "method": "tools/call",
-    "params": {
-      "name": "run_analytical_query",
-      "arguments": {
-        "dataset": "${datasetName}",
-        "malloy": "run: ${datasetName} -> { aggregate: row_count is count() }"
-      }
-    }
-  }'`;
-
-  return (
-    <section className="border border-green-300 dark:border-green-800 bg-green-50/50 dark:bg-green-950/20 rounded p-4 space-y-3">
-      <h2 className="text-sm font-semibold">How to use this</h2>
-
-      <div>
-        <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">
-          Your MCP endpoint
-        </div>
-        <Copyable value={url} />
-      </div>
-
-      <div>
-        <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">
-          Add to Claude Desktop ({" "}
-          <code className="text-[10px]">
-            ~/Library/Application Support/Claude/claude_desktop_config.json
-          </code>{" "}
-          )
-        </div>
-        <Copyable value={claudeConfig} multiline />
-      </div>
-
-      <div>
-        <div className="text-xs text-gray-500 dark:text-gray-400 mb-1">
-          Or test from a terminal
-        </div>
-        <Copyable value={curlExample} multiline />
-      </div>
-
-      <div className="text-xs text-gray-500 dark:text-gray-400">
-        Tools available on this endpoint:{" "}
-        <code>list_datasets</code>, <code>describe_semantic_model</code>,{" "}
-        <code>sample_rows</code>, <code>compile_analytical_query</code>,{" "}
-        <code>run_analytical_query</code>.
-      </div>
-    </section>
-  );
-}
-
-function Copyable({ value, multiline }: { value: string; multiline?: boolean }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <div className="relative">
-      <pre
-        className={`text-xs bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded p-2 overflow-auto ${multiline ? "whitespace-pre" : "whitespace-pre-wrap break-all"}`}
-      >
-        {value}
-      </pre>
-      <button
-        onClick={async () => {
-          await navigator.clipboard.writeText(value);
-          setCopied(true);
-          setTimeout(() => setCopied(false), 1200);
-        }}
-        className="absolute top-1.5 right-1.5 text-[10px] px-2 py-0.5 rounded bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700"
-      >
-        {copied ? "copied" : "copy"}
-      </button>
-    </div>
   );
 }

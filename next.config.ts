@@ -26,7 +26,7 @@ const nextConfig: NextConfig = {
   // Include all routes that transitively import @duckdb/node-api or
   // @malloydata/db-duckdb (which wraps @duckdb/node-api).
   outputFileTracingIncludes: {
-    "/mcp/[slug]": [
+    "/mcp": [
       "./node_modules/@duckdb/node-bindings*/**/*",
     ],
     "/.well-known/workflow/v1/step": [

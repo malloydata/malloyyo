@@ -1,4 +1,4 @@
-import { eq, and, desc } from "drizzle-orm";
+import { eq, and, desc, or } from "drizzle-orm";
 import { db, datasets, malloyModels, queries, type User } from "@/db";
 import { compileMalloy, runMalloy } from "./malloy";
 import { sampleTable } from "./duckdb";
@@ -98,7 +98,7 @@ async function listUserDatasets(userId: string) {
       readyAt: datasets.readyAt,
     })
     .from(datasets)
-    .where(eq(datasets.userId, userId));
+    .where(or(eq(datasets.userId, userId), eq(datasets.isPublic, true)));
 }
 
 async function findDataset(userId: string, name: string) {
@@ -107,7 +107,7 @@ async function findDataset(userId: string, name: string) {
   const rows = await db
     .select()
     .from(datasets)
-    .where(and(eq(datasets.userId, userId), eq(datasets.name, name)))
+    .where(and(or(eq(datasets.userId, userId), eq(datasets.isPublic, true)), eq(datasets.name, name)))
     .orderBy(desc(datasets.createdAt));
   return rows.find((r) => r.status === "ready") ?? rows[0];
 }

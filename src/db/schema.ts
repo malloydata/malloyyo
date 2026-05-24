@@ -31,6 +31,7 @@ export const users = pgTable("users", {
   email: text("email").unique(),
   emailVerified: timestamp("email_verified", { withTimezone: true, mode: "date" }),
   image: text("image"),
+  isAdmin: boolean("is_admin").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .default(sql`now()`),
@@ -105,6 +106,7 @@ export const datasets = pgTable(
     sourceUrl: text("source_url").notNull(),
     mdTable: text("md_table").notNull(),
     rowCount: integer("row_count"),
+    isPublic: boolean("is_public").notNull().default(false),
     status: datasetStatus("status").notNull().default("pending"),
     statusError: text("status_error"),
     schemaJson: jsonb("schema_json"),

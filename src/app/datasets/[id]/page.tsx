@@ -14,11 +14,13 @@ type DatasetDetail = {
   sourceUrl: string;
   status: string;
   statusError: string | null;
-  sizeBytes: number | null;
+  rowCount: number | null;
   createdAt: string;
   readyAt: string | null;
   workflowRunId: string | null;
   userSlug: string | null;
+  isPublic: boolean;
+  isAdmin: boolean;
   schema: Array<{ name: string; type: string; nullable: boolean }> | null;
   sampleRows: Record<string, unknown>[] | null;
   malloyModel: { source: string; generatedBy: string; compiledAt: string } | null;
@@ -91,17 +93,15 @@ export default function DatasetPage({
 
   return (
     <main className="mx-auto max-w-4xl px-6 py-10 font-mono text-sm space-y-6">
-      <header>
-        <Link
-          href="/"
-          className="text-xs text-gray-500 dark:text-gray-400 hover:underline"
-        >
-          ← all datasets
-        </Link>
-        <h1 className="text-xl font-bold mt-2">{data.name}</h1>
-        <p className="text-gray-500 dark:text-gray-400 break-all">
-          {data.sourceUrl}
-        </p>
+      <header className="flex items-start justify-between gap-4">
+        <div>
+          <Link href="/" className="text-xs text-gray-500 dark:text-gray-400 hover:underline">← all datasets</Link>
+          <h1 className="text-xl font-bold mt-2">{data.name}</h1>
+          <p className="text-gray-500 dark:text-gray-400 break-all">{data.sourceUrl}</p>
+        </div>
+        {data.isAdmin && (
+          <VisibilityToggle datasetId={data.id} initialIsPublic={data.isPublic} />
+        )}
       </header>
 
       <section className="border border-gray-200 dark:border-gray-800 rounded p-4 space-y-2">
@@ -117,12 +117,8 @@ export default function DatasetPage({
       </section>
 
       <section className="grid grid-cols-[140px_1fr] gap-y-1 text-xs">
-        <span className="text-gray-500 dark:text-gray-400">size</span>
-        <span>
-          {data.sizeBytes
-            ? `${(data.sizeBytes / 1024 / 1024).toFixed(2)} MiB`
-            : "—"}
-        </span>
+        <span className="text-gray-500 dark:text-gray-400">rows</span>
+        <span>{data.rowCount ? data.rowCount.toLocaleString() : "—"}</span>
         <span className="text-gray-500 dark:text-gray-400">workflow</span>
         <span className="break-all">{data.workflowRunId ?? "—"}</span>
         <span className="text-gray-500 dark:text-gray-400">created</span>
@@ -315,6 +311,36 @@ function MalloyEditor({
         </div>
       )}
     </section>
+  );
+}
+
+function VisibilityToggle({ datasetId, initialIsPublic }: { datasetId: string; initialIsPublic: boolean }) {
+  const [isPublic, setIsPublic] = useState(initialIsPublic);
+  const [busy, setBusy] = useState(false);
+
+  async function toggle() {
+    setBusy(true);
+    const res = await fetch(`/api/datasets/${datasetId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ isPublic: !isPublic }),
+    });
+    if (res.ok) setIsPublic(!isPublic);
+    setBusy(false);
+  }
+
+  return (
+    <button
+      onClick={toggle}
+      disabled={busy}
+      className={`text-xs px-3 py-1.5 rounded border disabled:opacity-50 whitespace-nowrap ${
+        isPublic
+          ? "border-blue-300 dark:border-blue-700 text-blue-700 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/20"
+          : "border-gray-300 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-900"
+      }`}
+    >
+      {busy ? "saving…" : isPublic ? "public — make private" : "private — make public"}
+    </button>
   );
 }
 

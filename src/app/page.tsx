@@ -14,6 +14,9 @@ type DatasetSummary = {
   rowCount: number | null;
   createdAt: string;
   readyAt: string | null;
+  isPublic: boolean;
+  ownerEmail?: string | null;
+  ownerName?: string | null;
 };
 
 type Me = {
@@ -22,6 +25,7 @@ type Me = {
   email: string | null;
   image: string | null;
   slug: string | null;
+  isAdmin: boolean;
 };
 
 export default function HomePage() {
@@ -86,13 +90,14 @@ export default function HomePage() {
 
       {!me ? (
         <section className="border border-gray-200 dark:border-gray-800 rounded p-6 text-center space-y-3">
-          <p className="text-gray-700 dark:text-gray-300">Sign in with Google to ingest your first dataset.</p>
+          <p className="text-gray-700 dark:text-gray-300">Sign in with Google to view datasets.</p>
           <a href="/api/auth/signin" className="inline-block rounded bg-black text-white dark:bg-white dark:text-black px-4 py-2">
             Sign in with Google
           </a>
         </section>
       ) : (
         <>
+          {me.isAdmin && (
           <section>
             <h2 className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-3">1 — Ingest a dataset</h2>
             <form onSubmit={onSubmit} className="space-y-4">
@@ -115,16 +120,19 @@ export default function HomePage() {
               {error && <pre className="text-red-600 dark:text-red-400 text-xs whitespace-pre-wrap mt-2">{error}</pre>}
             </form>
           </section>
+          )}
 
           <section>
             <div className="flex items-baseline justify-between mb-3">
-              <h2 className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">2 — Your datasets</h2>
+              <h2 className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">
+                {me.isAdmin ? "All datasets" : "Public datasets"}
+              </h2>
               <button onClick={load} className="text-xs text-gray-500 dark:text-gray-400 hover:underline">refresh</button>
             </div>
             {datasets === null ? (
               <p className="text-gray-500 dark:text-gray-400 text-xs">loading…</p>
             ) : datasets.length === 0 ? (
-              <p className="text-gray-500 dark:text-gray-400 text-xs">No datasets yet. Submit one above.</p>
+              <p className="text-gray-500 dark:text-gray-400 text-xs">No datasets yet.</p>
             ) : (
               <ul className="border border-gray-200 dark:border-gray-800 rounded divide-y divide-gray-200 dark:divide-gray-800">
                 {datasets.map((d) => (
@@ -132,8 +140,16 @@ export default function HomePage() {
                     <Link href={`/datasets/${d.id}`}
                       className="flex items-center justify-between gap-3 px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-900/50">
                       <span className="flex-1 truncate">{d.name}</span>
+                      {me.isAdmin && (d.ownerEmail || d.ownerName) && (
+                        <span className="text-gray-400 dark:text-gray-500 text-xs truncate max-w-[160px]">
+                          {d.ownerEmail ?? d.ownerName}
+                        </span>
+                      )}
                       <span className="text-gray-500 dark:text-gray-400 text-xs">
                         {d.rowCount ? `${d.rowCount.toLocaleString()} rows` : "—"}
+                      </span>
+                      <span className={`text-xs px-1.5 py-0.5 rounded ${d.isPublic ? "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300" : "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400"}`}>
+                        {d.isPublic ? "public" : "private"}
                       </span>
                       <StatusBadge status={d.status} />
                     </Link>

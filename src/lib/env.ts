@@ -20,7 +20,11 @@ export const env = {
   get APP_BASE_URL() {
     return process.env.APP_BASE_URL ?? "http://localhost:3000";
   },
-  get APP_SECRET() {
-    return required("APP_SECRET");
+  // Comma-separated list of Google emails that are automatically admins.
+  get APP_ADMIN_EMAILS(): string[] {
+    return (process.env.APP_ADMIN_EMAILS ?? "")
+      .split(",")
+      .map((e) => e.trim().toLowerCase())
+      .filter(Boolean);
   },
 };

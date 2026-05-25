@@ -1,95 +1,113 @@
-# mayolo
+# malloyyo
 
-Point at a Parquet file. Get a Malloy MCP endpoint.
+Point at a dataset. Get a Malloy MCP endpoint.
 
-This tag (`minimal-core`) is the elegant vertical slice before any auth,
-multi-table, or hill-climb code landed. It's what mayolo does in its smallest
-runnable form, and the easiest version to read.
+Malloyyo ingests data into MotherDuck, asks Claude to write a [Malloy](https://malloydata.dev) semantic model, and exposes the result as a personal MCP server — so any MCP-capable AI (Claude Desktop, claude.ai, etc.) can run structured analytical queries against your data.
 
 ## How it works
 
 ```
-                          ┌──────────────────────────────┐
-                          │   Vercel Workflow DevKit     │
-                          │   durable · retryable · resumable
-                          └──────────────────────────────┘
-                                       │
-              ┌──────────┬─────────────┼─────────────┬──────────────┐
-              ▼          ▼             ▼             ▼              ▼
-        ┌─────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐
-   URL  │ download│  │introspect│  │  model   │  │  finish  │  │  serve   │
-   ───▶ │  → R2   │─▶│  DuckDB  │─▶│  Claude  │─▶│  insert  │─▶│   MCP    │
-        │ stream  │  │ describe │  │  writes  │  │  malloy  │  │  /mcp/   │
-        │         │  │ + sample │  │  Malloy  │  │  model   │  │  <slug>  │
-        └─────────┘  └──────────┘  └──────────┘  └──────────┘  └──────────┘
-             │            │             │             │              │
-       Cloudflare R2  DuckDB reads   Anthropic    Postgres        JSON-RPC
-       (S3-compat)    parquet over   Claude       (datasets,      MCP server
-                      HTTPS, no      Opus 4.7     malloy_models)  with 5 tools
-                      full scan
+                    ┌─────────────────────────────────────────────────┐
+                    │                 Three ways in                   │
+                    │                                                 │
+                    │  1. Ingest from URL (Parquet / CSV)             │
+                    │  2. Load Malloy model from GitHub repo          │
+                    │  3. Build model from existing MotherDuck table  │
+                    └────────────────────┬────────────────────────────┘
+                                         │
+                    ┌────────────────────▼────────────────────────────┐
+                    │           Vercel Workflow (durable)             │
+                    │     load → introspect → model → ready           │
+                    └──────┬────────────────┬───────────────┬─────────┘
+                           │                │               │
+                    ┌──────▼──────┐  ┌──────▼──────┐  ┌────▼────────┐
+                    │  MotherDuck │  │    Claude   │  │    Neon     │
+                    │  (DuckDB   │  │  Opus 4.7   │  │  Postgres   │
+                    │   cloud)   │  │  writes     │  │  metadata   │
+                    │            │  │  Malloy     │  │             │
+                    │ analytical │  │  model      │  │ datasets    │
+                    │ data store │  │             │  │ malloy_     │
+                    │ + queries  │  └─────────────┘  │   models    │
+                    └─────────────┘                  │ users       │
+                           │                         │ oauth_*     │
+                           └──────────────┬──────────┘
+                                          │
+                    ┌─────────────────────▼───────────────────────────┐
+                    │              MCP server  /mcp                   │
+                    │         OAuth 2.1 · 5 analytical tools          │
+                    └─────────────────────────────────────────────────┘
 ```
 
-Each stage is its own `"use step"` function in `src/workflows/ingest.ts`. If
-any step fails, the workflow retries it. If the process dies, the workflow
-resumes where it left off on the next deploy.
+### Adding datasets
 
-## The MCP tools served at `/mcp/<user-slug>`
+**Ingest from URL** — paste a Parquet or CSV URL. A durable Vercel Workflow downloads it into MotherDuck, describes the schema, samples rows, and asks Claude to write a Malloy semantic model (up to 3 compile attempts). The dataset is ready when the model compiles.
 
-| Tool                       | What it does                                          |
-| -------------------------- | ----------------------------------------------------- |
-| `list_datasets`            | Names + schema summaries for every dataset on this endpoint. |
-| `describe_semantic_model`  | The Malloy `source:` declaration for a dataset.       |
-| `sample_rows`              | Up to 200 raw rows straight from R2/Parquet.          |
-| `compile_analytical_query` | Compile a Malloy snippet → SQL (no execution).        |
-| `run_analytical_query`     | Compile + run; return rows.                           |
+**Add from GitHub** — point at a GitHub repo that has an `index.malloy` at its root. Malloyyo fetches the file (and any imports it references), compiles the model, and stores all files. A webhook endpoint (`/api/datasets/<id>/webhook/github`) lets GitHub trigger an automatic refresh on every push.
 
-Point Claude Desktop at the URL and it'll see all five.
+**Build from existing table** — browse tables already in your MotherDuck database, expand their columns, and ask Claude to write a Malloy model. Same modeling pipeline as URL ingest, just skips the download step.
 
-## Suggested reading order
+### The two databases
 
-1. **`src/workflows/ingest.ts`** — the four-step durable workflow.
-2. **`src/lib/claude.ts`** — the Malloy-authoring prompt. The system prompt
-   teaches Claude the non-obvious Malloy syntax (pick/when, no SQL casts,
-   time functions) so models compile on the first try more often than not.
-3. **`src/lib/duckdb.ts`** — schema + samples without a full scan; how
-   DuckDB is wired up to read R2 over HTTPS (and why `SET s3_*` instead of
-   `CREATE SECRET`).
-4. **`src/lib/mcp-tools.ts`** + **`src/app/mcp/[slug]/route.ts`** — the MCP
-   server. Tools are pure functions; the route is a thin JSON-RPC dispatcher.
+| Database | What lives there |
+|---|---|
+| **MotherDuck** (DuckDB cloud) | The actual data — every ingested table lives here, queryable at sub-second latency from Vercel functions via the DuckDB native extension |
+| **Neon Postgres** | Metadata — `datasets`, `malloy_models`, `malloy_model_files`, `users`, `accounts`, `sessions`, OAuth clients and tokens |
 
-## Running it
+### MCP tools served at `/mcp`
 
-You'll need:
+| Tool | What it does |
+|---|---|
+| `list_datasets` | Names, schema summaries, and source names for every dataset |
+| `describe_semantic_model` | The full Malloy source for a dataset |
+| `sample_rows` | Up to 200 raw rows from MotherDuck |
+| `compile_analytical_query` | Compile a Malloy snippet → SQL (no execution) |
+| `run_analytical_query` | Compile + run; return rows |
 
-- **Postgres** (Neon works; any postgres does) for state.
-- **Cloudflare R2** (or any S3-compatible store) for parquet bytes.
-- **An Anthropic API key** for Claude.
+The MCP endpoint speaks OAuth 2.1, so claude.ai's remote MCP integration can connect after a one-time authorization flow.
 
-Then:
+## Stack
+
+- **Next.js 16** App Router
+- **Vercel Workflow** — durable, retryable ingest pipeline
+- **MotherDuck** — cloud DuckDB; analytical data storage and query engine
+- **Neon Postgres** + **DrizzleORM** — metadata and auth state
+- **Malloy** (`@malloydata/malloy` + `@malloydata/db-duckdb`) — semantic layer
+- **Claude Opus 4.7** — Malloy model authoring
+- **NextAuth v5** + **Google OAuth** — user authentication
+- **OAuth 2.1 provider** — MCP authorization for claude.ai
+
+## Running locally
+
+Required `.env.local` vars:
+
+```bash
+DATABASE_URL=postgresql://...          # Neon (or any Postgres)
+MOTHERDUCK_TOKEN=...                   # MotherDuck personal token (not read_scaling)
+MOTHERDUCK_DATABASE=malloyyo           # Must be an existing MotherDuck database
+AI_GATEWAY_API_KEY=sk-ant-...          # Anthropic API key
+APP_BASE_URL=http://localhost:3000
+APP_SECRET=...                         # Shared secret for the login page
+AUTH_GOOGLE_ID=...                     # Google OAuth client ID
+AUTH_GOOGLE_SECRET=...                 # Google OAuth client secret
+# GITHUB_TOKEN=github_pat_...          # Optional; needed for private repos
+```
+
+> **MotherDuck gotcha:** the lowercase `motherduck_token` shell env var must NOT be set — it overrides and conflicts with `MOTHERDUCK_TOKEN`.
 
 ```bash
 pnpm install
-cp .env.example .env.local   # fill in the blanks
-pnpm dev                     # starts Next + Workflow DevKit in dev mode
+cp .env.local.example .env.local   # fill in the blanks
+npx dotenv-cli -e .env.local -- npx drizzle-kit push   # first run only
+npx dotenv-cli -e .env.local -- npm run dev
 ```
 
-Open <http://localhost:3000>, paste a Parquet URL, watch the workflow run.
+Open <http://localhost:3000>.
 
-If you don't want to click around, `scripts/e2e.ts` ingests a NYC taxi
-parquet end-to-end and prints what the MCP endpoint would serve — no UI or
-auth setup required.
+## Suggested reading order
 
-## What's intentionally absent at this tag
-
-- **One Parquet URL per dataset.** Multi-table support came after.
-- **No user accounts.** Slugs are namespaces; anyone with the MCP URL can
-  query it.
-- **No OAuth.** mayolo doesn't act as an OAuth provider yet. That scaffold
-  is what makes `main` substantially more code than this tag.
-- **No retries beyond the workflow's.** If Claude's first Malloy doesn't
-  compile, the workflow retries the model step up to 3 times.
-
-See `main` for the full version: multi-table datasets, CSV ingest, an
-inline Malloy editor (CodeMirror), Google sign-in, MCP-as-OAuth-provider
-for claude.ai integration, SSRF protection, and a hill-climb "model
-laboratory" that hill-climbs the Malloy model against a probe bank.
+1. **`src/workflows/ingest.ts`** — the four-step durable workflow (load → introspect → model → finish).
+2. **`src/lib/claude.ts`** — the Malloy-authoring prompt. Teaches Claude non-obvious Malloy syntax so models compile on the first try more often than not.
+3. **`src/lib/duckdb.ts`** — MotherDuck connection, table creation, schema description, sampling, and table listing.
+4. **`src/lib/github.ts`** + **`src/lib/github-refresh.ts`** — GitHub model loading and webhook-triggered refresh.
+5. **`src/lib/mcp-tools.ts`** + **`src/app/mcp/route.ts`** — the MCP server. Tools are pure functions; the route is a JSON-RPC dispatcher.
+6. **`src/lib/malloy.ts`** — single-file and multi-file Malloy compilation and execution via `InMemoryURLReader`.

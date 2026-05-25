@@ -1,18 +1,27 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { eq, desc, or } from "drizzle-orm";
-import { db, datasets, users } from "@/db";
+import { eq, desc } from "drizzle-orm";
+import { db, datasets, malloyModels, malloyModelFiles, users } from "@/db";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
 import { nameToSlug } from "@/lib/slug";
 import { start } from "workflow/api";
 import { ingestDataset } from "@/workflows/ingest";
+import { GitHubURLReader, parseGitHubRepo } from "@/lib/github";
+import { introspectModelWithReader } from "@/lib/malloy";
 
 export const runtime = "nodejs";
 
-const Body = z.object({
+const IngestBody = z.object({
   sourceUrl: z.url(),
   name: z.string().min(1).max(64).optional(),
+});
+
+const GitHubBody = z.object({
+  githubRepo: z.string().min(1),
+  githubBranch: z.string().min(1).default("main"),
+  name: z.string().min(1).max(64),
+  useToken: z.boolean().default(true),
 });
 
 function deriveNameFromUrl(url: string): string {
@@ -33,7 +42,68 @@ export async function POST(req: Request) {
   }
   if (!isAdmin(user)) return NextResponse.json({ error: "admin required" }, { status: 403 });
 
-  const body = Body.parse(await req.json());
+  const raw = await req.json();
+
+  // GitHub path: { githubRepo, githubBranch, name }
+  if (raw && typeof raw === "object" && "githubRepo" in raw) {
+    const body = GitHubBody.parse(raw);
+    const name = nameToSlug(body.name);
+    const { owner, repo } = parseGitHubRepo(body.githubRepo);
+    const branch = body.githubBranch;
+
+    const id = crypto.randomUUID();
+    const [row] = await db
+      .insert(datasets)
+      .values({
+        id,
+        userId: user.id,
+        name,
+        sourceUrl: `https://github.com/${body.githubRepo}/tree/${branch}`,
+        mdTable: "",
+        githubRepo: body.githubRepo,
+        githubBranch: branch,
+        githubUseToken: body.useToken,
+        status: "modeling",
+      })
+      .returning();
+
+    const reader = new GitHubURLReader(owner, repo, branch, body.useToken);
+    const result = await introspectModelWithReader(reader, "index.malloy");
+
+    if (!result.ok) {
+      await db.update(datasets).set({ status: "failed", statusError: result.error }).where(eq(datasets.id, id));
+      return NextResponse.json({ id: row.id, error: result.error, status: "failed" }, { status: 422 });
+    }
+
+    const indexContent = reader.fetched.get("index.malloy") ?? "";
+    const [model] = await db
+      .insert(malloyModels)
+      .values({
+        datasetId: id,
+        version: 1,
+        source: indexContent,
+        generatedBy: `github:${body.githubRepo}@${branch}`,
+        compiledAt: new Date(),
+        sources: result.sources,
+      })
+      .returning();
+
+    if (reader.fetched.size > 0) {
+      await db.insert(malloyModelFiles).values(
+        Array.from(reader.fetched.entries()).map(([path, content]) => ({
+          modelId: model.id,
+          path,
+          content,
+        })),
+      );
+    }
+
+    await db.update(datasets).set({ status: "ready", readyAt: new Date() }).where(eq(datasets.id, id));
+    return NextResponse.json({ id: row.id, name, status: "ready", sources: result.sources });
+  }
+
+  // Ingest path: { sourceUrl, name? }
+  const body = IngestBody.parse(raw);
   const name = nameToSlug(body.name ?? deriveNameFromUrl(body.sourceUrl));
   const id = crypto.randomUUID();
   const mdTable = `${name}_${id.slice(0, 8)}`;
@@ -48,7 +118,7 @@ export async function POST(req: Request) {
 
   return NextResponse.json({
     id: row.id, name: row.name, sourceUrl: row.sourceUrl, status: row.status,
-    runId: run.runId, userSlug: user.slug, mcpUrl: `/mcp/${user.slug}`,
+    runId: run.runId, userSlug: user.slug,
   });
 }
 
@@ -56,7 +126,6 @@ export async function GET() {
   let user;
   try { user = await getSessionUser(); } catch (err) {
     if (err instanceof UnauthorizedError) {
-      // Unauthenticated: return public datasets only (no owner info).
       const rows = await db
         .select({ id: datasets.id, name: datasets.name, sourceUrl: datasets.sourceUrl,
           status: datasets.status, rowCount: datasets.rowCount,
@@ -68,7 +137,6 @@ export async function GET() {
   }
 
   if (isAdmin(user)) {
-    // Admins see all datasets with owner email.
     const rows = await db
       .select({
         id: datasets.id, name: datasets.name, sourceUrl: datasets.sourceUrl,
@@ -84,7 +152,6 @@ export async function GET() {
     return NextResponse.json(rows);
   }
 
-  // Regular users: see public datasets only.
   const rows = await db
     .select({ id: datasets.id, name: datasets.name, sourceUrl: datasets.sourceUrl,
       status: datasets.status, rowCount: datasets.rowCount,

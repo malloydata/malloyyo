@@ -1,6 +1,6 @@
 import { eq, and, desc, or } from "drizzle-orm";
-import { db, datasets, malloyModels, queries, type User } from "@/db";
-import { compileMalloy, runMalloy } from "./malloy";
+import { db, datasets, malloyModels, malloyModelFiles, queries, type User } from "@/db";
+import { compileMalloy, runMalloy, compileMalloyFiles, runMalloyFiles } from "./malloy";
 import { sampleTable } from "./duckdb";
 
 export type ToolDescriptor = {
@@ -122,6 +122,19 @@ async function latestModel(datasetId: string) {
   return row;
 }
 
+// Returns the file map for a model. For GitHub multi-file models returns all
+// fetched files; for Claude single-file models returns {index.malloy: source}.
+async function modelFileMap(model: { id: string; source: string }): Promise<Map<string, string>> {
+  const files = await db
+    .select({ path: malloyModelFiles.path, content: malloyModelFiles.content })
+    .from(malloyModelFiles)
+    .where(eq(malloyModelFiles.modelId, model.id));
+  if (files.length > 0) {
+    return new Map(files.map((f) => [f.path, f.content]));
+  }
+  return new Map([["index.malloy", model.source]]);
+}
+
 export type ToolResult = {
   content: Array<{ type: "text"; text: string }>;
   isError?: boolean;
@@ -167,6 +180,7 @@ export async function callTool(
         name: ds.name,
         column_count: Array.isArray(ds.schemaJson) ? ds.schemaJson.length : 0,
         schema: ds.schemaJson,
+        sources: model.sources ?? null,
         malloy_source: model.source,
       });
     }
@@ -176,6 +190,7 @@ export async function callTool(
       const ds = await findDataset(user.id, dsName);
       if (!ds) return errText(`dataset '${dsName}' not found`);
       if (ds.status !== "ready") return errText(`dataset '${dsName}' is ${ds.status}, not ready`);
+      if (!ds.mdTable) return errText(`sample_rows is not available for '${dsName}' — it was loaded from GitHub and has no MotherDuck table`);
       const rows = await sampleTable(ds.mdTable, n);
       return text(rows);
     }
@@ -186,7 +201,10 @@ export async function callTool(
       if (!ds) return errText(`dataset '${dsName}' not found`);
       const model = await latestModel(ds.id);
       if (!model) return errText(`dataset '${dsName}' has no Malloy model`);
-      const res = await compileMalloy(model.source, malloyQ);
+      const files = await modelFileMap(model);
+      const res = files.size > 1
+        ? await compileMalloyFiles(files, "index.malloy", malloyQ)
+        : await compileMalloy(model.source, malloyQ);
       if (!res.ok) return errText(`compile failed: ${res.error}`);
       return text({ sql: res.sql });
     }
@@ -199,9 +217,12 @@ export async function callTool(
       if (ds.status !== "ready") return errText(`dataset '${dsName}' is ${ds.status}, not ready`);
       const model = await latestModel(ds.id);
       if (!model) return errText(`dataset '${dsName}' has no Malloy model`);
+      const files = await modelFileMap(model);
       const t0 = Date.now();
       try {
-        const res = await runMalloy(model.source, malloyQ, { rowLimit: maxRows });
+        const res = files.size > 1
+          ? await runMalloyFiles(files, "index.malloy", malloyQ, { rowLimit: maxRows })
+          : await runMalloy(model.source, malloyQ, { rowLimit: maxRows });
         const durationMs = Date.now() - t0;
         const capped = res.rows.slice(0, maxRows);
         await db.insert(queries).values({

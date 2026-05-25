@@ -1,10 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
-
-const SAMPLE_URL =
-  "https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2024-01.parquet";
 
 type DatasetSummary = {
   id: string;
@@ -29,12 +25,7 @@ type Me = {
 };
 
 export default function HomePage() {
-  const router = useRouter();
   const [me, setMe] = useState<Me | null | undefined>(undefined);
-  const [url, setUrl] = useState(SAMPLE_URL);
-  const [name, setName] = useState("yellow_taxi");
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [datasets, setDatasets] = useState<DatasetSummary[] | null>(null);
 
   useEffect(() => { void load(); }, []);
@@ -46,28 +37,6 @@ export default function HomePage() {
     if (meJson.user) {
       const r = await fetch("/api/datasets");
       if (r.ok) setDatasets(await r.json());
-    }
-  }
-
-  async function onSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setSubmitting(true);
-    setError(null);
-    try {
-      const res = await fetch("/api/datasets", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ sourceUrl: url, name }),
-      });
-      if (!res.ok) {
-        const t = await res.text();
-        throw new Error(t || `${res.status} ${res.statusText}`);
-      }
-      const { id } = await res.json();
-      router.push(`/datasets/${id}`);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-      setSubmitting(false);
     }
   }
 
@@ -98,28 +67,20 @@ export default function HomePage() {
       ) : (
         <>
           {me.isAdmin && (
-          <section>
-            <h2 className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-3">1 — Ingest a dataset</h2>
-            <form onSubmit={onSubmit} className="space-y-4">
-              <label className="block">
-                <span className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Source URL (Parquet or CSV)</span>
-                <input type="url" required value={url} onChange={(e) => setUrl(e.target.value)}
-                  className="w-full rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40"
-                  placeholder="https://…/file.parquet" />
-              </label>
-              <label className="block">
-                <span className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Name (snake_case — used in queries)</span>
-                <input type="text" required value={name} onChange={(e) => setName(e.target.value)}
-                  className="w-full rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40"
-                  placeholder="yellow_taxi" />
-              </label>
-              <button type="submit" disabled={submitting}
-                className="rounded bg-black text-white dark:bg-white dark:text-black px-4 py-2 disabled:opacity-50">
-                {submitting ? "Submitting…" : "Ingest"}
-              </button>
-              {error && <pre className="text-red-600 dark:text-red-400 text-xs whitespace-pre-wrap mt-2">{error}</pre>}
-            </form>
-          </section>
+            <section className="flex gap-3">
+              <Link
+                href="/datasets/new/ingest"
+                className="inline-block rounded bg-black text-white dark:bg-white dark:text-black px-4 py-2 text-xs"
+              >
+                + Ingest from URL
+              </Link>
+              <Link
+                href="/datasets/new/github"
+                className="inline-block rounded border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 px-4 py-2 text-xs hover:bg-gray-50 dark:hover:bg-gray-900"
+              >
+                + Add Malloy model from GitHub
+              </Link>
+            </section>
           )}
 
           <McpSetup />

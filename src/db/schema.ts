@@ -112,6 +112,9 @@ export const datasets = pgTable(
     schemaJson: jsonb("schema_json"),
     sampleRowsJson: jsonb("sample_rows_json"),
     workflowRunId: text("workflow_run_id"),
+    githubRepo: text("github_repo"),
+    githubBranch: text("github_branch"),
+    githubUseToken: boolean("github_use_token").notNull().default(true),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .default(sql`now()`),
@@ -132,11 +135,31 @@ export const malloyModels = pgTable(
     generatedBy: text("generated_by").notNull(),
     compiledAt: timestamp("compiled_at", { withTimezone: true }),
     compileError: text("compile_error"),
+    // Names of Malloy sources/explores declared in this model.
+    // Populated for GitHub-loaded models; null for Claude-generated single-file models.
+    sources: jsonb("sources").$type<string[]>(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .default(sql`now()`),
   },
   (t) => [index("malloy_models_dataset_id_idx").on(t.datasetId)],
+);
+
+// One row per file in a multi-file GitHub-loaded model.
+// Keyed by model version (malloy_models.id) + relative path within the repo.
+export const malloyModelFiles = pgTable(
+  "malloy_model_files",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    modelId: uuid("model_id")
+      .notNull()
+      .references(() => malloyModels.id, { onDelete: "cascade" }),
+    path: text("path").notNull(),
+    content: text("content").notNull(),
+  },
+  (t) => [
+    index("malloy_model_files_model_id_idx").on(t.modelId),
+  ],
 );
 
 export const queries = pgTable(
@@ -258,6 +281,7 @@ export type Dataset = typeof datasets.$inferSelect;
 export type NewDataset = typeof datasets.$inferInsert;
 export type DatasetStatus = (typeof datasetStatus.enumValues)[number];
 export type MalloyModel = typeof malloyModels.$inferSelect;
+export type MalloyModelFile = typeof malloyModelFiles.$inferSelect;
 export type Query = typeof queries.$inferSelect;
 export type User = typeof users.$inferSelect;
 export type OAuthClient = typeof oauthClients.$inferSelect;

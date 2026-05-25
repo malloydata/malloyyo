@@ -21,9 +21,19 @@ type DatasetDetail = {
   userSlug: string | null;
   isPublic: boolean;
   isAdmin: boolean;
+  githubRepo: string | null;
+  githubBranch: string | null;
+  githubUseToken: boolean;
   schema: Array<{ name: string; type: string; nullable: boolean }> | null;
   sampleRows: Record<string, unknown>[] | null;
-  malloyModel: { source: string; generatedBy: string; compiledAt: string } | null;
+  malloyModel: {
+    id: string;
+    source: string;
+    generatedBy: string;
+    compiledAt: string | null;
+    sources: string[] | null;
+    files: Array<{ path: string; content: string }> | null;
+  } | null;
 };
 
 const TERMINAL = new Set(["ready", "failed"]);
@@ -64,6 +74,7 @@ export default function DatasetPage({
 }) {
   const { id } = use(params);
   const [data, setData] = useState<DatasetDetail | null>(null);
+  // setData is passed to GitHubConfig so it can update malloyModel after refresh.
 
   useEffect(() => {
     let cancelled = false;
@@ -168,12 +179,27 @@ export default function DatasetPage({
         </section>
       )}
 
-      {data.malloyModel && (
-        <MalloyEditor
+      {data.isAdmin && (
+        <GitHubConfig
           datasetId={data.id}
-          initialSource={data.malloyModel.source}
-          generatedBy={data.malloyModel.generatedBy}
+          initialRepo={data.githubRepo}
+          initialBranch={data.githubBranch}
+          initialUseToken={data.githubUseToken}
+          onRefreshed={(model) => setData((d) => d ? { ...d, malloyModel: model } : d)}
         />
+      )}
+
+      {data.malloyModel && (
+        data.malloyModel.files
+          ? <GitHubModelView
+              datasetId={data.id}
+              model={data.malloyModel}
+            />
+          : <MalloyEditor
+              datasetId={data.id}
+              initialSource={data.malloyModel.source}
+              generatedBy={data.malloyModel.generatedBy}
+            />
       )}
     </main>
   );
@@ -334,6 +360,332 @@ function VisibilityToggle({ datasetId, initialIsPublic }: { datasetId: string; i
     >
       {busy ? "saving…" : isPublic ? "public — make private" : "private — make public"}
     </button>
+  );
+}
+
+// Scan files for `source: NAME is` declarations to build a source→file map.
+function buildSourceFileMap(files: Array<{ path: string; content: string }>): Map<string, string> {
+  const map = new Map<string, string>();
+  const re = /^\s*source\s*:\s*(\w+)\s+is\b/gm;
+  for (const { path, content } of files) {
+    let m: RegExpExecArray | null;
+    re.lastIndex = 0;
+    while ((m = re.exec(content)) !== null) {
+      map.set(m[1], path);
+    }
+  }
+  return map;
+}
+
+type GitHubModel = NonNullable<DatasetDetail["malloyModel"]> & { files: NonNullable<DatasetDetail["malloyModel"]>["files"] };
+
+function GitHubModelView({ datasetId, model }: { datasetId: string; model: GitHubModel }) {
+  const [compiling, setCompiling] = useState(false);
+  const [compileResult, setCompileResult] = useState<CompileResult | null>(null);
+  const [expanded, setExpanded] = useState<Set<string>>(new Set(["index.malloy"]));
+
+  const files = model.files!;
+  const sourceFileMap = buildSourceFileMap(files);
+
+  async function compile() {
+    setCompiling(true);
+    setCompileResult(null);
+    try {
+      const r = await fetch(`/api/datasets/${datasetId}/model/compile`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      setCompileResult(await r.json());
+    } finally {
+      setCompiling(false);
+    }
+  }
+
+  function toggleFile(path: string) {
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  }
+
+  return (
+    <section className="space-y-4">
+      <div className="flex items-baseline justify-between">
+        <h2 className="text-sm font-semibold">
+          malloy model{" "}
+          <span className="text-gray-400 dark:text-gray-500 font-normal">
+            (from {model.generatedBy})
+          </span>
+        </h2>
+      </div>
+
+      {model.sources && model.sources.length > 0 && (
+        <div className="space-y-1">
+          <p className="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wide">Sources</p>
+          <div className="flex flex-wrap gap-2">
+            {model.sources.map((s) => {
+              const file = sourceFileMap.get(s);
+              return (
+                <div key={s} className="space-y-0.5">
+                  <span className="inline-block text-xs px-1.5 py-0.5 rounded bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300 font-mono">
+                    {s}
+                  </span>
+                  {file && (
+                    <div className="text-[10px] text-gray-400 dark:text-gray-500 font-mono pl-0.5">{file}</div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      <div className="space-y-2">
+        <p className="text-xs text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+          Files ({files.length})
+        </p>
+        {files.map(({ path, content }) => (
+          <div key={path} className="border border-gray-200 dark:border-gray-800 rounded overflow-hidden">
+            <button
+              onClick={() => toggleFile(path)}
+              className="w-full flex items-center justify-between px-3 py-2 text-xs font-mono text-left hover:bg-gray-50 dark:hover:bg-gray-900/50"
+            >
+              <span className="text-gray-700 dark:text-gray-300">{path}</span>
+              <span className="text-gray-400 dark:text-gray-500 text-[10px]">
+                {expanded.has(path) ? "▲" : "▼"}
+              </span>
+            </button>
+            {expanded.has(path) && (
+              <pre className="text-[11px] bg-gray-50 dark:bg-gray-900 text-gray-700 dark:text-gray-300 border-t border-gray-200 dark:border-gray-800 p-3 overflow-auto whitespace-pre">
+                {content}
+              </pre>
+            )}
+          </div>
+        ))}
+      </div>
+
+      <div className="flex items-center gap-2">
+        <button
+          onClick={compile}
+          disabled={compiling}
+          className="text-xs px-3 py-1 rounded border border-gray-300 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-900 disabled:opacity-50"
+        >
+          {compiling ? "Compiling…" : "Compile"}
+        </button>
+      </div>
+
+      {compileResult && (
+        <div className="mt-1">
+          {compileResult.ok ? (
+            <div className="text-xs text-green-700 dark:text-green-400">✓ compiles</div>
+          ) : (
+            <pre className="text-xs text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 rounded p-3 whitespace-pre-wrap">
+              {compileResult.error}
+            </pre>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+type MalloyModelSummary = DatasetDetail["malloyModel"];
+
+function GitHubConfig({
+  datasetId,
+  initialRepo,
+  initialBranch,
+  initialUseToken,
+  onRefreshed,
+}: {
+  datasetId: string;
+  initialRepo: string | null;
+  initialBranch: string | null;
+  initialUseToken: boolean;
+  onRefreshed: (model: MalloyModelSummary) => void;
+}) {
+  const [repo, setRepo] = useState(initialRepo ?? "");
+  const [branch, setBranch] = useState(initialBranch ?? "main");
+  const [useToken, setUseToken] = useState(initialUseToken);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [flash, setFlash] = useState("");
+  const [showModal, setShowModal] = useState(false);
+
+  const savedRepo = initialRepo ?? "";
+  const savedBranch = initialBranch ?? "main";
+  const dirty = repo !== savedRepo || branch !== savedBranch || useToken !== initialUseToken;
+
+  async function saveConfig() {
+    setSaving(true);
+    setError(null);
+    const res = await fetch(`/api/datasets/${datasetId}`, {
+      method: "PATCH",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ githubRepo: repo || null, githubBranch: branch || null, githubUseToken: useToken }),
+    });
+    setSaving(false);
+    if (!res.ok) { setError("save failed"); return; }
+    setFlash("saved");
+    setTimeout(() => setFlash(""), 1500);
+  }
+
+  async function refreshNow(): Promise<{ ok: boolean; error?: string }> {
+    const res = await fetch(`/api/datasets/${datasetId}/model/github`, { method: "POST" });
+    const j = await res.json();
+    if (!res.ok || j.ok === false) return { ok: false, error: j.error ?? "refresh failed" };
+    const dsRes = await fetch(`/api/datasets/${datasetId}`);
+    if (dsRes.ok) onRefreshed((await dsRes.json()).malloyModel);
+    return { ok: true };
+  }
+
+  return (
+    <>
+      <section className="border border-gray-200 dark:border-gray-800 rounded p-4 space-y-3">
+        <h2 className="text-sm font-semibold">GitHub model</h2>
+        <p className="text-xs text-gray-500 dark:text-gray-400">
+          Repo must have an <code>index.malloy</code> at its root. Imports are resolved from the same repo and branch.
+        </p>
+        <div className="flex gap-2">
+          <label className="flex-1">
+            <span className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Repository (owner/repo)</span>
+            <input type="text" value={repo} onChange={(e) => setRepo(e.target.value)}
+              placeholder="lloydtabb/my-malloy-models"
+              className="w-full rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-1.5 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/40" />
+          </label>
+          <label className="w-28">
+            <span className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Branch</span>
+            <input type="text" value={branch} onChange={(e) => setBranch(e.target.value)}
+              placeholder="main"
+              className="w-full rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-1.5 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/40" />
+          </label>
+        </div>
+        <label className="flex items-center gap-2 cursor-pointer select-none">
+          <input type="checkbox" checked={useToken} onChange={(e) => setUseToken(e.target.checked)} className="rounded" />
+          <span className="text-xs text-gray-700 dark:text-gray-300">
+            Use <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">GITHUB_TOKEN</code>
+            {" "}(uncheck for public repos if you get auth errors)
+          </span>
+        </label>
+        <div className="flex items-center gap-2">
+          {dirty && (
+            <button onClick={saveConfig} disabled={saving || !repo}
+              className="text-xs px-3 py-1 rounded bg-black text-white dark:bg-white dark:text-black disabled:opacity-50">
+              {saving ? "Saving…" : "Save"}
+            </button>
+          )}
+          <button onClick={() => { setShowModal(true); setError(null); }} disabled={!initialRepo}
+            className="text-xs px-3 py-1 rounded border border-gray-300 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-900 disabled:opacity-50"
+            title={!initialRepo ? "Save a repo first" : undefined}>
+            Refresh from GitHub
+          </button>
+          {flash && <span className="text-xs text-green-700 dark:text-green-400">{flash}</span>}
+        </div>
+        {error && <pre className="text-xs text-red-600 dark:text-red-400 whitespace-pre-wrap">{error}</pre>}
+      </section>
+
+      {showModal && (
+        <RefreshModal
+          datasetId={datasetId}
+          repo={initialRepo!}
+          branch={initialBranch ?? "main"}
+          onRefreshNow={refreshNow}
+          onClose={(msg) => {
+            setShowModal(false);
+            if (msg) { setFlash(msg); setTimeout(() => setFlash(""), 4000); }
+          }}
+        />
+      )}
+    </>
+  );
+}
+
+function RefreshModal({
+  datasetId,
+  repo,
+  branch,
+  onRefreshNow,
+  onClose,
+}: {
+  datasetId: string;
+  repo: string;
+  branch: string;
+  onRefreshNow: () => Promise<{ ok: boolean; error?: string }>;
+  onClose: (flashMsg?: string) => void;
+}) {
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [origin, setOrigin] = useState("");
+  useEffect(() => { setOrigin(window.location.origin); }, []);
+
+  const webhookUrl = `${origin}/api/datasets/${datasetId}/webhook/github`;
+
+  async function handleRefreshNow() {
+    setRefreshing(true);
+    setError(null);
+    const result = await onRefreshNow();
+    setRefreshing(false);
+    if (!result.ok) { setError(result.error ?? "refresh failed"); return; }
+    onClose("refreshed from GitHub");
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 dark:bg-black/60 p-4">
+      <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-lg shadow-xl max-w-lg w-full p-6 space-y-5 font-mono text-sm">
+        <div className="flex items-start justify-between gap-4">
+          <h2 className="font-semibold">Refresh from GitHub</h2>
+          <button onClick={() => onClose()} className="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 text-lg leading-none">×</button>
+        </div>
+
+        <div className="space-y-2">
+          <p className="text-xs font-medium text-gray-700 dark:text-gray-300">Refresh now</p>
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            Pull the latest <code>index.malloy</code> from <strong>{repo}</strong> ({branch}) immediately.
+          </p>
+          <button onClick={handleRefreshNow} disabled={refreshing}
+            className="text-xs px-3 py-1.5 rounded bg-black text-white dark:bg-white dark:text-black disabled:opacity-50">
+            {refreshing ? "Refreshing…" : "Refresh now"}
+          </button>
+          {error && <pre className="text-xs text-red-600 dark:text-red-400 whitespace-pre-wrap bg-red-50 dark:bg-red-950/40 p-2 rounded">{error}</pre>}
+        </div>
+
+        <hr className="border-gray-200 dark:border-gray-800" />
+
+        <div className="space-y-3">
+          <p className="text-xs font-medium text-gray-700 dark:text-gray-300">Auto-refresh via GitHub webhook</p>
+          <p className="text-xs text-gray-500 dark:text-gray-400 leading-relaxed">
+            Add this webhook to your repo and the model will refresh automatically on every push to <strong>{branch}</strong>.
+          </p>
+          <WebhookUrlCopy url={webhookUrl} />
+          <ol className="list-decimal list-inside space-y-1 text-xs text-gray-600 dark:text-gray-400">
+            <li>Go to <strong>{repo}</strong> → Settings → Webhooks → Add webhook</li>
+            <li>Paste the URL above as the Payload URL</li>
+            <li>Content type: <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">application/json</code></li>
+            <li>Events: <em>Just the push event</em></li>
+            <li>Click <strong>Add webhook</strong></li>
+          </ol>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function WebhookUrlCopy({ url }: { url: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="relative">
+      <pre className="text-xs bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded p-2 pr-16 overflow-auto whitespace-pre-wrap break-all">
+        {url}
+      </pre>
+      <button
+        onClick={async () => { await navigator.clipboard.writeText(url); setCopied(true); setTimeout(() => setCopied(false), 1200); }}
+        className="absolute top-1.5 right-1.5 text-[10px] px-2 py-0.5 rounded bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700">
+        {copied ? "copied" : "copy"}
+      </button>
+    </div>
   );
 }
 

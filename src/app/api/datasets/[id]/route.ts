@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
-import { db, datasets, malloyModels, users } from "@/db";
+import { desc } from "drizzle-orm";
+import { db, datasets, malloyModels, malloyModelFiles, users } from "@/db";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
 
@@ -29,7 +30,17 @@ export async function GET(
 
   const [user] = await db.select().from(users).where(eq(users.id, ds.userId));
   const [model] = await db.select().from(malloyModels)
-    .where(eq(malloyModels.datasetId, id)).limit(1);
+    .where(eq(malloyModels.datasetId, id))
+    .orderBy(desc(malloyModels.createdAt))
+    .limit(1);
+
+  const files = model
+    ? await db
+        .select({ path: malloyModelFiles.path, content: malloyModelFiles.content })
+        .from(malloyModelFiles)
+        .where(eq(malloyModelFiles.modelId, model.id))
+        .orderBy(malloyModelFiles.path)
+    : [];
 
   return NextResponse.json({
     id: ds.id, name: ds.name, sourceUrl: ds.sourceUrl,
@@ -37,11 +48,21 @@ export async function GET(
     statusError: ds.statusError, workflowRunId: ds.workflowRunId,
     createdAt: ds.createdAt, readyAt: ds.readyAt,
     isPublic: ds.isPublic,
+    githubRepo: ds.githubRepo ?? null,
+    githubBranch: ds.githubBranch ?? null,
+    githubUseToken: ds.githubUseToken,
     schema: ds.schemaJson, sampleRows: ds.sampleRowsJson,
     userSlug: user?.slug ?? null,
     isAdmin: me ? isAdmin(me) : false,
     malloyModel: model
-      ? { source: model.source, generatedBy: model.generatedBy, compiledAt: model.compiledAt }
+      ? {
+          id: model.id,
+          source: model.source,
+          generatedBy: model.generatedBy,
+          compiledAt: model.compiledAt,
+          sources: model.sources ?? null,
+          files: files.length > 0 ? files : null,
+        }
       : null,
   });
 }
@@ -58,8 +79,13 @@ export async function PATCH(
   if (!isAdmin(me)) return NextResponse.json({ error: "admin required" }, { status: 403 });
 
   const { id } = await ctx.params;
-  const { isPublic } = await req.json() as { isPublic: boolean };
-  const [updated] = await db.update(datasets).set({ isPublic }).where(eq(datasets.id, id)).returning();
+  const body = await req.json() as { isPublic?: boolean; githubRepo?: string | null; githubBranch?: string | null; githubUseToken?: boolean };
+  const patch: Record<string, unknown> = {};
+  if (body.isPublic !== undefined) patch.isPublic = body.isPublic;
+  if (body.githubRepo !== undefined) patch.githubRepo = body.githubRepo ?? null;
+  if (body.githubBranch !== undefined) patch.githubBranch = body.githubBranch ?? null;
+  if (body.githubUseToken !== undefined) patch.githubUseToken = body.githubUseToken;
+  const [updated] = await db.update(datasets).set(patch).where(eq(datasets.id, id)).returning();
   if (!updated) return NextResponse.json({ error: "not found" }, { status: 404 });
-  return NextResponse.json({ id: updated.id, isPublic: updated.isPublic });
+  return NextResponse.json({ id: updated.id, isPublic: updated.isPublic, githubRepo: updated.githubRepo, githubBranch: updated.githubBranch });
 }

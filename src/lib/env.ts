@@ -27,4 +27,8 @@ export const env = {
       .map((e) => e.trim().toLowerCase())
       .filter(Boolean);
   },
+  // Optional — needed only for private GitHub repos.
+  get GITHUB_TOKEN() {
+    return process.env.GITHUB_TOKEN ?? "";
+  },
 };

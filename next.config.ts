@@ -41,6 +41,12 @@ const nextConfig: NextConfig = {
     "/api/datasets/[id]/model/compile": [
       "./node_modules/@duckdb/node-bindings*/**/*",
     ],
+    "/api/datasets/[id]/model/github": [
+      "./node_modules/@duckdb/node-bindings*/**/*",
+    ],
+    "/api/datasets/[id]/webhook/github": [
+      "./node_modules/@duckdb/node-bindings*/**/*",
+    ],
   },
 };
 

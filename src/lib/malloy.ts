@@ -116,6 +116,54 @@ export async function introspectModelWithReader(
   }
 }
 
+export type FieldInfo = { name: string; type: string; description: string | null };
+export type SourceFields = {
+  dimensions: FieldInfo[];
+  measures: FieldInfo[];
+  views: string[];
+};
+
+// Compile a file map and return structured field info for a named source.
+export async function describeSourceFields(
+  files: Map<string, string>,
+  entryPath: string,
+  sourceName: string,
+): Promise<SourceFields | null> {
+  const urlMap = new Map<string, string>();
+  for (const [path, content] of files) {
+    urlMap.set(fileUrl(path).toString(), content);
+  }
+  const reader = new malloy.InMemoryURLReader(urlMap);
+  const conn = makeConnection();
+  try {
+    const runtime = new malloy.SingleConnectionRuntime({ connection: conn, urlReader: reader });
+    const compiled = await runtime.getModel(fileUrl(entryPath));
+    const explore = compiled.explores.find((e) => e.name === sourceName);
+    if (!explore) return null;
+    const dimensions: FieldInfo[] = [];
+    const measures: FieldInfo[] = [];
+    const views: string[] = [];
+    for (const f of explore.intrinsicFields) {
+      if (f.isQueryField()) {
+        views.push(f.name);
+      } else if (f.isAtomicField()) {
+        const desc = f.annotations.forRoute('"')[0]?.content.trim() ?? null;
+        const entry: FieldInfo = { name: f.name, type: f.type, description: desc };
+        if (f.sourceWasMeasure() || f.sourceWasMeasureLike()) {
+          measures.push(entry);
+        } else {
+          dimensions.push(entry);
+        }
+      }
+    }
+    return { dimensions, measures, views };
+  } catch {
+    return null;
+  } finally {
+    await conn.close();
+  }
+}
+
 // Run using a file map (from DB-stored GitHub model files).
 export async function runMalloyFiles(
   files: Map<string, string>,

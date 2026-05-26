@@ -1,7 +1,7 @@
 import { eq, and, desc, or } from "drizzle-orm";
 import { db, datasets, malloyModels, malloyModelFiles, queries, type User } from "@/db";
 import type { SourceInfo } from "./malloy";
-import { compileMalloy, runMalloy, compileMalloyFiles, runMalloyFiles } from "./malloy";
+import { compileMalloy, runMalloy, compileMalloyFiles, runMalloyFiles, describeSourceFields } from "./malloy";
 import { sampleTable } from "./duckdb";
 
 export type ToolDescriptor = {
@@ -201,10 +201,13 @@ export async function callTool(
       const found = await findBySource(user.id, sourceName);
       if (!found) return errText(`source '${sourceName}' not found`);
       const { ds, model, description } = found;
+      const files = await modelFileMap(model);
+      const fields = await describeSourceFields(files, "index.malloy", sourceName);
       return text({
         source: sourceName,
         model: ds.name,
         description,
+        fields,
         malloy_source: model.source,
       });
     }

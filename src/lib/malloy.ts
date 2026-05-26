@@ -118,7 +118,7 @@ export async function introspectModelWithReader(
 
 export type FieldNode = {
   name: string;
-  kind: "dimension" | "measure" | "view" | "join";
+  kind: "dimension" | "measure" | "column" | "view" | "join";
   type?: string;
   description: string | null;
   relationship?: string;
@@ -126,7 +126,7 @@ export type FieldNode = {
 };
 
 function serializeFields(explore: malloy.Explore): FieldNode[] {
-  return explore.intrinsicFields.map((f) => {
+  return explore.allFields.map((f) => {
     const description = f.annotations.forRoute('"')[0]?.content.trim() ?? null;
     if (f.isQueryField()) return { name: f.name, kind: "view" as const, description };
     if (f.isExploreField()) return {
@@ -134,7 +134,14 @@ function serializeFields(explore: malloy.Explore): FieldNode[] {
       relationship: f.joinRelationship,
       fields: serializeFields(f),
     };
-    const kind = (f.isAtomicField() && (f.sourceWasMeasure() || f.sourceWasMeasureLike())) ? "measure" as const : "dimension" as const;
+    // AtomicField: classify by expression type, not resultMetadata
+    // isCalculation() = aggregate expression → measure
+    // !isIntrinsic() && !isCalculation() = scalar expression → dimension
+    // isIntrinsic() = no expression → raw table column
+    let kind: FieldNode["kind"];
+    if (f.isAtomicField() && f.isCalculation()) kind = "measure";
+    else if (f.isAtomicField() && !f.isIntrinsic()) kind = "dimension";
+    else kind = "column";
     return { name: f.name, kind, type: f.isAtomicField() ? f.type : undefined, description };
   });
 }

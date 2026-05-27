@@ -223,6 +223,7 @@ export async function callTool(
         const capped = res.rows.slice(0, maxRows);
         await db.insert(queries).values({
           datasetId: ds.id,
+          userId: user.id,
           malloySource: malloyQ,
           compiledSql: res.sql,
           rowCount: res.rowCount,
@@ -238,6 +239,7 @@ export async function callTool(
         const msg = err instanceof Error ? err.message : String(err);
         await db.insert(queries).values({
           datasetId: ds.id,
+          userId: user.id,
           malloySource: malloyQ,
           error: msg,
         });

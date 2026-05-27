@@ -163,6 +163,7 @@ export const queries = pgTable(
     datasetId: uuid("dataset_id")
       .notNull()
       .references(() => datasets.id, { onDelete: "cascade" }),
+    userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
     malloySource: text("malloy_source").notNull(),
     compiledSql: text("compiled_sql"),
     rowCount: integer("row_count"),

@@ -24,11 +24,11 @@ importers:
         specifier: 1.4.4-r.1
         version: 1.4.4-r.1
       '@malloydata/db-duckdb':
-        specifier: ^0.0.393
-        version: 0.0.393
+        specifier: ^0.0.400
+        version: 0.0.400
       '@malloydata/malloy':
-        specifier: ^0.0.393
-        version: 0.0.393
+        specifier: ^0.0.400
+        version: 0.0.400
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.3)
@@ -1119,24 +1119,24 @@ packages:
     resolution: {integrity: sha512-Z7C/xXCiGWsg0KuKsHTKJxbWhpI3Vs5GwLfOean7MGyVFGqdRgBbAjOCh6u4bbjPc/8MJ2pZmK/0DLdCbivLDA==}
     engines: {node: '>=8'}
 
-  '@malloydata/db-duckdb@0.0.393':
-    resolution: {integrity: sha512-JkkSLcqMhwt/3GhR+iCxkL4XUjgU3XeEXH5tBV+PW0gAU4o12NOTqyF3IdO2AvJHDHi2yxhDt2S/kXwLIsr2Vw==}
+  '@malloydata/db-duckdb@0.0.400':
+    resolution: {integrity: sha512-pjdgj7djRHM4KmLp/YB+lp/7NNxoTtQLXs/PnQ1L4pe3inpDErnNGK06sKiJJL+jS7A1pjsJ/JTqpfX/oe/QeA==}
     engines: {node: '>=20'}
 
-  '@malloydata/malloy-filter@0.0.393':
-    resolution: {integrity: sha512-BcrUi5NafM4V2i+JX9GmnnJesPasD2HWay3tW4gyIFbaNoySh6ZXmjkUKvY+GUZV3ohVL/YeuhioZUnp+/nwVw==}
+  '@malloydata/malloy-filter@0.0.400':
+    resolution: {integrity: sha512-g5L8nelkTHXCXYDGCOLlF8KaFU6XF6rofhCuXXM1jM+iCL7TIQU3QkP7KgT6HQYPtPVwC7J/KrUxkJ3f+p5EdQ==}
     engines: {node: '>=20'}
 
-  '@malloydata/malloy-interfaces@0.0.393':
-    resolution: {integrity: sha512-z7bL4OWPetVHls8PSDqxLqJWPtmEL39lic385jqRAc5+65kiug8mTfphIPvhCMWqS3cKZmZi+EW/EtS4eNjphA==}
+  '@malloydata/malloy-interfaces@0.0.400':
+    resolution: {integrity: sha512-vkf7H+ujvIBkeMb1FsNqZFoll0yLz5KySWcSva/boutycDgnsxTeIwg+Sj62FCXvfbQ+IqGsv/LrQUKvUvfI7A==}
     engines: {node: '>=20'}
 
-  '@malloydata/malloy-tag@0.0.393':
-    resolution: {integrity: sha512-+WJxZcD/0BB8R3tBF9WCzydZuX6T92MBcrrn9Ppir5eBMA49asiwRXBL6FV84Pd+LxZBPP4dSoYY8KurjOacCg==}
+  '@malloydata/malloy-tag@0.0.400':
+    resolution: {integrity: sha512-qMs59NCw3QTG5borZMnpqBEdWpAqIUDajnGBP/VqbC6Zd5/MhIagvYJ7G/h1JvIRC4EQRfAOQDkFKNmq8pf9KQ==}
     engines: {node: '>=20'}
 
-  '@malloydata/malloy@0.0.393':
-    resolution: {integrity: sha512-hVl3RRB66wtfduBzigeC4ZRIJpg+Ba4KhfiQwChTz1Dmq93VUT1ywEvodoeEVner0vxPwdEVL7MVzf7dG9w80g==}
+  '@malloydata/malloy@0.0.400':
+    resolution: {integrity: sha512-Ep9TSZax8TzhaluF5LzKW3py71Hve7sT06SMU0VqjDbn5VLUW2mDvj4rEnNm63MelqxucE8HZZCJ4cn67u8P5A==}
     engines: {node: '>=20'}
 
   '@malloydata/motly-ts-parser@0.8.1':
@@ -5903,34 +5903,34 @@ snapshots:
 
   '@lukeed/csprng@1.1.0': {}
 
-  '@malloydata/db-duckdb@0.0.393':
+  '@malloydata/db-duckdb@0.0.400':
     dependencies:
       '@duckdb/duckdb-wasm': 1.33.1-dev13.0
       '@duckdb/node-api': 1.4.4-r.1
-      '@malloydata/malloy': 0.0.393
+      '@malloydata/malloy': 0.0.400
       '@motherduck/wasm-client': 0.6.6(apache-arrow@17.0.0)
       apache-arrow: 17.0.0
       web-worker: 1.5.0
 
-  '@malloydata/malloy-filter@0.0.393':
+  '@malloydata/malloy-filter@0.0.400':
     dependencies:
       jest-diff: 29.7.0
       luxon: 3.7.2
 
-  '@malloydata/malloy-interfaces@0.0.393':
+  '@malloydata/malloy-interfaces@0.0.400':
     dependencies:
       '@creditkarma/thrift-server-core': 1.0.4
 
-  '@malloydata/malloy-tag@0.0.393':
+  '@malloydata/malloy-tag@0.0.400':
     dependencies:
       '@malloydata/motly-ts-parser': 0.8.1
       assert: 2.1.0
 
-  '@malloydata/malloy@0.0.393':
+  '@malloydata/malloy@0.0.400':
     dependencies:
-      '@malloydata/malloy-filter': 0.0.393
-      '@malloydata/malloy-interfaces': 0.0.393
-      '@malloydata/malloy-tag': 0.0.393
+      '@malloydata/malloy-filter': 0.0.400
+      '@malloydata/malloy-interfaces': 0.0.400
+      '@malloydata/malloy-tag': 0.0.400
       '@noble/hashes': 1.8.0
       antlr4ts: 0.5.0-alpha.4
       assert: 2.1.0

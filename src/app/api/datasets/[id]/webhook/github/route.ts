@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+import { NextResponse, after } from "next/server";
 import { eq } from "drizzle-orm";
 import { db, datasets } from "@/db";
 import { refreshGitHubModel } from "@/lib/github-refresh";
@@ -18,9 +18,12 @@ export async function POST(
     return NextResponse.json({ ok: false, error: "dataset not found or has no github_repo" });
   }
 
-  // Run refresh in the background so we respond to GitHub quickly.
-  void refreshGitHubModel(id).catch((err) =>
-    console.error(`[webhook] refresh failed for dataset ${id}:`, err),
+  // Run refresh after the response is sent so GitHub gets a quick 200.
+  // `after()` uses waitUntil so Vercel keeps the function alive until done.
+  after(
+    refreshGitHubModel(id).catch((err) =>
+      console.error(`[webhook] refresh failed for dataset ${id}:`, err),
+    ),
   );
 
   return NextResponse.json({ ok: true, message: "refresh triggered" });

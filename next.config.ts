@@ -35,6 +35,9 @@ const nextConfig: NextConfig = {
     "/api/datasets": [
       "./node_modules/@duckdb/node-bindings*/**/*",
     ],
+    "/api/tables": [
+      "./node_modules/@duckdb/node-bindings*/**/*",
+    ],
     "/api/datasets/[id]/model": [
       "./node_modules/@duckdb/node-bindings*/**/*",
     ],

@@ -104,6 +104,34 @@ export async function describeTable(tableName: string): Promise<ColumnInfo[]> {
   }
 }
 
+export type TableInfo = {
+  name: string;
+  columns: ColumnInfo[];
+};
+
+export async function listTables(): Promise<TableInfo[]> {
+  const conn = await connect();
+  try {
+    const reader = await conn.runAndReadAll(`
+      SELECT table_name, column_name, data_type, is_nullable
+      FROM duckdb_columns()
+      WHERE database_name = '${esc(env.MOTHERDUCK_DATABASE)}' AND schema_name = 'main'
+      ORDER BY table_name, column_index
+    `);
+    const rows = reader.getRowObjectsJson() as Array<{
+      table_name: string; column_name: string; data_type: string; is_nullable: boolean;
+    }>;
+    const tableMap = new Map<string, ColumnInfo[]>();
+    for (const row of rows) {
+      if (!tableMap.has(row.table_name)) tableMap.set(row.table_name, []);
+      tableMap.get(row.table_name)!.push({ name: row.column_name, type: row.data_type, nullable: row.is_nullable });
+    }
+    return Array.from(tableMap.entries()).map(([name, columns]) => ({ name, columns }));
+  } finally {
+    conn.closeSync();
+  }
+}
+
 export async function sampleTable(
   tableName: string,
   limit = 50,

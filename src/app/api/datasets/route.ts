@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, ne, and } from "drizzle-orm";
 import { db, datasets, malloyModels, malloyModelFiles, users } from "@/db";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
 import { nameToSlug } from "@/lib/slug";
 import { start } from "workflow/api";
-import { ingestDataset } from "@/workflows/ingest";
+import { ingestDataset, modelExistingTable } from "@/workflows/ingest";
 import { GitHubURLReader, parseGitHubRepo } from "@/lib/github";
 import { introspectModelWithReader } from "@/lib/malloy";
 
@@ -15,6 +15,11 @@ export const runtime = "nodejs";
 const IngestBody = z.object({
   sourceUrl: z.url(),
   name: z.string().min(1).max(64).optional(),
+});
+
+const TableBody = z.object({
+  mdTable: z.string().min(1).max(200),
+  name: z.string().min(1).max(64),
 });
 
 const GitHubBody = z.object({
@@ -43,6 +48,20 @@ export async function POST(req: Request) {
   if (!isAdmin(user)) return NextResponse.json({ error: "admin required" }, { status: 403 });
 
   const raw = await req.json();
+
+  // Existing table path: { mdTable, name }
+  if (raw && typeof raw === "object" && "mdTable" in raw) {
+    const body = TableBody.parse(raw);
+    const name = nameToSlug(body.name);
+    const id = crypto.randomUUID();
+    const [row] = await db
+      .insert(datasets)
+      .values({ id, userId: user.id, name, sourceUrl: `motherduck://${body.mdTable}`, mdTable: body.mdTable, status: "pending" })
+      .returning();
+    const run = await start(modelExistingTable, [id]);
+    await db.update(datasets).set({ workflowRunId: run.runId }).where(eq(datasets.id, id));
+    return NextResponse.json({ id: row.id, name, status: row.status, runId: run.runId });
+  }
 
   // GitHub path: { githubRepo, githubBranch, name }
   if (raw && typeof raw === "object" && "githubRepo" in raw) {
@@ -130,7 +149,7 @@ export async function GET() {
         .select({ id: datasets.id, name: datasets.name, sourceUrl: datasets.sourceUrl,
           status: datasets.status, rowCount: datasets.rowCount,
           createdAt: datasets.createdAt, readyAt: datasets.readyAt, isPublic: datasets.isPublic })
-        .from(datasets).where(eq(datasets.isPublic, true)).orderBy(desc(datasets.createdAt)).limit(50);
+        .from(datasets).where(and(eq(datasets.isPublic, true), ne(datasets.status, "failed"))).orderBy(desc(datasets.createdAt)).limit(50);
       return NextResponse.json(rows);
     }
     throw err;
@@ -147,6 +166,7 @@ export async function GET() {
       })
       .from(datasets)
       .leftJoin(users, eq(datasets.userId, users.id))
+      .where(ne(datasets.status, "failed"))
       .orderBy(desc(datasets.createdAt))
       .limit(50);
     return NextResponse.json(rows);
@@ -156,6 +176,6 @@ export async function GET() {
     .select({ id: datasets.id, name: datasets.name, sourceUrl: datasets.sourceUrl,
       status: datasets.status, rowCount: datasets.rowCount,
       createdAt: datasets.createdAt, readyAt: datasets.readyAt, isPublic: datasets.isPublic })
-    .from(datasets).where(eq(datasets.isPublic, true)).orderBy(desc(datasets.createdAt)).limit(50);
+    .from(datasets).where(and(eq(datasets.isPublic, true), ne(datasets.status, "failed"))).orderBy(desc(datasets.createdAt)).limit(50);
   return NextResponse.json(rows);
 }

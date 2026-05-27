@@ -10,7 +10,7 @@ export default function NewDatasetPage() {
         <h1 className="text-xl font-bold mt-3">Add dataset</h1>
       </header>
 
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
         <Link
           href="/datasets/new/ingest"
           className="block border border-gray-200 dark:border-gray-800 rounded p-5 hover:bg-gray-50 dark:hover:bg-gray-900/50 space-y-2"
@@ -30,6 +30,16 @@ export default function NewDatasetPage() {
           <div className="text-xs text-gray-500 dark:text-gray-400 leading-relaxed">
             Point at a GitHub repo with an <code>index.malloy</code> at its root.
             Imports are resolved from the same repo and branch.
+          </div>
+        </Link>
+
+        <Link
+          href="/datasets/new/table"
+          className="block border border-gray-200 dark:border-gray-800 rounded p-5 hover:bg-gray-50 dark:hover:bg-gray-900/50 space-y-2"
+        >
+          <div className="font-semibold text-sm">Build from existing table</div>
+          <div className="text-xs text-gray-500 dark:text-gray-400 leading-relaxed">
+            Browse tables already in MotherDuck and ask Claude to write a Malloy model for one.
           </div>
         </Link>
       </div>

@@ -23,7 +23,6 @@ type DatasetDetail = {
   isAdmin: boolean;
   githubRepo: string | null;
   githubBranch: string | null;
-  githubUseToken: boolean;
   schema: Array<{ name: string; type: string; nullable: boolean }> | null;
   sampleRows: Record<string, unknown>[] | null;
   malloyModel: {
@@ -108,7 +107,10 @@ export default function DatasetPage({
           <p className="text-gray-500 dark:text-gray-400 break-all">{data.sourceUrl}</p>
         </div>
         {data.isAdmin && (
-          <VisibilityToggle datasetId={data.id} initialIsPublic={data.isPublic} />
+          <div className="flex items-center gap-2">
+            <VisibilityToggle datasetId={data.id} initialIsPublic={data.isPublic} />
+            <DeleteButton datasetId={data.id} datasetName={data.name} />
+          </div>
         )}
       </header>
 
@@ -179,12 +181,11 @@ export default function DatasetPage({
         </section>
       )}
 
-      {data.isAdmin && (
+      {data.isAdmin && data.githubRepo && (
         <GitHubConfig
           datasetId={data.id}
           initialRepo={data.githubRepo}
           initialBranch={data.githubBranch}
-          initialUseToken={data.githubUseToken}
           onRefreshed={(model) => setData((d) => d ? { ...d, malloyModel: model } : d)}
         />
       )}
@@ -363,6 +364,48 @@ function VisibilityToggle({ datasetId, initialIsPublic }: { datasetId: string; i
   );
 }
 
+function DeleteButton({ datasetId, datasetName }: { datasetId: string; datasetName: string }) {
+  const [confirming, setConfirming] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  async function handleDelete() {
+    setDeleting(true);
+    await fetch(`/api/datasets/${datasetId}`, { method: "DELETE" });
+    window.location.href = "/";
+  }
+
+  if (confirming) {
+    return (
+      <div className="flex items-center gap-2">
+        <span className="text-xs text-gray-600 dark:text-gray-400">Delete <strong>{datasetName}</strong>?</span>
+        <button
+          onClick={handleDelete}
+          disabled={deleting}
+          className="text-xs px-3 py-1.5 rounded border border-red-300 dark:border-red-700 text-red-700 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-50"
+        >
+          {deleting ? "deleting…" : "yes, delete"}
+        </button>
+        <button
+          onClick={() => setConfirming(false)}
+          disabled={deleting}
+          className="text-xs text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+        >
+          cancel
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <button
+      onClick={() => setConfirming(true)}
+      className="text-xs px-3 py-1.5 rounded border border-gray-300 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:border-red-300 dark:hover:border-red-700 hover:text-red-700 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
+    >
+      delete
+    </button>
+  );
+}
+
 // Scan files for `source: NAME is` declarations to build a source→file map.
 function buildSourceFileMap(files: Array<{ path: string; content: string }>): Map<string, string> {
   const map = new Map<string, string>();
@@ -498,18 +541,15 @@ function GitHubConfig({
   datasetId,
   initialRepo,
   initialBranch,
-  initialUseToken,
   onRefreshed,
 }: {
   datasetId: string;
   initialRepo: string | null;
   initialBranch: string | null;
-  initialUseToken: boolean;
   onRefreshed: (model: MalloyModelSummary) => void;
 }) {
   const [repo, setRepo] = useState(initialRepo ?? "");
   const [branch, setBranch] = useState(initialBranch ?? "main");
-  const [useToken, setUseToken] = useState(initialUseToken);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [flash, setFlash] = useState("");
@@ -517,7 +557,7 @@ function GitHubConfig({
 
   const savedRepo = initialRepo ?? "";
   const savedBranch = initialBranch ?? "main";
-  const dirty = repo !== savedRepo || branch !== savedBranch || useToken !== initialUseToken;
+  const dirty = repo !== savedRepo || branch !== savedBranch;
 
   async function saveConfig() {
     setSaving(true);
@@ -525,7 +565,7 @@ function GitHubConfig({
     const res = await fetch(`/api/datasets/${datasetId}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ githubRepo: repo || null, githubBranch: branch || null, githubUseToken: useToken }),
+      body: JSON.stringify({ githubRepo: repo || null, githubBranch: branch || null, githubUseToken: true }),
     });
     setSaving(false);
     if (!res.ok) { setError("save failed"); return; }
@@ -563,13 +603,6 @@ function GitHubConfig({
               className="w-full rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-1.5 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/40" />
           </label>
         </div>
-        <label className="flex items-center gap-2 cursor-pointer select-none">
-          <input type="checkbox" checked={useToken} onChange={(e) => setUseToken(e.target.checked)} className="rounded" />
-          <span className="text-xs text-gray-700 dark:text-gray-300">
-            Use <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">GITHUB_TOKEN</code>
-            {" "}(uncheck for public repos if you get auth errors)
-          </span>
-        </label>
         <div className="flex items-center gap-2">
           {dirty && (
             <button onClick={saveConfig} disabled={saving || !repo}
@@ -661,7 +694,7 @@ function RefreshModal({
           </p>
           <WebhookUrlCopy url={webhookUrl} />
           <ol className="list-decimal list-inside space-y-1 text-xs text-gray-600 dark:text-gray-400">
-            <li>Go to <strong>{repo}</strong> → Settings → Webhooks → Add webhook</li>
+            <li>Go to{" "}<a href={`https://github.com/${repo}/settings/hooks`} target="_blank" rel="noopener noreferrer" className="underline text-blue-600 dark:text-blue-400">{repo} → Settings → Webhooks</a>{" "}→ Add webhook</li>
             <li>Paste the URL above as the Payload URL</li>
             <li>Content type: <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">application/json</code></li>
             <li>Events: <em>Just the push event</em></li>

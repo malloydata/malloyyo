@@ -8,7 +8,6 @@ export default function GitHubModelPage() {
   const [repo, setRepo] = useState("");
   const [branch, setBranch] = useState("main");
   const [name, setName] = useState("");
-  const [useToken, setUseToken] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -20,7 +19,7 @@ export default function GitHubModelPage() {
       const res = await fetch("/api/datasets", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ githubRepo: repo, githubBranch: branch, name, useToken }),
+        body: JSON.stringify({ githubRepo: repo, githubBranch: branch, name, useToken: true }),
       });
       const json = await res.json();
       if (!res.ok) {
@@ -85,19 +84,6 @@ export default function GitHubModelPage() {
             className="w-full rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-2 font-mono text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/40"
             placeholder="auto_recalls"
           />
-        </label>
-
-        <label className="flex items-center gap-2 cursor-pointer select-none">
-          <input
-            type="checkbox"
-            checked={useToken}
-            onChange={(e) => setUseToken(e.target.checked)}
-            className="rounded"
-          />
-          <span className="text-xs text-gray-700 dark:text-gray-300">
-            Use <code className="bg-gray-100 dark:bg-gray-800 px-1 rounded">GITHUB_TOKEN</code>
-            {" "}(uncheck for public repos if you get auth errors)
-          </span>
         </label>
 
         <button

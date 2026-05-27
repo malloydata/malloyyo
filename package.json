@@ -18,7 +18,6 @@
     "@codemirror/theme-one-dark": "^6.1.3",
     "@duckdb/node-api": "1.4.4-r.1",
     "@malloydata/db-bigquery": "^0.0.400",
-    "@malloydata/db-databricks": "^0.0.400",
     "@malloydata/db-duckdb": "^0.0.400",
     "@malloydata/db-mysql": "^0.0.400",
     "@malloydata/db-postgres": "^0.0.400",

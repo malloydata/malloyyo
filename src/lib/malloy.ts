@@ -17,7 +17,6 @@ function ensureConnectionTypes(): Promise<void> {
       "@malloydata/db-snowflake",
       "@malloydata/db-trino",
       "@malloydata/db-mysql",
-      "@malloydata/db-databricks",
     ];
     for (const pkg of pkgs) {
       try {

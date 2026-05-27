@@ -2,7 +2,6 @@ import { eq, and, desc, or } from "drizzle-orm";
 import { db, datasets, malloyModels, malloyModelFiles, queries, type User } from "@/db";
 import type { SourceInfo } from "./malloy";
 import { compileMalloy, runMalloy, compileMalloyFiles, runMalloyFiles, describeSourceFields } from "./malloy";
-import { sampleTable } from "./duckdb";
 
 export type ToolDescriptor = {
   name: string;
@@ -14,13 +13,13 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: "list_sources",
     description:
-      "List all queryable Malloy sources available on this MCP endpoint. Each source is a named entity you can run analytical queries against. Multiple sources may come from the same semantic model.",
+      "List all queryable Malloy sources available on this MCP endpoint. Each source is a named entity you can run analytical queries against. Multiple sources may come from the same semantic model. After listing, call describe_semantic_model on the source you want to query.",
     inputSchema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
     name: "describe_semantic_model",
     description:
-      "Return the Malloy semantic model (source declarations, measures, dimensions) for the named source. Use this first to learn what queries are possible.",
+      "Return the full Malloy semantic model for the named source: all pre-defined measures, dimensions, views, and joins. Always call this before writing any query — the model almost certainly already has the measures you need (counts, sums, averages) so you do not need to write aggregations from scratch. Reading the model once is cheaper than iterating through compile errors.",
     inputSchema: {
       type: "object",
       properties: { source: { type: "string" } },
@@ -29,23 +28,9 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     },
   },
   {
-    name: "sample_rows",
-    description:
-      "Return up to N (default 20, max 200) raw sample rows from the source's underlying table. Useful for quickly inspecting values before writing a Malloy query.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        source: { type: "string" },
-        n: { type: "integer", minimum: 1, maximum: 200 },
-      },
-      required: ["source"],
-      additionalProperties: false,
-    },
-  },
-  {
     name: "compile_analytical_query",
     description:
-      "Compile a Malloy query against the source's semantic model and return the generated SQL, without executing. Use this to validate syntax cheaply.",
+      "Compile a Malloy query against the source's semantic model and return the generated SQL, without executing. Use this to validate syntax cheaply. You must call describe_semantic_model first to know what measures and dimensions are available.",
     inputSchema: {
       type: "object",
       properties: {
@@ -62,7 +47,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: "run_analytical_query",
     description:
-      "Execute a Malloy query against the source and return the rows. Default row cap is 10000; pass a smaller `max_rows` if you want to bound the response.",
+      "Execute a Malloy query against the source and return the rows. Default row cap is 10000; pass a smaller `max_rows` if you want to bound the response. You must call describe_semantic_model first to know what measures and dimensions are available — use the pre-defined measures rather than writing raw aggregations.",
     inputSchema: {
       type: "object",
       properties: {
@@ -210,16 +195,6 @@ export async function callTool(
         fields,
         malloy_source: model.source,
       });
-    }
-    case "sample_rows": {
-      const sourceName = String(args.source ?? args.dataset ?? "");
-      const n = Math.max(1, Math.min(200, Number(args.n ?? 20)));
-      const found = await findBySource(user.id, sourceName);
-      if (!found) return errText(`source '${sourceName}' not found`);
-      const { ds } = found;
-      if (!ds.mdTable) return errText(`sample_rows is not available for '${sourceName}' — it has no MotherDuck table`);
-      const rows = await sampleTable(ds.mdTable, n);
-      return text(rows);
     }
     case "compile_analytical_query": {
       const sourceName = String(args.source ?? args.dataset ?? "");

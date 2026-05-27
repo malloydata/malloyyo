@@ -98,25 +98,31 @@ export default function HomePage() {
                 {sources.map((s, i) => (
                   <li key={`${s.datasetId}-${s.source}-${i}`}>
                     <Link href={`/datasets/${s.datasetId}`}
-                      className="flex items-center justify-between gap-3 px-3 py-2 hover:bg-gray-50 dark:hover:bg-gray-900/50">
-                      <span className="flex-1 min-w-0">
-                        <span className="truncate block">{s.source}</span>
-                        {s.description && (
-                          <span className="text-gray-400 dark:text-gray-500 text-xs truncate block">{s.description}</span>
-                        )}
-                        {!s.description && s.source !== s.model && (
-                          <span className="text-gray-400 dark:text-gray-500 text-xs truncate block">in {s.model}</span>
-                        )}
-                      </span>
-                      {me.isAdmin && (s.ownerEmail || s.ownerName) && (
-                        <span className="text-gray-400 dark:text-gray-500 text-xs truncate max-w-[160px]">
-                          {s.ownerEmail ?? s.ownerName}
-                        </span>
-                      )}
-                      <span className={`text-xs px-1.5 py-0.5 rounded whitespace-nowrap ${s.isPublic ? "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300" : "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400"}`}>
-                        {s.isPublic ? "public" : "private"}
-                      </span>
-                      <StatusBadge status={s.status} />
+                      className="block px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-900/50">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex-1 min-w-0">
+                          <span className="font-medium truncate block">{s.source}</span>
+                          {s.description && (
+                            <span className="text-gray-500 dark:text-gray-400 text-xs mt-0.5 block leading-relaxed">{s.description}</span>
+                          )}
+                          {!s.description && s.source !== s.model && (
+                            <span className="text-gray-400 dark:text-gray-500 text-xs mt-0.5 block">in {s.model}</span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2 flex-shrink-0 mt-0.5">
+                          {me.isAdmin && (s.ownerEmail || s.ownerName) && (
+                            <span className="text-gray-400 dark:text-gray-500 text-xs">
+                              {s.ownerEmail ?? s.ownerName}
+                            </span>
+                          )}
+                          {!s.isPublic && (
+                            <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400">
+                              private
+                            </span>
+                          )}
+                          {s.status !== "ready" && <StatusBadge status={s.status} />}
+                        </div>
+                      </div>
                     </Link>
                   </li>
                 ))}

@@ -181,7 +181,6 @@ async function modelFileMap(model: { id: string; source: string }): Promise<Map<
   return new Map([["index.malloy", model.source]]);
 }
 
-// Get next sequence number for a tool call within an investigation.
 async function nextSequence(investigationId: string): Promise<number> {
   const [row] = await db
     .select({ n: count() })
@@ -226,12 +225,10 @@ export async function callTool(
     case "list_sources":
     case "list_datasets": {
       const sources = await listAllSources(user.id);
-      if (investigationId) {
-        const seq = await nextSequence(investigationId);
-        await db.insert(toolCalls).values({
-          investigationId, userId: user.id, sequence: seq, toolName: "list_sources",
-        }).catch(() => {});
-      }
+      const seq = investigationId ? await nextSequence(investigationId) : 0;
+      await db.insert(toolCalls).values({
+        investigationId, userId: user.id, sequence: seq, toolName: "list_sources",
+      }).catch(() => {});
       return text(sources);
     }
 
@@ -242,13 +239,11 @@ export async function callTool(
       const { ds, model, description } = found;
       const files = await modelFileMap(model);
       const fields = await describeSourceFields(files, "index.malloy", sourceName);
-      if (investigationId) {
-        const seq = await nextSequence(investigationId);
-        await db.insert(toolCalls).values({
-          investigationId, userId: user.id, datasetId: ds.id, sequence: seq,
-          toolName: "describe_semantic_model", source: sourceName,
-        }).catch(() => {});
-      }
+      const seq = investigationId ? await nextSequence(investigationId) : 0;
+      await db.insert(toolCalls).values({
+        investigationId, userId: user.id, datasetId: ds.id, sequence: seq,
+        toolName: "describe_semantic_model", source: sourceName,
+      }).catch(() => {});
       return text({
         source: sourceName,
         model: ds.name,
@@ -266,16 +261,14 @@ export async function callTool(
       const { ds, model } = found;
       const files = await modelFileMap(model);
       const res = await compileMalloyFiles(files, "index.malloy", malloyQ);
-      if (investigationId) {
-        const seq = await nextSequence(investigationId);
-        await db.insert(toolCalls).values({
-          investigationId, userId: user.id, datasetId: ds.id, sequence: seq,
-          toolName: "compile_analytical_query", source: sourceName,
-          malloyInput: malloyQ,
-          compiledSql: res.ok ? res.sql : undefined,
-          error: res.ok ? undefined : res.error,
-        }).catch(() => {});
-      }
+      const seq = investigationId ? await nextSequence(investigationId) : 0;
+      await db.insert(toolCalls).values({
+        investigationId, userId: user.id, datasetId: ds.id, sequence: seq,
+        toolName: "compile_analytical_query", source: sourceName,
+        malloyInput: malloyQ,
+        compiledSql: res.ok ? res.sql : undefined,
+        error: res.ok ? undefined : res.error,
+      }).catch(() => {});
       if (!res.ok) return errText(`compile failed: ${res.error}`);
       return text({ sql: res.sql });
     }
@@ -302,15 +295,13 @@ export async function callTool(
           rowCount: res.rowCount,
           durationMs,
         });
-        if (investigationId) {
-          const seq = await nextSequence(investigationId);
-          await db.insert(toolCalls).values({
-            investigationId, userId: user.id, datasetId: ds.id, sequence: seq,
-            toolName: "run_analytical_query", source: sourceName,
-            malloyInput: malloyQ, compiledSql: res.sql,
-            rowCount: res.rowCount, durationMs,
-          }).catch(() => {});
-        }
+        const seq = investigationId ? await nextSequence(investigationId) : 0;
+        await db.insert(toolCalls).values({
+          investigationId, userId: user.id, datasetId: ds.id, sequence: seq,
+          toolName: "run_analytical_query", source: sourceName,
+          malloyInput: malloyQ, compiledSql: res.sql,
+          rowCount: res.rowCount, durationMs,
+        }).catch(() => {});
         return text({
           row_count: res.rowCount,
           rows: capped,
@@ -325,14 +316,12 @@ export async function callTool(
           malloySource: malloyQ,
           error: msg,
         });
-        if (investigationId) {
-          const seq = await nextSequence(investigationId);
-          await db.insert(toolCalls).values({
-            investigationId, userId: user.id, datasetId: ds.id, sequence: seq,
-            toolName: "run_analytical_query", source: sourceName,
-            malloyInput: malloyQ, error: msg, durationMs: Date.now() - t0,
-          }).catch(() => {});
-        }
+        const seq = investigationId ? await nextSequence(investigationId) : 0;
+        await db.insert(toolCalls).values({
+          investigationId, userId: user.id, datasetId: ds.id, sequence: seq,
+          toolName: "run_analytical_query", source: sourceName,
+          malloyInput: malloyQ, error: msg, durationMs: Date.now() - t0,
+        }).catch(() => {});
         return errText(`run failed: ${msg}`);
       }
     }

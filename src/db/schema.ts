@@ -176,6 +176,50 @@ export const queries = pgTable(
   (t) => [index("queries_dataset_id_idx").on(t.datasetId)],
 );
 
+// An investigation is a thread of tool calls initiated by an AI agent.
+// Claude calls start_investigation first with a synopsis, then all subsequent
+// tool calls reference the investigation_id so they can be analyzed as a unit.
+export const investigations = pgTable(
+  "investigations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
+    synopsis: text("synopsis").notNull(),
+    clientName: text("client_name"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .default(sql`now()`),
+  },
+  (t) => [index("investigations_user_id_idx").on(t.userId)],
+);
+
+// One row per MCP tool call. Linked to an investigation when Claude provides
+// the investigation_id. Sequence tracks call order within an investigation.
+export const toolCalls = pgTable(
+  "tool_calls",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    investigationId: uuid("investigation_id").references(() => investigations.id, { onDelete: "set null" }),
+    userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
+    datasetId: uuid("dataset_id").references(() => datasets.id, { onDelete: "set null" }),
+    sequence: integer("sequence").notNull().default(0),
+    toolName: text("tool_name").notNull(),
+    source: text("source"),
+    malloyInput: text("malloy_input"),
+    compiledSql: text("compiled_sql"),
+    rowCount: integer("row_count"),
+    durationMs: integer("duration_ms"),
+    error: text("error"),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .default(sql`now()`),
+  },
+  (t) => [
+    index("tool_calls_investigation_id_idx").on(t.investigationId),
+    index("tool_calls_user_id_idx").on(t.userId),
+  ],
+);
+
 // OAuth 2.1 client registry (RFC 7591). One row per MCP client.
 export const oauthClients = pgTable("oauth_clients", {
   id: text("id")

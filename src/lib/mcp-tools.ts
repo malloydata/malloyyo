@@ -1,5 +1,5 @@
-import { eq, and, desc, or } from "drizzle-orm";
-import { db, datasets, malloyModels, malloyModelFiles, queries, type User } from "@/db";
+import { eq, and, desc, or, count } from "drizzle-orm";
+import { db, datasets, malloyModels, malloyModelFiles, queries, investigations, toolCalls, type User } from "@/db";
 import type { SourceInfo } from "./malloy";
 import { compileMalloyFiles, runMalloyFiles, describeSourceFields } from "./malloy";
 
@@ -11,10 +11,32 @@ export type ToolDescriptor = {
 
 export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
+    name: "start_investigation",
+    description:
+      "Call this FIRST before any other tool. Provide a one-sentence synopsis of what you are trying to answer. Returns an investigation_id — pass it to every subsequent tool call so your work can be tracked and analyzed as a coherent thread.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        synopsis: {
+          type: "string",
+          description: "One sentence describing the question or goal of this investigation.",
+        },
+      },
+      required: ["synopsis"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "list_sources",
     description:
       "List all queryable Malloy sources available on this MCP endpoint. Each source is a named entity you can run analytical queries against. Multiple sources may come from the same semantic model. After listing, call describe_semantic_model on the source you want to query.",
-    inputSchema: { type: "object", properties: {}, additionalProperties: false },
+    inputSchema: {
+      type: "object",
+      properties: {
+        investigation_id: { type: "string", description: "ID returned by start_investigation." },
+      },
+      additionalProperties: false,
+    },
   },
   {
     name: "describe_semantic_model",
@@ -22,7 +44,10 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       "Return the full Malloy semantic model for the named source: all pre-defined measures, dimensions, views, and joins. Always call this before writing any query — the model almost certainly already has the measures you need (counts, sums, averages) so you do not need to write aggregations from scratch. Reading the model once is cheaper than iterating through compile errors.",
     inputSchema: {
       type: "object",
-      properties: { source: { type: "string" } },
+      properties: {
+        source: { type: "string" },
+        investigation_id: { type: "string", description: "ID returned by start_investigation." },
+      },
       required: ["source"],
       additionalProperties: false,
     },
@@ -39,6 +64,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
           type: "string",
           description: "Malloy query starting with `run:` that references the source name.",
         },
+        investigation_id: { type: "string", description: "ID returned by start_investigation." },
       },
       required: ["source", "malloy"],
       additionalProperties: false,
@@ -63,6 +89,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
           description:
             "Maximum rows to return (default 10000). The result is truncated server-side at this value; `truncated: true` indicates more rows are available.",
         },
+        investigation_id: { type: "string", description: "ID returned by start_investigation." },
       },
       required: ["source", "malloy"],
       additionalProperties: false,
@@ -154,6 +181,15 @@ async function modelFileMap(model: { id: string; source: string }): Promise<Map<
   return new Map([["index.malloy", model.source]]);
 }
 
+// Get next sequence number for a tool call within an investigation.
+async function nextSequence(investigationId: string): Promise<number> {
+  const [row] = await db
+    .select({ n: count() })
+    .from(toolCalls)
+    .where(eq(toolCalls.investigationId, investigationId));
+  return Number(row?.n ?? 0);
+}
+
 export type ToolResult = {
   content: Array<{ type: "text"; text: string }>;
   isError?: boolean;
@@ -174,13 +210,31 @@ export async function callTool(
   name: string,
   args: Record<string, unknown>,
 ): Promise<ToolResult> {
+  const investigationId = typeof args.investigation_id === "string" ? args.investigation_id : undefined;
+
   switch (name) {
+    case "start_investigation": {
+      const synopsis = String(args.synopsis ?? "").trim();
+      if (!synopsis) return errText("synopsis is required");
+      const [inv] = await db
+        .insert(investigations)
+        .values({ userId: user.id, synopsis })
+        .returning({ id: investigations.id });
+      return text({ investigation_id: inv.id });
+    }
+
     case "list_sources":
     case "list_datasets": {
-      // list_datasets kept as a silent alias for backward compatibility.
       const sources = await listAllSources(user.id);
+      if (investigationId) {
+        const seq = await nextSequence(investigationId);
+        await db.insert(toolCalls).values({
+          investigationId, userId: user.id, sequence: seq, toolName: "list_sources",
+        }).catch(() => {});
+      }
       return text(sources);
     }
+
     case "describe_semantic_model": {
       const sourceName = String(args.source ?? args.dataset ?? "");
       const found = await findBySource(user.id, sourceName);
@@ -188,6 +242,13 @@ export async function callTool(
       const { ds, model, description } = found;
       const files = await modelFileMap(model);
       const fields = await describeSourceFields(files, "index.malloy", sourceName);
+      if (investigationId) {
+        const seq = await nextSequence(investigationId);
+        await db.insert(toolCalls).values({
+          investigationId, userId: user.id, datasetId: ds.id, sequence: seq,
+          toolName: "describe_semantic_model", source: sourceName,
+        }).catch(() => {});
+      }
       return text({
         source: sourceName,
         model: ds.name,
@@ -196,17 +257,29 @@ export async function callTool(
         malloy_source: model.source,
       });
     }
+
     case "compile_analytical_query": {
       const sourceName = String(args.source ?? args.dataset ?? "");
       const malloyQ = String(args.malloy ?? "");
       const found = await findBySource(user.id, sourceName);
       if (!found) return errText(`source '${sourceName}' not found`);
-      const { model } = found;
+      const { ds, model } = found;
       const files = await modelFileMap(model);
       const res = await compileMalloyFiles(files, "index.malloy", malloyQ);
+      if (investigationId) {
+        const seq = await nextSequence(investigationId);
+        await db.insert(toolCalls).values({
+          investigationId, userId: user.id, datasetId: ds.id, sequence: seq,
+          toolName: "compile_analytical_query", source: sourceName,
+          malloyInput: malloyQ,
+          compiledSql: res.ok ? res.sql : undefined,
+          error: res.ok ? undefined : res.error,
+        }).catch(() => {});
+      }
       if (!res.ok) return errText(`compile failed: ${res.error}`);
       return text({ sql: res.sql });
     }
+
     case "run_analytical_query": {
       const sourceName = String(args.source ?? args.dataset ?? "");
       const malloyQ = String(args.malloy ?? "");
@@ -229,6 +302,15 @@ export async function callTool(
           rowCount: res.rowCount,
           durationMs,
         });
+        if (investigationId) {
+          const seq = await nextSequence(investigationId);
+          await db.insert(toolCalls).values({
+            investigationId, userId: user.id, datasetId: ds.id, sequence: seq,
+            toolName: "run_analytical_query", source: sourceName,
+            malloyInput: malloyQ, compiledSql: res.sql,
+            rowCount: res.rowCount, durationMs,
+          }).catch(() => {});
+        }
         return text({
           row_count: res.rowCount,
           rows: capped,
@@ -243,9 +325,18 @@ export async function callTool(
           malloySource: malloyQ,
           error: msg,
         });
+        if (investigationId) {
+          const seq = await nextSequence(investigationId);
+          await db.insert(toolCalls).values({
+            investigationId, userId: user.id, datasetId: ds.id, sequence: seq,
+            toolName: "run_analytical_query", source: sourceName,
+            malloyInput: malloyQ, error: msg, durationMs: Date.now() - t0,
+          }).catch(() => {});
+        }
         return errText(`run failed: ${msg}`);
       }
     }
+
     default:
       return errText(`unknown tool: ${name}`);
   }

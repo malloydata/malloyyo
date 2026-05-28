@@ -1,5 +1,6 @@
 import NextAuth from "next-auth";
 import Google from "next-auth/providers/google";
+import Okta from "next-auth/providers/okta";
 import { DrizzleAdapter } from "@auth/drizzle-adapter";
 import { eq } from "drizzle-orm";
 import { db, users, accounts, sessions, verificationTokens } from "@/db";
@@ -17,6 +18,13 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       clientId: process.env.AUTH_GOOGLE_ID,
       clientSecret: process.env.AUTH_GOOGLE_SECRET,
     }),
+    ...(process.env.AUTH_OKTA_CLIENT_ID ? [
+      Okta({
+        clientId: process.env.AUTH_OKTA_CLIENT_ID,
+        clientSecret: process.env.AUTH_OKTA_CLIENT_SECRET,
+        issuer: process.env.AUTH_OKTA_ISSUER,
+      }),
+    ] : []),
   ],
   session: { strategy: "database" },
   // Vercel preview deploys use dynamic hostnames; trust the request host.

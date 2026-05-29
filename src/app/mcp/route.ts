@@ -48,12 +48,7 @@ export async function POST(req: Request) {
   }
   const raw = authHeader.slice(7).trim();
   const validated = await validateAccessToken(raw);
-  if (!validated.ok) {
-    const { createHash } = await import("node:crypto");
-    const hash = createHash("sha256").update(raw).digest("hex");
-    console.error(`[mcp] token validation failed: reason=${validated.reason} hash=${hash} token_len=${raw.length}`);
-    return unauthorized("Invalid or revoked token", req);
-  }
+  if (!validated.ok) return unauthorized("Invalid or revoked token", req);
 
   // Identify user from the token — no slug needed.
   const [user] = await db.select().from(users).where(eq(users.id, validated.userId)).limit(1);

@@ -1,4 +1,5 @@
 @AGENTS.md
+@local/CLAUDE.md
 
 ## Project context
 
@@ -17,32 +18,18 @@ Forked from jrtipton/mayolo@minimal-core. Key architectural change: **S3/R2 repl
 
 ## Local dev
 
-There is no `.env.local` — always specify the environment file explicitly:
+Create a `local/` directory (gitignored) for your environment files. Name them after the instance, e.g. `local/staging`, `local/main`. Copy `.env.local.example` for the required vars.
 
 ```bash
-npx dotenv-cli -e .env.local.main -- npm run dev
-npx dotenv-cli -e .env.local.staging -- npm run dev
-npx dotenv-cli -e .env.local.motherduck -- npm run dev
+npx dotenv-cli -e local/staging -- npm run dev
 ```
 
-Available env files (never committed — see `.gitignore`):
-- `.env.local.main` — production (malloyyo.vercel.app)
-- `.env.local.staging` — staging instance
-- `.env.local.motherduck` — malloyyo-duck instance
-- `.env.local.guild` — guild instance
-
-Copy `.env.local.example` to get started. Required vars:
-- `DATABASE_URL` — Neon Postgres connection string
-- `MOTHERDUCK_TOKEN` — read-write personal token (NOT a read_scaling token)
-- `MOTHERDUCK_DATABASE` — must be an existing MotherDuck database (e.g. `mayolo`)
-- `AI_GATEWAY_API_KEY` — Anthropic API key
-- `APP_BASE_URL` — http://localhost:3000 locally
-- `APP_SECRET` — shared secret for the login page
-
-DB schema push (first time or after schema changes):
+DB schema push:
 ```bash
-npx dotenv-cli -e .env.local.main -- npx drizzle-kit push
+npx dotenv-cli -e local/staging -- npx drizzle-kit push
 ```
+
+See `local/CLAUDE.md` for instance-specific details (gitignored, private).
 
 ## MotherDuck gotcha
 

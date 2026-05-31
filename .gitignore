@@ -30,6 +30,9 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
+# local configuration directory (private, never committed)
+local/
+
 # env files
 .env.local*
 !.env.local.example

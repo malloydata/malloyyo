@@ -29,6 +29,14 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   session: { strategy: "database" },
   // Vercel preview deploys use dynamic hostnames; trust the request host.
   trustHost: true,
+  callbacks: {
+    async signIn({ user }) {
+      const allowList = process.env.EMAIL_ALLOW_LIST;
+      if (!allowList) return true;
+      const allowed = allowList.split(",").map((e) => e.trim().toLowerCase());
+      return allowed.includes((user.email ?? "").toLowerCase());
+    },
+  },
   events: {
     // Assign a friendly slug on first sign-in. Retry on the rare
     // unique-constraint collision (~525k namespace).

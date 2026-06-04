@@ -1,6 +1,7 @@
 import { auth } from "@/auth";
 import { getOAuthClient, isRegisteredRedirect } from "@/lib/oauth/clients";
 import { signAuthz } from "@/lib/oauth/authz-blob";
+import { originFromRequest } from "@/lib/oauth/base-url";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -45,7 +46,8 @@ export async function GET(request: Request): Promise<Response> {
   const session = await auth();
   if (!session?.user?.id) {
     const callbackUrl = url.pathname + url.search;
-    const signInUrl = new URL("/api/auth/signin", url.origin);
+    const origin = originFromRequest(request);
+    const signInUrl = new URL("/api/auth/signin", origin);
     signInUrl.searchParams.set("callbackUrl", callbackUrl);
     return Response.redirect(signInUrl.toString(), 302);
   }
@@ -55,7 +57,7 @@ export async function GET(request: Request): Promise<Response> {
     resource: resource || null, state: state || null,
   });
 
-  const consent = new URL("/oauth/consent", url.origin);
+  const consent = new URL("/oauth/consent", originFromRequest(request));
   consent.searchParams.set("t", token);
   return Response.redirect(consent.toString(), 302);
 }

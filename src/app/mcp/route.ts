@@ -3,6 +3,7 @@ import { eq } from "drizzle-orm";
 import { TOOL_DESCRIPTORS, callTool } from "@/lib/mcp-tools";
 import { recordAccessTokenUse, validateAccessToken } from "@/lib/oauth/tokens";
 import { corsPreflight, withCors } from "@/lib/oauth/cors";
+import { originFromRequest } from "@/lib/oauth/base-url";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,7 +24,7 @@ function err(id: string | number | null | undefined, code: number, message: stri
 }
 
 function unauthorized(description: string, request: Request): Response {
-  const origin = new URL(request.url).origin;
+  const origin = originFromRequest(request);
   const safe = description.replace(/[^\x20-\x7E]/g, " ").replace(/"/g, "'");
   return withCors(
     new Response(JSON.stringify({ error: "invalid_token", error_description: description }), {

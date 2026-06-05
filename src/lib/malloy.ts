@@ -2,6 +2,7 @@ import * as malloy from "@malloydata/malloy";
 import { DuckDBConnection as MalloyDuckDBConnection } from "@malloydata/db-duckdb";
 import { env } from "./env";
 import type { GitHubURLReader } from "./github";
+import { logger } from "./logger";
 
 // DB backends are registered lazily (on first malloy-config.json use) so a broken
 // native dependency (e.g. lz4 for Databricks) cannot crash the module at load time.
@@ -22,7 +23,7 @@ function ensureConnectionTypes(): Promise<void> {
       try {
         await import(pkg);
       } catch (err) {
-        console.warn(`[malloy] could not register connection backend ${pkg}:`, err);
+        logger.warn("malloy connection backend unavailable", { pkg, err: err instanceof Error ? err.message : String(err) });
       }
     }
   })();

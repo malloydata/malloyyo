@@ -84,7 +84,7 @@ export async function POST(req: Request) {
       const name = String(params.name ?? "");
       const args = (params.arguments ?? {}) as Record<string, unknown>;
       const start = Date.now();
-      logger.info("mcp tool call", { tool: name, userId: user.id, userEmail: user.email });
+      logger.info("mcp tool call", { tool: name, userId: user.id });
       try {
         const result = await callTool(user, name, args);
         logger.info("mcp tool ok", { tool: name, userId: user.id, durationMs: Date.now() - start });

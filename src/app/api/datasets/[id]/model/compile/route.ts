@@ -5,6 +5,7 @@ import { db, datasets, malloyModels, malloyModelFiles } from "@/db";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
 import { compileMalloy, compileMalloyFiles } from "@/lib/malloy";
+import { logger } from "@/lib/logger";
 
 export const runtime = "nodejs";
 
@@ -41,6 +42,7 @@ export async function POST(
     const probe = `run: ${firstSource} -> { aggregate: __probe is count() }`;
     const fileMap = new Map(files.map((f) => [f.path, f.content]));
     const result = await compileMalloyFiles(fileMap, "index.malloy", probe);
+    if (!result.ok) logger.error("model compile failed (github)", { datasetId: id, modelId: model.id, error: result.error });
     return NextResponse.json(result);
   }
 
@@ -49,5 +51,6 @@ export async function POST(
   if (!source) return NextResponse.json({ error: "source required" }, { status: 400 });
   const probe = `run: ${ds.name} -> { aggregate: __probe is count() }`;
   const result = await compileMalloy(source, probe);
+  if (!result.ok) logger.error("model compile failed (single-file)", { datasetId: id, error: result.error });
   return NextResponse.json(result);
 }

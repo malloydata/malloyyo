@@ -72,6 +72,7 @@ export async function POST(req: Request) {
     const result = await introspectModelWithReader(reader, "index.malloy", malloyConfig);
 
     if (!result.ok) {
+      logger.error("dataset model introspection failed", { datasetId: id, repo: body.githubRepo, branch, error: result.error });
       await db.update(datasets).set({ status: "failed", statusError: result.error }).where(eq(datasets.id, id));
       return NextResponse.json({ id: row.id, error: result.error, status: "failed" }, { status: 422 });
     }

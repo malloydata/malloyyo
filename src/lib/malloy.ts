@@ -51,14 +51,18 @@ export async function compileMalloy(
   modelSource: string,
   query: string,
 ): Promise<CompileResult> {
+  logger.debug("compileMalloy start", { sourceLen: modelSource.length, query });
   const conn = makeConnection();
   try {
     const runtime = new malloy.SingleConnectionRuntime({ connection: conn });
     const runner = runtime.loadQuery(`${modelSource}\n${query}`);
     const sql = await runner.getSQL();
+    logger.debug("compileMalloy ok");
     return { ok: true, sql };
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    const error = err instanceof Error ? err.message : String(err);
+    logger.error("compileMalloy failed", { error, sourcePreview: modelSource.slice(0, 200) });
+    return { ok: false, error };
   } finally {
     await conn.close();
   }
@@ -106,6 +110,7 @@ export async function introspectModelWithReader(
   entryPath: string,
   configJson?: string,
 ): Promise<{ ok: true; sources: SourceInfo[] } | { ok: false; error: string }> {
+  logger.debug("introspectModel start", { entryPath, hasConfig: !!configJson });
   let handle: RuntimeHandle | undefined;
   try {
     handle = await buildRuntimeWithReader(reader as malloy.URLReader, configJson);
@@ -114,9 +119,12 @@ export async function introspectModelWithReader(
       name: e.name,
       description: e.annotations.forRoute('"')[0]?.content.trim() ?? null,
     }));
+    logger.debug("introspectModel ok", { entryPath, sourceCount: sources.length, sources: sources.map((s) => s.name) });
     return { ok: true, sources };
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    const error = err instanceof Error ? err.message : String(err);
+    logger.error("introspectModel failed", { entryPath, hasConfig: !!configJson, error });
+    return { ok: false, error };
   } finally {
     await handle?.cleanup();
   }
@@ -246,6 +254,7 @@ export async function compileMalloyFiles(
   entryPath: string,
   query: string,
 ): Promise<CompileResult & { sources?: string[] }> {
+  logger.debug("compileMalloyFiles start", { entryPath, fileCount: files.size, files: [...files.keys()], query });
   const { runtime, cleanup } = await buildRuntime(files);
   try {
     const url = fileUrl(entryPath);
@@ -253,9 +262,12 @@ export async function compileMalloyFiles(
     const sql = await runner.getSQL();
     const compiled = await runtime.getModel(url);
     const sources = compiled.explores.map((e) => e.name);
+    logger.debug("compileMalloyFiles ok", { entryPath, sources });
     return { ok: true, sql, sources };
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    const error = err instanceof Error ? err.message : String(err);
+    logger.error("compileMalloyFiles failed", { entryPath, fileCount: files.size, files: [...files.keys()], error });
+    return { ok: false, error };
   } finally {
     await cleanup();
   }

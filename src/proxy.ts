@@ -1,29 +1,41 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { auth } from "@/auth";
+import { logger } from "@/lib/logger";
 
 // Routes that must never be blocked — OAuth discovery, MCP, and auth itself.
 const ALWAYS_ALLOW = /^\/(api\/auth|api\/oauth|\.well-known|mcp|oauth\/consent)/;
 
 export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
-  if (ALWAYS_ALLOW.test(pathname)) return NextResponse.next();
+
+  const requestId = req.headers.get("x-request-id") ?? crypto.randomUUID();
+  const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
+  logger.info("request", { requestId, method: req.method, path: pathname, ip });
+
+  // Propagate requestId so route handlers can correlate logs.
+  const headers = new Headers(req.headers);
+  headers.set("x-request-id", requestId);
+  const next = () => NextResponse.next({ request: { headers } });
+
+  if (ALWAYS_ALLOW.test(pathname)) return next();
 
   const allowList = process.env.EMAIL_ALLOW_LIST;
-  if (!allowList) return NextResponse.next();
+  if (!allowList) return next();
 
   const session = await auth();
-  if (!session?.user?.email) return NextResponse.next(); // not signed in — let route handle it
+  if (!session?.user?.email) return next(); // not signed in — let route handle it
 
   const allowed = allowList.split(",").map((e) => e.trim().toLowerCase());
   if (!allowed.includes(session.user.email.toLowerCase())) {
     // Signed in but not allowed — sign them out and redirect to home.
+    logger.warn("access denied", { requestId, userId: session.user.id });
     const signOutUrl = new URL("/api/auth/signout", req.url);
     signOutUrl.searchParams.set("callbackUrl", "/");
     return NextResponse.redirect(signOutUrl);
   }
 
-  return NextResponse.next();
+  return next();
 }
 
 export const config = {

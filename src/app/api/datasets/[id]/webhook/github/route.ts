@@ -2,6 +2,7 @@ import { NextResponse, after } from "next/server";
 import { eq } from "drizzle-orm";
 import { db, datasets } from "@/db";
 import { refreshGitHubModel } from "@/lib/github-refresh";
+import { logger, serializeErr } from "@/lib/logger";
 
 export const runtime = "nodejs";
 
@@ -22,7 +23,7 @@ export async function POST(
   // `after()` uses waitUntil so Vercel keeps the function alive until done.
   after(
     refreshGitHubModel(id).catch((err) =>
-      console.error(`[webhook] refresh failed for dataset ${id}:`, err),
+      logger.error("webhook refresh failed", { datasetId: id, ...serializeErr(err) }),
     ),
   );
 

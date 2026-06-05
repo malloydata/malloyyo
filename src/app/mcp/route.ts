@@ -4,6 +4,7 @@ import { TOOL_DESCRIPTORS, callTool } from "@/lib/mcp-tools";
 import { recordAccessTokenUse, validateAccessToken } from "@/lib/oauth/tokens";
 import { corsPreflight, withCors } from "@/lib/oauth/cors";
 import { originFromRequest } from "@/lib/oauth/base-url";
+import { logger } from "@/lib/logger";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -82,10 +83,14 @@ export async function POST(req: Request) {
       const params = body.params ?? {};
       const name = String(params.name ?? "");
       const args = (params.arguments ?? {}) as Record<string, unknown>;
+      const start = Date.now();
+      logger.info("mcp tool call", { tool: name, userId: user.id });
       try {
         const result = await callTool(user, name, args);
+        logger.info("mcp tool ok", { tool: name, userId: user.id, durationMs: Date.now() - start });
         return ok(body.id, result);
       } catch (e) {
+        logger.error("mcp tool error", { tool: name, userId: user.id, durationMs: Date.now() - start, error: e instanceof Error ? e.message : String(e) });
         return err(body.id, -32000, e instanceof Error ? e.message : String(e));
       }
     }

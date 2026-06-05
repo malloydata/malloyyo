@@ -2,6 +2,7 @@ import { desc, eq } from "drizzle-orm";
 import { db, datasets, malloyModels, malloyModelFiles } from "@/db";
 import { GitHubURLReader, fetchGitHubFile, parseGitHubRepo } from "./github";
 import { introspectModelWithReader, type SourceInfo } from "./malloy";
+import { logger } from "./logger";
 
 export type RefreshResult =
   | { ok: true; version: number; generatedBy: string; compiledAt: Date | null; sources: SourceInfo[]; fileCount: number }
@@ -11,6 +12,7 @@ export async function refreshGitHubModel(datasetId: string): Promise<RefreshResu
   const [ds] = await db.select().from(datasets).where(eq(datasets.id, datasetId));
   if (!ds) return { ok: false, error: "dataset not found" };
   if (!ds.githubRepo) return { ok: false, error: "dataset has no github_repo configured" };
+  logger.info("refreshGitHubModel start", { datasetId, repo: ds.githubRepo, branch: ds.githubBranch ?? "main" });
 
   const { owner, repo } = parseGitHubRepo(ds.githubRepo);
   const branch = ds.githubBranch ?? "main";
@@ -28,7 +30,10 @@ export async function refreshGitHubModel(datasetId: string): Promise<RefreshResu
   }
 
   const result = await introspectModelWithReader(reader, "index.malloy", malloyConfig);
-  if (!result.ok) return { ok: false, error: result.error };
+  if (!result.ok) {
+    logger.error("refreshGitHubModel introspection failed", { datasetId, repo: ds.githubRepo, error: result.error });
+    return { ok: false, error: result.error };
+  }
 
   const [latest] = await db
     .select({ version: malloyModels.version })
@@ -64,6 +69,7 @@ export async function refreshGitHubModel(datasetId: string): Promise<RefreshResu
     );
   }
 
+  logger.info("refreshGitHubModel ok", { datasetId, repo: ds.githubRepo, version: created.version, sourceCount: result.sources.length, fileCount: reader.fetched.size });
   return {
     ok: true,
     version: created.version,

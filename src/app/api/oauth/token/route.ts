@@ -3,6 +3,7 @@ import { consumeAuthorizationCode, verifyPkce } from "@/lib/oauth/codes";
 import { getOAuthClient } from "@/lib/oauth/clients";
 import { issueTokenPair, rotateRefreshToken } from "@/lib/oauth/tokens";
 import { corsPreflight, withCors } from "@/lib/oauth/cors";
+import { logger } from "@/lib/logger";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -86,7 +87,7 @@ async function handleRefreshToken(body: TokenRequest): Promise<Response> {
 
   const result = await rotateRefreshToken(refresh_token, client_id);
   if (!result.ok) {
-    if (result.reason === "replayed") console.warn(`[oauth-token] replay detected; revoked grant for client_id=${client_id}`);
+    if (result.reason === "replayed") logger.warn("oauth token replay detected; grant revoked", { clientId: client_id });
     return err("invalid_grant", `Refresh token ${result.reason}`);
   }
   return tokenResponse(result.tokens.accessToken, result.tokens.refreshToken, result.tokens.expiresIn, "mcp");

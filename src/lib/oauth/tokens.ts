@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { and, eq, isNull } from "drizzle-orm";
 import { db, oauthAccessTokens, oauthRefreshTokens } from "@/db";
-import { logger } from "@/lib/logger";
+import { logger, serializeErr } from "@/lib/logger";
 
 export const ACCESS_TTL_SEC = 24 * 60 * 60;
 export const REFRESH_TTL_SEC = 90 * 24 * 60 * 60;
@@ -117,6 +117,6 @@ export async function recordAccessTokenUse(tokenHash: string): Promise<void> {
   try {
     await db.update(oauthAccessTokens).set({ lastUsedAt: new Date() }).where(eq(oauthAccessTokens.tokenHash, tokenHash));
   } catch (err) {
-    logger.warn("recordAccessTokenUse failed", { err: err instanceof Error ? err.message : String(err) });
+    logger.warn("recordAccessTokenUse failed", { ...serializeErr(err) });
   }
 }

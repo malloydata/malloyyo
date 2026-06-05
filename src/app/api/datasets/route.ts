@@ -7,7 +7,7 @@ import { isAdmin } from "@/lib/admin";
 import { nameToSlug } from "@/lib/slug";
 import { GitHubURLReader, fetchGitHubFile, parseGitHubRepo } from "@/lib/github";
 import { introspectModelWithReader } from "@/lib/malloy";
-import { logger } from "@/lib/logger";
+import { logger, serializeErr } from "@/lib/logger";
 
 export const runtime = "nodejs";
 
@@ -106,7 +106,7 @@ export async function POST(req: Request) {
     await db.update(datasets).set({ status: "ready", readyAt: new Date() }).where(eq(datasets.id, id));
     return NextResponse.json({ id: row.id, name, status: "ready", sources: result.sources });
   } catch (err) {
-    logger.error("POST /api/datasets uncaught error", { datasetId: id, err: err instanceof Error ? err.message : String(err) });
+    logger.error("POST /api/datasets uncaught error", { datasetId: id, ...serializeErr(err) });
     const msg = err instanceof Error ? err.message : String(err);
     await db.update(datasets).set({ status: "failed", statusError: msg }).where(eq(datasets.id, id)).catch(() => {});
     return NextResponse.json({ id, error: msg, status: "failed" }, { status: 500 });

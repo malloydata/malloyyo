@@ -29,7 +29,7 @@ export async function proxy(req: NextRequest) {
   const allowed = allowList.split(",").map((e) => e.trim().toLowerCase());
   if (!allowed.includes(session.user.email.toLowerCase())) {
     // Signed in but not allowed — sign them out and redirect to home.
-    logger.warn("access denied", { requestId, email: session.user.email });
+    logger.warn("access denied", { requestId, userId: session.user.id });
     const signOutUrl = new URL("/api/auth/signout", req.url);
     signOutUrl.searchParams.set("callbackUrl", "/");
     return NextResponse.redirect(signOutUrl);

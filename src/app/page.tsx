@@ -63,22 +63,30 @@ export default function HomePage() {
         </section>
       ) : (
         <>
-          {me.isAdmin && (
-            <section className="flex gap-3">
+          <section className="flex gap-3">
+            {me.isAdmin && (
               <Link
                 href="/datasets/new/github"
                 className="inline-block rounded bg-black text-white dark:bg-white dark:text-black px-4 py-2 text-xs"
               >
                 + Add Malloy model from GitHub
               </Link>
+            )}
+            <Link
+              href="/history"
+              className="inline-block rounded border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 px-4 py-2 text-xs hover:bg-gray-50 dark:hover:bg-gray-900"
+            >
+              query history
+            </Link>
+            {me.isAdmin && (
               <Link
                 href="/admin/users"
                 className="inline-block rounded border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 px-4 py-2 text-xs hover:bg-gray-50 dark:hover:bg-gray-900 ml-auto"
               >
                 users
               </Link>
-            </section>
-          )}
+            )}
+          </section>
 
           <McpSetup />
 

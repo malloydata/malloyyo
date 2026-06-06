@@ -4,6 +4,10 @@ import { env } from "./env";
 import type { GitHubURLReader } from "./github";
 import { logger, serializeErr } from "./logger";
 
+// DuckDB extension autoloading requires a writable home directory. Vercel/Lambda
+// functions may have HOME unset or empty — default to /tmp which is always writable.
+if (!process.env["HOME"]) process.env["HOME"] = "/tmp";
+
 // DB backends are registered lazily (on first malloy-config.json use) so a broken
 // native dependency (e.g. lz4 for Databricks) cannot crash the module at load time.
 let _connectionTypesReady: Promise<void> | null = null;
@@ -31,9 +35,6 @@ function ensureConnectionTypes(): Promise<void> {
 }
 
 function makeConnection(): MalloyDuckDBConnection {
-  // Same home_directory fix as duckdb.ts — cached MotherDuck extension
-  // can autoload before setupSQL runs if $HOME is unset (Vercel/Lambda).
-  process.env["HOME"] = process.env["HOME"] || "/tmp";
   return new MalloyDuckDBConnection({
     name: "duckdb",
     databasePath: "md:",

@@ -85,7 +85,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: "run_analytical_query",
     description:
-      "Execute a Malloy query against the source and return the rows. Default row cap is 10000; pass a smaller `max_rows` if you want to bound the response. You must call describe_semantic_model first to know what measures and dimensions are available — use the pre-defined measures rather than writing raw aggregations.",
+      "Execute a Malloy query against the source and return the rows. Default row cap is 10000; pass a smaller `max_rows` if you want to bound the response. You must call describe_semantic_model first to know what measures and dimensions are available — use the pre-defined measures rather than writing raw aggregations.\n\nAfter EVERY call to this tool you MUST immediately output a 'Query summary' containing: (1) the question being answered in plain English, (2) the Malloy logic — what is filtered, grouped, aggregated, and ordered, (3) any post-processing applied outside Malloy (if none, say 'none'). Omitting this summary is an error.\n\nWhen building visualizations: the Malloy query must do as much work as possible. Filtering to top-N results, selecting specific members, and ranking must happen in Malloy, not in client code. Only aesthetic decisions (colors, layout) belong outside Malloy.",
     inputSchema: {
       type: "object",
       properties: {

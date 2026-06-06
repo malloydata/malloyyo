@@ -9,56 +9,38 @@ export type ToolDescriptor = {
   inputSchema: Record<string, unknown>;
 };
 
+// Shared inquiry params appended to every substantive tool.
+const INQUIRY_PARAMS = {
+  question: {
+    type: "string",
+    description: "The user's question in their words. Pass this on the FIRST call for a new question — it creates an inquiry and returns inquiry_id. Omit on follow-up calls for the same question.",
+  },
+  inquiry_id: {
+    type: "string",
+    description: "inquiry_id returned by a previous call. Pass this on follow-up calls to associate them with the same inquiry.",
+  },
+};
+
 export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
-  {
-    name: "start_conversation",
-    description:
-      "Call this ONCE at the beginning of a session, before any other tool. Provide the name of the source you will explore and a brief description of what the user is trying to accomplish overall. Returns a conversation_id to pass to start_inquiry.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        source: { type: "string", description: "The Malloy source name you will be querying." },
-        context: { type: "string", description: "One sentence describing the user's overall goal for this session." },
-      },
-      required: ["source"],
-      additionalProperties: false,
-    },
-  },
-  {
-    name: "start_inquiry",
-    description:
-      "Call this at the start of each new question. Start a NEW inquiry when the user's question is unrelated to the previous results — for example, switching from 'Hitchcock movies' to 'weekend box office' is a new inquiry, but 'now show me Hitchcock remakes' is the same inquiry continuing. Returns an inquiry_id to pass to all subsequent tool calls for this question.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        conversation_id: { type: "string", description: "ID returned by start_conversation." },
-        question: { type: "string", description: "The user's question, in their words." },
-      },
-      required: ["conversation_id", "question"],
-      additionalProperties: false,
-    },
-  },
   {
     name: "list_sources",
     description:
-      "List all queryable Malloy sources available on this MCP endpoint. Each source is a named entity you can run analytical queries against. Multiple sources may come from the same semantic model. After listing, call describe_semantic_model on the source you want to query.",
+      "List all queryable Malloy sources available on this MCP endpoint. Each source is a named entity you can run analytical queries against. Call describe_semantic_model on the source you want to query before writing any query.",
     inputSchema: {
       type: "object",
-      properties: {
-        inquiry_id: { type: "string", description: "ID returned by start_inquiry." },
-      },
+      properties: { ...INQUIRY_PARAMS },
       additionalProperties: false,
     },
   },
   {
     name: "describe_semantic_model",
     description:
-      "Return the full Malloy semantic model for the named source: all pre-defined measures, dimensions, views, and joins. Always call this before writing any query — the model almost certainly already has the measures you need (counts, sums, averages) so you do not need to write aggregations from scratch. Reading the model once is cheaper than iterating through compile errors.",
+      "Return the full Malloy semantic model for the named source: all pre-defined measures, dimensions, views, and joins. Always call this before writing any query — the model almost certainly already has the measures you need (counts, sums, averages) so you do not need to write aggregations from scratch. Pass 'question' to start tracking this inquiry; the returned inquiry_id threads all subsequent calls.",
     inputSchema: {
       type: "object",
       properties: {
         source: { type: "string" },
-        inquiry_id: { type: "string", description: "ID returned by start_inquiry." },
+        ...INQUIRY_PARAMS,
       },
       required: ["source"],
       additionalProperties: false,
@@ -67,7 +49,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: "compile_analytical_query",
     description:
-      "Compile a Malloy query against the source's semantic model and return the generated SQL, without executing. Use this to validate syntax cheaply. You must call describe_semantic_model first to know what measures and dimensions are available.",
+      "Compile a Malloy query against the source's semantic model and return the generated SQL, without executing. Use this to validate syntax cheaply. Call describe_semantic_model first to know what measures and dimensions are available.",
     inputSchema: {
       type: "object",
       properties: {
@@ -76,7 +58,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
           type: "string",
           description: "Malloy query starting with `run:` that references the source name.",
         },
-        inquiry_id: { type: "string", description: "ID returned by start_inquiry." },
+        ...INQUIRY_PARAMS,
       },
       required: ["source", "malloy"],
       additionalProperties: false,
@@ -85,7 +67,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: "run_analytical_query",
     description:
-      "Execute a Malloy query against the source and return the rows. Default row cap is 10000; pass a smaller `max_rows` if you want to bound the response. You must call describe_semantic_model first to know what measures and dimensions are available — use the pre-defined measures rather than writing raw aggregations.",
+      "Execute a Malloy query against the source and return the rows. Default row cap is 10000; pass a smaller `max_rows` to bound the response. Call describe_semantic_model first to know what measures and dimensions are available — use pre-defined measures rather than writing raw aggregations. Pass 'question' to start tracking this inquiry; the returned inquiry_id threads all subsequent calls.",
     inputSchema: {
       type: "object",
       properties: {
@@ -98,10 +80,9 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
           type: "integer",
           minimum: 1,
           maximum: 10000,
-          description:
-            "Maximum rows to return (default 10000). The result is truncated server-side at this value; `truncated: true` indicates more rows are available.",
+          description: "Maximum rows to return (default 10000). `truncated: true` means more rows are available.",
         },
-        inquiry_id: { type: "string", description: "ID returned by start_inquiry." },
+        ...INQUIRY_PARAMS,
       },
       required: ["source", "malloy"],
       additionalProperties: false,
@@ -196,6 +177,27 @@ async function nextSequence(inquiryId: string): Promise<number> {
   return Number(row?.n ?? 0);
 }
 
+// Create a conversation + inquiry when question is provided; return existing inquiry_id otherwise.
+async function ensureInquiry(
+  userId: string,
+  question?: string,
+  inquiryId?: string,
+  datasetId?: string,
+  source?: string,
+): Promise<string | undefined> {
+  if (inquiryId) return inquiryId;
+  if (!question) return undefined;
+  const [conv] = await db
+    .insert(conversations)
+    .values({ userId, datasetId, source })
+    .returning({ id: conversations.id });
+  const [inq] = await db
+    .insert(inquiries)
+    .values({ conversationId: conv.id, question, sequence: 0 })
+    .returning({ id: inquiries.id });
+  return inq.id;
+}
+
 async function logCall(fields: {
   inquiryId?: string;
   userId: string;
@@ -231,46 +233,41 @@ export async function callTool(
   name: string,
   args: Record<string, unknown>,
 ): Promise<ToolResult> {
+  const question = typeof args.question === "string" ? args.question.trim() : undefined;
   const inquiryId = typeof args.inquiry_id === "string" ? args.inquiry_id : undefined;
 
   switch (name) {
+    // Legacy — kept for backwards compatibility with existing MCP clients.
     case "start_conversation": {
       const sourceName = String(args.source ?? "").trim();
       const context = typeof args.context === "string" ? args.context.trim() : undefined;
       const found = sourceName ? await findBySource(user.id, sourceName) : null;
       const [conv] = await db
         .insert(conversations)
-        .values({
-          userId: user.id,
-          datasetId: found?.ds.id,
-          source: sourceName || undefined,
-          context,
-        })
+        .values({ userId: user.id, datasetId: found?.ds.id, source: sourceName || undefined, context })
         .returning({ id: conversations.id });
       return text({ conversation_id: conv.id });
     }
 
     case "start_inquiry": {
       const conversationId = String(args.conversation_id ?? "").trim();
-      const question = String(args.question ?? "").trim();
+      const q = String(args.question ?? "").trim();
       if (!conversationId) return errText("conversation_id is required");
-      if (!question) return errText("question is required");
-      const [seq] = await db
-        .select({ n: count() })
-        .from(inquiries)
-        .where(eq(inquiries.conversationId, conversationId));
+      if (!q) return errText("question is required");
+      const [seq] = await db.select({ n: count() }).from(inquiries).where(eq(inquiries.conversationId, conversationId));
       const [inq] = await db
         .insert(inquiries)
-        .values({ conversationId, question, sequence: Number(seq?.n ?? 0) })
+        .values({ conversationId, question: q, sequence: Number(seq?.n ?? 0) })
         .returning({ id: inquiries.id });
       return text({ inquiry_id: inq.id });
     }
 
     case "list_sources":
     case "list_datasets": {
+      const inqId = await ensureInquiry(user.id, question, inquiryId);
       const sources = await listAllSources(user.id);
-      await logCall({ inquiryId, userId: user.id, toolName: "list_sources" });
-      return text(sources);
+      await logCall({ inquiryId: inqId, userId: user.id, toolName: "list_sources" });
+      return text(inqId ? { sources, inquiry_id: inqId } : sources);
     }
 
     case "describe_semantic_model": {
@@ -278,10 +275,11 @@ export async function callTool(
       const found = await findBySource(user.id, sourceName);
       if (!found) return errText(`source '${sourceName}' not found`);
       const { ds, model, description } = found;
+      const inqId = await ensureInquiry(user.id, question, inquiryId, ds.id, sourceName);
       const files = await modelFileMap(model);
       const fields = await describeSourceFields(files, "index.malloy", sourceName);
-      await logCall({ inquiryId, userId: user.id, datasetId: ds.id, toolName: "describe_semantic_model", source: sourceName });
-      return text({ source: sourceName, model: ds.name, description, fields, malloy_source: model.source });
+      await logCall({ inquiryId: inqId, userId: user.id, datasetId: ds.id, toolName: "describe_semantic_model", source: sourceName });
+      return text({ source: sourceName, model: ds.name, description, fields, malloy_source: model.source, inquiry_id: inqId });
     }
 
     case "compile_analytical_query": {
@@ -290,16 +288,17 @@ export async function callTool(
       const found = await findBySource(user.id, sourceName);
       if (!found) return errText(`source '${sourceName}' not found`);
       const { ds, model } = found;
+      const inqId = await ensureInquiry(user.id, question, inquiryId, ds.id, sourceName);
       const files = await modelFileMap(model);
       const res = await compileMalloyFiles(files, "index.malloy", malloyQ);
       await logCall({
-        inquiryId, userId: user.id, datasetId: ds.id, toolName: "compile_analytical_query",
+        inquiryId: inqId, userId: user.id, datasetId: ds.id, toolName: "compile_analytical_query",
         source: sourceName, malloyInput: malloyQ,
         compiledSql: res.ok ? res.sql : undefined,
         error: res.ok ? undefined : res.error,
       });
       if (!res.ok) return errText(`compile failed: ${res.error}`);
-      return text({ sql: res.sql });
+      return text({ sql: res.sql, inquiry_id: inqId });
     }
 
     case "run_analytical_query": {
@@ -310,6 +309,7 @@ export async function callTool(
       if (!found) return errText(`source '${sourceName}' not found`);
       const { ds, model } = found;
       if (ds.status !== "ready") return errText(`source '${sourceName}' is not ready`);
+      const inqId = await ensureInquiry(user.id, question, inquiryId, ds.id, sourceName);
       const files = await modelFileMap(model);
       const t0 = Date.now();
       try {
@@ -317,13 +317,13 @@ export async function callTool(
         const durationMs = Date.now() - t0;
         const capped = res.rows.slice(0, maxRows);
         await db.insert(queries).values({ datasetId: ds.id, userId: user.id, malloySource: malloyQ, compiledSql: res.sql, rowCount: res.rowCount, durationMs });
-        await logCall({ inquiryId, userId: user.id, datasetId: ds.id, toolName: "run_analytical_query", source: sourceName, malloyInput: malloyQ, compiledSql: res.sql, rowCount: res.rowCount, durationMs });
-        return text({ row_count: res.rowCount, rows: capped, truncated: res.rowCount > capped.length, duration_ms: durationMs });
+        await logCall({ inquiryId: inqId, userId: user.id, datasetId: ds.id, toolName: "run_analytical_query", source: sourceName, malloyInput: malloyQ, compiledSql: res.sql, rowCount: res.rowCount, durationMs });
+        return text({ row_count: res.rowCount, rows: capped, truncated: res.rowCount > capped.length, duration_ms: durationMs, inquiry_id: inqId });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         const durationMs = Date.now() - t0;
         await db.insert(queries).values({ datasetId: ds.id, userId: user.id, malloySource: malloyQ, error: msg });
-        await logCall({ inquiryId, userId: user.id, datasetId: ds.id, toolName: "run_analytical_query", source: sourceName, malloyInput: malloyQ, error: msg, durationMs });
+        await logCall({ inquiryId: inqId, userId: user.id, datasetId: ds.id, toolName: "run_analytical_query", source: sourceName, malloyInput: malloyQ, error: msg, durationMs });
         return errText(`run failed: ${msg}`);
       }
     }

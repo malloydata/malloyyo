@@ -30,6 +30,9 @@ const nextConfig: NextConfig = {
     "/api/datasets/[id]/webhook/github": [
       "./node_modules/@duckdb/node-bindings*/**/*",
     ],
+    "/api/run": [
+      "./node_modules/@duckdb/node-bindings*/**/*",
+    ],
   },
 };
 

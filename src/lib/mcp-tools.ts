@@ -332,3 +332,38 @@ export async function callTool(
       return errText(`unknown tool: ${name}`);
   }
 }
+
+export type WebRunResult =
+  | { ok: true; rows: Record<string, unknown>[]; sql: string; rowCount: number; truncated: boolean; durationMs: number; stableResult: unknown }
+  | { ok: false; error: string };
+
+// Run a Malloy query for the web UI. Returns the full result including the
+// stable (interfaces-format) result for client-side Malloy rendering.
+export async function runQueryForWeb(
+  userId: string,
+  source: string,
+  malloyQuery: string,
+  maxRows = 1000,
+): Promise<WebRunResult> {
+  const found = await findBySource(userId, source);
+  if (!found) return { ok: false, error: `source '${source}' not found` };
+  const { ds, model } = found;
+  if (ds.status !== "ready") return { ok: false, error: `source '${source}' is not ready` };
+  const files = await modelFileMap(model);
+  const t0 = Date.now();
+  try {
+    const res = await runMalloyFiles(files, "index.malloy", malloyQuery, { rowLimit: maxRows });
+    const capped = res.rows.slice(0, maxRows);
+    return {
+      ok: true,
+      rows: capped,
+      sql: res.sql,
+      rowCount: res.rowCount,
+      truncated: res.rowCount > capped.length,
+      durationMs: Date.now() - t0,
+      stableResult: res.stableResult,
+    };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}

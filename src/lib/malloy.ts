@@ -1,4 +1,5 @@
 import * as malloy from "@malloydata/malloy";
+import { API } from "@malloydata/malloy";
 import { DuckDBConnection as MalloyDuckDBConnection } from "@malloydata/db-duckdb";
 import { env } from "./env";
 import type { GitHubURLReader } from "./github";
@@ -73,6 +74,8 @@ export type RunResult = {
   sql: string;
   rows: Record<string, unknown>[];
   rowCount: number;
+  // Interfaces-format result for passing to @malloydata/render on the client.
+  stableResult: unknown;
 };
 
 // Malloy's default rowLimit is 10 — far too small for analytical queries.
@@ -90,7 +93,8 @@ export async function runMalloy(
     const sql = await runner.getSQL();
     const result = await runner.run({ rowLimit: opts.rowLimit ?? DEFAULT_ROW_LIMIT });
     const rows = result.data.toJSON() as Record<string, unknown>[];
-    return { sql, rows, rowCount: rows.length };
+    const stableResult = API.util.wrapResult(result);
+    return { sql, rows, rowCount: rows.length, stableResult };
   } finally {
     await conn.close();
   }
@@ -243,7 +247,8 @@ export async function runMalloyFiles(
     const sql = await runner.getSQL();
     const result = await runner.run({ rowLimit: opts.rowLimit ?? DEFAULT_ROW_LIMIT });
     const rows = result.data.toJSON() as Record<string, unknown>[];
-    return { sql, rows, rowCount: rows.length };
+    const stableResult = API.util.wrapResult(result);
+    return { sql, rows, rowCount: rows.length, stableResult };
   } finally {
     await cleanup();
   }

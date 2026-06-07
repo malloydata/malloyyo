@@ -55,6 +55,19 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
   );
 }
 
+function CopyChip({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      onClick={async () => { await navigator.clipboard.writeText(value); setCopied(true); setTimeout(() => setCopied(false), 1200); }}
+      className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-800 hover:bg-gray-200 dark:hover:bg-gray-700 flex-shrink-0"
+      title="Copy"
+    >
+      {copied ? "copied" : "copy"}
+    </button>
+  );
+}
+
 function StarButton({
   item,
   onToggle,
@@ -91,6 +104,8 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
   const [runError, setRunError] = useState<string | null>(null);
   const [schemaOpen, setSchemaOpen] = useState(false);
   const [instanceName, setInstanceName] = useState("Malloyyo");
+  const [claudeConnected, setClaudeConnected] = useState(false);
+  const [showClaudeSetup, setShowClaudeSetup] = useState(false);
   const [shareCopied, setShareCopied] = useState(false);
   const [editedTitle, setEditedTitle] = useState<string | null>(null);
   const mainRef = useRef<HTMLDivElement>(null);
@@ -106,7 +121,10 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
   useEffect(() => { loadHistory(); }, [loadHistory]);
 
   useEffect(() => {
-    fetch("/api/me").then((r) => r.json()).then((d) => { if (d?.instanceName) setInstanceName(d.instanceName); }).catch(() => {});
+    fetch("/api/me").then((r) => r.json()).then((d) => {
+      if (d?.instanceName) setInstanceName(d.instanceName);
+      if (typeof d?.claudeConnected === "boolean") setClaudeConnected(d.claudeConnected);
+    }).catch(() => {});
   }, []);
 
   const runQuery = useCallback(async (src: string, malloy: string) => {
@@ -411,15 +429,16 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
                 </button>
               )}
               {claudeUrl && (
-                <a
-                  href={claudeUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
+                <button
+                  onClick={() => {
+                    if (claudeConnected) window.open(claudeUrl, "_blank", "noopener,noreferrer");
+                    else setShowClaudeSetup(true);
+                  }}
                   className="text-xs px-3 py-1.5 rounded border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-900"
                   title={`Open a new Claude chat seeded with this query on ${instanceName}`}
                 >
                   Explore further with Claude →
-                </a>
+                </button>
               )}
               {result && !running && (
                 <span className="text-xs text-gray-500 dark:text-gray-400">
@@ -460,6 +479,88 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
 
       {schemaOpen && (
         <SchemaPanel source={source || null} onClose={() => setSchemaOpen(false)} />
+      )}
+
+      {/* One-time claude.ai connection instructions, shown before following the
+          Explore link when this user has never completed the MCP OAuth flow. */}
+      {showClaudeSetup && claudeUrl && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+          onClick={() => setShowClaudeSetup(false)}
+        >
+          <div
+            className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-lg shadow-xl max-w-md w-full mx-4 p-5 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-3">
+              <h2 className="text-sm font-semibold">Connect {instanceName} to Claude first</h2>
+              <button
+                onClick={() => setShowClaudeSetup(false)}
+                className="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 leading-none"
+                title="Close"
+              >
+                ×
+              </button>
+            </div>
+
+            <p className="text-xs text-gray-600 dark:text-gray-400">
+              It looks like you haven&apos;t connected {instanceName} to claude.ai yet.
+              Without the connection, Claude can&apos;t load this query. One-time setup:
+            </p>
+
+            <ol className="list-decimal list-inside text-xs text-gray-700 dark:text-gray-300 space-y-2">
+              <li>
+                Open{" "}
+                <a
+                  href="https://claude.ai/customize/connectors"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="underline hover:text-gray-900 dark:hover:text-gray-100"
+                >
+                  claude.ai → Settings → Connectors
+                </a>
+              </li>
+              <li>Click <strong>Add custom connector</strong> and enter:</li>
+            </ol>
+
+            <div className="space-y-1.5 pl-4 text-xs">
+              <div className="flex items-center gap-2">
+                <span className="text-gray-500 dark:text-gray-400 w-12 flex-shrink-0">Name</span>
+                <code className="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded px-1.5 py-0.5 flex-1 truncate">{instanceName}</code>
+                <CopyChip value={instanceName} />
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-gray-500 dark:text-gray-400 w-12 flex-shrink-0">URL</span>
+                <code className="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 rounded px-1.5 py-0.5 flex-1 truncate">
+                  {typeof window !== "undefined" ? `${window.location.origin}/mcp` : "/mcp"}
+                </code>
+                <CopyChip value={typeof window !== "undefined" ? `${window.location.origin}/mcp` : "/mcp"} />
+              </div>
+            </div>
+
+            <ol className="list-decimal list-inside text-xs text-gray-700 dark:text-gray-300 space-y-2" start={3}>
+              <li>Finish the Google sign-in when claude.ai prompts you</li>
+            </ol>
+
+            <div className="flex items-center gap-3 pt-1">
+              <button
+                onClick={() => {
+                  window.open(claudeUrl, "_blank", "noopener,noreferrer");
+                  setShowClaudeSetup(false);
+                }}
+                className="text-xs px-3 py-1.5 rounded bg-black text-white dark:bg-white dark:text-black hover:opacity-80"
+              >
+                Continue on to Claude.ai →
+              </button>
+              <button
+                onClick={() => setShowClaudeSetup(false)}
+                className="text-xs px-3 py-1.5 rounded border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-900"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -1,3 +1,6 @@
+// Copyright (c) The Malloy Foundation
+// SPDX-License-Identifier: MIT
+
 import { auth } from "@/auth";
 import { getOAuthClient, isRegisteredRedirect } from "@/lib/oauth/clients";
 import { signAuthz } from "@/lib/oauth/authz-blob";

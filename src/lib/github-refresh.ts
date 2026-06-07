@@ -1,3 +1,6 @@
+// Copyright (c) The Malloy Foundation
+// SPDX-License-Identifier: MIT
+
 import { desc, eq } from "drizzle-orm";
 import { db, datasets, malloyModels, malloyModelFiles } from "@/db";
 import { GitHubURLReader, fetchGitHubFile, parseGitHubRepo } from "./github";

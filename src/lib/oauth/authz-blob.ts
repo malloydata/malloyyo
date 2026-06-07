@@ -1,3 +1,6 @@
+// Copyright (c) The Malloy Foundation
+// SPDX-License-Identifier: MIT
+
 import { createHmac, timingSafeEqual } from "node:crypto";
 
 export interface PendingAuthz {

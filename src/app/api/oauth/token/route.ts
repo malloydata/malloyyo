@@ -1,3 +1,6 @@
+// Copyright (c) The Malloy Foundation
+// SPDX-License-Identifier: MIT
+
 import { NextResponse } from "next/server";
 import { consumeAuthorizationCode, verifyPkce } from "@/lib/oauth/codes";
 import { getOAuthClient } from "@/lib/oauth/clients";

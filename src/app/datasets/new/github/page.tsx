@@ -1,3 +1,6 @@
+// Copyright (c) The Malloy Foundation
+// SPDX-License-Identifier: MIT
+
 "use client";
 import { useState } from "react";
 import { useRouter } from "next/navigation";

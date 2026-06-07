@@ -1,3 +1,6 @@
+// Copyright (c) The Malloy Foundation
+// SPDX-License-Identifier: MIT
+
 import { db, users } from "@/db";
 import { eq } from "drizzle-orm";
 import { TOOL_DESCRIPTORS, callTool } from "@/lib/mcp-tools";

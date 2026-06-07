@@ -1,3 +1,6 @@
+// Copyright (c) The Malloy Foundation
+// SPDX-License-Identifier: MIT
+
 import { redirect } from "next/navigation";
 import { desc } from "drizzle-orm";
 import Link from "next/link";

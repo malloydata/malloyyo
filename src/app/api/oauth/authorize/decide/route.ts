@@ -1,3 +1,6 @@
+// Copyright (c) The Malloy Foundation
+// SPDX-License-Identifier: MIT
+
 import { auth } from "@/auth";
 import { verifyAuthz } from "@/lib/oauth/authz-blob";
 import { issueAuthorizationCode } from "@/lib/oauth/codes";

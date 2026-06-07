@@ -29,6 +29,7 @@ type HistoryItem = {
   durationMs: number | null;
   authorName: string | null;
   isFavorited: boolean;
+  favoriteCount: number;
 };
 
 type RunResult = {
@@ -68,6 +69,8 @@ function CopyChip({ value }: { value: string }) {
   );
 }
 
+// Star states: amber ★ = my favorite; blue ★ (+count) = favorited only by
+// others — clicking adopts it as mine; hollow ☆ = nobody's yet.
 function StarButton({
   item,
   onToggle,
@@ -76,17 +79,27 @@ function StarButton({
   onToggle: (e: React.MouseEvent, item: HistoryItem) => void;
 }) {
   if (!item.inquiryId) return null;
+  const others = Math.max(0, item.favoriteCount - (item.isFavorited ? 1 : 0));
+  const cls = item.isFavorited
+    ? "text-amber-400 hover:text-amber-500"
+    : others > 0
+      ? "text-blue-400 dark:text-blue-500 hover:text-amber-400"
+      : "text-gray-300 dark:text-gray-700 hover:text-amber-400 dark:hover:text-amber-500";
+  const title = item.isFavorited
+    ? others > 0
+      ? `Your favorite (+${others} other${others > 1 ? "s" : ""}) — click to remove yours`
+      : "Unfavorite"
+    : others > 0
+      ? `Favorited by ${others} other${others > 1 ? "s" : ""} — click to add yours`
+      : "Favorite";
   return (
     <button
       onClick={(e) => onToggle(e, item)}
-      className={`text-sm leading-none flex-shrink-0 transition-colors ${
-        item.isFavorited
-          ? "text-amber-400 hover:text-amber-500"
-          : "text-gray-300 dark:text-gray-700 hover:text-amber-400 dark:hover:text-amber-500"
-      }`}
-      title={item.isFavorited ? "Unfavorite" : "Favorite"}
+      className={`text-sm leading-none flex-shrink-0 transition-colors ${cls}`}
+      title={title}
     >
-      {item.isFavorited ? "★" : "☆"}
+      {item.isFavorited || others > 0 ? "★" : "☆"}
+      {others > 0 && <span className="text-[9px] align-top ml-0.5">{others}</span>}
     </button>
   );
 }
@@ -95,8 +108,11 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
   const [items, setItems] = useState<HistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<HistoryItem | null>(null);
-  const [view, setView] = useState<View>("history");
+  // Open on my favorites; auto-fall back (once) to all favorites, then history.
+  const [view, setView] = useState<View>("favorites");
   const [scope, setScope] = useState<Scope>("me");
+  const [filter, setFilter] = useState("");
+  const autoFallback = useRef(true);
   const [query, setQuery] = useState("");
   const [source, setSource] = useState("");
   const [running, setRunning] = useState(false);
@@ -114,7 +130,20 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
     setLoading(true);
     fetch(`/api/history?scope=${scope}&view=${view}`)
       .then((r) => r.json())
-      .then((data) => setItems(Array.isArray(data) ? data : []))
+      .then((data) => {
+        const arr: HistoryItem[] = Array.isArray(data) ? data : [];
+        // Initial-load fallback chain: my favorites → all favorites → my history.
+        // Cancelled the moment the user clicks a tab or anything loads.
+        if (autoFallback.current && arr.length === 0 && view === "favorites") {
+          if (scope === "me") { setScope("all"); return; }
+          autoFallback.current = false;
+          setView("history");
+          setScope("me");
+          return;
+        }
+        autoFallback.current = false;
+        setItems(arr);
+      })
       .finally(() => setLoading(false));
   }, [scope, view]);
 
@@ -164,7 +193,7 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
           inquiryId: null, slug: initialSlug, question: body.question ?? null,
           createdAt: new Date().toISOString(), source: body.source ?? null, datasetId: null,
           malloyQuery: body.malloy ?? null, rowCount: null, durationMs: null,
-          authorName: null, isFavorited: false,
+          authorName: null, isFavorited: false, favoriteCount: 0,
         };
         setSelected(item);
         setQuery(body.malloy ?? "");
@@ -191,15 +220,17 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
     }
   }
 
+  // Toggle MY star only. Rows linger in place after unfavoriting (a misclick
+  // is fixed by clicking again); the list re-filters on the next refresh.
   const toggleFavorite = useCallback(async (e: React.MouseEvent, item: HistoryItem) => {
     e.stopPropagation();
     if (!item.inquiryId) return;
     const nextFav = !item.isFavorited;
+    const apply = (fav: boolean, count: number) =>
+      setItems((prev) => prev.map((i) => i.inquiryId === item.inquiryId ? { ...i, isFavorited: fav, favoriteCount: count } : i));
 
     // Optimistic update
-    setItems((prev) =>
-      prev.map((i) => i.inquiryId === item.inquiryId ? { ...i, isFavorited: nextFav } : i)
-    );
+    apply(nextFav, Math.max(0, item.favoriteCount + (nextFav ? 1 : -1)));
 
     try {
       const res = await fetch("/api/favorites", {
@@ -208,22 +239,27 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
         body: JSON.stringify({ inquiryId: item.inquiryId }),
       });
       const json = await res.json() as { isFavorited: boolean };
-      if (view === "favorites" && !json.isFavorited) {
-        // Remove from list when unfavoriting in favorites view
-        setItems((prev) => prev.filter((i) => i.inquiryId !== item.inquiryId));
-        if (selected?.inquiryId === item.inquiryId) setSelected(null);
-      } else {
-        setItems((prev) =>
-          prev.map((i) => i.inquiryId === item.inquiryId ? { ...i, isFavorited: json.isFavorited } : i)
-        );
+      if (json.isFavorited !== nextFav) {
+        // Server disagreed (e.g. double-click race) — trust it.
+        apply(json.isFavorited, Math.max(0, item.favoriteCount + (json.isFavorited ? 1 : -1)));
       }
     } catch {
       // Revert on error
-      setItems((prev) =>
-        prev.map((i) => i.inquiryId === item.inquiryId ? { ...i, isFavorited: item.isFavorited } : i)
-      );
+      apply(item.isFavorited, item.favoriteCount);
     }
-  }, [view, selected]);
+  }, []);
+
+  // Client-side text filter over the loaded list.
+  const visibleItems = filter.trim()
+    ? items.filter((i) => {
+        const q = filter.trim().toLowerCase();
+        return (
+          (i.question ?? "").toLowerCase().includes(q) ||
+          (i.source ?? "").toLowerCase().includes(q) ||
+          (i.authorName ?? "").toLowerCase().includes(q)
+        );
+      })
+    : items;
 
   // The loaded query has been edited away from what its slug points at.
   const isModified = !!selected && query.trim() !== (selected.malloyQuery ?? "").trim();
@@ -271,6 +307,7 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
         durationMs: json.durationMs ?? null,
         authorName: null,
         isFavorited: false,
+        favoriteCount: 0,
       };
       setSelected(newItem);
       setEditedTitle(null);
@@ -307,24 +344,33 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
           </div>
           {/* Tabs + scope toggle */}
           <div className="flex items-center gap-1">
-            <TabButton active={view === "history"} onClick={() => setView("history")}>History</TabButton>
-            <TabButton active={view === "favorites"} onClick={() => setView("favorites")}>Favorites</TabButton>
+            <TabButton active={view === "history"} onClick={() => { autoFallback.current = false; setView("history"); }}>History</TabButton>
+            <TabButton active={view === "favorites"} onClick={() => { autoFallback.current = false; setView("favorites"); }}>Favorites</TabButton>
             <div className="flex-1" />
-            <TabButton active={scope === "me"} onClick={() => setScope("me")}>Me</TabButton>
-            <TabButton active={scope === "all"} onClick={() => setScope("all")}>All</TabButton>
+            <TabButton active={scope === "me"} onClick={() => { autoFallback.current = false; setScope("me"); }}>Me</TabButton>
+            <TabButton active={scope === "all"} onClick={() => { autoFallback.current = false; setScope("all"); }}>All</TabButton>
           </div>
+          {/* Filter — searches question, source, and author */}
+          <input
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="filter…"
+            className="w-full text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-800 bg-transparent placeholder-gray-400 dark:placeholder-gray-600 focus:outline-none focus:border-gray-400 dark:focus:border-gray-600"
+          />
         </div>
 
         <div className="overflow-y-auto flex-1">
           {loading ? (
             <p className="text-xs text-gray-500 dark:text-gray-400 px-4 py-3">loading…</p>
-          ) : items.length === 0 ? (
+          ) : visibleItems.length === 0 ? (
             <p className="text-xs text-gray-500 dark:text-gray-400 px-4 py-3">
-              {view === "favorites" ? "No favorites yet." : "No queries yet."}
+              {filter.trim()
+                ? "No matches."
+                : view === "favorites" ? "No favorites yet." : "No queries yet."}
             </p>
           ) : (
             <ul className="divide-y divide-gray-100 dark:divide-gray-900">
-              {items.map((item) => (
+              {visibleItems.map((item) => (
                 <li key={item.inquiryId ?? `${item.source}-${item.createdAt}`}>
                   <div className={`flex items-start hover:bg-gray-50 dark:hover:bg-gray-900/50 transition-colors ${
                     selected?.inquiryId === item.inquiryId && selected?.createdAt === item.createdAt
@@ -344,7 +390,7 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
                             {item.source}
                           </span>
                         )}
-                        {item.authorName && scope === "all" && (
+                        {item.authorName && (scope === "all" || view === "favorites") && (
                           <span className="text-[10px] text-gray-400 dark:text-gray-600 truncate max-w-[100px]">
                             {item.authorName}
                           </span>
@@ -399,7 +445,7 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
               {isModified && (
                 <p className="text-[11px] text-amber-600 dark:text-amber-500">Edited — running will save this as a new query.</p>
               )}
-              {!isModified && selected.authorName && scope === "all" && (
+              {!isModified && selected.authorName && (scope === "all" || view === "favorites") && (
                 <p className="text-xs text-gray-400 dark:text-gray-600">by {selected.authorName}</p>
               )}
             </div>

@@ -15,6 +15,14 @@ function favExists(userId: string) {
   )`;
 }
 
+// Any user (including the current one) has favorited this inquiry.
+function anyFavExists() {
+  return sql<boolean>`EXISTS (
+    SELECT 1 FROM favorites
+    WHERE favorites.inquiry_id = ${toolCalls.inquiryId}
+  )`;
+}
+
 export async function GET(req: Request) {
   let user;
   try { user = await getSessionUser(); } catch (err) {
@@ -40,6 +48,7 @@ export async function GET(req: Request) {
       toolSeq: toolCalls.sequence,
       authorName: users.name,
       isFavorited: favExists(user.id),
+      favoriteCount: sql<number>`(SELECT count(*)::int FROM favorites WHERE favorites.inquiry_id = ${toolCalls.inquiryId})`,
     })
     .from(toolCalls)
     .leftJoin(inquiries, eq(inquiries.id, toolCalls.inquiryId))
@@ -48,8 +57,11 @@ export async function GET(req: Request) {
       and(
         eq(toolCalls.toolName, "run_query"),
         isNull(toolCalls.error),
-        scope === "me" ? eq(toolCalls.userId, user.id) : undefined,
-        view === "favorites" ? favExists(user.id) : undefined,
+        // History view: scope filters the query author.
+        view !== "favorites" && scope === "me" ? eq(toolCalls.userId, user.id) : undefined,
+        // Favorites view: scope filters WHOSE favorites — mine vs anyone's —
+        // regardless of who authored the query.
+        view === "favorites" ? (scope === "me" ? favExists(user.id) : anyFavExists()) : undefined,
       )
     )
     .orderBy(desc(toolCalls.createdAt))

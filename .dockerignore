@@ -1,0 +1,9 @@
+# Keep secrets and local state out of Docker build context / image layers.
+# (See PR #1 — the Dockerfile's `COPY . .` copies everything not listed here.)
+local/
+.env*
+.git
+node_modules
+.next
+.vercel
+drizzle/meta

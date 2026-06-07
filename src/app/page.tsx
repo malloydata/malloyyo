@@ -171,8 +171,19 @@ function McpSetup({ instanceName }: { instanceName: string }) {
     <section className="border border-gray-200 dark:border-gray-800 rounded p-4 space-y-4">
       <h2 className="text-sm font-semibold">Connect to Claude</h2>
 
+      <p className="text-xs text-gray-600 dark:text-gray-400">
+        Use <strong>both</strong> values below. The server <strong>name</strong> matters as
+        much as the URL — Claude prefixes every tool with it, so an exact match keeps tools
+        clear when you connect several instances.
+      </p>
+
       <div className="space-y-1">
-        <p className="text-xs text-gray-500 dark:text-gray-400">Your MCP server URL</p>
+        <p className="text-xs text-gray-500 dark:text-gray-400">Server name</p>
+        <Copyable value={instanceName} />
+      </div>
+
+      <div className="space-y-1">
+        <p className="text-xs text-gray-500 dark:text-gray-400">Server URL</p>
         <Copyable value={mcpUrl} />
       </div>
 
@@ -180,8 +191,8 @@ function McpSetup({ instanceName }: { instanceName: string }) {
         <p className="font-medium">claude.ai (web)</p>
         <ol className="list-decimal list-inside space-y-1 text-gray-600 dark:text-gray-400">
           <li>Go to <strong>claude.ai</strong> → Settings → Integrations</li>
-          <li>Click <strong>Add MCP server</strong> and paste the URL above</li>
-          <li>Name the connection <strong>{instanceName}</strong> — matching the name keeps tools easy to tell apart if you connect several instances</li>
+          <li>Click <strong>Add MCP server</strong></li>
+          <li>Set the name to <strong>{instanceName}</strong> (copy above) and paste the URL above</li>
           <li>claude.ai will open a Google sign-in → grant access on the consent page</li>
           <li>Done — {instanceName} tools appear in every new conversation</li>
         </ol>
@@ -198,7 +209,7 @@ function McpSetup({ instanceName }: { instanceName: string }) {
 
       <div className="space-y-2 text-xs text-gray-700 dark:text-gray-300">
         <p className="font-medium">Claude Code (CLI)</p>
-        <Copyable value={`claude mcp add malloyyo --transport http ${mcpUrl}`} />
+        <Copyable value={`claude mcp add ${instanceName.toLowerCase().replace(/\s+/g, "-")} --transport http ${mcpUrl}`} />
         <p className="text-gray-500 dark:text-gray-400">Run the command above, then follow the browser OAuth flow.</p>
       </div>
 

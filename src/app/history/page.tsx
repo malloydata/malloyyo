@@ -2,6 +2,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
+import { SchemaPanel } from "@/components/SchemaPanel";
 
 const MalloyCodeEditor = dynamic(
   () => import("@/components/MalloyCodeEditor").then((m) => m.MalloyCodeEditor),
@@ -43,6 +44,7 @@ export default function HistoryPage() {
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<RunResult | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
+  const [schemaOpen, setSchemaOpen] = useState(false);
   const mainRef = useRef<HTMLDivElement>(null);
 
   const loadHistory = useCallback(() => {
@@ -85,6 +87,7 @@ export default function HistoryPage() {
     setSource(item.source ?? "");
     setResult(null);
     setRunError(null);
+    if (item.source) setSchemaOpen(true);
     mainRef.current?.scrollTo({ top: 0 });
     if (item.malloyQuery && item.source) {
       runQuery(item.source, item.malloyQuery);
@@ -92,7 +95,7 @@ export default function HistoryPage() {
   }
 
   return (
-    <div className="flex h-screen overflow-hidden font-mono text-sm">
+    <div className="flex h-screen overflow-hidden font-mono text-sm" style={{ minWidth: 0 }}>
       {/* Sidebar */}
       <aside className="w-72 flex-shrink-0 border-r border-gray-200 dark:border-gray-800 flex flex-col overflow-hidden">
         <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-800">
@@ -117,11 +120,11 @@ export default function HistoryPage() {
           ) : (
             <ul className="divide-y divide-gray-100 dark:divide-gray-900">
               {items.map((item) => (
-                <li key={item.inquiryId}>
+                <li key={item.inquiryId ?? `${item.source}-${item.createdAt}`}>
                   <button
                     onClick={() => selectItem(item)}
                     className={`w-full text-left px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-900/50 transition-colors ${
-                      selected?.inquiryId === item.inquiryId
+                      selected === item
                         ? "bg-blue-50 dark:bg-blue-950/30 border-l-2 border-blue-500"
                         : ""
                     }`}
@@ -166,11 +169,13 @@ export default function HistoryPage() {
             <div className="space-y-1">
               <div className="flex items-start gap-3">
                 <p className="text-base font-semibold text-gray-900 dark:text-gray-100 flex-1">{selected.question}</p>
-                {source && (
-                  <span className="flex-shrink-0 text-xs px-2 py-0.5 rounded bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300">
-                    {source}
-                  </span>
-                )}
+                <button
+                  onClick={() => setSchemaOpen((o) => !o)}
+                  className="flex-shrink-0 text-xs px-2 py-0.5 rounded bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300 hover:bg-purple-200 dark:hover:bg-purple-900/60"
+                  title={schemaOpen ? "Hide schema" : "Show schema"}
+                >
+                  {source || "schema"}
+                </button>
               </div>
               {selected.authorName && (
                 <p className="text-xs text-gray-400 dark:text-gray-600">by {selected.authorName}</p>
@@ -228,6 +233,10 @@ export default function HistoryPage() {
           </div>
         )}
       </main>
+
+      {schemaOpen && (
+        <SchemaPanel source={source || null} onClose={() => setSchemaOpen(false)} />
+      )}
     </div>
   );
 }

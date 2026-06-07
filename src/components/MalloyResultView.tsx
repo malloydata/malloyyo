@@ -2,7 +2,6 @@
 import { useEffect, useRef } from "react";
 
 interface Props {
-  // Malloy interfaces-format result from API.util.wrapResult()
   stableResult: Record<string, unknown>;
 }
 
@@ -18,7 +17,10 @@ export function MalloyResultView({ stableResult }: Props) {
     import("@malloydata/render").then(({ MalloyRenderer }) => {
       if (cancelled || !container) return;
       const renderer = new MalloyRenderer({});
-      const viz = renderer.createViz({ tableConfig: { enableDrill: false } });
+      const viz = renderer.createViz({
+        tableConfig: { enableDrill: false },
+        scrollEl: container,
+      });
       viz.setResult(stableResult as Parameters<typeof viz.setResult>[0]);
       viz.render(container);
       vizCleanup = () => viz.remove();
@@ -30,5 +32,10 @@ export function MalloyResultView({ stableResult }: Props) {
     };
   }, [stableResult]);
 
-  return <div ref={containerRef} className="malloy-result-container min-h-[200px]" />;
+  return (
+    <div
+      ref={containerRef}
+      style={{ display: "grid", minHeight: "350px", overflow: "auto", width: "100%" }}
+    />
+  );
 }

@@ -13,7 +13,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: "start_conversation",
     description:
-      "Call this ONCE at the beginning of a session, before any other tool. Provide the name of the source you will explore and a brief description of what the user is trying to accomplish overall. Returns a conversation_id to pass to start_inquiry.",
+      "Call this ONCE at the beginning of a session, before any other tool. Provide the name of the source you will explore and a brief description of what the user is trying to accomplish overall. Returns a conversation_id to pass to run_analytical_query.",
     inputSchema: {
       type: "object",
       properties: {
@@ -21,20 +21,6 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         context: { type: "string", description: "One sentence describing the user's overall goal for this session." },
       },
       required: ["source"],
-      additionalProperties: false,
-    },
-  },
-  {
-    name: "start_inquiry",
-    description:
-      "Call this at the start of each new question. Start a NEW inquiry when the user's question is unrelated to the previous results — for example, switching from 'Hitchcock movies' to 'weekend box office' is a new inquiry, but 'now show me Hitchcock remakes' is the same inquiry continuing. Returns an inquiry_id to pass to all subsequent tool calls for this question.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        conversation_id: { type: "string", description: "ID returned by start_conversation." },
-        question: { type: "string", description: "The user's question, in their words." },
-      },
-      required: ["conversation_id", "question"],
       additionalProperties: false,
     },
   },
@@ -85,7 +71,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: "run_analytical_query",
     description:
-      "Execute a Malloy query against the source and return the rows. Default row cap is 10000; pass a smaller `max_rows` if you want to bound the response. You must call describe_semantic_model first to know what measures and dimensions are available — use the pre-defined measures rather than writing raw aggregations.\n\nAfter EVERY call to this tool you MUST immediately output a 'Query summary' containing: (1) the question being answered in plain English, (2) the Malloy logic — what is filtered, grouped, aggregated, and ordered, (3) any post-processing applied outside Malloy (if none, say 'none'). Omitting this summary is an error.\n\nWhen building visualizations: the Malloy query must do as much work as possible. Filtering to top-N results, selecting specific members, and ranking must happen in Malloy, not in client code. Only aesthetic decisions (colors, layout) belong outside Malloy.",
+      "Execute a Malloy query against the source and return the rows. You must call describe_semantic_model first.\n\nInquiry tracking (required — exactly one of these):\n- `question`: Pass the user's question in plain English to start a NEW inquiry. The response will include an `inquiry_id`.\n- `inquiry_id`: Pass the `inquiry_id` from a previous call to continue the same inquiry (follow-up queries, refinements, retries).\n\nAfter EVERY call you MUST output a 'Query summary': (1) question in plain English, (2) Malloy logic (filters, grouping, aggregation, ordering), (3) post-processing outside Malloy or 'none'. Omitting this summary is an error.\n\nVisualization rule: filtering top-N, ranking, and member selection must happen in Malloy — not in client code.",
     inputSchema: {
       type: "object",
       properties: {
@@ -94,16 +80,26 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
           type: "string",
           description: "Malloy query starting with `run:` that references the source name.",
         },
+        question: {
+          type: "string",
+          description: "The user's question in plain English. Provide this to start a new inquiry. Omit when continuing an existing inquiry (use inquiry_id instead).",
+        },
+        inquiry_id: {
+          type: "string",
+          description: "ID from a previous run_analytical_query response. Provide this to continue an existing inquiry. Omit when asking a new question (use question instead).",
+        },
+        conversation_id: {
+          type: "string",
+          description: "Optional. ID from start_conversation. If omitted a conversation is created automatically.",
+        },
         max_rows: {
           type: "integer",
           minimum: 1,
           maximum: 10000,
-          description:
-            "Maximum rows to return (default 10000). The result is truncated server-side at this value; `truncated: true` indicates more rows are available.",
+          description: "Maximum rows to return (default 10000). Truncated server-side; `truncated: true` means more rows exist.",
         },
-        inquiry_id: { type: "string", description: "ID returned by start_inquiry. Required — call start_inquiry before run_analytical_query." },
       },
-      required: ["source", "malloy", "inquiry_id"],
+      required: ["source", "malloy"],
       additionalProperties: false,
     },
   },
@@ -226,6 +222,16 @@ function errText(msg: string): ToolResult {
   return { content: [{ type: "text", text: msg }], isError: true };
 }
 
+// Find or create a conversation for auto-inquiry creation.
+async function ensureConversation(userId: string, conversationId: string | undefined, sourceName: string, datasetId: string | undefined): Promise<string> {
+  if (conversationId) return conversationId;
+  const [conv] = await db
+    .insert(conversations)
+    .values({ userId, datasetId, source: sourceName || undefined })
+    .returning({ id: conversations.id });
+  return conv.id;
+}
+
 export async function callTool(
   user: User,
   name: string,
@@ -303,7 +309,24 @@ export async function callTool(
     }
 
     case "run_analytical_query": {
-      if (!inquiryId) return errText("inquiry_id is required — call start_inquiry first and pass the returned inquiry_id.");
+      const question = typeof args.question === "string" ? args.question.trim() : undefined;
+      const conversationId = typeof args.conversation_id === "string" ? args.conversation_id : undefined;
+
+      // Resolve or create the inquiry.
+      let resolvedInquiryId = inquiryId;
+      if (!resolvedInquiryId) {
+        if (!question) return errText("Provide either 'question' (new inquiry) or 'inquiry_id' (follow-up).");
+        const sourceName0 = String(args.source ?? "").trim();
+        const found0 = await findBySource(user.id, sourceName0);
+        const convId = await ensureConversation(user.id, conversationId, sourceName0, found0?.ds.id);
+        const [seq] = await db.select({ n: count() }).from(inquiries).where(eq(inquiries.conversationId, convId));
+        const [inq] = await db
+          .insert(inquiries)
+          .values({ conversationId: convId, question, sequence: Number(seq?.n ?? 0) })
+          .returning({ id: inquiries.id });
+        resolvedInquiryId = inq.id;
+      }
+
       const sourceName = String(args.source ?? args.dataset ?? "");
       const malloyQ = String(args.malloy ?? "");
       const maxRows = Math.max(1, Math.min(10000, Number(args.max_rows ?? 10000)));
@@ -318,14 +341,14 @@ export async function callTool(
         const durationMs = Date.now() - t0;
         const capped = res.rows.slice(0, maxRows);
         await db.insert(queries).values({ datasetId: ds.id, userId: user.id, malloySource: malloyQ, compiledSql: res.sql, rowCount: res.rowCount, durationMs });
-        await logCall({ inquiryId, userId: user.id, datasetId: ds.id, toolName: "run_analytical_query", source: sourceName, malloyInput: malloyQ, compiledSql: res.sql, rowCount: res.rowCount, durationMs });
-        return text({ row_count: res.rowCount, rows: capped, truncated: res.rowCount > capped.length, duration_ms: durationMs });
+        await logCall({ inquiryId: resolvedInquiryId, userId: user.id, datasetId: ds.id, toolName: "run_analytical_query", source: sourceName, malloyInput: malloyQ, compiledSql: res.sql, rowCount: res.rowCount, durationMs });
+        return text({ inquiry_id: resolvedInquiryId, row_count: res.rowCount, rows: capped, truncated: res.rowCount > capped.length, duration_ms: durationMs });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         const durationMs = Date.now() - t0;
         await db.insert(queries).values({ datasetId: ds.id, userId: user.id, malloySource: malloyQ, error: msg });
-        await logCall({ inquiryId, userId: user.id, datasetId: ds.id, toolName: "run_analytical_query", source: sourceName, malloyInput: malloyQ, error: msg, durationMs });
-        return errText(`run failed: ${msg}`);
+        await logCall({ inquiryId: resolvedInquiryId, userId: user.id, datasetId: ds.id, toolName: "run_analytical_query", source: sourceName, malloyInput: malloyQ, error: msg, durationMs });
+        return errText(`run failed: ${msg}\n\ninquiry_id: ${resolvedInquiryId}`);
       }
     }
 

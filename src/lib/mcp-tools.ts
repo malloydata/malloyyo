@@ -101,9 +101,9 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
           description:
             "Maximum rows to return (default 10000). The result is truncated server-side at this value; `truncated: true` indicates more rows are available.",
         },
-        inquiry_id: { type: "string", description: "ID returned by start_inquiry." },
+        inquiry_id: { type: "string", description: "ID returned by start_inquiry. Required — call start_inquiry before run_analytical_query." },
       },
-      required: ["source", "malloy"],
+      required: ["source", "malloy", "inquiry_id"],
       additionalProperties: false,
     },
   },
@@ -303,6 +303,7 @@ export async function callTool(
     }
 
     case "run_analytical_query": {
+      if (!inquiryId) return errText("inquiry_id is required — call start_inquiry first and pass the returned inquiry_id.");
       const sourceName = String(args.source ?? args.dataset ?? "");
       const malloyQ = String(args.malloy ?? "");
       const maxRows = Math.max(1, Math.min(10000, Number(args.max_rows ?? 10000)));

@@ -36,10 +36,12 @@ function ensureConnectionTypes(): Promise<void> {
 }
 
 function makeConnection(): MalloyDuckDBConnection {
+  // With a MotherDuck token, connect to md:; otherwise plain in-memory DuckDB
+  // (models define their own sources — http/parquet/attached DBs).
+  const token = env.MOTHERDUCK_TOKEN;
   return new MalloyDuckDBConnection({
     name: "duckdb",
-    databasePath: "md:",
-    motherDuckToken: env.MOTHERDUCK_TOKEN,
+    ...(token ? { databasePath: "md:", motherDuckToken: token } : {}),
     setupSQL: `SET home_directory='/tmp';`,
     enableExternalAccess: true,
   });

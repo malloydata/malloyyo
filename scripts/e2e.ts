@@ -1,4 +1,6 @@
 #!/usr/bin/env tsx
+// Copyright (c) The Malloy Foundation
+// SPDX-License-Identifier: MIT
 /* e2e: NYC taxi → ready → MCP query. Run with `pnpm e2e`. */
 
 const BASE = process.env.APP_BASE_URL ?? "http://localhost:3000";

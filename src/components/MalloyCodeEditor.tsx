@@ -1,3 +1,6 @@
+// Copyright (c) The Malloy Foundation
+// SPDX-License-Identifier: MIT
+
 "use client";
 import { useEffect, useState } from "react";
 import CodeMirror, {

@@ -1,3 +1,6 @@
+// Copyright (c) The Malloy Foundation
+// SPDX-License-Identifier: MIT
+
 type Level = "debug" | "info" | "warn" | "error";
 type Fields = Record<string, unknown>;
 

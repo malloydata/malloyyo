@@ -1,3 +1,6 @@
+// Copyright (c) The Malloy Foundation
+// SPDX-License-Identifier: MIT
+
 export function originFromRequest(request: Request): string {
   const host =
     request.headers.get("x-forwarded-host") ??

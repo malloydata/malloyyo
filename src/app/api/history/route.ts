@@ -1,3 +1,6 @@
+// Copyright (c) The Malloy Foundation
+// SPDX-License-Identifier: MIT
+
 import { NextResponse } from "next/server";
 import { eq, desc, and, isNull, sql } from "drizzle-orm";
 import { db, inquiries, toolCalls, users } from "@/db";

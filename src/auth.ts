@@ -1,3 +1,6 @@
+// Copyright (c) The Malloy Foundation
+// SPDX-License-Identifier: MIT
+
 import NextAuth from "next-auth";
 import Google from "next-auth/providers/google";
 import Okta from "next-auth/providers/okta";

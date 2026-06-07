@@ -1,3 +1,6 @@
+// Copyright (c) The Malloy Foundation
+// SPDX-License-Identifier: MIT
+
 import { redirect } from "next/navigation";
 import { auth } from "@/auth";
 import { verifyAuthz } from "@/lib/oauth/authz-blob";

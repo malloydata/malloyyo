@@ -1,3 +1,6 @@
+// Copyright (c) The Malloy Foundation
+// SPDX-License-Identifier: MIT
+
 "use client";
 import { use, useEffect, useState } from "react";
 import Link from "next/link";

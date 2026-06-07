@@ -1,3 +1,6 @@
+// Copyright (c) The Malloy Foundation
+// SPDX-License-Identifier: MIT
+
 import { NextResponse } from "next/server";
 import { originFromRequest } from "@/lib/oauth/base-url";
 import { corsPreflight, withCors } from "@/lib/oauth/cors";

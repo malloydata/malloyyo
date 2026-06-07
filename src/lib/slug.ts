@@ -1,3 +1,6 @@
+// Copyright (c) The Malloy Foundation
+// SPDX-License-Identifier: MIT
+
 import { customAlphabet } from "nanoid";
 import {
   uniqueNamesGenerator,

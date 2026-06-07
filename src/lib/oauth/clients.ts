@@ -1,3 +1,6 @@
+// Copyright (c) The Malloy Foundation
+// SPDX-License-Identifier: MIT
+
 import { db, oauthClients, type OAuthClient } from "@/db";
 import { eq } from "drizzle-orm";
 

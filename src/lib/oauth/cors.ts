@@ -1,3 +1,6 @@
+// Copyright (c) The Malloy Foundation
+// SPDX-License-Identifier: MIT
+
 const ALLOW_HEADERS = ["Authorization", "Content-Type", "Mcp-Session-Id", "Mcp-Protocol-Version"].join(", ");
 const ALLOW_METHODS = "GET, POST, DELETE, OPTIONS";
 const EXPOSE_HEADERS = ["WWW-Authenticate", "Mcp-Session-Id"].join(", ");

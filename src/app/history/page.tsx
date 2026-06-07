@@ -45,12 +45,15 @@ export default function HistoryPage() {
   const [runError, setRunError] = useState<string | null>(null);
   const mainRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
+  const loadHistory = useCallback(() => {
+    setLoading(true);
     fetch("/api/history")
       .then((r) => r.json())
       .then((data) => setItems(Array.isArray(data) ? data : []))
       .finally(() => setLoading(false));
   }, []);
+
+  useEffect(() => { loadHistory(); }, [loadHistory]);
 
   const runQuery = useCallback(async (src: string, malloy: string) => {
     if (!src || !malloy.trim()) return;
@@ -94,7 +97,17 @@ export default function HistoryPage() {
       <aside className="w-72 flex-shrink-0 border-r border-gray-200 dark:border-gray-800 flex flex-col overflow-hidden">
         <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-800">
           <Link href="/" className="text-xs text-gray-500 dark:text-gray-400 hover:underline">← home</Link>
-          <h1 className="text-sm font-bold mt-1">Query history</h1>
+          <div className="flex items-center justify-between mt-1">
+            <h1 className="text-sm font-bold">Query history</h1>
+            <button
+              onClick={loadHistory}
+              disabled={loading}
+              className="text-xs text-gray-400 dark:text-gray-600 hover:text-gray-700 dark:hover:text-gray-300 disabled:opacity-40"
+              title="Refresh"
+            >
+              {loading ? "↻" : "↻"}
+            </button>
+          </div>
         </div>
         <div className="overflow-y-auto flex-1">
           {loading ? (

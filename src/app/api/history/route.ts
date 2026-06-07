@@ -29,6 +29,7 @@ export async function GET(req: Request) {
   const rows = await db
     .select({
       inquiryId: toolCalls.inquiryId,
+      slug: inquiries.slug,
       question: inquiries.question,
       createdAt: toolCalls.createdAt,
       source: toolCalls.source,
@@ -45,7 +46,7 @@ export async function GET(req: Request) {
     .leftJoin(users, eq(users.id, toolCalls.userId))
     .where(
       and(
-        eq(toolCalls.toolName, "run_analytical_query"),
+        eq(toolCalls.toolName, "run_query"),
         isNull(toolCalls.error),
         scope === "me" ? eq(toolCalls.userId, user.id) : undefined,
         view === "favorites" ? favExists(user.id) : undefined,

@@ -14,7 +14,7 @@ export async function GET(req: Request) {
   const source = new URL(req.url).searchParams.get("source");
   if (!source) return NextResponse.json({ error: "source is required" }, { status: 400 });
 
-  const result = await callTool(user, "describe_semantic_model", { source });
+  const result = await callTool(user, "describe_source", { source });
   if (result.isError) return NextResponse.json({ error: result.content[0]?.text }, { status: 404 });
 
   return NextResponse.json(JSON.parse(result.content[0]?.text ?? "{}"));

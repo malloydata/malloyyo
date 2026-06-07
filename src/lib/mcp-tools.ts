@@ -1,7 +1,9 @@
-import { eq, and, desc, or, count } from "drizzle-orm";
+import { eq, and, desc, or, count, isNull } from "drizzle-orm";
 import { db, datasets, malloyModels, malloyModelFiles, queries, conversations, inquiries, toolCalls, type User } from "@/db";
 import type { SourceInfo } from "./malloy";
 import { compileMalloyFiles, runMalloyFiles, describeSourceFields } from "./malloy";
+import { env } from "./env";
+import { parseSlug } from "./slug";
 
 export type ToolDescriptor = {
   name: string;
@@ -9,11 +11,16 @@ export type ToolDescriptor = {
   inputSchema: Record<string, unknown>;
 };
 
+// Every description is prefixed with this so that, when several Malloyyo
+// instances are connected to the same Claude client, the tools self-identify
+// and Claude can route a request to the right instance.
+const TAG = `[${env.INSTANCE_NAME}]`;
+
 export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: "start_conversation",
     description:
-      "Call this ONCE at the beginning of a session, before any other tool. Provide the name of the source you will explore and a brief description of what the user is trying to accomplish overall. Returns a conversation_id to pass to run_analytical_query.",
+      `${TAG} Call this ONCE at the beginning of a session, before any other tool. Provide the name of the source you will explore and a brief description of what the user is trying to accomplish overall. Returns a conversation_id to pass to run_query.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -27,33 +34,33 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: "list_sources",
     description:
-      "List all queryable Malloy sources available on this MCP endpoint. Each source is a named entity you can run analytical queries against. Multiple sources may come from the same semantic model. After listing, call describe_semantic_model on the source you want to query.",
+      `${TAG} List all queryable Malloy sources available on this MCP endpoint. Each source is a named entity you can run analytical queries against. Multiple sources may come from the same semantic model. After listing, call describe_source on the source you want to query.`,
     inputSchema: {
       type: "object",
       properties: {
-        inquiry_id: { type: "string", description: "Optional inquiry_id from a previous run_analytical_query call." },
+        inquiry_id: { type: "string", description: "Optional inquiry_id from a previous run_query call." },
       },
       additionalProperties: false,
     },
   },
   {
-    name: "describe_semantic_model",
+    name: "describe_source",
     description:
-      "Return the full Malloy semantic model for the named source: all pre-defined measures, dimensions, views, and joins. Always call this before writing any query — the model almost certainly already has the measures you need (counts, sums, averages) so you do not need to write aggregations from scratch. Reading the model once is cheaper than iterating through compile errors.",
+      `${TAG} Return the full Malloy semantic model for the named source: all pre-defined measures, dimensions, views, and joins. Always call this before writing any query — the model almost certainly already has the measures you need (counts, sums, averages) so you do not need to write aggregations from scratch. Reading the model once is cheaper than iterating through compile errors.`,
     inputSchema: {
       type: "object",
       properties: {
         source: { type: "string" },
-        inquiry_id: { type: "string", description: "Optional inquiry_id from a previous run_analytical_query call." },
+        inquiry_id: { type: "string", description: "Optional inquiry_id from a previous run_query call." },
       },
       required: ["source"],
       additionalProperties: false,
     },
   },
   {
-    name: "compile_analytical_query",
+    name: "compile_query",
     description:
-      "Compile a Malloy query against the source's semantic model and return the generated SQL, without executing. Use this to validate syntax cheaply. You must call describe_semantic_model first to know what measures and dimensions are available.",
+      `${TAG} Compile a Malloy query against the source's semantic model and return the generated SQL, without executing. Use this to validate syntax cheaply. You must call describe_source first to know what measures and dimensions are available.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -62,16 +69,16 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
           type: "string",
           description: "Malloy query starting with `run:` that references the source name.",
         },
-        inquiry_id: { type: "string", description: "Optional inquiry_id from a previous run_analytical_query call." },
+        inquiry_id: { type: "string", description: "Optional inquiry_id from a previous run_query call." },
       },
       required: ["source", "malloy"],
       additionalProperties: false,
     },
   },
   {
-    name: "run_analytical_query",
+    name: "run_query",
     description:
-      "Execute a Malloy query against the source and return the rows. You must call describe_semantic_model first.\n\nInquiry tracking (required — exactly one of these):\n- `question`: Pass the user's question in plain English to start a NEW inquiry. The response will include an `inquiry_id`.\n- `inquiry_id`: Pass the `inquiry_id` from a previous call to continue the same inquiry (follow-up queries, refinements, retries).\n\nAfter EVERY call you MUST output a 'Query summary': (1) question in plain English, (2) Malloy logic (filters, grouping, aggregation, ordering), (3) post-processing outside Malloy or 'none'. Omitting this summary is an error.\n\nVisualization rule: filtering top-N, ranking, and member selection must happen in Malloy — not in client code.",
+      `${TAG} Execute a Malloy query against the source and return the rows. You must call describe_source first.\n\nInquiry tracking (required — exactly one of these):\n- \`question\`: Pass the user's question in plain English to start a NEW inquiry. The response will include an \`inquiry_id\`.\n- \`inquiry_id\`: Pass the \`inquiry_id\` from a previous call to continue the same inquiry (follow-up queries, refinements, retries).\n\nThe response includes \`ltool_url\` — a shareable link that opens this exact query in the ${env.INSTANCE_NAME} web UI. At the END of your Query summary, append this as a small inline markdown link with an outbound icon, exactly like \`[↗](ltool_url)\` (or \`[↗ ${env.INSTANCE_NAME}](ltool_url)\`), so the user can click through to view, tweak, or share the query.\n\nAfter EVERY call you MUST output a 'Query summary': (1) question in plain English, (2) Malloy logic (filters, grouping, aggregation, ordering), (3) post-processing outside Malloy or 'none'. Omitting this summary is an error.\n\nVisualization rule: filtering top-N, ranking, and member selection must happen in Malloy — not in client code.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -86,7 +93,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         },
         inquiry_id: {
           type: "string",
-          description: "ID from a previous run_analytical_query response. Provide this to continue an existing inquiry. Omit when asking a new question (use question instead).",
+          description: "ID from a previous run_query response. Provide this to continue an existing inquiry. Omit when asking a new question (use question instead).",
         },
         conversation_id: {
           type: "string",
@@ -100,6 +107,19 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         },
       },
       required: ["source", "malloy"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "describe_query",
+    description:
+      `${TAG} Resolve a shareable query slug (from an ltool_url, e.g. the tail after /ltool/) back into its source, original question, and Malloy. Use this when the user pastes a ${env.INSTANCE_NAME} share link.\n\nAfter loading, do NOT run the query. Show the user the question and the Malloy, then ask what they'd like to do — for example: "What more would you like to know? I can run it and tell you about the result, modify it and run it, or something else." Only call run_query once the user has told you how they want to proceed.\n\nSlugs are instance-specific: if the slug belongs to a different Malloyyo instance, this returns an error naming the correct one — switch to that instance's tools.`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        slug: { type: "string", description: "The share slug, e.g. `main_k7m2qx9p4b`." },
+      },
+      required: ["slug"],
       additionalProperties: false,
     },
   },
@@ -232,12 +252,48 @@ async function ensureConversation(userId: string, conversationId: string | undef
   return conv.id;
 }
 
+// Look up an inquiry's shareable slug (legacy rows may have none).
+async function inquirySlug(inquiryId: string): Promise<string | null> {
+  const [row] = await db.select({ slug: inquiries.slug }).from(inquiries).where(eq(inquiries.id, inquiryId)).limit(1);
+  return row?.slug ?? null;
+}
+
+export type SharedQuery =
+  | { ok: true; instance: string; source: string | null; question: string; malloy: string | null }
+  | { ok: false; error: string; wrongInstance?: string };
+
+// Resolve a share slug into the query it points at: the inquiry's question
+// plus the source/Malloy from its most recent successful run. Shared by the
+// describe_query tool and the /api/ltool/share web endpoint.
+export async function loadSharedQuery(slug: string): Promise<SharedQuery> {
+  const parsed = parseSlug(slug);
+  if (parsed && !parsed.matchesInstance) {
+    return {
+      ok: false,
+      wrongInstance: parsed.code,
+      error: `Slug '${slug}' belongs to the '${parsed.code}' Malloyyo instance, not '${env.INSTANCE_CODE}' (${env.INSTANCE_NAME}). Use that instance's tools instead.`,
+    };
+  }
+  const [inq] = await db.select({ id: inquiries.id, question: inquiries.question }).from(inquiries).where(eq(inquiries.slug, slug)).limit(1);
+  if (!inq) return { ok: false, error: `query slug '${slug}' not found` };
+  const [tc] = await db
+    .select({ source: toolCalls.source, malloy: toolCalls.malloyInput })
+    .from(toolCalls)
+    .where(and(eq(toolCalls.inquiryId, inq.id), eq(toolCalls.toolName, "run_query"), isNull(toolCalls.error)))
+    .orderBy(desc(toolCalls.createdAt))
+    .limit(1);
+  return { ok: true, instance: env.INSTANCE_NAME, source: tc?.source ?? null, question: inq.question, malloy: tc?.malloy ?? null };
+}
+
 export async function callTool(
   user: User,
   name: string,
   args: Record<string, unknown>,
+  opts: { origin?: string } = {},
 ): Promise<ToolResult> {
   const inquiryId = typeof args.inquiry_id === "string" ? args.inquiry_id : undefined;
+  const baseUrl = (opts.origin ?? env.APP_BASE_URL).replace(/\/$/, "");
+  const ltoolUrl = (slug: string | null) => (slug ? `${baseUrl}/ltool/${slug}` : undefined);
 
   switch (name) {
     case "start_conversation": {
@@ -279,18 +335,26 @@ export async function callTool(
       return text(sources);
     }
 
-    case "describe_semantic_model": {
+    case "describe_query": {
+      const slug = String(args.slug ?? "").trim();
+      if (!slug) return errText("slug is required");
+      const res = await loadSharedQuery(slug);
+      if (!res.ok) return errText(res.error);
+      return text({ instance: res.instance, source: res.source, question: res.question, malloy: res.malloy, ltool_url: ltoolUrl(slug) });
+    }
+
+    case "describe_source": {
       const sourceName = String(args.source ?? args.dataset ?? "");
       const found = await findBySource(user.id, sourceName);
       if (!found) return errText(`source '${sourceName}' not found`);
       const { ds, model, description } = found;
       const files = await modelFileMap(model);
       const fields = await describeSourceFields(files, "index.malloy", sourceName);
-      await logCall({ inquiryId, userId: user.id, datasetId: ds.id, toolName: "describe_semantic_model", source: sourceName });
+      await logCall({ inquiryId, userId: user.id, datasetId: ds.id, toolName: "describe_source", source: sourceName });
       return text({ source: sourceName, model: ds.name, description, fields, malloy_source: model.source });
     }
 
-    case "compile_analytical_query": {
+    case "compile_query": {
       const sourceName = String(args.source ?? args.dataset ?? "");
       const malloyQ = String(args.malloy ?? "");
       const found = await findBySource(user.id, sourceName);
@@ -299,7 +363,7 @@ export async function callTool(
       const files = await modelFileMap(model);
       const res = await compileMalloyFiles(files, "index.malloy", malloyQ);
       await logCall({
-        inquiryId, userId: user.id, datasetId: ds.id, toolName: "compile_analytical_query",
+        inquiryId, userId: user.id, datasetId: ds.id, toolName: "compile_query",
         source: sourceName, malloyInput: malloyQ,
         compiledSql: res.ok ? res.sql : undefined,
         error: res.ok ? undefined : res.error,
@@ -308,12 +372,13 @@ export async function callTool(
       return text({ sql: res.sql });
     }
 
-    case "run_analytical_query": {
+    case "run_query": {
       const question = typeof args.question === "string" ? args.question.trim() : undefined;
       const conversationId = typeof args.conversation_id === "string" ? args.conversation_id : undefined;
 
       // Resolve or create the inquiry.
       let resolvedInquiryId = inquiryId;
+      let resolvedSlug: string | null = null;
       if (!resolvedInquiryId) {
         if (!question) return errText("Provide either 'question' (new inquiry) or 'inquiry_id' (follow-up).");
         const sourceName0 = String(args.source ?? "").trim();
@@ -323,8 +388,11 @@ export async function callTool(
         const [inq] = await db
           .insert(inquiries)
           .values({ conversationId: convId, question, sequence: Number(seq?.n ?? 0) })
-          .returning({ id: inquiries.id });
+          .returning({ id: inquiries.id, slug: inquiries.slug });
         resolvedInquiryId = inq.id;
+        resolvedSlug = inq.slug;
+      } else {
+        resolvedSlug = await inquirySlug(resolvedInquiryId);
       }
 
       const sourceName = String(args.source ?? args.dataset ?? "");
@@ -341,13 +409,13 @@ export async function callTool(
         const durationMs = Date.now() - t0;
         const capped = res.rows.slice(0, maxRows);
         await db.insert(queries).values({ datasetId: ds.id, userId: user.id, malloySource: malloyQ, compiledSql: res.sql, rowCount: res.rowCount, durationMs });
-        await logCall({ inquiryId: resolvedInquiryId, userId: user.id, datasetId: ds.id, toolName: "run_analytical_query", source: sourceName, malloyInput: malloyQ, compiledSql: res.sql, rowCount: res.rowCount, durationMs });
-        return text({ inquiry_id: resolvedInquiryId, row_count: res.rowCount, rows: capped, truncated: res.rowCount > capped.length, duration_ms: durationMs });
+        await logCall({ inquiryId: resolvedInquiryId, userId: user.id, datasetId: ds.id, toolName: "run_query", source: sourceName, malloyInput: malloyQ, compiledSql: res.sql, rowCount: res.rowCount, durationMs });
+        return text({ inquiry_id: resolvedInquiryId, ltool_url: ltoolUrl(resolvedSlug), row_count: res.rowCount, rows: capped, truncated: res.rowCount > capped.length, duration_ms: durationMs });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         const durationMs = Date.now() - t0;
         await db.insert(queries).values({ datasetId: ds.id, userId: user.id, malloySource: malloyQ, error: msg });
-        await logCall({ inquiryId: resolvedInquiryId, userId: user.id, datasetId: ds.id, toolName: "run_analytical_query", source: sourceName, malloyInput: malloyQ, error: msg, durationMs });
+        await logCall({ inquiryId: resolvedInquiryId, userId: user.id, datasetId: ds.id, toolName: "run_query", source: sourceName, malloyInput: malloyQ, error: msg, durationMs });
         return errText(`run failed: ${msg}\n\ninquiry_id: ${resolvedInquiryId}`);
       }
     }
@@ -389,5 +457,51 @@ export async function runQueryForWeb(
     };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export type WebSaveResult =
+  | { ok: true; slug: string | null; inquiryId: string; rows: Record<string, unknown>[]; sql: string; rowCount: number; truncated: boolean; durationMs: number; stableResult: unknown }
+  | { ok: false; error: string };
+
+// Run a Malloy query from the web UI AND persist it as a new history entry:
+// creates a conversation + inquiry (which mints a fresh slug) and logs a
+// run_query tool call so it shows up in /ltool history and is shareable. Used
+// when the user edits a loaded query and runs it (the slug no longer matches
+// the original, so it becomes a new saved query).
+export async function saveWebQuery(
+  userId: string,
+  source: string,
+  malloyQuery: string,
+  title: string,
+  maxRows = 1000,
+): Promise<WebSaveResult> {
+  const found = await findBySource(userId, source);
+  if (!found) return { ok: false, error: `source '${source}' not found` };
+  const { ds, model } = found;
+  if (ds.status !== "ready") return { ok: false, error: `source '${source}' is not ready` };
+  const files = await modelFileMap(model);
+
+  const convId = await ensureConversation(userId, undefined, source, ds.id);
+  const [seq] = await db.select({ n: count() }).from(inquiries).where(eq(inquiries.conversationId, convId));
+  const [inq] = await db
+    .insert(inquiries)
+    .values({ conversationId: convId, question: title, sequence: Number(seq?.n ?? 0) })
+    .returning({ id: inquiries.id, slug: inquiries.slug });
+
+  const t0 = Date.now();
+  try {
+    const res = await runMalloyFiles(files, "index.malloy", malloyQuery, { rowLimit: maxRows });
+    const durationMs = Date.now() - t0;
+    const capped = res.rows.slice(0, maxRows);
+    await db.insert(queries).values({ datasetId: ds.id, userId, malloySource: malloyQuery, compiledSql: res.sql, rowCount: res.rowCount, durationMs });
+    await logCall({ inquiryId: inq.id, userId, datasetId: ds.id, toolName: "run_query", source, malloyInput: malloyQuery, compiledSql: res.sql, rowCount: res.rowCount, durationMs });
+    return { ok: true, slug: inq.slug, inquiryId: inq.id, rows: capped, sql: res.sql, rowCount: res.rowCount, truncated: res.rowCount > capped.length, durationMs, stableResult: res.stableResult };
+  } catch (err) {
+    const durationMs = Date.now() - t0;
+    const msg = err instanceof Error ? err.message : String(err);
+    await db.insert(queries).values({ datasetId: ds.id, userId, malloySource: malloyQuery, error: msg });
+    await logCall({ inquiryId: inq.id, userId, datasetId: ds.id, toolName: "run_query", source, malloyInput: malloyQuery, error: msg, durationMs });
+    return { ok: false, error: msg };
   }
 }

@@ -5,6 +5,7 @@ import { recordAccessTokenUse, validateAccessToken } from "@/lib/oauth/tokens";
 import { corsPreflight, withCors } from "@/lib/oauth/cors";
 import { originFromRequest } from "@/lib/oauth/base-url";
 import { logger } from "@/lib/logger";
+import { env } from "@/lib/env";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -41,7 +42,7 @@ function unauthorized(description: string, request: Request): Response {
 }
 
 const PROTOCOL_VERSION = "2025-03-26";
-const SERVER_INFO = { name: "malloyyo", version: "0.1.0" };
+const SERVER_INFO = { name: env.INSTANCE_NAME, version: "0.1.0" };
 
 export async function POST(req: Request) {
   const authHeader = req.headers.get("authorization");
@@ -86,7 +87,7 @@ export async function POST(req: Request) {
       const start = Date.now();
       logger.info("mcp tool call", { tool: name, userId: user.id });
       try {
-        const result = await callTool(user, name, args);
+        const result = await callTool(user, name, args, { origin: originFromRequest(req) });
         logger.info("mcp tool ok", { tool: name, userId: user.id, durationMs: Date.now() - start });
         return ok(body.id, result);
       } catch (e) {

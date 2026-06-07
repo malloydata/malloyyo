@@ -17,6 +17,18 @@ export const env = {
   get APP_BASE_URL() {
     return process.env.APP_BASE_URL ?? "http://localhost:3000";
   },
+  // Human-readable name for this deployment, shown in the UI, the MCP
+  // serverInfo, and prefixed onto every tool description so Claude can tell
+  // multiple connected Malloyyo instances apart.
+  get INSTANCE_NAME() {
+    return process.env.INSTANCE_NAME ?? "Malloyyo";
+  },
+  // Short slug prefix for this deployment (e.g. main / stg / gld). Prefixed
+  // onto shareable query slugs so a slug from one instance fails loudly when
+  // handed to another.
+  get INSTANCE_CODE() {
+    return (process.env.INSTANCE_CODE ?? "main").toLowerCase();
+  },
   // Comma-separated list of Google emails that are automatically admins.
   get APP_ADMIN_EMAILS(): string[] {
     return (process.env.APP_ADMIN_EMAILS ?? "")

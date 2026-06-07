@@ -24,6 +24,7 @@ type Me = {
 
 export default function HomePage() {
   const [me, setMe] = useState<Me | null | undefined>(undefined);
+  const [instanceName, setInstanceName] = useState("malloyyo");
   const [sources, setSources] = useState<SourceSummary[] | null>(null);
 
   useEffect(() => { void load(); }, []);
@@ -32,6 +33,7 @@ export default function HomePage() {
     const meRes = await fetch("/api/me");
     const meJson = await meRes.json();
     setMe(meJson.user);
+    if (meJson.instanceName) setInstanceName(meJson.instanceName);
     if (meJson.user) {
       const r = await fetch("/api/sources");
       if (r.ok) setSources(await r.json());
@@ -44,7 +46,7 @@ export default function HomePage() {
     <main className="mx-auto max-w-2xl px-6 py-16 font-mono text-sm space-y-10">
       <header className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold mb-2">malloyyo</h1>
+          <h1 className="text-2xl font-bold mb-2">{instanceName}</h1>
           <p className="text-gray-500 dark:text-gray-400 leading-relaxed">
             A simple MCP server for Malloy semantic models. All you need is a
             database connection (or S3 bucket) and a GitHub repository for the
@@ -73,10 +75,10 @@ export default function HomePage() {
               </Link>
             )}
             <Link
-              href="/history"
+              href="/ltool"
               className="inline-block rounded border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 px-4 py-2 text-xs hover:bg-gray-50 dark:hover:bg-gray-900"
             >
-              query history
+              ltool
             </Link>
             {me.isAdmin && (
               <Link
@@ -88,7 +90,7 @@ export default function HomePage() {
             )}
           </section>
 
-          <McpSetup />
+          <McpSetup instanceName={instanceName} />
 
           <section>
             <div className="flex items-baseline justify-between mb-3">
@@ -160,7 +162,7 @@ function Copyable({ value, multiline }: { value: string; multiline?: boolean }) 
   );
 }
 
-function McpSetup() {
+function McpSetup({ instanceName }: { instanceName: string }) {
   const [origin, setOrigin] = useState("");
   useEffect(() => { setOrigin(window.location.origin); }, []);
   const mcpUrl = `${origin || "https://malloyyo.vercel.app"}/mcp`;
@@ -179,8 +181,9 @@ function McpSetup() {
         <ol className="list-decimal list-inside space-y-1 text-gray-600 dark:text-gray-400">
           <li>Go to <strong>claude.ai</strong> → Settings → Integrations</li>
           <li>Click <strong>Add MCP server</strong> and paste the URL above</li>
+          <li>Name the connection <strong>{instanceName}</strong> — matching the name keeps tools easy to tell apart if you connect several instances</li>
           <li>claude.ai will open a Google sign-in → grant access on the consent page</li>
-          <li>Done — malloyyo tools appear in every new conversation</li>
+          <li>Done — {instanceName} tools appear in every new conversation</li>
         </ol>
       </div>
 
@@ -200,8 +203,8 @@ function McpSetup() {
       </div>
 
       <div className="text-xs text-gray-500 dark:text-gray-400">
-        Available tools: <code>list_sources</code>, <code>describe_semantic_model</code>,{" "}
-        <code>sample_rows</code>, <code>compile_analytical_query</code>, <code>run_analytical_query</code>
+        Available tools: <code>list_sources</code>, <code>describe_source</code>,{" "}
+        <code>compile_query</code>, <code>run_query</code>, <code>describe_query</code>
       </div>
     </section>
   );

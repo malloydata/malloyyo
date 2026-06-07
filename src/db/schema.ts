@@ -12,6 +12,7 @@ import {
   integer,
 } from "drizzle-orm/pg-core";
 import type { AdapterAccountType } from "next-auth/adapters";
+import { instanceSlug } from "../lib/slug";
 
 export const datasetStatus = pgEnum("dataset_status", [
   "pending",
@@ -204,6 +205,9 @@ export const inquiries = pgTable(
       .references(() => conversations.id, { onDelete: "cascade" }),
     sequence: integer("sequence").notNull().default(0),
     question: text("question").notNull(),
+    // Shareable slug (<instance-code>_<random>) for the ltool deep-link.
+    // App-generated on insert; backfilled for legacy rows by the 0001 migration.
+    slug: text("slug").unique().$defaultFn(() => instanceSlug()),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .default(sql`now()`),

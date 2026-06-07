@@ -19,6 +19,7 @@ type Scope = "me" | "all";
 
 type HistoryItem = {
   inquiryId: string | null;
+  slug: string | null;
   question: string | null;
   createdAt: string;
   source: string | null;
@@ -77,7 +78,7 @@ function StarButton({
   );
 }
 
-export default function HistoryPage() {
+export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
   const [items, setItems] = useState<HistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<HistoryItem | null>(null);
@@ -89,6 +90,9 @@ export default function HistoryPage() {
   const [result, setResult] = useState<RunResult | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
   const [schemaOpen, setSchemaOpen] = useState(false);
+  const [instanceName, setInstanceName] = useState("Malloyyo");
+  const [shareCopied, setShareCopied] = useState(false);
+  const [editedTitle, setEditedTitle] = useState<string | null>(null);
   const mainRef = useRef<HTMLDivElement>(null);
 
   const loadHistory = useCallback(() => {
@@ -100,6 +104,10 @@ export default function HistoryPage() {
   }, [scope, view]);
 
   useEffect(() => { loadHistory(); }, [loadHistory]);
+
+  useEffect(() => {
+    fetch("/api/me").then((r) => r.json()).then((d) => { if (d?.instanceName) setInstanceName(d.instanceName); }).catch(() => {});
+  }, []);
 
   const runQuery = useCallback(async (src: string, malloy: string) => {
     if (!src || !malloy.trim()) return;
@@ -125,10 +133,37 @@ export default function HistoryPage() {
     }
   }, []);
 
+  // Deep-link: hydrate from a shared slug and auto-run.
+  useEffect(() => {
+    if (!initialSlug) return;
+    let cancelled = false;
+    fetch(`/api/ltool/share/${initialSlug}`)
+      .then(async (r) => ({ ok: r.ok, body: await r.json() }))
+      .then(({ ok, body }) => {
+        if (cancelled) return;
+        if (!ok) { setRunError(body.error ?? "could not load shared query"); return; }
+        const item: HistoryItem = {
+          inquiryId: null, slug: initialSlug, question: body.question ?? null,
+          createdAt: new Date().toISOString(), source: body.source ?? null, datasetId: null,
+          malloyQuery: body.malloy ?? null, rowCount: null, durationMs: null,
+          authorName: null, isFavorited: false,
+        };
+        setSelected(item);
+        setQuery(body.malloy ?? "");
+        setSource(body.source ?? "");
+        setEditedTitle(null);
+        if (body.source) setSchemaOpen(true);
+        if (body.source && body.malloy) runQuery(body.source, body.malloy);
+      })
+      .catch((e) => { if (!cancelled) setRunError(e instanceof Error ? e.message : String(e)); });
+    return () => { cancelled = true; };
+  }, [initialSlug, runQuery]);
+
   function selectItem(item: HistoryItem) {
     setSelected(item);
     setQuery(item.malloyQuery ?? "");
     setSource(item.source ?? "");
+    setEditedTitle(null);
     setResult(null);
     setRunError(null);
     if (item.source) setSchemaOpen(true);
@@ -171,6 +206,70 @@ export default function HistoryPage() {
       );
     }
   }, [view, selected]);
+
+  // The loaded query has been edited away from what its slug points at.
+  const isModified = !!selected && query.trim() !== (selected.malloyQuery ?? "").trim();
+  const modifiedDefaultTitle = `(Modified) ${selected?.question ?? ""}`;
+  // Clear the slug while modified — it no longer matches the editor contents.
+  const activeSlug = isModified ? null : selected?.slug ?? null;
+
+  const shareUrl = activeSlug ? `${typeof window !== "undefined" ? window.location.origin : ""}/ltool/${activeSlug}` : null;
+
+  const claudeUrl = activeSlug
+    ? `https://claude.ai/new?q=${encodeURIComponent(
+        `Using the ${instanceName} Malloy tools, continue exploring${source ? ` the "${source}" source` : ""}.` +
+        (selected?.question ? ` I was looking at: "${selected.question}".` : "") +
+        ` Call describe_query with slug "${activeSlug}" to load the exact query, then go deeper.`
+      )}`
+    : null;
+
+  // Run the current editor contents. If the query was edited, persist it as a
+  // new history entry (fresh slug) under the edited title; otherwise just run.
+  async function handleRun() {
+    if (!source || !query.trim()) return;
+    if (!isModified) { runQuery(source, query); return; }
+    const title = (editedTitle ?? modifiedDefaultTitle).trim() || query.trim().slice(0, 80);
+    setRunning(true);
+    setResult(null);
+    setRunError(null);
+    try {
+      const res = await fetch("/api/run", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ source, malloy: query, save: true, title }),
+      });
+      const json = await res.json();
+      if (!res.ok) { setRunError(json.error ?? "query failed"); return; }
+      setResult(json);
+      const newItem: HistoryItem = {
+        inquiryId: json.inquiryId ?? null,
+        slug: json.slug ?? null,
+        question: title,
+        createdAt: new Date().toISOString(),
+        source,
+        datasetId: selected?.datasetId ?? null,
+        malloyQuery: query,
+        rowCount: json.rowCount ?? null,
+        durationMs: json.durationMs ?? null,
+        authorName: null,
+        isFavorited: false,
+      };
+      setSelected(newItem);
+      setEditedTitle(null);
+      loadHistory();
+    } catch (e) {
+      setRunError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  async function copyShare() {
+    if (!shareUrl) return;
+    await navigator.clipboard.writeText(shareUrl);
+    setShareCopied(true);
+    setTimeout(() => setShareCopied(false), 1200);
+  }
 
   return (
     <div className="flex h-screen overflow-hidden font-mono text-sm" style={{ minWidth: 0 }}>
@@ -261,7 +360,16 @@ export default function HistoryPage() {
             {/* Question + meta */}
             <div className="space-y-1">
               <div className="flex items-start gap-3">
-                <p className="text-base font-semibold text-gray-900 dark:text-gray-100 flex-1">{selected.question}</p>
+                {isModified ? (
+                  <input
+                    value={editedTitle ?? modifiedDefaultTitle}
+                    onChange={(e) => setEditedTitle(e.target.value)}
+                    placeholder="Title for this query"
+                    className="flex-1 text-base font-semibold text-gray-900 dark:text-gray-100 bg-amber-50 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-800 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-amber-400"
+                  />
+                ) : (
+                  <p className="text-base font-semibold text-gray-900 dark:text-gray-100 flex-1">{selected.question}</p>
+                )}
                 <button
                   onClick={() => setSchemaOpen((o) => !o)}
                   className="flex-shrink-0 text-xs px-2 py-0.5 rounded bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300 hover:bg-purple-200 dark:hover:bg-purple-900/60"
@@ -270,7 +378,10 @@ export default function HistoryPage() {
                   {source || "schema"}
                 </button>
               </div>
-              {selected.authorName && scope === "all" && (
+              {isModified && (
+                <p className="text-[11px] text-amber-600 dark:text-amber-500">Edited — running will save this as a new query.</p>
+              )}
+              {!isModified && selected.authorName && scope === "all" && (
                 <p className="text-xs text-gray-400 dark:text-gray-600">by {selected.authorName}</p>
               )}
             </div>
@@ -281,15 +392,35 @@ export default function HistoryPage() {
               <MalloyCodeEditor value={query} onChange={setQuery} minHeight="120px" />
             </div>
 
-            {/* Run button */}
-            <div className="flex items-center gap-3">
+            {/* Run + share buttons */}
+            <div className="flex items-center gap-3 flex-wrap">
               <button
-                onClick={() => runQuery(source, query)}
+                onClick={handleRun}
                 disabled={running || !source || !query.trim()}
                 className="text-xs px-3 py-1.5 rounded bg-black text-white dark:bg-white dark:text-black disabled:opacity-40 hover:opacity-80"
               >
-                {running ? "running…" : "Run"}
+                {running ? "running…" : isModified ? "Run & save" : "Run"}
               </button>
+              {shareUrl && (
+                <button
+                  onClick={copyShare}
+                  className="text-xs px-3 py-1.5 rounded border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-900"
+                  title="Copy a shareable link to this query"
+                >
+                  {shareCopied ? "copied link" : "Share"}
+                </button>
+              )}
+              {claudeUrl && (
+                <a
+                  href={claudeUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs px-3 py-1.5 rounded border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-900"
+                  title={`Open a new Claude chat seeded with this query on ${instanceName}`}
+                >
+                  Explore further with Claude →
+                </a>
+              )}
               {result && !running && (
                 <span className="text-xs text-gray-500 dark:text-gray-400">
                   {result.rowCount.toLocaleString()} rows · {(result.durationMs / 1000).toFixed(2)}s

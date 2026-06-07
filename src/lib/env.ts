@@ -8,8 +8,10 @@ export const env = {
   get DATABASE_URL() {
     return required("DATABASE_URL");
   },
+  // Optional — when unset, Malloy runs against plain (in-memory) DuckDB
+  // instead of MotherDuck; models supply their own sources/attachments.
   get MOTHERDUCK_TOKEN() {
-    return required("MOTHERDUCK_TOKEN");
+    return process.env.MOTHERDUCK_TOKEN ?? "";
   },
   get MOTHERDUCK_DATABASE() {
     return process.env.MOTHERDUCK_DATABASE ?? "mayolo";

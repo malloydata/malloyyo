@@ -238,6 +238,16 @@ export const toolCalls = pgTable(
   ],
 );
 
+export const favorites = pgTable(
+  "favorites",
+  {
+    userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+    inquiryId: uuid("inquiry_id").notNull().references(() => inquiries.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
+  },
+  (t) => [primaryKey({ columns: [t.userId, t.inquiryId] })],
+);
+
 // OAuth 2.1 client registry (RFC 7591). One row per MCP client.
 export const oauthClients = pgTable("oauth_clients", {
   id: text("id")
@@ -345,3 +355,4 @@ export type Inquiry = typeof inquiries.$inferSelect;
 export type User = typeof users.$inferSelect;
 export type OAuthClient = typeof oauthClients.$inferSelect;
 export type OAuthAccessToken = typeof oauthAccessTokens.$inferSelect;
+export type Favorite = typeof favorites.$inferSelect;

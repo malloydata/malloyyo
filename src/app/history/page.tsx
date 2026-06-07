@@ -14,9 +14,12 @@ const MalloyResultView = dynamic(
   { ssr: false, loading: () => <div className="h-40 rounded border border-gray-200 dark:border-gray-800 bg-gray-50 dark:bg-gray-900 animate-pulse" /> },
 );
 
+type View = "history" | "favorites";
+type Scope = "me" | "all";
+
 type HistoryItem = {
-  inquiryId: string;
-  question: string;
+  inquiryId: string | null;
+  question: string | null;
   createdAt: string;
   source: string | null;
   datasetId: string | null;
@@ -24,6 +27,7 @@ type HistoryItem = {
   rowCount: number | null;
   durationMs: number | null;
   authorName: string | null;
+  isFavorited: boolean;
 };
 
 type RunResult = {
@@ -35,10 +39,50 @@ type RunResult = {
   stableResult: Record<string, unknown>;
 };
 
+function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`text-xs px-2.5 py-1 rounded transition-colors ${
+        active
+          ? "bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900"
+          : "text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function StarButton({
+  item,
+  onToggle,
+}: {
+  item: HistoryItem;
+  onToggle: (e: React.MouseEvent, item: HistoryItem) => void;
+}) {
+  if (!item.inquiryId) return null;
+  return (
+    <button
+      onClick={(e) => onToggle(e, item)}
+      className={`text-sm leading-none flex-shrink-0 transition-colors ${
+        item.isFavorited
+          ? "text-amber-400 hover:text-amber-500"
+          : "text-gray-300 dark:text-gray-700 hover:text-amber-400 dark:hover:text-amber-500"
+      }`}
+      title={item.isFavorited ? "Unfavorite" : "Favorite"}
+    >
+      {item.isFavorited ? "★" : "☆"}
+    </button>
+  );
+}
+
 export default function HistoryPage() {
   const [items, setItems] = useState<HistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<HistoryItem | null>(null);
+  const [view, setView] = useState<View>("history");
+  const [scope, setScope] = useState<Scope>("me");
   const [query, setQuery] = useState("");
   const [source, setSource] = useState("");
   const [running, setRunning] = useState(false);
@@ -49,11 +93,11 @@ export default function HistoryPage() {
 
   const loadHistory = useCallback(() => {
     setLoading(true);
-    fetch("/api/history")
+    fetch(`/api/history?scope=${scope}&view=${view}`)
       .then((r) => r.json())
       .then((data) => setItems(Array.isArray(data) ? data : []))
       .finally(() => setLoading(false));
-  }, []);
+  }, [scope, view]);
 
   useEffect(() => { loadHistory(); }, [loadHistory]);
 
@@ -94,62 +138,111 @@ export default function HistoryPage() {
     }
   }
 
+  const toggleFavorite = useCallback(async (e: React.MouseEvent, item: HistoryItem) => {
+    e.stopPropagation();
+    if (!item.inquiryId) return;
+    const nextFav = !item.isFavorited;
+
+    // Optimistic update
+    setItems((prev) =>
+      prev.map((i) => i.inquiryId === item.inquiryId ? { ...i, isFavorited: nextFav } : i)
+    );
+
+    try {
+      const res = await fetch("/api/favorites", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ inquiryId: item.inquiryId }),
+      });
+      const json = await res.json() as { isFavorited: boolean };
+      if (view === "favorites" && !json.isFavorited) {
+        // Remove from list when unfavoriting in favorites view
+        setItems((prev) => prev.filter((i) => i.inquiryId !== item.inquiryId));
+        if (selected?.inquiryId === item.inquiryId) setSelected(null);
+      } else {
+        setItems((prev) =>
+          prev.map((i) => i.inquiryId === item.inquiryId ? { ...i, isFavorited: json.isFavorited } : i)
+        );
+      }
+    } catch {
+      // Revert on error
+      setItems((prev) =>
+        prev.map((i) => i.inquiryId === item.inquiryId ? { ...i, isFavorited: item.isFavorited } : i)
+      );
+    }
+  }, [view, selected]);
+
   return (
     <div className="flex h-screen overflow-hidden font-mono text-sm" style={{ minWidth: 0 }}>
       {/* Sidebar */}
       <aside className="w-72 flex-shrink-0 border-r border-gray-200 dark:border-gray-800 flex flex-col overflow-hidden">
-        <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-800">
-          <Link href="/" className="text-xs text-gray-500 dark:text-gray-400 hover:underline">← home</Link>
-          <div className="flex items-center justify-between mt-1">
-            <h1 className="text-sm font-bold">Query history</h1>
+        <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-800 space-y-2">
+          <div className="flex items-center justify-between">
+            <Link href="/" className="text-xs text-gray-500 dark:text-gray-400 hover:underline">← home</Link>
             <button
               onClick={loadHistory}
               disabled={loading}
               className="text-xs text-gray-400 dark:text-gray-600 hover:text-gray-700 dark:hover:text-gray-300 disabled:opacity-40"
               title="Refresh"
             >
-              {loading ? "↻" : "↻"}
+              ↻
             </button>
           </div>
+          {/* Tabs + scope toggle */}
+          <div className="flex items-center gap-1">
+            <TabButton active={view === "history"} onClick={() => setView("history")}>History</TabButton>
+            <TabButton active={view === "favorites"} onClick={() => setView("favorites")}>Favorites</TabButton>
+            <div className="flex-1" />
+            <TabButton active={scope === "me"} onClick={() => setScope("me")}>Me</TabButton>
+            <TabButton active={scope === "all"} onClick={() => setScope("all")}>All</TabButton>
+          </div>
         </div>
+
         <div className="overflow-y-auto flex-1">
           {loading ? (
             <p className="text-xs text-gray-500 dark:text-gray-400 px-4 py-3">loading…</p>
           ) : items.length === 0 ? (
-            <p className="text-xs text-gray-500 dark:text-gray-400 px-4 py-3">No queries yet.</p>
+            <p className="text-xs text-gray-500 dark:text-gray-400 px-4 py-3">
+              {view === "favorites" ? "No favorites yet." : "No queries yet."}
+            </p>
           ) : (
             <ul className="divide-y divide-gray-100 dark:divide-gray-900">
               {items.map((item) => (
                 <li key={item.inquiryId ?? `${item.source}-${item.createdAt}`}>
-                  <button
-                    onClick={() => selectItem(item)}
-                    className={`w-full text-left px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-900/50 transition-colors ${
-                      selected === item
-                        ? "bg-blue-50 dark:bg-blue-950/30 border-l-2 border-blue-500"
-                        : ""
-                    }`}
-                  >
-                    <p className="text-xs font-medium text-gray-800 dark:text-gray-200 line-clamp-2 leading-snug">
-                      {item.question}
-                    </p>
-                    <div className="flex items-center gap-2 mt-1.5 flex-wrap">
-                      {item.source && (
-                        <span className="text-[10px] px-1 py-0.5 rounded bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300">
-                          {item.source}
-                        </span>
-                      )}
-                      {item.authorName && (
-                        <span className="text-[10px] text-gray-400 dark:text-gray-600 truncate max-w-[100px]">
-                          {item.authorName}
-                        </span>
-                      )}
+                  <div className={`flex items-start hover:bg-gray-50 dark:hover:bg-gray-900/50 transition-colors ${
+                    selected?.inquiryId === item.inquiryId && selected?.createdAt === item.createdAt
+                      ? "bg-blue-50 dark:bg-blue-950/30 border-l-2 border-blue-500"
+                      : ""
+                  }`}>
+                    <button
+                      onClick={() => selectItem(item)}
+                      className="flex-1 text-left px-4 py-3 min-w-0"
+                    >
+                      <p className="text-xs font-medium text-gray-800 dark:text-gray-200 line-clamp-2 leading-snug">
+                        {item.question}
+                      </p>
+                      <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+                        {item.source && (
+                          <span className="text-[10px] px-1 py-0.5 rounded bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300">
+                            {item.source}
+                          </span>
+                        )}
+                        {item.authorName && scope === "all" && (
+                          <span className="text-[10px] text-gray-400 dark:text-gray-600 truncate max-w-[100px]">
+                            {item.authorName}
+                          </span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 mt-1 text-[10px] text-gray-400 dark:text-gray-600">
+                        {item.rowCount != null && <span>{item.rowCount.toLocaleString()} rows</span>}
+                        {item.durationMs != null && <span>{(item.durationMs / 1000).toFixed(1)}s</span>}
+                        <span>{new Date(item.createdAt).toLocaleDateString()}</span>
+                      </div>
+                    </button>
+                    <div className="pr-3 pt-3 flex-shrink-0">
+                      <StarButton item={item} onToggle={toggleFavorite} />
                     </div>
-                    <div className="flex items-center gap-2 mt-1 text-[10px] text-gray-400 dark:text-gray-600">
-                      {item.rowCount != null && <span>{item.rowCount.toLocaleString()} rows</span>}
-                      {item.durationMs != null && <span>{(item.durationMs / 1000).toFixed(1)}s</span>}
-                      <span>{new Date(item.createdAt).toLocaleDateString()}</span>
-                    </div>
-                  </button>
+                  </div>
                 </li>
               ))}
             </ul>
@@ -177,7 +270,7 @@ export default function HistoryPage() {
                   {source || "schema"}
                 </button>
               </div>
-              {selected.authorName && (
+              {selected.authorName && scope === "all" && (
                 <p className="text-xs text-gray-400 dark:text-gray-600">by {selected.authorName}</p>
               )}
             </div>

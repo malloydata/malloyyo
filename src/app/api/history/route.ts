@@ -1,20 +1,31 @@
 import { NextResponse } from "next/server";
-import { eq, desc, and, isNull } from "drizzle-orm";
+import { eq, desc, and, isNull, sql } from "drizzle-orm";
 import { db, inquiries, toolCalls, users } from "@/db";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 
 export const runtime = "nodejs";
 
-export async function GET() {
+// Correlated EXISTS checking if the current user has favorited this inquiry.
+// Uses toolCalls.inquiryId as a column reference (drizzle resolves to tool_calls.inquiry_id).
+function favExists(userId: string) {
+  return sql<boolean>`EXISTS (
+    SELECT 1 FROM favorites
+    WHERE favorites.inquiry_id = ${toolCalls.inquiryId}
+    AND favorites.user_id = ${userId}::uuid
+  )`;
+}
+
+export async function GET(req: Request) {
   let user;
   try { user = await getSessionUser(); } catch (err) {
     if (err instanceof UnauthorizedError) return NextResponse.json({ error: "sign in required" }, { status: 401 });
     throw err;
   }
 
-  // Start from toolCalls filtered by the authenticated user, then LEFT JOIN to inquiries.
-  // This is more resilient than filtering through conversations.userId, which can be stale
-  // or mismatched when MCP sessions reconnect.
+  const url = new URL(req.url);
+  const scope = url.searchParams.get("scope") ?? "me";     // "me" | "all"
+  const view  = url.searchParams.get("view")  ?? "history"; // "history" | "favorites"
+
   const rows = await db
     .select({
       inquiryId: toolCalls.inquiryId,
@@ -27,21 +38,23 @@ export async function GET() {
       durationMs: toolCalls.durationMs,
       toolSeq: toolCalls.sequence,
       authorName: users.name,
+      isFavorited: favExists(user.id),
     })
     .from(toolCalls)
     .leftJoin(inquiries, eq(inquiries.id, toolCalls.inquiryId))
     .leftJoin(users, eq(users.id, toolCalls.userId))
     .where(
       and(
-        eq(toolCalls.userId, user.id),
         eq(toolCalls.toolName, "run_analytical_query"),
         isNull(toolCalls.error),
+        scope === "me" ? eq(toolCalls.userId, user.id) : undefined,
+        view === "favorites" ? favExists(user.id) : undefined,
       )
     )
-    .orderBy(desc(toolCalls.createdAt));
+    .orderBy(desc(toolCalls.createdAt))
+    .limit(500);
 
-  // Keep the latest successful tool call per inquiry. Tool calls with no inquiry get
-  // their own entry keyed by the tool call's own id (shown as orphan rows).
+  // Keep the latest successful tool call per inquiry (dedup by inquiryId).
   const seen = new Set<string>();
   const history = rows
     .filter((row) => {

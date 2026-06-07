@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 type FieldNode = {
   name: string;
@@ -12,9 +12,11 @@ type FieldNode = {
 
 type SchemaData = {
   source: string;
-  // describe_semantic_model returns fields as a SourceDescription object
   fields: { primary_key: string | null; fields: FieldNode[] } | null;
 };
+
+// Module-level cache: persists across renders, cleared per source on demand.
+const schemaCache = new Map<string, SchemaData>();
 
 function kindColor(kind: FieldNode["kind"]) {
   switch (kind) {
@@ -113,15 +115,28 @@ export function SchemaPanel({ source, onClose }: Props) {
   const [schema, setSchema] = useState<SchemaData | null>(null);
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    if (!source) { setSchema(null); return; }
+  const fetchSchema = useCallback((src: string, bust = false) => {
+    if (bust) schemaCache.delete(src);
+    if (!bust && schemaCache.has(src)) {
+      setSchema(schemaCache.get(src)!);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setSchema(null);
-    fetch(`/api/schema?source=${encodeURIComponent(source)}`)
+    fetch(`/api/schema?source=${encodeURIComponent(src)}`)
       .then((r) => r.json())
-      .then((data) => setSchema(data))
+      .then((data: SchemaData) => {
+        schemaCache.set(src, data);
+        setSchema(data);
+      })
       .finally(() => setLoading(false));
-  }, [source]);
+  }, []);
+
+  useEffect(() => {
+    if (!source) { setSchema(null); return; }
+    fetchSchema(source);
+  }, [source, fetchSchema]);
 
   const fields = schema?.fields?.fields ?? [];
   const views      = fields.filter((f) => f.kind === "view");
@@ -135,13 +150,25 @@ export function SchemaPanel({ source, onClose }: Props) {
         <span className="text-xs font-semibold text-gray-700 dark:text-gray-300 truncate">
           {source ?? "Schema"}
         </span>
-        <button
-          onClick={onClose}
-          className="text-gray-400 dark:text-gray-600 hover:text-gray-700 dark:hover:text-gray-300 text-xs ml-2 flex-shrink-0"
-          title="Close"
-        >
-          ✕
-        </button>
+        <div className="flex items-center gap-1 flex-shrink-0 ml-2">
+          {source && (
+            <button
+              onClick={() => fetchSchema(source, true)}
+              disabled={loading}
+              className="text-gray-400 dark:text-gray-600 hover:text-gray-700 dark:hover:text-gray-300 text-xs disabled:opacity-40"
+              title="Refresh schema"
+            >
+              ↻
+            </button>
+          )}
+          <button
+            onClick={onClose}
+            className="text-gray-400 dark:text-gray-600 hover:text-gray-700 dark:hover:text-gray-300 text-xs"
+            title="Close"
+          >
+            ✕
+          </button>
+        </div>
       </div>
       <div className="overflow-y-auto flex-1 px-3 py-2 font-mono text-xs">
         {loading && <p className="text-gray-400 dark:text-gray-600 text-[11px]">loading…</p>}

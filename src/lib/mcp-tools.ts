@@ -31,7 +31,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     inputSchema: {
       type: "object",
       properties: {
-        inquiry_id: { type: "string", description: "ID returned by start_inquiry." },
+        inquiry_id: { type: "string", description: "Optional inquiry_id from a previous run_analytical_query call." },
       },
       additionalProperties: false,
     },
@@ -44,7 +44,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
       type: "object",
       properties: {
         source: { type: "string" },
-        inquiry_id: { type: "string", description: "ID returned by start_inquiry." },
+        inquiry_id: { type: "string", description: "Optional inquiry_id from a previous run_analytical_query call." },
       },
       required: ["source"],
       additionalProperties: false,
@@ -62,7 +62,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
           type: "string",
           description: "Malloy query starting with `run:` that references the source name.",
         },
-        inquiry_id: { type: "string", description: "ID returned by start_inquiry." },
+        inquiry_id: { type: "string", description: "Optional inquiry_id from a previous run_analytical_query call." },
       },
       required: ["source", "malloy"],
       additionalProperties: false,

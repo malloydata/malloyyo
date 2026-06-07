@@ -24,6 +24,7 @@
     "@malloydata/db-snowflake": "^0.0.403",
     "@malloydata/db-trino": "^0.0.403",
     "@malloydata/malloy": "^0.0.403",
+    "@malloydata/render": "0.0.403",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@uiw/react-codemirror": "^4.25.9",
     "ai": "^6.0.177",

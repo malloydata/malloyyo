@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { eq, desc, and, isNull } from "drizzle-orm";
-import { db, inquiries, conversations, toolCalls, users } from "@/db";
+import { db, inquiries, toolCalls, users } from "@/db";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 
 export const runtime = "nodejs";
@@ -12,11 +12,14 @@ export async function GET() {
     throw err;
   }
 
+  // Start from toolCalls filtered by the authenticated user, then LEFT JOIN to inquiries.
+  // This is more resilient than filtering through conversations.userId, which can be stale
+  // or mismatched when MCP sessions reconnect.
   const rows = await db
     .select({
-      inquiryId: inquiries.id,
+      inquiryId: toolCalls.inquiryId,
       question: inquiries.question,
-      createdAt: inquiries.createdAt,
+      createdAt: toolCalls.createdAt,
       source: toolCalls.source,
       datasetId: toolCalls.datasetId,
       malloyQuery: toolCalls.malloyInput,
@@ -25,26 +28,26 @@ export async function GET() {
       toolSeq: toolCalls.sequence,
       authorName: users.name,
     })
-    .from(inquiries)
-    .innerJoin(conversations, eq(inquiries.conversationId, conversations.id))
-    .innerJoin(
-      toolCalls,
+    .from(toolCalls)
+    .leftJoin(inquiries, eq(inquiries.id, toolCalls.inquiryId))
+    .leftJoin(users, eq(users.id, toolCalls.userId))
+    .where(
       and(
-        eq(toolCalls.inquiryId, inquiries.id),
+        eq(toolCalls.userId, user.id),
         eq(toolCalls.toolName, "run_analytical_query"),
         isNull(toolCalls.error),
       )
     )
-    .leftJoin(users, eq(users.id, toolCalls.userId))
-    .where(eq(conversations.userId, user.id))
-    .orderBy(desc(inquiries.createdAt), desc(toolCalls.sequence));
+    .orderBy(desc(toolCalls.createdAt));
 
-  // Keep the latest successful tool call per inquiry (first row wins after ordering by sequence DESC).
+  // Keep the latest successful tool call per inquiry. Tool calls with no inquiry get
+  // their own entry keyed by the tool call's own id (shown as orphan rows).
   const seen = new Set<string>();
   const history = rows
     .filter((row) => {
-      if (seen.has(row.inquiryId)) return false;
-      seen.add(row.inquiryId);
+      const key = row.inquiryId ?? `tc-${row.source}-${row.createdAt}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
       return true;
     })
     .slice(0, 100);

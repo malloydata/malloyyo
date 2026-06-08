@@ -352,7 +352,7 @@ export async function callTool(
       if (!found) return errText(`source '${sourceName}' not found`);
       const { ds, model, description } = found;
       const files = await modelFileMap(model);
-      const fields = await describeSourceFields(files, "index.malloy", sourceName);
+      const fields = await describeSourceFields(files, "index.malloy", sourceName, { cacheKey: model.id });
       await logCall({ inquiryId, userId: user.id, datasetId: ds.id, toolName: "describe_source", source: sourceName });
       return text({ source: sourceName, model: ds.name, description, fields, malloy_source: model.source });
     }
@@ -364,7 +364,7 @@ export async function callTool(
       if (!found) return errText(`source '${sourceName}' not found`);
       const { ds, model } = found;
       const files = await modelFileMap(model);
-      const res = await compileMalloyFiles(files, "index.malloy", malloyQ);
+      const res = await compileMalloyFiles(files, "index.malloy", malloyQ, { cacheKey: model.id });
       await logCall({
         inquiryId, userId: user.id, datasetId: ds.id, toolName: "compile_query",
         source: sourceName, malloyInput: malloyQ,
@@ -408,7 +408,7 @@ export async function callTool(
       const files = await modelFileMap(model);
       const t0 = Date.now();
       try {
-        const res = await runMalloyFiles(files, "index.malloy", malloyQ, { rowLimit: maxRows });
+        const res = await runMalloyFiles(files, "index.malloy", malloyQ, { rowLimit: maxRows, cacheKey: model.id });
         const durationMs = Date.now() - t0;
         const capped = res.rows.slice(0, maxRows);
         await db.insert(queries).values({ datasetId: ds.id, userId: user.id, malloySource: malloyQ, compiledSql: res.sql, rowCount: res.rowCount, durationMs });
@@ -447,7 +447,7 @@ export async function runQueryForWeb(
   const files = await modelFileMap(model);
   const t0 = Date.now();
   try {
-    const res = await runMalloyFiles(files, "index.malloy", malloyQuery, { rowLimit: maxRows });
+    const res = await runMalloyFiles(files, "index.malloy", malloyQuery, { rowLimit: maxRows, cacheKey: model.id });
     const capped = res.rows.slice(0, maxRows);
     return {
       ok: true,
@@ -494,7 +494,7 @@ export async function saveWebQuery(
 
   const t0 = Date.now();
   try {
-    const res = await runMalloyFiles(files, "index.malloy", malloyQuery, { rowLimit: maxRows });
+    const res = await runMalloyFiles(files, "index.malloy", malloyQuery, { rowLimit: maxRows, cacheKey: model.id });
     const durationMs = Date.now() - t0;
     const capped = res.rows.slice(0, maxRows);
     await db.insert(queries).values({ datasetId: ds.id, userId, malloySource: malloyQuery, compiledSql: res.sql, rowCount: res.rowCount, durationMs });

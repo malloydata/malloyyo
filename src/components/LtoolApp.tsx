@@ -311,11 +311,12 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
 
   const shareUrl = activeSlug ? `${typeof window !== "undefined" ? window.location.origin : ""}/ltool/${activeSlug}` : null;
 
+  // The tool name is namespaced (${instanceName}:describe_query) so Claude calls
+  // the exact connector+tool instead of discovering it — important because
+  // Claude only surfaces a handful of a connector's tools up front.
   const claudeUrl = activeSlug
     ? `https://claude.ai/new?q=${encodeURIComponent(
-        `Using the ${instanceName} Malloy tools, continue exploring${source ? ` the "${source}" source` : ""}.` +
-        (selected?.question ? ` I was looking at: "${selected.question}".` : "") +
-        ` Call describe_query with slug "${activeSlug}" to load the exact query, then go deeper.`
+        `Using the ${instanceName} Malloy tools, Call ${instanceName}:describe_query with slug "${activeSlug}", then ask me what I'd like to know.`
       )}`
     : null;
 
@@ -522,6 +523,9 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
                   <span className="text-[10px] uppercase tracking-wide font-semibold text-gray-400 dark:text-gray-600 flex-shrink-0">Malloy</span>
                   <span className="text-[11px] font-mono text-gray-600 dark:text-gray-400 truncate flex-1">
                     {malloyPreview(query)}
+                  </span>
+                  <span className="text-[10px] font-semibold text-blue-600 dark:text-blue-400 flex-shrink-0 group-hover:underline">
+                    expand ▾
                   </span>
                 </button>
               )}

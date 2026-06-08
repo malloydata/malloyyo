@@ -2,6 +2,44 @@
 
 Steps an operator runs when pulling a new version of Malloyyo. Newest first.
 
+## Tool surface redesign (2026-06-08)
+
+Slims the MCP tool surface from 6 tools to 4 so the most important tool ranks
+reliably in clients that only fetch a handful of a connector's tools up front.
+
+**No *new* database step for this release.** The schema is unchanged and this
+release adds no migration — tool-call history is preserved by matching old *and*
+new log labels in code, not by rewriting rows.
+
+> If you are upgrading from **before** the ltool release (2026-06-07) you must
+> still run that release's `0001_ltool_slugs.sql` migration (see below) — it is
+> cumulative, not replaced by this one. Already on the ltool release? Nothing to
+> run; just deploy.
+
+### What changed
+
+- **4 tools now:** `query`, `list_sources`, `describe_source`, `open_share_link`.
+- `run_query` → **`query`**. It also absorbs compiling: pass `execute:false` to
+  get just the generated SQL (replaces the standalone `compile_query` tool).
+- `describe_query` → **`open_share_link`**.
+- `start_conversation` is **removed** — `query` auto-creates the conversation;
+  pass an optional `context` on the first `query` to record the session goal.
+- Behavioral guidance (the "Query summary" rule, `ltool_url` formatting, etc.)
+  now ships once in the MCP `initialize` **server instructions**, not in every
+  tool description.
+
+### Backward compatibility
+
+Unlike the previous rename, the **old tool names still work as aliases**
+(`run_query`, `compile_query`, `describe_query`, `start_conversation`), so saved
+prompts and automations keep functioning. Update them at your leisure.
+
+### After deploy
+
+- In claude.ai, **disconnect and reconnect** (or refresh the connector) so the
+  client re-fetches the new tool list and server instructions.
+- Update any docs/prompts that hard-code `run_query` / `describe_query`.
+
 ## ltool + instance identity (2026-06-07)
 
 This release renames the MCP tools, adds shareable query links (`/ltool/<slug>`),

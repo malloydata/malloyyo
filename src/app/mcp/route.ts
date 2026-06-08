@@ -3,7 +3,7 @@
 
 import { db, users } from "@/db";
 import { eq } from "drizzle-orm";
-import { TOOL_DESCRIPTORS, callTool } from "@/lib/mcp-tools";
+import { TOOL_DESCRIPTORS, SERVER_INSTRUCTIONS, callTool } from "@/lib/mcp-tools";
 import { recordAccessTokenUse, validateAccessToken } from "@/lib/oauth/tokens";
 import { corsPreflight, withCors } from "@/lib/oauth/cors";
 import { originFromRequest } from "@/lib/oauth/base-url";
@@ -75,6 +75,7 @@ export async function POST(req: Request) {
         protocolVersion: PROTOCOL_VERSION,
         capabilities: { tools: { listChanged: false } },
         serverInfo: SERVER_INFO,
+        instructions: SERVER_INSTRUCTIONS,
       });
 
     case "notifications/initialized":

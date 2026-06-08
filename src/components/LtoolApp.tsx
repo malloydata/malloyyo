@@ -311,12 +311,12 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
 
   const shareUrl = activeSlug ? `${typeof window !== "undefined" ? window.location.origin : ""}/ltool/${activeSlug}` : null;
 
-  // The tool name is namespaced (${instanceName}:describe_query) so Claude calls
+  // The tool name is namespaced (${instanceName}:open_share_link) so Claude calls
   // the exact connector+tool instead of discovering it — important because
   // Claude only surfaces a handful of a connector's tools up front.
   const claudeUrl = activeSlug
     ? `https://claude.ai/new?q=${encodeURIComponent(
-        `Using the ${instanceName} Malloy tools, Call ${instanceName}:describe_query with slug "${activeSlug}", then ask me what I'd like to know.`
+        `Using the ${instanceName} Malloy tools, Call ${instanceName}:open_share_link with slug "${activeSlug}", then ask me what I'd like to know.`
       )}`
     : null;
 

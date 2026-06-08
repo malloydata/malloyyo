@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: MIT
 
 import { NextResponse } from "next/server";
-import { eq, desc, and, isNull, sql } from "drizzle-orm";
+import { eq, desc, and, isNull, inArray, sql } from "drizzle-orm";
 import { db, inquiries, toolCalls, users } from "@/db";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
+import { RUN_LABELS } from "@/lib/tool-names";
 
 export const runtime = "nodejs";
 
@@ -58,7 +59,7 @@ export async function GET(req: Request) {
     .leftJoin(users, eq(users.id, toolCalls.userId))
     .where(
       and(
-        eq(toolCalls.toolName, "run_query"),
+        inArray(toolCalls.toolName, RUN_LABELS),
         isNull(toolCalls.error),
         // History view: scope filters the query author.
         view !== "favorites" && scope === "me" ? eq(toolCalls.userId, user.id) : undefined,

@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: MIT
 
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 type FieldNode = {
   name: string;
@@ -123,20 +124,37 @@ function SourcePicker({
   onChange: (source: string) => void;
 }) {
   const [open, setOpen] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  // The menu is rendered in a portal on document.body so it escapes the schema
+  // panel's overflow-hidden clip (otherwise it's buried under the middle panel).
+  // We right-align it to the button using its on-screen rect.
+  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
+
+  const toggle = () => {
+    if (open) { setOpen(false); return; }
+    const r = btnRef.current?.getBoundingClientRect();
+    if (r) setPos({ top: r.bottom + 4, right: window.innerWidth - r.right });
+    setOpen(true);
+  };
+
   return (
-    <div className="relative min-w-0">
+    <div className="min-w-0">
       <button
-        onClick={() => setOpen((o) => !o)}
+        ref={btnRef}
+        onClick={toggle}
         className="flex items-center gap-1 min-w-0 text-xs font-semibold text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100"
         title="Switch source"
       >
         <span className="truncate">{value ?? "Schema"}</span>
         <span className="text-[9px] text-gray-400 dark:text-gray-600 flex-shrink-0">▾</span>
       </button>
-      {open && (
+      {open && pos && createPortal(
         <>
-          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 mt-1 z-20 w-64 max-h-80 overflow-y-auto rounded-md border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950 shadow-lg py-1">
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div
+            className="fixed z-50 w-64 max-h-80 overflow-y-auto rounded-md border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950 shadow-lg py-1"
+            style={{ top: pos.top, right: pos.right }}
+          >
             {sources.length === 0 ? (
               <p className="px-2 py-1.5 text-[11px] text-gray-400 dark:text-gray-600">No sources.</p>
             ) : (
@@ -156,7 +174,8 @@ function SourcePicker({
               ))
             )}
           </div>
-        </>
+        </>,
+        document.body,
       )}
     </div>
   );

@@ -5,7 +5,7 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
 import dynamic from "next/dynamic";
-import { SchemaPanel } from "@/components/SchemaPanel";
+import { SchemaPanel, type SourceOption } from "@/components/SchemaPanel";
 
 const MalloyCodeEditor = dynamic(
   () => import("@/components/MalloyCodeEditor").then((m) => m.MalloyCodeEditor),
@@ -43,6 +43,17 @@ type RunResult = {
   durationMs: number;
   stableResult: Record<string, unknown>;
 };
+
+// First meaningful line of a Malloy query, whitespace-collapsed, for the
+// collapsed preview bar.
+function malloyPreview(query: string): string {
+  const line = query
+    .split("\n")
+    .map((l) => l.trim())
+    .find((l) => l.length > 0);
+  if (!line) return "(empty)";
+  return line.replace(/\s+/g, " ").slice(0, 120);
+}
 
 function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
@@ -121,7 +132,14 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<RunResult | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
-  const [schemaOpen, setSchemaOpen] = useState(false);
+  // The Malloy editor and schema panel are collapsed by default and expand
+  // together — most users read results; writing Malloy is the advanced path.
+  const [expanded, setExpanded] = useState(false);
+  // Which source the schema panel is *browsing*. Defaults to the loaded query's
+  // source but can be changed independently to explore other sources, without
+  // retargeting the query.
+  const [schemaSource, setSchemaSource] = useState("");
+  const [sources, setSources] = useState<SourceOption[]>([]);
   const [instanceName, setInstanceName] = useState("Malloyyo");
   const [claudeConnected, setClaudeConnected] = useState(false);
   const [showClaudeSetup, setShowClaudeSetup] = useState(false);
@@ -157,6 +175,25 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
       if (d?.instanceName) setInstanceName(d.instanceName);
       if (typeof d?.claudeConnected === "boolean") setClaudeConnected(d.claudeConnected);
     }).catch(() => {});
+  }, []);
+
+  // Source list for the schema panel's source switcher (name + description).
+  useEffect(() => {
+    fetch("/api/sources")
+      .then((r) => r.json())
+      .then((d: Array<{ source: string; description?: string | null }>) => {
+        if (!Array.isArray(d)) return;
+        const seen = new Set<string>();
+        const opts: SourceOption[] = [];
+        for (const s of d) {
+          if (s.source && !seen.has(s.source)) {
+            seen.add(s.source);
+            opts.push({ source: s.source, description: s.description ?? null });
+          }
+        }
+        setSources(opts);
+      })
+      .catch(() => {});
   }, []);
 
   const runQuery = useCallback(async (src: string, malloy: string) => {
@@ -201,8 +238,9 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
         setSelected(item);
         setQuery(body.malloy ?? "");
         setSource(body.source ?? "");
+        setSchemaSource(body.source ?? "");
+        setExpanded(false);
         setEditedTitle(null);
-        if (body.source) setSchemaOpen(true);
         if (body.source && body.malloy) runQuery(body.source, body.malloy);
       })
       .catch((e) => { if (!cancelled) setRunError(e instanceof Error ? e.message : String(e)); });
@@ -213,10 +251,11 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
     setSelected(item);
     setQuery(item.malloyQuery ?? "");
     setSource(item.source ?? "");
+    setSchemaSource(item.source ?? "");
+    setExpanded(false);
     setEditedTitle(null);
     setResult(null);
     setRunError(null);
-    if (item.source) setSchemaOpen(true);
     mainRef.current?.scrollTo({ top: 0 });
     if (item.malloyQuery && item.source) {
       runQuery(item.source, item.malloyQuery);
@@ -384,7 +423,10 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
                       onClick={() => selectItem(item)}
                       className="flex-1 text-left px-4 py-3 min-w-0"
                     >
-                      <p className="text-xs font-medium text-gray-800 dark:text-gray-200 line-clamp-2 leading-snug">
+                      <p
+                        className="text-xs font-medium text-gray-800 dark:text-gray-200 line-clamp-2 leading-snug"
+                        title={item.question ?? ""}
+                      >
                         {item.question}
                       </p>
                       <div className="flex items-center gap-2 mt-1.5 flex-wrap">
@@ -438,9 +480,9 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
                   <p className="text-base font-semibold text-gray-900 dark:text-gray-100 flex-1">{selected.question}</p>
                 )}
                 <button
-                  onClick={() => setSchemaOpen((o) => !o)}
+                  onClick={() => setExpanded((o) => !o)}
                   className="flex-shrink-0 text-xs px-2 py-0.5 rounded bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300 hover:bg-purple-200 dark:hover:bg-purple-900/60"
-                  title={schemaOpen ? "Hide schema" : "Show schema"}
+                  title={expanded ? "Hide Malloy & schema" : "Show Malloy & schema"}
                 >
                   {source || "schema"}
                 </button>
@@ -453,10 +495,36 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
               )}
             </div>
 
-            {/* Malloy editor */}
+            {/* Malloy — collapsed to a one-line preview by default; expanding
+                also opens the schema panel (they travel together). */}
             <div className="space-y-2">
-              <p className="text-[11px] text-gray-500 dark:text-gray-400 uppercase tracking-wide font-semibold">Malloy</p>
-              <MalloyCodeEditor value={query} onChange={setQuery} minHeight="120px" />
+              {expanded ? (
+                <>
+                  <div className="flex items-center justify-between">
+                    <p className="text-[11px] text-gray-500 dark:text-gray-400 uppercase tracking-wide font-semibold">Malloy</p>
+                    <button
+                      onClick={() => setExpanded(false)}
+                      className="text-[11px] text-gray-400 dark:text-gray-600 hover:text-gray-700 dark:hover:text-gray-300"
+                      title="Collapse Malloy & schema"
+                    >
+                      ▾ collapse
+                    </button>
+                  </div>
+                  <MalloyCodeEditor value={query} onChange={setQuery} minHeight="120px" />
+                </>
+              ) : (
+                <button
+                  onClick={() => setExpanded(true)}
+                  className="w-full flex items-baseline gap-2 text-left px-2.5 py-2 rounded border border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-900/50 group"
+                  title="Show Malloy & schema"
+                >
+                  <span className="text-[10px] text-gray-400 dark:text-gray-600 flex-shrink-0">▸</span>
+                  <span className="text-[10px] uppercase tracking-wide font-semibold text-gray-400 dark:text-gray-600 flex-shrink-0">Malloy</span>
+                  <span className="text-[11px] font-mono text-gray-600 dark:text-gray-400 truncate flex-1">
+                    {malloyPreview(query)}
+                  </span>
+                </button>
+              )}
             </div>
 
             {/* Run + share buttons */}
@@ -526,8 +594,13 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
         )}
       </main>
 
-      {schemaOpen && (
-        <SchemaPanel source={source || null} onClose={() => setSchemaOpen(false)} />
+      {expanded && (
+        <SchemaPanel
+          source={schemaSource || source || null}
+          sources={sources}
+          onSourceChange={setSchemaSource}
+          onClose={() => setExpanded(false)}
+        />
       )}
 
       {/* One-time claude.ai connection instructions, shown before following the

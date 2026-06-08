@@ -61,24 +61,6 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
     },
   },
   {
-    name: "compile_query",
-    description:
-      `${TAG} Compile a Malloy query against the source's semantic model and return the generated SQL, without executing. Use this to validate syntax cheaply. You must call describe_source first to know what measures and dimensions are available.`,
-    inputSchema: {
-      type: "object",
-      properties: {
-        source: { type: "string" },
-        malloy: {
-          type: "string",
-          description: "Malloy query starting with `run:` that references the source name.",
-        },
-        inquiry_id: { type: "string", description: "Optional inquiry_id from a previous run_query call." },
-      },
-      required: ["source", "malloy"],
-      additionalProperties: false,
-    },
-  },
-  {
     name: "run_query",
     description:
       `${TAG} Execute a Malloy query against the source and return the rows. You must call describe_source first.\n\nInquiry tracking (required — exactly one of these):\n- \`question\`: Pass the user's question in plain English to start a NEW inquiry. The response will include an \`inquiry_id\`.\n- \`inquiry_id\`: Pass the \`inquiry_id\` from a previous call to continue the same inquiry (follow-up queries, refinements, retries).\n\nThe response includes \`ltool_url\` — a shareable link that opens this exact query in the ${env.INSTANCE_NAME} web UI. At the END of your Query summary, append this as a small inline markdown link with an outbound icon, exactly like \`[↗](ltool_url)\` (or \`[↗ ${env.INSTANCE_NAME}](ltool_url)\`), so the user can click through to view, tweak, or share the query.\n\nAfter EVERY call you MUST output a 'Query summary': (1) question in plain English, (2) Malloy logic (filters, grouping, aggregation, ordering), (3) post-processing outside Malloy or 'none'. Omitting this summary is an error.\n\nVisualization rule: filtering top-N, ranking, and member selection must happen in Malloy — not in client code.`,
@@ -123,6 +105,27 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         slug: { type: "string", description: "The share slug, e.g. `main_k7m2qx9p4b`." },
       },
       required: ["slug"],
+      additionalProperties: false,
+    },
+  },
+  // compile_query is intentionally last: helpful for validating syntax cheaply,
+  // but not essential to exploration, so it stays outside the first handful of
+  // tools Claude surfaces (which is where run_query needs to be).
+  {
+    name: "compile_query",
+    description:
+      `${TAG} Compile a Malloy query against the source's semantic model and return the generated SQL, without executing. Use this to validate syntax cheaply. You must call describe_source first to know what measures and dimensions are available.`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        source: { type: "string" },
+        malloy: {
+          type: "string",
+          description: "Malloy query starting with `run:` that references the source name.",
+        },
+        inquiry_id: { type: "string", description: "Optional inquiry_id from a previous run_query call." },
+      },
+      required: ["source", "malloy"],
       additionalProperties: false,
     },
   },

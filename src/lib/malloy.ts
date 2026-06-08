@@ -192,32 +192,62 @@ type RuntimeHandle = {
   cleanup: () => Promise<void>;
 };
 
+// Compiled-model caches keyed by model version id. A cache hit skips parse,
+// translate, AND schema introspection (the cached ModelDef embeds table
+// schemas), so repeat compiles are near-instant. Module-level state survives
+// across requests on a warm serverless instance (Fluid Compute reuses
+// instances); it resets on cold start. Entries self-invalidate on content
+// change via InMemoryURLReader's content-hash invalidation keys, but we still
+// scope per model version so models sharing file paths (file:///index.malloy)
+// don't evict each other.
+const MAX_MODEL_CACHES = 16;
+const modelCaches = new Map<string, malloy.CacheManager>();
+
+function cacheManagerFor(cacheKey: string | undefined): malloy.CacheManager | undefined {
+  if (!cacheKey) return undefined;
+  let cm = modelCaches.get(cacheKey);
+  if (cm) {
+    // LRU bump: re-insert as most recently used.
+    modelCaches.delete(cacheKey);
+  } else {
+    cm = new malloy.CacheManager(new malloy.InMemoryModelCache());
+    if (modelCaches.size >= MAX_MODEL_CACHES) {
+      const oldest = modelCaches.keys().next().value;
+      if (oldest !== undefined) modelCaches.delete(oldest);
+    }
+  }
+  modelCaches.set(cacheKey, cm);
+  return cm;
+}
+
 // Build a Runtime backed by a pre-supplied URLReader (e.g. GitHubURLReader).
 // configJson, if provided, activates the MalloyConfig path; otherwise falls back to DuckDB.
 async function buildRuntimeWithReader(
   reader: malloy.URLReader,
   configJson?: string,
+  cacheKey?: string,
 ): Promise<RuntimeHandle> {
+  const cacheManager = cacheManagerFor(cacheKey);
   if (configJson) {
     await ensureConnectionTypes();
     const config = new malloy.MalloyConfig(configJson, {
       overlays: malloy.defaultConfigOverlays(),
     });
-    const runtime = new malloy.Runtime({ config, urlReader: reader });
+    const runtime = new malloy.Runtime({ config, urlReader: reader, cacheManager });
     return { runtime, cleanup: () => runtime.shutdown("close") };
   }
   const conn = makeConnection();
-  const runtime = new malloy.SingleConnectionRuntime({ connection: conn, urlReader: reader });
+  const runtime = new malloy.SingleConnectionRuntime({ connection: conn, urlReader: reader, cacheManager });
   return { runtime, cleanup: () => conn.close() };
 }
 
 // Build a Runtime from a file map. If malloy-config.json is present, uses MalloyConfig
 // (which supports BigQuery, Postgres, Snowflake, Trino, MySQL, Databricks, DuckDB).
 // Falls back to a MotherDuck DuckDB SingleConnectionRuntime when no config is present.
-async function buildRuntime(files: Map<string, string>): Promise<RuntimeHandle> {
+async function buildRuntime(files: Map<string, string>, cacheKey?: string): Promise<RuntimeHandle> {
   const { urlMap, configJson } = splitFiles(files);
   const reader = new malloy.InMemoryURLReader(urlMap);
-  return await buildRuntimeWithReader(reader, configJson);
+  return await buildRuntimeWithReader(reader, configJson, cacheKey);
 }
 
 // Compile a file map and return the full hierarchical field tree for a named source.
@@ -225,8 +255,9 @@ export async function describeSourceFields(
   files: Map<string, string>,
   entryPath: string,
   sourceName: string,
+  opts: { cacheKey?: string } = {},
 ): Promise<SourceDescription | null> {
-  const { runtime, cleanup } = await buildRuntime(files);
+  const { runtime, cleanup } = await buildRuntime(files, opts.cacheKey);
   try {
     const compiled = await runtime.getModel(fileUrl(entryPath));
     const explore = compiled.explores.find((e) => e.name === sourceName);
@@ -244,15 +275,26 @@ export async function runMalloyFiles(
   files: Map<string, string>,
   entryPath: string,
   query: string,
-  opts: { rowLimit?: number } = {},
+  opts: { rowLimit?: number; cacheKey?: string } = {},
 ): Promise<RunResult> {
-  const { runtime, cleanup } = await buildRuntime(files);
+  const t0 = Date.now();
+  const { runtime, cleanup } = await buildRuntime(files, opts.cacheKey);
+  const tBuild = Date.now();
   try {
     const runner = runtime.loadModel(fileUrl(entryPath)).loadQuery(query);
     const sql = await runner.getSQL();
+    const tCompile = Date.now();
     const result = await runner.run({ rowLimit: opts.rowLimit ?? DEFAULT_ROW_LIMIT });
+    const tRun = Date.now();
     const rows = result.data.toJSON() as Record<string, unknown>[];
     const stableResult = API.util.wrapResult(result);
+    logger.info("runMalloyFiles timing", {
+      entryPath,
+      buildRuntimeMs: tBuild - t0,
+      compileMs: tCompile - tBuild,
+      runMs: tRun - tCompile,
+      serializeMs: Date.now() - tRun,
+    });
     return { sql, rows, rowCount: rows.length, stableResult };
   } finally {
     await cleanup();
@@ -264,9 +306,10 @@ export async function compileMalloyFiles(
   files: Map<string, string>,
   entryPath: string,
   query: string,
+  opts: { cacheKey?: string } = {},
 ): Promise<CompileResult & { sources?: string[] }> {
   logger.debug("compileMalloyFiles start", { entryPath, fileCount: files.size, files: [...files.keys()], query });
-  const { runtime, cleanup } = await buildRuntime(files);
+  const { runtime, cleanup } = await buildRuntime(files, opts.cacheKey);
   try {
     const url = fileUrl(entryPath);
     const runner = runtime.loadModel(url).loadQuery(query);

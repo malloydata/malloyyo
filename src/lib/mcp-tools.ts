@@ -28,7 +28,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
   {
     name: "query",
     description:
-      `${TAG} Run a Malloy query against a source and return the rows, plus a shareable link. Set execute:false to return just the generated SQL without running it. Read describe_source first so you reuse the model's existing measures and dimensions.`,
+      `${TAG} Run a Malloy query against a source and return the rows, plus a shareable link. Pass a plain-English \`question\` describing what THIS query answers — every call is recorded and shared on its own, so give each one its own question. Set execute:false to return just the generated SQL without running it. Read describe_source first so you reuse the model's existing measures and dimensions.`,
     inputSchema: {
       type: "object",
       properties: {
@@ -39,11 +39,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
         },
         question: {
           type: "string",
-          description: "The user's question in plain English. Provide this to start a new inquiry; omit when continuing one (use inquiry_id).",
-        },
-        inquiry_id: {
-          type: "string",
-          description: "ID from a previous query response. Provide this to continue an inquiry (follow-ups, refinements); omit for a new question.",
+          description: "Plain-English description of what this specific query answers. Recorded as the query's label and share text — make it describe this query, not the broader session.",
         },
         execute: {
           type: "boolean",
@@ -55,12 +51,8 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
           maximum: 10000,
           description: "Maximum rows to return (default 10000). `truncated: true` in the response means more rows exist.",
         },
-        context: {
-          type: "string",
-          description: "Optional. One sentence on the user's overall goal, recorded with a new inquiry's conversation.",
-        },
       },
-      required: ["source", "malloy"],
+      required: ["source", "malloy", "question"],
       additionalProperties: false,
     },
   },
@@ -108,7 +100,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
 export const SERVER_INSTRUCTIONS =
   `Malloy semantic-layer analytics for ${env.INSTANCE_NAME}.\n\n` +
   `Workflow: list_sources to see what's queryable, then describe_source to read a source's measures/dimensions/views before writing Malloy. Use query to run it; set execute:false first if you want to check the generated SQL without running.\n\n` +
-  `Inquiry tracking: pass \`question\` (plain English) on the first query of a new question to open an inquiry; pass the returned \`inquiry_id\` on follow-ups and refinements.\n\n` +
+  `Pass a plain-English \`question\` with EVERY query, describing what that specific query answers. Each query is recorded and shared independently — don't try to group related queries; just describe each one.\n\n` +
   `After EVERY query you MUST output a "Query summary": (1) the question in plain English, (2) the Malloy logic (filters, grouping, aggregation, ordering), (3) any post-processing done outside Malloy, or "none". Omitting it is an error.\n\n` +
   `Each query response includes \`ltool_url\`. Append it to the END of the summary as a small inline markdown link, exactly like [↗](ltool_url) (or [↗ ${env.INSTANCE_NAME}](ltool_url)), so the user can open, tweak, or share the query.\n\n` +
   `Do ranking, top-N, and member selection in Malloy, not in client code.\n\n` +
@@ -233,19 +225,13 @@ function errText(msg: string): ToolResult {
 }
 
 // Find or create a conversation for auto-inquiry creation.
-async function ensureConversation(userId: string, conversationId: string | undefined, sourceName: string, datasetId: string | undefined, context?: string): Promise<string> {
+async function ensureConversation(userId: string, conversationId: string | undefined, sourceName: string, datasetId: string | undefined): Promise<string> {
   if (conversationId) return conversationId;
   const [conv] = await db
     .insert(conversations)
-    .values({ userId, datasetId, source: sourceName || undefined, context: context || undefined })
+    .values({ userId, datasetId, source: sourceName || undefined })
     .returning({ id: conversations.id });
   return conv.id;
-}
-
-// Look up an inquiry's shareable slug (legacy rows may have none).
-async function inquirySlug(inquiryId: string): Promise<string | null> {
-  const [row] = await db.select({ slug: inquiries.slug }).from(inquiries).where(eq(inquiries.id, inquiryId)).limit(1);
-  return row?.slug ?? null;
 }
 
 export type SharedQuery =
@@ -376,28 +362,8 @@ export async function callTool(
       // execute:false → compile only (the old compile_query behavior).
       if (args.execute === false) return compileQueryTool(user, inquiryId, args);
 
-      const question = typeof args.question === "string" ? args.question.trim() : undefined;
-      const context = typeof args.context === "string" ? args.context.trim() : undefined;
-      const conversationId = typeof args.conversation_id === "string" ? args.conversation_id : undefined;
-
-      // Resolve or create the inquiry.
-      let resolvedInquiryId = inquiryId;
-      let resolvedSlug: string | null = null;
-      if (!resolvedInquiryId) {
-        if (!question) return errText("Provide either 'question' (new inquiry) or 'inquiry_id' (follow-up).");
-        const sourceName0 = String(args.source ?? "").trim();
-        const found0 = await findBySource(user.id, sourceName0);
-        const convId = await ensureConversation(user.id, conversationId, sourceName0, found0?.ds.id, context);
-        const [seq] = await db.select({ n: count() }).from(inquiries).where(eq(inquiries.conversationId, convId));
-        const [inq] = await db
-          .insert(inquiries)
-          .values({ conversationId: convId, question, sequence: Number(seq?.n ?? 0) })
-          .returning({ id: inquiries.id, slug: inquiries.slug });
-        resolvedInquiryId = inq.id;
-        resolvedSlug = inq.slug;
-      } else {
-        resolvedSlug = await inquirySlug(resolvedInquiryId);
-      }
+      const question = typeof args.question === "string" ? args.question.trim() : "";
+      if (!question) return errText("'question' is required: a plain-English description of what this query answers.");
 
       const sourceName = String(args.source ?? args.dataset ?? "");
       const malloyQ = String(args.malloy ?? "");
@@ -406,6 +372,16 @@ export async function callTool(
       if (!found) return errText(`source '${sourceName}' not found`);
       const { ds, model } = found;
       if (ds.status !== "ready") return errText(`source '${sourceName}' is not ready`);
+
+      // Each query is its own inquiry: a fresh record + share slug per call, so
+      // unrelated queries can never collapse onto one record. Claude no longer
+      // threads an inquiry_id — it just labels every query with its question.
+      const convId = await ensureConversation(user.id, undefined, sourceName, ds.id);
+      const [inq] = await db
+        .insert(inquiries)
+        .values({ conversationId: convId, question, sequence: 0 })
+        .returning({ id: inquiries.id, slug: inquiries.slug });
+
       const files = await modelFileMap(model);
       const t0 = Date.now();
       try {
@@ -413,14 +389,26 @@ export async function callTool(
         const durationMs = Date.now() - t0;
         const capped = res.rows.slice(0, maxRows);
         await db.insert(queries).values({ datasetId: ds.id, userId: user.id, malloySource: malloyQ, compiledSql: res.sql, rowCount: res.rowCount, durationMs });
-        await logCall({ inquiryId: resolvedInquiryId, userId: user.id, datasetId: ds.id, toolName: "query", source: sourceName, malloyInput: malloyQ, compiledSql: res.sql, rowCount: res.rowCount, durationMs });
-        return text({ inquiry_id: resolvedInquiryId, ltool_url: ltoolUrl(resolvedSlug), row_count: res.rowCount, rows: capped, truncated: res.rowCount > capped.length, duration_ms: durationMs });
+        await logCall({ inquiryId: inq.id, userId: user.id, datasetId: ds.id, toolName: "query", source: sourceName, malloyInput: malloyQ, compiledSql: res.sql, rowCount: res.rowCount, durationMs });
+        const ltool = ltoolUrl(inq.slug);
+        // The behavioral directive is echoed in the result (not just the server
+        // instructions) because clients read the tool result every turn right
+        // before summarizing — the most reliable place to make Claude append the
+        // link and write the summary, while the description stays lean for ranking.
+        const reminder = `End your reply with a "Query summary": (1) the question in plain English, (2) the Malloy logic (filters, grouping, aggregation, ordering), (3) post-processing outside Malloy or "none".` +
+          (ltool ? ` Then append the share link as a small inline markdown link, exactly: [↗](${ltool})` : ``);
+        return {
+          content: [
+            { type: "text", text: reminder },
+            { type: "text", text: JSON.stringify({ ltool_url: ltool, row_count: res.rowCount, rows: capped, truncated: res.rowCount > capped.length, duration_ms: durationMs }, null, 2) },
+          ],
+        };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         const durationMs = Date.now() - t0;
         await db.insert(queries).values({ datasetId: ds.id, userId: user.id, malloySource: malloyQ, error: msg });
-        await logCall({ inquiryId: resolvedInquiryId, userId: user.id, datasetId: ds.id, toolName: "query", source: sourceName, malloyInput: malloyQ, error: msg, durationMs });
-        return errText(`run failed: ${msg}\n\ninquiry_id: ${resolvedInquiryId}`);
+        await logCall({ inquiryId: inq.id, userId: user.id, datasetId: ds.id, toolName: "query", source: sourceName, malloyInput: malloyQ, error: msg, durationMs });
+        return errText(`run failed: ${msg}`);
       }
     }
 

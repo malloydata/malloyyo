@@ -23,19 +23,35 @@ export async function proxy(req: NextRequest) {
 
   if (ALWAYS_ALLOW.test(pathname)) return next();
 
-  const allowList = process.env.EMAIL_ALLOW_LIST;
-  if (!allowList) return next();
+  // API routes authenticate and authorize themselves (getSessionUser → 401
+  // JSON). The middleware only guards PAGE navigations, where it can redirect
+  // the browser to the sign-in screen.
+  if (pathname.startsWith("/api/")) return next();
 
   const session = await auth();
-  if (!session?.user?.email) return next(); // not signed in — let route handle it
 
-  const allowed = allowList.split(",").map((e) => e.trim().toLowerCase());
-  if (!allowed.includes(session.user.email.toLowerCase())) {
-    // Signed in but not allowed — sign them out and redirect to home.
-    logger.warn("access denied", { requestId, userId: session.user.id });
-    const signOutUrl = new URL("/api/auth/signout", req.url);
-    signOutUrl.searchParams.set("callbackUrl", "/");
-    return NextResponse.redirect(signOutUrl);
+  // Authentication: every page except the public landing requires a signed-in
+  // user. Bounce anonymous visitors to Google sign-in and return them here
+  // afterward (so e.g. a shared /ltool/<slug> link survives the round-trip).
+  if (!session?.user?.email) {
+    if (pathname === "/") return next(); // landing renders its own sign-in prompt
+    const signInUrl = new URL("/api/auth/signin", req.url);
+    signInUrl.searchParams.set("callbackUrl", req.nextUrl.pathname + req.nextUrl.search);
+    return NextResponse.redirect(signInUrl);
+  }
+
+  // Authorization: the email allow-list. Fail-open by design — an unset list
+  // means any authenticated user is allowed.
+  const allowList = process.env.EMAIL_ALLOW_LIST;
+  if (allowList) {
+    const allowed = allowList.split(",").map((e) => e.trim().toLowerCase());
+    if (!allowed.includes(session.user.email.toLowerCase())) {
+      // Signed in but not allowed — sign them out and redirect to home.
+      logger.warn("access denied", { requestId, userId: session.user.id });
+      const signOutUrl = new URL("/api/auth/signout", req.url);
+      signOutUrl.searchParams.set("callbackUrl", "/");
+      return NextResponse.redirect(signOutUrl);
+    }
   }
 
   return next();

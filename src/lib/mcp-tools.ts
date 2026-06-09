@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { eq, and, desc, or, count, isNull, inArray } from "drizzle-orm";
-import { db, datasets, malloyModels, malloyModelFiles, queries, conversations, inquiries, toolCalls, type User } from "@/db";
+import { db, datasets, malloyModels, malloyModelFiles, queries, conversations, inquiries, toolCalls, favorites, type User } from "@/db";
 import type { SourceInfo } from "./malloy";
 import { compileMalloyFiles, runMalloyFiles, describeSourceFields } from "./malloy";
 import { env } from "./env";
@@ -259,6 +259,32 @@ export async function loadSharedQuery(slug: string): Promise<SharedQuery> {
     .orderBy(desc(toolCalls.createdAt))
     .limit(1);
   return { ok: true, instance: env.INSTANCE_NAME, source: tc?.source ?? null, question: inq.question, malloy: tc?.malloy ?? null };
+}
+
+export type SharedQueryListContext = {
+  favoritedByMe: boolean;
+  favoriteCount: number;
+  authoredByMe: boolean;
+};
+
+// For the ltool deep-link: where the shared query lives from the viewer's
+// perspective, so the page can open on a tab/scope that actually contains it.
+// `authoredByMe` mirrors the history "me" filter (a successful run logged by
+// this user). Returns null if the slug isn't found.
+export async function sharedQueryListContext(slug: string, userId: string): Promise<SharedQueryListContext | null> {
+  const [inq] = await db.select({ id: inquiries.id }).from(inquiries).where(eq(inquiries.slug, slug)).limit(1);
+  if (!inq) return null;
+  const [total] = await db.select({ n: count() }).from(favorites).where(eq(favorites.inquiryId, inq.id));
+  const [mine] = await db.select({ n: count() }).from(favorites).where(and(eq(favorites.inquiryId, inq.id), eq(favorites.userId, userId)));
+  const [authored] = await db
+    .select({ n: count() })
+    .from(toolCalls)
+    .where(and(eq(toolCalls.inquiryId, inq.id), eq(toolCalls.userId, userId), inArray(toolCalls.toolName, RUN_LABELS), isNull(toolCalls.error)));
+  return {
+    favoriteCount: Number(total?.n ?? 0),
+    favoritedByMe: Number(mine?.n ?? 0) > 0,
+    authoredByMe: Number(authored?.n ?? 0) > 0,
+  };
 }
 
 // Compile-only path: shared by `query` with execute:false and the legacy

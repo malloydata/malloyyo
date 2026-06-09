@@ -3,18 +3,17 @@
 
 ## Project context
 
-Malloyyo: paste a dataset URL → ingests into MotherDuck → DuckDB introspects schema → Claude authors a Malloy semantic model → personal MCP endpoint for analytical queries.
+Malloyyo: load a Malloy semantic model from a GitHub repo → Malloy runs analytical queries on DuckDB (the model attaches its own data sources) → a personal MCP endpoint that claude.ai (and other MCP clients) query.
 
-Forked from jrtipton/mayolo@minimal-core. Key architectural change: **S3/R2 replaced with MotherDuck** for zero-infrastructure deployment.
+Forked from jrtipton/mayolo@minimal-core.
 
 ## Stack
 
-- Next.js 16 App Router + Vercel Workflow (ingest pipeline)
-- MotherDuck (DuckDB cloud) — data storage + query engine
+- Next.js 16 App Router
+- Malloy (@malloydata/malloy) — semantic layer + query engine. Runs on DuckDB by default (@malloydata/db-duckdb, in-memory); models can attach their own warehouses via the bundled connectors (BigQuery, Postgres, MySQL, Snowflake, Trino). MotherDuck is optional — set `MOTHERDUCK_TOKEN` to use an `md:` connection.
+- Malloy models are **loaded from a GitHub repo** (src/lib/github.ts; `GITHUB_TOKEN` only for private repos), not generated.
 - Neon Postgres — metadata (datasets, models, queries, users)
-- Malloy (@malloydata/malloy + @malloydata/db-duckdb) — semantic layer
-- Anthropic Claude claude-opus-4-7 — Malloy model authoring
-- Shared-secret auth via src/proxy.ts (Next.js 16 middleware)
+- Auth via src/proxy.ts (Next.js 16 middleware): Google/Okta sign-in + OAuth 2.0 / bearer tokens on the MCP endpoint.
 
 ## Local dev
 
@@ -72,10 +71,6 @@ connected to the same Claude client at once. Two env vars disambiguate them:
 Defaults are `Malloyyo`/`main`. Set both in the Vercel env (per environment)
 **and** mirror them into the matching `local/<instance>` file.
 
-## MotherDuck gotcha
-
-The lowercase `motherduck_token` shell env var must NOT be set — it overrides and conflicts. Unset it before running. The token in the env file is `MOTHERDUCK_TOKEN` (uppercase).
-
 ## Vercel deployment notes
 
 - `outputFileTracingIncludes` keys must NOT have `/route` suffix
@@ -112,7 +107,6 @@ uncommitted changes, or to push the staging alias (below). Env-var notes:
 
 ```bash
 export PATH="$HOME/.npm-global/bin:$PATH"   # the vercel CLI lives here
-unset motherduck_token                       # MotherDuck gotcha, see above
 vercel --target preview --yes                # deploys local tree; prints <deploy-url>
 vercel alias set <deploy-url> malloyyo-staging.vercel.app   # staging alias
 ```
@@ -126,6 +120,4 @@ vercel alias set <deploy-url> malloyyo-staging.vercel.app   # staging alias
 
 ## Planned work
 
-- [ ] Google OAuth (jrtipton commit e338eef8) + OAuth 2.0 for MCP (commits b5fd4668, 2aad16e8, 77d88c80) — do together, needed for claude.ai web MCP integration
-- [ ] Bearer token auth on MCP endpoint for infrastructure/API use
-- [ ] Malloy models loadable from a git repo URL instead of Claude-generated
+_None tracked here right now — the prior items (Google/MCP OAuth, MCP bearer-token auth, git-repo model loading) have all shipped._

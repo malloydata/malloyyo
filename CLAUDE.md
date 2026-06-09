@@ -86,22 +86,29 @@ The lowercase `motherduck_token` shell env var must NOT be set — it overrides 
   routes evaluate it). Build with the instance env, e.g.
   `npx dotenv-cli -e local/staging -- npm run build`.
 
-### The Vercel project has NO connected Git repo
+### Both Vercel projects are git-connected (auto-deploy on merge)
 
-Deploys come from the **local working tree** via the CLI, not git pushes. Two
-consequences that cost real time:
+`malloyyo` and `motherduckyo` are connected to the GitHub repo, so **merging to
+`main` auto-deploys production** for both (verified: PR #16's merge commit
+deployed to both prod environments). Pushing a branch / opening a PR creates a
+**preview** deployment — that's what runs the Vercel checks on a PR.
 
-- **`vercel env add` does not work from an agent shell.** The CLI auto-detects
-  the agent, goes non-interactive, and either loops on a `git_branch_required`
-  prompt or errors `Project "malloyyo" does not have a connected Git repository`
-  (the branch-scoped form needs a git repo). **Set env vars in the Vercel
-  dashboard** (Project → Settings → Environment Variables → tick Production
-  and/or Preview). `vercel env ls preview` to read them back works fine.
-- The Vercel **MCP server can deploy and read logs but has NO env-var tool**,
-  and its `deploy_to_vercel` takes no args (can't target preview). For a
-  targeted staging deploy use the CLI.
+> **Preview builds get only Preview-scoped env vars.** A PR build fails at
+> "Collecting page data" with `Missing required env var: DATABASE_URL` unless
+> `DATABASE_URL` (and the rest) are set in the **Preview** environment, separate
+> from Production. (This bit motherduckyo's first PR.)
 
-### Deploy + alias sequence (verified working)
+You can still deploy the **local working tree** via the CLI as a fallback — for
+uncommitted changes, or to push the staging alias (below). Env-var notes:
+
+- Prefer the Vercel **dashboard** for env vars (Project → Settings → Environment
+  Variables → tick Production and/or Preview). `vercel env add` from an agent
+  shell was historically blocked by the no-git-repo error; with the projects now
+  git-connected the CLI form can work, but the dashboard stays the reliable path.
+  `vercel env ls <env>` to read back works fine.
+- The Vercel **MCP server** can deploy and read logs but has **no env-var tool**.
+
+### Manual deploy + staging alias (CLI fallback, still valid)
 
 ```bash
 export PATH="$HOME/.npm-global/bin:$PATH"   # the vercel CLI lives here
@@ -110,12 +117,12 @@ vercel --target preview --yes                # deploys local tree; prints <deplo
 vercel alias set <deploy-url> malloyyo-staging.vercel.app   # staging alias
 ```
 
-- Staging lives at **`malloyyo-staging.vercel.app`** (Preview env). It is NOT
-  the auto-generated `malloyyo-<user>-<team>.vercel.app` URL — don't alias to
-  that by mistake.
-- Production: `vercel --prod` (uses Production env).
-- The CLI is already authenticated (`vercel whoami`). It may warn it's outdated;
-  `npx vercel@latest …` behaves the same re: the agent/git-repo limits above.
+- Staging lives at **`malloyyo-staging.vercel.app`** (malloyyo Preview env). It
+  is NOT the auto-generated `malloyyo-<user>-<team>.vercel.app` URL — don't alias
+  to that by mistake.
+- Production: **merge to `main`** (auto-deploys both projects), or `vercel --prod`
+  from the local tree as a fallback.
+- The CLI is already authenticated (`vercel whoami`).
 
 ## Planned work
 

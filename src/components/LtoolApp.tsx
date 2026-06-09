@@ -223,17 +223,22 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
   // Deep-link: hydrate from a shared slug and auto-run.
   useEffect(() => {
     if (!initialSlug) return;
+    // The opened query drives the tabs, not the default fallback chain.
+    autoFallback.current = false;
     let cancelled = false;
     fetch(`/api/ltool/share/${initialSlug}`)
       .then(async (r) => ({ ok: r.ok, body: await r.json() }))
       .then(({ ok, body }) => {
         if (cancelled) return;
         if (!ok) { setRunError(body.error ?? "could not load shared query"); return; }
+        const favoriteCount: number = body.favoriteCount ?? 0;
+        const favoritedByMe: boolean = body.favoritedByMe ?? false;
+        const authoredByMe: boolean = body.authoredByMe ?? false;
         const item: HistoryItem = {
           inquiryId: null, slug: initialSlug, question: body.question ?? null,
           createdAt: new Date().toISOString(), source: body.source ?? null, datasetId: null,
           malloyQuery: body.malloy ?? null, rowCount: null, durationMs: null,
-          authorName: null, isFavorited: false, favoriteCount: 0,
+          authorName: null, isFavorited: favoritedByMe, favoriteCount,
         };
         setSelected(item);
         setQuery(body.malloy ?? "");
@@ -241,6 +246,15 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
         setSchemaSource(body.source ?? "");
         setExpanded(false);
         setEditedTitle(null);
+        // Open on a tab+scope that actually contains this query.
+        // Favorites > History, Me > All (the query is always in the list shown).
+        if (favoriteCount > 0) {
+          setView("favorites");
+          setScope(favoritedByMe ? "me" : "all");
+        } else {
+          setView("history");
+          setScope(authoredByMe ? "me" : "all");
+        }
         if (body.source && body.malloy) runQuery(body.source, body.malloy);
       })
       .catch((e) => { if (!cancelled) setRunError(e instanceof Error ? e.message : String(e)); });

@@ -52,8 +52,6 @@ See `local/CLAUDE.md` for instance-specific details (gitignored, private).
   as `:'name'`), defaulting them with `\if :{?name} \else \set name … \endif`
   so a passed `-v` isn't overridden. The schema column itself still lives in
   `src/db/schema.ts` so fresh `push` installs stay correct.
-- Operator-facing upgrade steps (env vars + which migration to run) belong in
-  `UPGRADING.md` — keep it current for the external Guild instance.
 
 ## Instance identity
 

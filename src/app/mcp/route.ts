@@ -5,6 +5,7 @@ import { db, users } from "@/db";
 import { eq } from "drizzle-orm";
 import { TOOL_DESCRIPTORS, SERVER_INSTRUCTIONS, callTool } from "@/lib/mcp-tools";
 import { recordAccessTokenUse, validateAccessToken } from "@/lib/oauth/tokens";
+import { isEmailAllowed } from "@/lib/user";
 import { corsPreflight, withCors } from "@/lib/oauth/cors";
 import { originFromRequest } from "@/lib/oauth/base-url";
 import { logger } from "@/lib/logger";
@@ -59,6 +60,11 @@ export async function POST(req: Request) {
   // Identify user from the token — no slug needed.
   const [user] = await db.select().from(users).where(eq(users.id, validated.userId)).limit(1);
   if (!user) return unauthorized("Token user not found", req);
+
+  // Re-check the email allow-list on every call. The token alone proves the
+  // user once authenticated; this ensures a user removed from EMAIL_ALLOW_LIST
+  // loses MCP access immediately rather than at token expiry (up to 90 days).
+  if (!isEmailAllowed(user.email)) return unauthorized("Access revoked for this account", req);
 
   // Fire-and-forget last_used_at update.
   void recordAccessTokenUse(validated.tokenHash);

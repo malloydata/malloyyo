@@ -79,20 +79,39 @@ Defaults are `Malloyyo`/`main`. Set both in the Vercel env (per environment)
   routes evaluate it). Build with the instance env, e.g.
   `npx dotenv-cli -e local/staging -- npm run build`.
 
-### Both Vercel projects are git-connected (auto-deploy on merge)
+### Production deploys are MANUAL (the git auto-deploy hook was removed)
 
-`malloyyo` and `motherduckyo` are connected to the GitHub repo, so **merging to
-`main` auto-deploys production** for both (verified: PR #16's merge commit
-deployed to both prod environments). Pushing a branch / opening a PR creates a
-**preview** deployment — that's what runs the Vercel checks on a PR.
+The GitHub auto-deploy integration has been **removed (2026-06-10)**, so
+**merging to `main` no longer deploys anything.** Each production deploy is now
+a manual `vercel --prod` per project from the local working tree:
 
-> **Preview builds get only Preview-scoped env vars.** A PR build fails at
-> "Collecting page data" with `Missing required env var: DATABASE_URL` unless
-> `DATABASE_URL` (and the rest) are set in the **Preview** environment, separate
-> from Production. (This bit motherduckyo's first PR.)
+```bash
+export PATH="$HOME/.npm-global/bin:$PATH"   # the vercel CLI lives here
+git checkout main && git pull               # deploy whatever tree you want live
 
-You can still deploy the **local working tree** via the CLI as a fallback — for
-uncommitted changes, or to push the staging alias (below). Env-var notes:
+# 1) malloyyo (the default-linked project)
+vercel --prod --yes
+
+# 2) motherduckyo — relink, deploy, relink back
+vercel link --project motherduckyo --yes
+vercel --prod --yes
+vercel link --project malloyyo --yes        # restore the default link
+```
+
+`vercel --prod` builds **remotely** using each project's own env vars, so you
+don't need a local env file for the build. It deploys the **current working
+tree**, not GitHub — check out the code you want live first. Verify after:
+`curl -s https://motherduckyo.vercel.app/ | grep -o '<title>[^<]*'`.
+
+> Pushing a branch / opening a PR no longer creates a Vercel preview either.
+> For a staging build, use the manual preview + alias flow below.
+
+Historical env-var note (still true for any preview build you trigger): preview
+builds get only **Preview**-scoped env vars, so they fail at "Collecting page
+data" with `Missing required env var: DATABASE_URL` unless `DATABASE_URL` (and
+the rest) are set in the **Preview** environment, separate from Production.
+
+Env-var notes:
 
 - Prefer the Vercel **dashboard** for env vars (Project → Settings → Environment
   Variables → tick Production and/or Preview). `vercel env add` from an agent
@@ -112,8 +131,8 @@ vercel alias set <deploy-url> malloyyo-staging.vercel.app   # staging alias
 - Staging lives at **`malloyyo-staging.vercel.app`** (malloyyo Preview env). It
   is NOT the auto-generated `malloyyo-<user>-<team>.vercel.app` URL — don't alias
   to that by mistake.
-- Production: **merge to `main`** (auto-deploys both projects), or `vercel --prod`
-  from the local tree as a fallback.
+- Production: **manual `vercel --prod` per project** (see "Production deploys are
+  MANUAL" above) — merging to `main` no longer deploys.
 - The CLI is already authenticated (`vercel whoami`).
 
 ## Planned work

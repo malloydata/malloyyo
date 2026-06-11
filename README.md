@@ -153,8 +153,8 @@ The button forks the repo into your GitHub and creates a Vercel project. The sch
 **self-initializes on first boot** (`RUN_MIGRATIONS_ON_BOOT=1`), so you never run a
 migration. The import screen prompts for these env vars:
 
-1. **`DATABASE_URL`** — a Postgres connection string. **The build needs it, so paste one
-   here.** A free [Neon](https://neon.tech) project takes a minute (or use any Postgres).
+1. **`DATABASE_URL`** — a Postgres connection string (you can get a free instance from
+   [neon.tech](https://neon.tech)). **The build needs it, so paste one here.**
    *Prefer Vercel-managed storage? Finish the import with a temporary value, then add
    Postgres under the project's **Storage** tab — it overwrites `DATABASE_URL` — and
    redeploy.*
@@ -162,8 +162,9 @@ migration. The import screen prompts for these env vars:
 3. **`AUTH_SECRET`** — `openssl rand -base64 32`.
 4. **`APP_ADMIN_EMAILS`** — your email (admins add datasets / publish).
 5. **`INSTANCE_NAME` / `INSTANCE_CODE`** — a display name + a short, unique slug (e.g. `gld`).
-6. **`AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET` / `APP_BASE_URL`** — for sign-in; you can leave
-   these blank now and fill them after the first deploy (next step).
+6. **`AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET`** — for sign-in; you can leave these blank now
+   and fill them after the first deploy (next step).
+7. **`APP_BASE_URL`** — your deployment's URL, e.g. `https://<yourproject>.vercel.app`.
 
 **Then enable Google sign-in:** create a Google OAuth app (Google Cloud Console →
 Credentials → Web application), set its authorized redirect URI to

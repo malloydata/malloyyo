@@ -160,9 +160,11 @@ New `POST /api/datasets/[id]/model/push`, modeled on the existing
 `model/github/route.ts` but:
 
 - **Auth = bearer token**, not session — exactly the planned "Bearer token auth for
-  infrastructure/API use." Reuse `oauthAccessTokens` (`schema.ts:301`); resolve token →
-  user, check the user owns the dataset. (CI wants a longer-lived token than the current
-  24 h OAuth access tokens — see Open Questions.)
+  infrastructure/API use." Reuse `oauthAccessTokens` (`schema.ts:301`); resolve token → user,
+  then **require that user be an admin** (`users.isAdmin`), matching the current
+  `model/github` route. Owner-based publishing (allow `dataset.userId === token.userId`) is a
+  deliberate future loosening — *not* enabled yet (§4.5). (CI wants a longer-lived token than
+  the current 24 h OAuth access tokens — see Open Questions.)
 - **No git fetch.** Wrap the uploaded files in a `MapURLReader` (a few lines) and call the
   *same* `introspectModelWithReader(reader, "index.malloy", config)` that
   `github-refresh.ts:35` already uses. Then run the identical version-bump + insert into
@@ -186,7 +188,74 @@ New `POST /api/datasets/[id]/model/push`, modeled on the existing
 So ~90% of `refreshGitHubModel` is reused; the only swaps are *where the file bytes come from*
 (uploaded map vs. GitHub Contents API) and recording + reporting the pushed commit and status.
 
-### 4.4 What this buys
+### 4.4 Error handling & validation
+
+**Publish is transactional: compile first, persist only on success.** Treat a push like a
+deploy whose build fails — the live model is simply unchanged. The elegant payoff: there's no
+explicit "active version" pointer (the MCP serves the latest `malloyModels` row), so if we
+**only ever insert a version that compiled clean**, then *latest = live = always valid*,
+automatically. A broken upload can never point the MCP endpoint at a model that won't compile.
+This matches the pull path, which already bails *before* the insert on `!result.ok`
+(`github-refresh.ts:36-39`).
+
+Failure taxonomy:
+- **Request-level** (bad/expired token → 401; not an admin → 403; unknown dataset → 404; no
+  `*.malloy` / no root `index.malloy` / malformed body → 400; oversized → 413). Nothing
+  stored.
+- **Compile / introspection** — the interesting bucket, all of which **reject without
+  advancing the live model**:
+  - *syntax / semantic error* — Malloy returns log entries with file + line/column.
+  - *missing import* — `index.malloy` imports a file that wasn't uploaded. **Push-specific**
+    (with pull the whole repo tree was fetchable); usually the file is `.gitignore`d or
+    outside the published dir. Worth a dedicated, actionable message.
+  - *missing table / schema drift* — a referenced MotherDuck table isn't in the dataset's DB.
+    **Hard failure** (a model over absent data is broken; better to fail at publish than at
+    first query). To make the live guarantee real, **introspect every declared source** —
+    that forces schema resolution, since "compiles" ≠ "queryable." (Future escape hatch:
+    `--allow-missing-tables` downgrades to a warning, e.g. publishing ahead of an ingest.)
+  - *connection/infra error* — server's fault → 5xx, retryable.
+
+**Record the failure without polluting history.** Rejecting shouldn't mean amnesia: store the
+attempt on the **dataset** — `last_publish_at`, `last_publish_sha` / `_branch`,
+`last_publish_error` (additive columns) — *not* as a model version. The UI then shows
+*"Live: v5 (main@abc). Last push main@def — FAILED: syntax error in `orders.malloy:12`."*
+Version history stays clean (only servable models); the failed attempt is still visible.
+
+**Typed errors back to the CLI.** Respond with `{ ok:false, kind, error, errors:[{file,line,
+column,message}] }` so `publish` prints file:line diagnostics and **exits non-zero** (CI
+gate). The `kind` discriminator lets the CLI give the push-specific hint for `missing-import`.
+The CLI can also do a cheap **local import-scan** of the gathered set before sending, to catch
+missing-import without a round trip.
+
+**Validate-only mode.** `malloyyo publish <target> --check` (server `?dryRun=1`) compiles +
+introspects against real data and returns the same status, but **does not** create a version.
+This validates a branch without publishing it — the "test branches" goal — and is nearly free
+since the compile path is identical (skip the insert). (Distinct from the CLI's existing
+client-side `--dry-run`, which never hits the server.)
+
+### 4.5 Ownership, datasets & visibility
+
+- **Authorization — admin-only for now.** The CLI/`model/push` endpoint requires
+  `users.isAdmin` (§4.3), consistent with today's `model/github` route. Owner-based
+  publishing is a documented future loosening, intentionally **not** enabled yet — we don't
+  want general users pushing models at this stage. The population is already gated: a token
+  exists only for allow-listed, signed-in users (`EMAIL_ALLOW_LIST`), and on top of that the
+  caller must be an admin.
+- **New datasets — explicit, never auto-created.** A dataset is tied to **data in
+  MotherDuck**; a pushed model references its tables. Auto-creating a dataset on publish would
+  yield a model over an empty DB — which **fails the missing-table check every time** (§4.4).
+  So `publish` requires the configured `dataset` to **already exist**; missing → a clear error
+  (`dataset "mdw" not found — create it in the UI`), never a silent spawn (which would also
+  turn a config typo into junk datasets). Creation stays a separate, deliberate act (UI/ingest
+  today; a future explicit `malloyyo datasets create` / `publish --create` if needed) — like
+  `vercel projects add` vs `vercel deploy`.
+- **Public/private — orthogonal to publish.** `datasets.isPublic` governs who can see/query
+  the dataset, not who can publish to it. **Publish never changes visibility**, and visibility
+  is **not** config-driven: a committed repo file must not be able to expose data (same
+  instinct as keeping tokens out of the config). Set `isPublic` deliberately at dataset
+  creation / in the UI; a model push is a no-op on it.
+
+### 4.6 What this buys
 
 - **No server-side git credential, ever.** Works for private repos with no grant to
   Malloyyo, and for **any git host**.
@@ -200,12 +269,14 @@ So ~90% of `refreshGitHubModel` is reused; the only swaps are *where the file by
   ambient repo creds — still no PAT. This recovers the one thing push otherwise loses
   (auto-refresh when a *teammate* pushes).
 
-### 4.5 Cost
+### 4.7 Cost
 
 - **New `malloyyo` workspace package** (in this repo): `publish`/`status` commands +
-  directory walk + git metadata (~150 LOC). Ships to npm independently of the server (§7).
-- New server route + `MapURLReader` + bearer-auth helper (~120 LOC, mostly reuse).
-- Four additive `git_*` columns on `malloyModels` (`ADD COLUMN IF NOT EXISTS` migration).
+  directory walk + git metadata + `--check` (~150 LOC). Ships to npm independently (§7).
+- New server route + `MapURLReader` + admin/bearer-auth helper + typed error mapping +
+  `?dryRun=1` (~140 LOC, mostly reuse).
+- Additive columns: four `git_*` on `malloyModels`; `last_publish_*` on `datasets`
+  (`ADD COLUMN IF NOT EXISTS` migration).
 - A long-lived API-token story (Open Questions).
 
 ## 5. Why not become a GitHub App
@@ -281,9 +352,13 @@ npm. They don't interfere.
   `publish <target>` selects one. Remaining nit: is the `dataset` a UUID or a
   human-friendly slug? A slug survives recreating the dataset and reads better in the
   committed config — worth resolving slug → id server-side.
-- **Who creates the dataset?** Does `publish` to an unknown dataset auto-create one (and
-  return its id), or must it pre-exist in the UI? Auto-create is friendlier for a
-  pure-CLI / CI workflow.
-- **Verifying tables exist.** A pushed model references MotherDuck tables; should the server
-  reject a push that introspects against missing tables, or store it `failed` like the
-  pull path does?
+- **Who creates the dataset? — resolved (§4.5):** explicit, must pre-exist; `publish` never
+  auto-creates. A future `malloyyo datasets create` / `publish --create` is the opt-in path
+  if a pure-CLI/CI provisioning flow is wanted.
+- **Verifying tables exist — resolved (§4.4):** missing tables are a **hard failure**
+  (reject, don't persist); the server introspects every declared source so "compiles" implies
+  "queryable." Future `--allow-missing-tables` downgrades to a warning for publish-ahead-of-
+  ingest.
+- **Opening up authz.** When/if to move from admin-only to owner-based publishing
+  (`dataset.userId === token.userId`), and whether non-admins get a self-serve token flow at
+  that point.

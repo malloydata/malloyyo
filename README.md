@@ -1,8 +1,8 @@
 # malloyyo
 
-Point at a GitHub repo with a Malloy model. Get a personal MCP endpoint for analytical queries.
+Bring a Malloy model — publish it with the `malloyyo` CLI, or point at a GitHub repo. Get a personal MCP endpoint for analytical queries.
 
-Malloyyo loads a [Malloy](https://malloydata.dev) semantic model from GitHub, compiles it against your MotherDuck database, and exposes it as an MCP server — so any MCP-capable AI (Claude Desktop, claude.ai, etc.) can run structured analytical queries against your data.
+Malloyyo takes a [Malloy](https://malloydata.dev) semantic model — pushed from your repo with the `malloyyo` CLI, or pulled from a GitHub repo — compiles it against your MotherDuck database, and exposes it as an MCP server, so any MCP-capable AI (Claude Desktop, claude.ai, etc.) can run structured analytical queries against your data.
 
 ## How it works
 
@@ -14,7 +14,7 @@ Malloyyo loads a [Malloy](https://malloydata.dev) semantic model from GitHub, co
                            │  malloyyo publish
       ┌────────────────────▼────────────────────────┐
       │                 Malloyyo                    │
-      │     GitHub → compile → store → ready        │
+      │       compile → store → ready               │
       └──────┬─────────────────────────┬────────────┘
              │                         │
       ┌──────▼──────┐           ┌──────▼──────┐
@@ -30,13 +30,22 @@ Malloyyo loads a [Malloy](https://malloydata.dev) semantic model from GitHub, co
                            │
       ┌────────────────────▼────────────────────────┐
       │              MCP server  /mcp               │
-      │         OAuth 2.1 · 5 analytical tools      │
+      │         OAuth 2.1 · 6 analytical tools      │
       └─────────────────────────────────────────────┘
 ```
 
 ### Adding a dataset
 
-Point Malloyyo at a GitHub repo that has an `index.malloy` at its root. Malloyyo fetches the file (and any imports it references), compiles the model, and stores all files. A webhook endpoint (`/api/datasets/<id>/webhook/github`) lets GitHub trigger an automatic refresh on every push.
+Develop your model in a repo with an `index.malloy` at its root, then **publish it with the [`malloyyo` CLI](packages/cli)**:
+
+```bash
+malloyyo login <target>     # one-time browser sign-in
+malloyyo publish <target>   # bundle *.malloy + malloy-config.json and push
+```
+
+The CLI records the git commit it published from; Malloyyo compiles and introspects the model and stores a new version. If it doesn't compile, the push is rejected and the live model is left unchanged.
+
+Alternatively, **point Malloyyo at a GitHub repo** and it pulls `index.malloy` (and any imports) directly — a webhook endpoint (`/api/datasets/<id>/webhook/github`) refreshes it on every push.
 
 ### The two databases
 
@@ -49,23 +58,24 @@ Point Malloyyo at a GitHub repo that has an `index.malloy` at its root. Malloyyo
 
 | Tool | What it does |
 |---|---|
-| `list_datasets` | Names, schema summaries, and source names for every dataset |
-| `describe_semantic_model` | The full Malloy source for a dataset |
-| `sample_rows` | Up to 200 raw rows from MotherDuck |
-| `compile_analytical_query` | Compile a Malloy snippet → SQL (no execution) |
-| `run_analytical_query` | Compile + run; return rows |
+| `start_conversation` | Begin a session against a source (sets up inquiry tracking) |
+| `list_sources` | List the queryable Malloy sources on this endpoint |
+| `describe_source` | A source's full semantic model — measures, dimensions, views, joins |
+| `compile_query` | Compile a Malloy query → SQL (no execution) |
+| `run_query` | Run a Malloy query; returns rows + a shareable `ltool` link |
+| `describe_query` | Resolve a shared query slug back to its source, question, and Malloy |
 
 The MCP endpoint speaks OAuth 2.1, so claude.ai's remote MCP integration can connect after a one-time authorization flow.
 
 ## Developing Malloy models
 
-Use the [Malloy CLI](https://github.com/malloydata/malloy-cli) to write and test semantic models locally before deploying them to Malloyyo via GitHub.
+Use the [Malloy CLI](https://github.com/malloydata/malloy-cli) (`@malloydata/cli`) to write and test semantic models locally, then publish them to Malloyyo with the separate [`malloyyo` CLI](packages/cli). (Two tools: `malloy-cli` authors and compiles; `malloyyo` publishes.)
 
 ```bash
 npm install -g @malloydata/cli
 ```
 
-**1. Configure your database connection** in `malloy-config.json` at the root of your model repo — see the [Malloy connection config docs](https://docs.malloydata.dev/documentation/setup/config). Supported databases: BigQuery, DuckDB (incl. MotherDuck), MySQL, Postgres, Snowflake, Databricks, Trino, Presto. Malloyyo reads this same file from the root of your GitHub repo when loading a model, so one config works in both places.
+**1. Configure your database connection** in `malloy-config.json` at the root of your model repo — see the [Malloy connection config docs](https://docs.malloydata.dev/documentation/setup/config). Supported databases: BigQuery, DuckDB (incl. MotherDuck), MySQL, Postgres, Snowflake, Databricks, Trino, Presto. Malloyyo reads this same file when it builds your model — the `malloyyo` CLI uploads it on publish, and the GitHub path reads it from the repo root — so one config works everywhere.
 
 **2. Add `.mcp.json`** to your model repo so your AI assistant can compile and test Malloy directly:
 
@@ -84,7 +94,7 @@ npm install -g @malloydata/cli
 
 **3. Develop your model** — ask your AI to generate and test a Malloy semantic model against your database, or write it yourself and use `malloy-cli compile` / `malloy-cli run` to verify it.
 
-Once the model compiles cleanly, push to GitHub and add the repo to Malloyyo.
+Once the model compiles cleanly, publish it with `malloyyo publish <target>` (or push to GitHub and point Malloyyo at the repo). See [`packages/cli/README.md`](packages/cli/README.md) for the CLI.
 
 ## Stack
 
@@ -93,7 +103,8 @@ Once the model compiles cleanly, push to GitHub and add the repo to Malloyyo.
 - **Neon Postgres** + **DrizzleORM** — metadata and auth state
 - **Malloy** (`@malloydata/malloy` + `@malloydata/db-duckdb`) — semantic layer
 - **NextAuth v5** + **Google OAuth** — user authentication
-- **OAuth 2.1 provider** — MCP authorization for claude.ai
+- **OAuth 2.1 provider** — MCP authorization for claude.ai, and login for the CLI
+- **`malloyyo` CLI** (`packages/cli`) — publish models from a repo over an OAuth-authenticated push endpoint
 
 ## Running locally
 
@@ -121,7 +132,8 @@ Open <http://localhost:3000>.
 
 ## Code map
 
-1. **`src/lib/github.ts`** + **`src/lib/github-refresh.ts`** — GitHub model loading and webhook-triggered refresh.
-2. **`src/lib/malloy.ts`** — single-file and multi-file Malloy compilation and execution via `InMemoryURLReader`.
-3. **`src/lib/mcp-tools.ts`** + **`src/app/mcp/route.ts`** — the MCP server. Tools are pure functions; the route is a JSON-RPC dispatcher.
-4. **`src/db/schema.ts`** — Drizzle schema for all Postgres tables.
+1. **`packages/cli`** + **`src/app/api/datasets/[id]/model/push`** — the `malloyyo publish` path: the CLI bundles and uploads model files; the route compiles, introspects, and stores a versioned model (git provenance in `malloy_models.git_*`).
+2. **`src/lib/github.ts`** + **`src/lib/github-refresh.ts`** — the GitHub *pull* path: model loading and webhook-triggered refresh.
+3. **`src/lib/malloy.ts`** — single-file and multi-file Malloy compilation and execution via `InMemoryURLReader`.
+4. **`src/lib/mcp-tools.ts`** + **`src/app/mcp/route.ts`** — the MCP server. Tools are pure functions; the route is a JSON-RPC dispatcher.
+5. **`src/db/schema.ts`** — Drizzle schema for all Postgres tables.

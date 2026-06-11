@@ -32,12 +32,16 @@ entry per deployment. **Only the env-var name is committed — never the token v
 ## Sign in
 
 ```bash
-malloyyo login main             # opens your browser to sign in; stores a token
-malloyyo logout main            # forget the stored token
+malloyyo login main                         # a named target from the config
+malloyyo login https://malloyyo.example.com # a raw URL (no config needed)
+malloyyo login                              # omit it if the config has one target
+malloyyo logout main
 ```
 
-`login` uses the instance's OAuth flow (Authorization Code + PKCE, loopback redirect) and
-stores a refreshable token in `~/.config/malloyyo/credentials.json` (mode 0600), keyed by
+Login is **per-instance** (it authenticates you to a URL, for all datasets on it), so the
+argument is a *target or URL*, not a dataset — and it's optional when the config is
+unambiguous. It uses the instance's OAuth flow (Authorization Code + PKCE, loopback redirect)
+and stores a refreshable token in `~/.config/malloyyo/credentials.json` (mode 0600), keyed by
 instance URL — so you can be logged in to several instances at once. Tokens auto-refresh.
 
 ## Use

@@ -39,6 +39,8 @@ function readTargetMap(dir: string): TargetMap {
   );
 }
 
+const normalizeUrl = (u: string): string => u.replace(/\/+$/, "");
+
 /** Resolve a named target's url/dataset (token is resolved separately — see oauth.ts). */
 export function resolveTarget(dir: string, name: string): Target {
   const targets = readTargetMap(dir);
@@ -49,8 +51,42 @@ export function resolveTarget(dir: string, name: string): Target {
   }
   return {
     name,
-    url: cfg.url.replace(/\/+$/, ""),
+    url: normalizeUrl(cfg.url),
     dataset: cfg.dataset,
     tokenEnv: cfg.malloyyo_token?.env,
   };
+}
+
+/**
+ * Resolve an instance to log in/out of. `arg` may be:
+ *   - a URL (http/https) — used directly, no config needed
+ *   - a named target from the config block — its url is used
+ *   - omitted — allowed when the config is unambiguous (one target, or all
+ *     targets share a single url)
+ * Login is per-instance, so the dataset is irrelevant here.
+ */
+export function resolveInstance(dir: string, arg?: string): { name: string; url: string } {
+  if (arg && /^https?:\/\//i.test(arg)) {
+    const url = normalizeUrl(arg);
+    return { name: url, url };
+  }
+
+  const targets = readTargetMap(dir);
+  const entries = Object.entries(targets);
+
+  if (arg) {
+    const cfg = targets[arg];
+    if (!cfg) {
+      const available = entries.map(([n]) => n).join(", ") || "(none defined)";
+      throw new Error(`Unknown target "${arg}". Pass a target name, a URL, or one of: ${available}`);
+    }
+    return { name: arg, url: normalizeUrl(cfg.url) };
+  }
+
+  // No arg: only allowed when unambiguous.
+  if (entries.length === 0) throw new Error("No targets defined. Pass a target name or a URL.");
+  if (entries.length === 1) return { name: entries[0][0], url: normalizeUrl(entries[0][1].url) };
+  const urls = new Set(entries.map(([, c]) => normalizeUrl(c.url)));
+  if (urls.size === 1) return { name: entries.map(([n]) => n).join("/"), url: [...urls][0] };
+  throw new Error(`Multiple targets — specify which: ${entries.map(([n]) => n).join(", ")} (or a URL).`);
 }

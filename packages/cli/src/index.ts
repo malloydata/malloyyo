@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import { resolve } from "node:path";
-import { resolveTarget } from "./config.js";
+import { resolveTarget, resolveInstance } from "./config.js";
 import { gatherDirectory, gitInfo } from "./gather.js";
 import { getAccessToken, login } from "./oauth.js";
 import { clearCreds } from "./store.js";
@@ -69,15 +69,15 @@ async function status(target: string, opts: { token?: string }): Promise<void> {
   console.log(`  ${s.compileError ? `✗ ${s.compileError}` : `✓ compiled ${s.compiledAt ?? ""}`}`);
 }
 
-async function loginCmd(target: string): Promise<void> {
-  const t = resolveTarget(resolve("."), target);
-  await login(t.url);
-  console.log(`✓ logged in to ${t.name} (${t.url})`);
+async function loginCmd(target: string | undefined): Promise<void> {
+  const inst = resolveInstance(resolve("."), target);
+  await login(inst.url);
+  console.log(`✓ logged in to ${inst.name} (${inst.url})`);
 }
 
-async function logoutCmd(target: string): Promise<void> {
-  const t = resolveTarget(resolve("."), target);
-  console.log(clearCreds(t.url) ? `✓ logged out of ${t.url}` : `not logged in to ${t.url}`);
+async function logoutCmd(target: string | undefined): Promise<void> {
+  const inst = resolveInstance(resolve("."), target);
+  console.log(clearCreds(inst.url) ? `✓ logged out of ${inst.url}` : `not logged in to ${inst.url}`);
 }
 
 const program = new Command();
@@ -88,14 +88,14 @@ program
 
 program
   .command("login")
-  .argument("<target>", "named target from the `malloyyo` config block")
-  .description("sign in to a target's instance in your browser (stores a token)")
+  .argument("[target]", "target name or instance URL (optional if the config has one target)")
+  .description("sign in to an instance in your browser (stores a token)")
   .action(loginCmd);
 
 program
   .command("logout")
-  .argument("<target>", "named target from the `malloyyo` config block")
-  .description("forget the stored token for a target's instance")
+  .argument("[target]", "target name or instance URL (optional if the config has one target)")
+  .description("forget the stored token for an instance")
   .action(logoutCmd);
 
 program

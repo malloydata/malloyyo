@@ -1,8 +1,10 @@
 # malloyyo
 
-Bring a Malloy model — publish it with the `malloyyo` CLI, or point at a GitHub repo. Get a personal MCP endpoint for analytical queries.
+An MCP server that gives AI a **semantic model** of your data — so it returns accurate results, not plausible-looking SQL.
 
-Malloyyo takes a [Malloy](https://malloydata.dev) semantic model — pushed from your repo with the `malloyyo` CLI, or pulled from a GitHub repo — compiles it against your MotherDuck database, and exposes it as an MCP server, so any MCP-capable AI (Claude Desktop, claude.ai, etc.) can run structured analytical queries against your data.
+Point an AI at a raw database and it guesses: wrong joins, invented columns, aggregations double-counted on fan-out — and the answers *look* right. Malloyyo puts a [Malloy](https://malloydata.dev) semantic model — the measures, dimensions, and joins defined once and correctly — between the AI and your data. The AI composes queries against that model instead of writing SQL from scratch, so the numbers come back right by construction.
+
+You develop the model locally with the [Malloy CLI](https://github.com/malloydata/malloy-cli) and publish it with the `malloyyo` CLI (or point Malloyyo at a GitHub repo). Malloyyo compiles it against your MotherDuck database and serves it as a personal MCP endpoint for claude.ai, Claude Desktop, or any MCP client — running on Vercel or self-hosted in Docker.
 
 ## How it works
 

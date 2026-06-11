@@ -78,6 +78,28 @@ npm install -g @malloydata/cli
 
 **1. Configure your database connection** in `malloy-config.json` at the root of your model repo — see the [Malloy connection config docs](https://docs.malloydata.dev/documentation/setup/config). Supported databases: BigQuery, DuckDB (incl. MotherDuck), MySQL, Postgres, Snowflake, Databricks, Trino, Presto. Malloyyo reads this same file when it builds your model — the `malloyyo` CLI uploads it on publish, and the GitHub path reads it from the repo root — so one config works everywhere.
 
+The secret never lives in the committed file — reference it from an env var with `{"env": "VAR_NAME"}`. Name it whatever you like (e.g. `ANALYTICAL_DATABASE_SECRET`) and set that var locally (in `local/<instance>`) and on the Malloyyo server:
+
+```jsonc
+// Postgres
+{ "connections": { "analytics": {
+  "is": "postgres", "host": "db.example.com", "databaseName": "analytics",
+  "username": "analyst", "password": { "env": "ANALYTICAL_DATABASE_SECRET" }
+}}}
+
+// …or MotherDuck
+{ "connections": { "analytics": {
+  "is": "duckdb", "databasePath": "md:my_database",
+  "motherDuckToken": { "env": "ANALYTICAL_DATABASE_SECRET" }
+}}}
+
+// …or BigQuery
+{ "connections": { "analytics": {
+  "is": "bigquery", "projectId": "my-project",
+  "serviceAccountKey": { "env": "ANALYTICAL_DATABASE_SECRET" }
+}}}
+```
+
 **2. Add `.mcp.json`** to your model repo so your AI assistant can compile and test Malloy directly:
 
 ```json
@@ -131,8 +153,8 @@ migrations. Two things still need a human, and the import flow walks you through
 
 After that, sign in with the admin email and add a dataset.
 
-> `MOTHERDUCK_TOKEN` and `GITHUB_TOKEN` are optional — add them only if you want a
-> MotherDuck-backed default connection or private-repo model pulls.
+> Your model's `malloy-config.json` references your analytical database's secret from an
+> env var (e.g. `ANALYTICAL_DATABASE_SECRET` — see [Developing Malloy models](#developing-malloy-models)). Set that var on the project so the server can connect. `GITHUB_TOKEN` is optional (private-repo model pulls).
 
 ## Running locally
 

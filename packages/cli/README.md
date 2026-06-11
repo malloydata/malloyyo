@@ -29,10 +29,20 @@ entry per deployment. **Only the env-var name is committed — never the token v
 }
 ```
 
+## Sign in
+
+```bash
+malloyyo login main             # opens your browser to sign in; stores a token
+malloyyo logout main            # forget the stored token
+```
+
+`login` uses the instance's OAuth flow (Authorization Code + PKCE, loopback redirect) and
+stores a refreshable token in `~/.config/malloyyo/credentials.json` (mode 0600), keyed by
+instance URL — so you can be logged in to several instances at once. Tokens auto-refresh.
+
 ## Use
 
 ```bash
-export malloyyo_main_token=…
 malloyyo publish main           # push the model in . to the "main" target
 malloyyo publish staging ./model
 malloyyo publish main --dry-run # show what would be sent
@@ -40,5 +50,9 @@ malloyyo status main            # what's live: version, commit, compile state
 ```
 
 `publish` exits non-zero on a server-side compile failure, so it's safe to gate CI on.
+
+**Token precedence:** `--token` flag → the `malloyyo_token` env var from config (for CI) →
+your `malloyyo login` session. So interactively you just `login` once; in CI you set the env
+var and never touch the browser.
 
 See `docs/model-publishing-design.md` in the repo for the full design.

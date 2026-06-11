@@ -5,7 +5,8 @@ export interface Target {
   name: string;
   url: string;
   dataset: string;
-  token: string;
+  /** Env var name holding a bearer token, if the config declares one. */
+  tokenEnv?: string;
 }
 
 /** One entry under the `malloyyo` config block. Only the token env var *name* is committed. */
@@ -38,28 +39,18 @@ function readTargetMap(dir: string): TargetMap {
   );
 }
 
-/** Resolve a named target and its token (from --token, else its env ref). */
-export function resolveTarget(dir: string, name: string, tokenFlag?: string): Target {
+/** Resolve a named target's url/dataset (token is resolved separately — see oauth.ts). */
+export function resolveTarget(dir: string, name: string): Target {
   const targets = readTargetMap(dir);
   const cfg = targets[name];
   if (!cfg) {
     const available = Object.keys(targets).join(", ") || "(none defined)";
     throw new Error(`Unknown target "${name}". Available: ${available}`);
   }
-
-  const envVar = cfg.malloyyo_token?.env;
-  const token = tokenFlag ?? (envVar ? process.env[envVar] : undefined);
-  if (!token) {
-    throw new Error(
-      `No token for target "${name}". ` +
-        (envVar ? `Set $${envVar}` : `Add a malloyyo_token env ref`) + ` or pass --token.`,
-    );
-  }
-
   return {
     name,
     url: cfg.url.replace(/\/+$/, ""),
     dataset: cfg.dataset,
-    token,
+    tokenEnv: cfg.malloyyo_token?.env,
   };
 }

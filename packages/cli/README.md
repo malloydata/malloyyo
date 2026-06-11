@@ -8,9 +8,25 @@ introspects the model — the CLI needs no database connection.
 
 ## Install
 
+> **Not published to npm yet.** For now, build and run it from this repo (it lives in the
+> `malloyyo` monorepo as `packages/cli`). Needs Node ≥ 20.
+
 ```bash
-npm i -g malloyyo        # or: npx malloyyo …
+# from the repo root
+pnpm install
+pnpm --filter malloyyo build              # → packages/cli/dist/index.js
+
+# put `malloyyo` on your PATH (symlink to the built CLI)
+cd packages/cli && npm link               # then: malloyyo --help
+
+# …or just run it directly, no link
+node packages/cli/dist/index.js --help
+
+# rebuild after editing source
+pnpm --filter malloyyo build
 ```
+
+Once published, this becomes the usual `npm i -g malloyyo` (or `npx malloyyo …`).
 
 ## Configure
 

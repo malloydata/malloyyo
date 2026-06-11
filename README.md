@@ -147,25 +147,28 @@ Once the model compiles cleanly, publish it with `malloyyo publish <target>` (or
 
 ## Deploy your own
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fmalloydata%2Fmalloyyo&env=RUN_MIGRATIONS_ON_BOOT,AUTH_SECRET,AUTH_GOOGLE_ID,AUTH_GOOGLE_SECRET,APP_ADMIN_EMAILS,APP_BASE_URL,INSTANCE_NAME,INSTANCE_CODE&envDescription=Set%20RUN_MIGRATIONS_ON_BOOT%3D1%20so%20the%20database%20self-initializes%20on%20first%20boot.%20See%20the%20checklist%20below%20for%20the%20rest.&envLink=https%3A%2F%2Fgithub.com%2Fmalloydata%2Fmalloyyo%23deploy-your-own&project-name=malloyyo&repository-name=malloyyo)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fmalloydata%2Fmalloyyo&env=DATABASE_URL,RUN_MIGRATIONS_ON_BOOT,AUTH_SECRET,AUTH_GOOGLE_ID,AUTH_GOOGLE_SECRET,APP_ADMIN_EMAILS,APP_BASE_URL,INSTANCE_NAME,INSTANCE_CODE&envDescription=Paste%20a%20Postgres%20DATABASE_URL%20and%20set%20RUN_MIGRATIONS_ON_BOOT%3D1.%20See%20the%20checklist%20for%20the%20rest.&envLink=https%3A%2F%2Fgithub.com%2Fmalloydata%2Fmalloyyo%23deploy-your-own&project-name=malloyyo&repository-name=malloyyo)
 
 The button forks the repo into your GitHub and creates a Vercel project. The schema
-**self-initializes on first boot** (set `RUN_MIGRATIONS_ON_BOOT=1`), so you don't run any
-migrations. Two things still need a human, and the import flow walks you through them:
+**self-initializes on first boot** (`RUN_MIGRATIONS_ON_BOOT=1`), so you never run a
+migration. The import screen prompts for these env vars:
 
-1. **Add a Postgres database.** In the import flow, add a Postgres integration (e.g. Neon)
-   — it sets `DATABASE_URL` for you. (The build needs it, so add it before deploying.)
-2. **Set the env vars** the button prompts for:
-   - `RUN_MIGRATIONS_ON_BOOT=1` — create the schema on first boot
-   - `AUTH_SECRET` — `openssl rand -base64 32`
-   - `APP_ADMIN_EMAILS` — your email (admins can add datasets / publish)
-   - `INSTANCE_NAME` / `INSTANCE_CODE` — a display name + a short, unique slug (e.g. `gld`)
-   - `AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET` — from a Google OAuth app (next step)
-   - `APP_BASE_URL` — your deployment's URL (you can fill this in after the first deploy)
-3. **Create a Google OAuth app** (Google Cloud Console → Credentials). This can't be
-   automated, and its redirect URI needs the deployed domain — so after the first deploy,
-   set the authorized redirect URI to `https://<your-domain>/api/auth/callback/google`,
-   put the client ID/secret + `APP_BASE_URL` into the project's env vars, and redeploy.
+1. **`DATABASE_URL`** — a Postgres connection string. **The build needs it, so paste one
+   here.** A free [Neon](https://neon.tech) project takes a minute (or use any Postgres).
+   *Prefer Vercel-managed storage? Finish the import with a temporary value, then add
+   Postgres under the project's **Storage** tab — it overwrites `DATABASE_URL` — and
+   redeploy.*
+2. **`RUN_MIGRATIONS_ON_BOOT`** = `1` — create the schema on first boot.
+3. **`AUTH_SECRET`** — `openssl rand -base64 32`.
+4. **`APP_ADMIN_EMAILS`** — your email (admins add datasets / publish).
+5. **`INSTANCE_NAME` / `INSTANCE_CODE`** — a display name + a short, unique slug (e.g. `gld`).
+6. **`AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET` / `APP_BASE_URL`** — for sign-in; you can leave
+   these blank now and fill them after the first deploy (next step).
+
+**Then enable Google sign-in:** create a Google OAuth app (Google Cloud Console →
+Credentials → Web application), set its authorized redirect URI to
+`https://<your-domain>/api/auth/callback/google`, put the client ID/secret + your
+`APP_BASE_URL` into the project's env vars, and redeploy.
 
 After that, sign in with the admin email and add a dataset.
 

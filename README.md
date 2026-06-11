@@ -186,6 +186,17 @@ AUTH_GOOGLE_SECRET=...                 # Google OAuth client secret
 # GITHUB_TOKEN=github_pat_...          # Optional; needed for private repos
 ```
 
+**Google sign-in** needs a Google OAuth app — Google Cloud Console → APIs & Services →
+Credentials → **Create OAuth client ID** → type **Web application**. Put its client
+ID/secret into `AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET`, and add this **Authorized redirect
+URI**:
+
+```
+http://localhost:3000/api/auth/callback/google
+```
+
+(Miss this and Google rejects sign-in with `redirect_uri_mismatch`.)
+
 ```bash
 pnpm install
 npx dotenv-cli -e local/main -- npx drizzle-kit push   # first run only

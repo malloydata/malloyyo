@@ -11,7 +11,7 @@ Malloyyo loads a [Malloy](https://malloydata.dev) semantic model from GitHub, co
       │           GitHub repo (index.malloy)        │
       │   your semantic model, developed with CLI   │
       └────────────────────┬────────────────────────┘
-                           │  load + compile
+                           │  malloyyo publish
       ┌────────────────────▼────────────────────────┐
       │                 Malloyyo                    │
       │     GitHub → compile → store → ready        │

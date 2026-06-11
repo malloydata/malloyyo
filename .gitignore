@@ -32,8 +32,9 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# local configuration directory (private, never committed)
-local/
+# local configuration directory (private, never committed).
+# Bare `local` (no slash) so it also catches a `local` *symlink*, not just a dir.
+local
 
 # env files
 .env.local*

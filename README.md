@@ -107,6 +107,33 @@ Once the model compiles cleanly, publish it with `malloyyo publish <target>` (or
 - **OAuth 2.1 provider** — MCP authorization for claude.ai, and login for the CLI
 - **`malloyyo` CLI** (`packages/cli`) — publish models from a repo over an OAuth-authenticated push endpoint
 
+## Deploy your own
+
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fmalloydata%2Fmalloyyo&env=RUN_MIGRATIONS_ON_BOOT,AUTH_SECRET,AUTH_GOOGLE_ID,AUTH_GOOGLE_SECRET,APP_ADMIN_EMAILS,APP_BASE_URL,INSTANCE_NAME,INSTANCE_CODE&envDescription=Set%20RUN_MIGRATIONS_ON_BOOT%3D1%20so%20the%20database%20self-initializes%20on%20first%20boot.%20See%20the%20checklist%20below%20for%20the%20rest.&envLink=https%3A%2F%2Fgithub.com%2Fmalloydata%2Fmalloyyo%23deploy-your-own&project-name=malloyyo&repository-name=malloyyo)
+
+The button forks the repo into your GitHub and creates a Vercel project. The schema
+**self-initializes on first boot** (set `RUN_MIGRATIONS_ON_BOOT=1`), so you don't run any
+migrations. Two things still need a human, and the import flow walks you through them:
+
+1. **Add a Postgres database.** In the import flow, add a Postgres integration (e.g. Neon)
+   — it sets `DATABASE_URL` for you. (The build needs it, so add it before deploying.)
+2. **Set the env vars** the button prompts for:
+   - `RUN_MIGRATIONS_ON_BOOT=1` — create the schema on first boot
+   - `AUTH_SECRET` — `openssl rand -base64 32`
+   - `APP_ADMIN_EMAILS` — your email (admins can add datasets / publish)
+   - `INSTANCE_NAME` / `INSTANCE_CODE` — a display name + a short, unique slug (e.g. `gld`)
+   - `AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET` — from a Google OAuth app (next step)
+   - `APP_BASE_URL` — your deployment's URL (you can fill this in after the first deploy)
+3. **Create a Google OAuth app** (Google Cloud Console → Credentials). This can't be
+   automated, and its redirect URI needs the deployed domain — so after the first deploy,
+   set the authorized redirect URI to `https://<your-domain>/api/auth/callback/google`,
+   put the client ID/secret + `APP_BASE_URL` into the project's env vars, and redeploy.
+
+After that, sign in with the admin email and add a dataset.
+
+> `MOTHERDUCK_TOKEN` and `GITHUB_TOKEN` are optional — add them only if you want a
+> MotherDuck-backed default connection or private-repo model pulls.
+
 ## Running locally
 
 Copy `.env.local.example` to `local/<instance>` and fill in the blanks:

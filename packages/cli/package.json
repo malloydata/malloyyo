@@ -1,0 +1,35 @@
+{
+  "name": "malloyyo",
+  "version": "0.1.0",
+  "description": "Publish Malloy models to a Malloyyo instance",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "malloyyo": "dist/index.js"
+  },
+  "files": [
+    "dist/**"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --packages=external --outfile=dist/index.js",
+    "dev": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "esbuild": "^0.24.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5"
+  }
+}

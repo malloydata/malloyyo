@@ -1,0 +1,3 @@
+# Never upload the local instance env directory (a symlink to gitignored,
+# per-instance secrets) into a Vercel deployment.
+local

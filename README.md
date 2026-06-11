@@ -1,10 +1,10 @@
 # malloyyo
 
-An MCP server that gives AI a **semantic model** of your data — so it returns accurate results, not plausible-looking SQL.
+An MCP server that gives AI a **semantic model** of your data — so it returns accurate results, consistent results, with much less AI cognitive load.
 
-Point an AI at a raw database and it guesses: wrong joins, invented columns, aggregations double-counted on fan-out — and the answers *look* right. Malloyyo puts a [Malloy](https://malloydata.dev) semantic model — the measures, dimensions, and joins defined once and correctly — between the AI and your data. The AI composes queries against that model instead of writing SQL from scratch, so the numbers come back right by construction.
+Point an AI at a raw database and it build a query from scratch. The problem is that, tomorrow, when you ask the same question, it might write a different query with different results. Numbers aren't consistent. Sometimes it guesses: wrong joins, invented columns, aggregations double-counted on fan-out — and the answers *look* right. Malloyyo puts a [Malloy](https://malloydata.dev) semantic model — the measures, dimensions, and joins defined once and correctly — between the AI and your data. The AI composes queries against that model instead of writing SQL from scratch, so the numbers come back right by construction.
 
-You develop the model locally with the [Malloy CLI](https://github.com/malloydata/malloy-cli) and publish it with the `malloyyo` CLI (or point Malloyyo at a GitHub repo). Malloyyo compiles it against your MotherDuck database and serves it as a personal MCP endpoint for claude.ai, Claude Desktop, or any MCP client — running on Vercel or self-hosted in Docker.
+You develop the model locally with the [Malloy CLI](https://github.com/malloydata/malloy-cli) and publish it with the [`malloyyo` CLI](packages/cli) (or point Malloyyo at a GitHub repo). Malloyyo compiles it against your Analytical database and serves it as a personal MCP endpoint for claude.ai, Claude Desktop, or any MCP client — running on Vercel or self-hosted in Docker.
 
 ## How it works
 
@@ -99,7 +99,7 @@ Once the model compiles cleanly, publish it with `malloyyo publish <target>` (or
 ## Stack
 
 - **Next.js 16** App Router
-- **MotherDuck** — cloud DuckDB; analytical data storage and query engine
+- **Your Analytical Database** —  Most SQL based analytical data storage and query engines
 - **Neon Postgres** + **DrizzleORM** — metadata and auth state
 - **Malloy** (`@malloydata/malloy` + `@malloydata/db-duckdb`) — semantic layer
 - **NextAuth v5** + **Google OAuth** — user authentication
@@ -112,8 +112,6 @@ Copy `.env.local.example` to `local/<instance>` and fill in the blanks:
 
 ```bash
 DATABASE_URL=postgresql://...          # Neon (or any Postgres)
-MOTHERDUCK_TOKEN=...                   # MotherDuck personal token
-MOTHERDUCK_DATABASE=malloyyo           # Must be an existing MotherDuck database
 APP_BASE_URL=http://localhost:3000
 APP_ADMIN_EMAILS=you@example.com
 AUTH_SECRET=...                        # openssl rand -base64 32

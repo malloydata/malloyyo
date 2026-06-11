@@ -6,6 +6,7 @@ Point an AI at a raw database and it build a query from scratch. The problem is 
 
 You develop the model locally with the [Malloy CLI](https://github.com/malloydata/malloy-cli).  Claude (and other AIs) already know the Malloy Language, they same way they know python, so building your semantic model is easy and assisted.  You then publish your model with the [`malloyyo` CLI](packages/cli) (or point Malloyyo at a GitHub repo). Malloyyo compiles it against your Analytical database and serves it as a personal MCP endpoint for claude.ai, Claude Desktop, or any MCP client — running on Vercel or self-hosted in Docker.
 
+The Malloyyo server collects the history of all queries and and lets you run/share and explore further.  Try [the Malloyyo demo server](https://malloyyo.vercel.app/ltool/main_7zfqmk7cv6) and 'Explore further with Claude'.  You can use any Google account to log in.
 ## How it works
 
 ```

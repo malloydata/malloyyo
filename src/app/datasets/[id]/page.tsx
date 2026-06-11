@@ -17,6 +17,12 @@ type DatasetDetail = {
   isAdmin: boolean;
   githubRepo: string | null;
   githubBranch: string | null;
+  lastPublish: {
+    at: string;
+    sha: string | null;
+    branch: string | null;
+    error: string | null;
+  } | null;
   malloyModel: {
     id: string;
     source: string;
@@ -24,8 +30,68 @@ type DatasetDetail = {
     compiledAt: string | null;
     sources: string[] | null;
     files: Array<{ path: string; content: string }> | null;
+    git: GitProvenance | null;
   } | null;
 };
+
+type GitProvenance = {
+  repo: string | null;
+  branch: string | null;
+  sha: string | null;
+  dirty: boolean | null;
+};
+
+function shortSha(sha: string | null | undefined): string {
+  return sha ? sha.slice(0, 7) : "";
+}
+
+// branch@sha chip, linking to the commit when the repo is on GitHub.
+function CommitChip({ git }: { git: GitProvenance }) {
+  if (!git.sha && !git.branch) return null;
+  const label = `${git.branch ?? "?"}${git.sha ? `@${shortSha(git.sha)}` : ""}`;
+  const url = git.repo && git.sha ? `https://github.com/${git.repo}/commit/${git.sha}` : null;
+  return (
+    <span className="inline-flex items-center gap-1.5 font-normal">
+      {url ? (
+        <a href={url} target="_blank" rel="noopener noreferrer" className="font-mono text-blue-600 dark:text-blue-400 hover:underline">
+          {label}
+        </a>
+      ) : (
+        <span className="font-mono text-gray-500 dark:text-gray-400">{label}</span>
+      )}
+      {git.dirty && (
+        <span title="published with uncommitted changes" className="text-amber-600 dark:text-amber-400 text-[10px]">
+          ● dirty
+        </span>
+      )}
+    </span>
+  );
+}
+
+// Surfaces the last CLI publish attempt. Failures are loud (the live model below is
+// unchanged); successes are a quiet one-liner.
+function LastPublishBanner({ lastPublish }: { lastPublish: NonNullable<DatasetDetail["lastPublish"]> }) {
+  const ref = `${lastPublish.branch ?? "?"}${lastPublish.sha ? `@${shortSha(lastPublish.sha)}` : ""}`;
+  const when = new Date(lastPublish.at).toLocaleString();
+  if (lastPublish.error) {
+    return (
+      <section>
+        <h2 className="text-sm font-semibold mb-1 text-red-700 dark:text-red-300">last publish failed</h2>
+        <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">
+          <span className="font-mono">{ref}</span> · {when} — the live model below is unchanged.
+        </p>
+        <pre className="text-red-700 dark:text-red-300 text-xs whitespace-pre-wrap bg-red-50 dark:bg-red-950/40 p-3 rounded">
+          {lastPublish.error}
+        </pre>
+      </section>
+    );
+  }
+  return (
+    <p className="text-xs text-gray-500 dark:text-gray-400">
+      last published <span className="font-mono">{ref}</span> · {when}
+    </p>
+  );
+}
 
 const TERMINAL = new Set(["ready", "failed"]);
 
@@ -111,6 +177,8 @@ export default function DatasetPage({
         </section>
       )}
 
+      {data.lastPublish && <LastPublishBanner lastPublish={data.lastPublish} />}
+
       {data.isAdmin && data.githubRepo && (
         <GitHubConfig
           datasetId={data.id}
@@ -123,7 +191,7 @@ export default function DatasetPage({
       {data.malloyModel && (
         data.malloyModel.files
           ? <GitHubModelView datasetId={data.id} model={data.malloyModel} />
-          : <ModelReadOnly source={data.malloyModel.source} generatedBy={data.malloyModel.generatedBy} />
+          : <ModelReadOnly source={data.malloyModel.source} generatedBy={data.malloyModel.generatedBy} git={data.malloyModel.git} />
       )}
     </main>
   );
@@ -131,12 +199,12 @@ export default function DatasetPage({
 
 type CompileResult = { ok: true; sql: string } | { ok: false; error: string };
 
-function ModelReadOnly({ source, generatedBy }: { source: string; generatedBy: string }) {
+function ModelReadOnly({ source, generatedBy, git }: { source: string; generatedBy: string; git: GitProvenance | null }) {
   return (
     <section>
-      <h2 className="text-sm font-semibold mb-1">
+      <h2 className="text-sm font-semibold mb-1 flex items-baseline gap-2 flex-wrap">
         malloy model{" "}
-        <span className="text-gray-400 dark:text-gray-500 font-normal">(from {generatedBy})</span>
+        {git ? <CommitChip git={git} /> : <span className="text-gray-400 dark:text-gray-500 font-normal">(from {generatedBy})</span>}
       </h2>
       <pre className="text-[11px] bg-gray-50 dark:bg-gray-900 text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-800 rounded p-3 overflow-auto whitespace-pre">
         {source}
@@ -268,11 +336,13 @@ function GitHubModelView({ datasetId, model }: { datasetId: string; model: GitHu
   return (
     <section className="space-y-4">
       <div className="flex items-baseline justify-between">
-        <h2 className="text-sm font-semibold">
+        <h2 className="text-sm font-semibold flex items-baseline gap-2 flex-wrap">
           malloy model{" "}
-          <span className="text-gray-400 dark:text-gray-500 font-normal">
-            (from {model.generatedBy})
-          </span>
+          {model.git ? (
+            <CommitChip git={model.git} />
+          ) : (
+            <span className="text-gray-400 dark:text-gray-500 font-normal">(from {model.generatedBy})</span>
+          )}
         </h2>
       </div>
 

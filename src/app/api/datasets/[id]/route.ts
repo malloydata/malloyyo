@@ -30,6 +30,9 @@ export async function GET(
     return NextResponse.json({ error: "not found" }, { status: 404 });
   }
 
+  // last-publish detail (incl. failure text) is management-only — don't expose to public viewers.
+  const canManage = me ? isAdmin(me) || ds.userId === me.id : false;
+
   const [user] = await db.select().from(users).where(eq(users.id, ds.userId));
   const [model] = await db.select().from(malloyModels)
     .where(eq(malloyModels.datasetId, id))
@@ -54,6 +57,15 @@ export async function GET(
     githubUseToken: ds.githubUseToken,
     userSlug: user?.slug ?? null,
     isAdmin: me ? isAdmin(me) : false,
+    lastPublish:
+      canManage && ds.lastPublishAt
+        ? {
+            at: ds.lastPublishAt,
+            sha: ds.lastPublishSha,
+            branch: ds.lastPublishBranch,
+            error: ds.lastPublishError,
+          }
+        : null,
     malloyModel: model
       ? {
           id: model.id,
@@ -64,6 +76,10 @@ export async function GET(
             ? (model.sources as Array<string | { name: string }>).map((s) => typeof s === "string" ? s : s.name)
             : null,
           files: files.length > 0 ? files : null,
+          git:
+            model.gitRepo || model.gitSha
+              ? { repo: model.gitRepo, branch: model.gitBranch, sha: model.gitSha, dirty: model.gitDirty }
+              : null,
         }
       : null,
   });

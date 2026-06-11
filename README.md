@@ -78,27 +78,43 @@ npm install -g @malloydata/cli
 
 **1. Configure your database connection** in `malloy-config.json` at the root of your model repo — see the [Malloy connection config docs](https://docs.malloydata.dev/documentation/setup/config). Supported databases: BigQuery, DuckDB (incl. MotherDuck), MySQL, Postgres, Snowflake, Databricks, Trino, Presto. Malloyyo reads this same file when it builds your model — the `malloyyo` CLI uploads it on publish, and the GitHub path reads it from the repo root — so one config works everywhere.
 
-The secret never lives in the committed file — reference it from an env var with `{"env": "VAR_NAME"}`. Name it whatever you like (e.g. `ANALYTICAL_DATABASE_SECRET`) and set that var locally (in `local/<instance>`) and on the Malloyyo server:
+The secret never lives in the committed file — reference it from an env var with `{"env": "VAR_NAME"}`. Name it whatever you like (e.g. `ANALYTICAL_DATABASE_SECRET`) and set that var locally (in `local/<instance>`) and on the Malloyyo server.
 
-```jsonc
-// Postgres
-{ "connections": { "analytics": {
-  "is": "postgres", "host": "db.example.com", "databaseName": "analytics",
-  "username": "analyst", "password": { "env": "ANALYTICAL_DATABASE_SECRET" }
-}}}
+<table>
+<tr><th>BigQuery</th><th>MotherDuck</th></tr>
+<tr>
+<td>
 
-// …or MotherDuck
-{ "connections": { "analytics": {
-  "is": "duckdb", "databasePath": "md:my_database",
-  "motherDuckToken": { "env": "ANALYTICAL_DATABASE_SECRET" }
-}}}
-
-// …or BigQuery
-{ "connections": { "analytics": {
-  "is": "bigquery", "projectId": "my-project",
-  "serviceAccountKey": { "env": "ANALYTICAL_DATABASE_SECRET" }
-}}}
+```json
+{
+  "connections": {
+    "analytics": {
+      "is": "bigquery",
+      "projectId": "my-project",
+      "serviceAccountKey": { "env": "ANALYTICAL_DATABASE_SECRET" }
+    }
+  }
+}
 ```
+
+</td>
+<td>
+
+```json
+{
+  "connections": {
+    "analytics": {
+      "is": "duckdb",
+      "databasePath": "md:my_database",
+      "motherDuckToken": { "env": "ANALYTICAL_DATABASE_SECRET" }
+    }
+  }
+}
+```
+
+</td>
+</tr>
+</table>
 
 **2. Add `.mcp.json`** to your model repo so your AI assistant can compile and test Malloy directly:
 

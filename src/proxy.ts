@@ -58,5 +58,8 @@ export async function proxy(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
+  // Exclude static assets and the app icons (icon.svg / apple-icon) — otherwise an
+  // anonymous browser's background favicon request gets auth-redirected, and its
+  // callbackUrl (e.g. /icon.svg?<hash>) can win the sign-in round-trip.
+  matcher: ["/((?!_next/static|_next/image|favicon.ico|icon.svg|apple-icon).*)"],
 };

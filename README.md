@@ -32,7 +32,7 @@ You develop the model locally with the [Malloy CLI](https://github.com/malloydat
                            │
       ┌────────────────────▼────────────────────────┐
       │              MCP server  /mcp               │
-      │         OAuth 2.1 · 6 analytical tools      │
+      │         OAuth 2.1 · 4 analytical tools      │
       └─────────────────────────────────────────────┘
 ```
 
@@ -60,12 +60,10 @@ Alternatively, **point Malloyyo at a GitHub repo** and it pulls `index.malloy` (
 
 | Tool | What it does |
 |---|---|
-| `start_conversation` | Begin a session against a source (sets up inquiry tracking) |
-| `list_sources` | List the queryable Malloy sources on this endpoint |
-| `describe_source` | A source's full semantic model — measures, dimensions, views, joins |
-| `compile_query` | Compile a Malloy query → SQL (no execution) |
-| `run_query` | Run a Malloy query; returns rows + a shareable `ltool` link |
-| `describe_query` | Resolve a shared query slug back to its source, question, and Malloy |
+| `list_sources` | List the Malloy sources you can query on this endpoint |
+| `describe_source` | A source's semantic model — measures, dimensions, views, joins |
+| `query` | Run a Malloy query; returns rows + a shareable link (`execute: false` for SQL only) |
+| `open_share_link` | Resolve a shared link back to its source, question, and Malloy |
 
 The MCP endpoint speaks OAuth 2.1, so claude.ai's remote MCP integration can connect after a one-time authorization flow.
 

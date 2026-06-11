@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: MIT
 
 "use client";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 type FieldNode = {
   name: string;
@@ -109,12 +110,85 @@ function JoinSection({ join, prefix }: { join: FieldNode; prefix?: string }) {
   );
 }
 
+export type SourceOption = { source: string; description: string | null };
+
+// A compact dropdown for switching which source's schema is shown. Each row is
+// more than a name — the source's description sits dimmed beneath it.
+function SourcePicker({
+  value,
+  sources,
+  onChange,
+}: {
+  value: string | null;
+  sources: SourceOption[];
+  onChange: (source: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  // The menu is rendered in a portal on document.body so it escapes the schema
+  // panel's overflow-hidden clip (otherwise it's buried under the middle panel).
+  // We right-align it to the button using its on-screen rect.
+  const [pos, setPos] = useState<{ top: number; right: number } | null>(null);
+
+  const toggle = () => {
+    if (open) { setOpen(false); return; }
+    const r = btnRef.current?.getBoundingClientRect();
+    if (r) setPos({ top: r.bottom + 4, right: window.innerWidth - r.right });
+    setOpen(true);
+  };
+
+  return (
+    <div className="min-w-0">
+      <button
+        ref={btnRef}
+        onClick={toggle}
+        className="flex items-center gap-1 min-w-0 text-xs font-semibold text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-gray-100"
+        title="Switch source"
+      >
+        <span className="truncate">{value ?? "Schema"}</span>
+        <span className="text-[9px] text-gray-400 dark:text-gray-600 flex-shrink-0">▾</span>
+      </button>
+      {open && pos && createPortal(
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div
+            className="fixed z-50 w-64 max-h-80 overflow-y-auto rounded-md border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950 shadow-lg py-1"
+            style={{ top: pos.top, right: pos.right }}
+          >
+            {sources.length === 0 ? (
+              <p className="px-2 py-1.5 text-[11px] text-gray-400 dark:text-gray-600">No sources.</p>
+            ) : (
+              sources.map((s) => (
+                <button
+                  key={s.source}
+                  onClick={() => { onChange(s.source); setOpen(false); }}
+                  className={`block w-full text-left px-2 py-1.5 hover:bg-gray-100 dark:hover:bg-gray-800/60 ${
+                    s.source === value ? "bg-gray-50 dark:bg-gray-900" : ""
+                  }`}
+                >
+                  <span className="block font-mono text-[11px] text-gray-800 dark:text-gray-200 truncate">{s.source}</span>
+                  {s.description && (
+                    <span className="block text-[10px] text-gray-400 dark:text-gray-500 leading-snug line-clamp-2">{s.description}</span>
+                  )}
+                </button>
+              ))
+            )}
+          </div>
+        </>,
+        document.body,
+      )}
+    </div>
+  );
+}
+
 interface Props {
   source: string | null;
   onClose: () => void;
+  sources?: SourceOption[];
+  onSourceChange?: (source: string) => void;
 }
 
-export function SchemaPanel({ source, onClose }: Props) {
+export function SchemaPanel({ source, onClose, sources, onSourceChange }: Props) {
   const [schema, setSchema] = useState<SchemaData | null>(null);
   const [loading, setLoading] = useState(false);
 
@@ -141,6 +215,8 @@ export function SchemaPanel({ source, onClose }: Props) {
     fetchSchema(source);
   }, [source, fetchSchema]);
 
+  const currentDescription = sources?.find((s) => s.source === source)?.description ?? null;
+
   const fields = schema?.fields?.fields ?? [];
   const views      = fields.filter((f) => f.kind === "view");
   const dimensions = fields.filter((f) => f.kind === "dimension");
@@ -150,9 +226,13 @@ export function SchemaPanel({ source, onClose }: Props) {
   return (
     <aside className="w-56 flex-shrink-0 border-l border-gray-200 dark:border-gray-800 flex flex-col overflow-hidden">
       <div className="px-3 py-2 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between">
-        <span className="text-xs font-semibold text-gray-700 dark:text-gray-300 truncate">
-          {source ?? "Schema"}
-        </span>
+        {sources && onSourceChange ? (
+          <SourcePicker value={source} sources={sources} onChange={onSourceChange} />
+        ) : (
+          <span className="text-xs font-semibold text-gray-700 dark:text-gray-300 truncate">
+            {source ?? "Schema"}
+          </span>
+        )}
         <div className="flex items-center gap-1 flex-shrink-0 ml-2">
           {source && (
             <button
@@ -174,6 +254,9 @@ export function SchemaPanel({ source, onClose }: Props) {
         </div>
       </div>
       <div className="overflow-y-auto flex-1 px-3 py-2 font-mono text-xs">
+        {currentDescription && (
+          <p className="text-[11px] text-gray-500 dark:text-gray-400 leading-snug mb-2 font-sans">{currentDescription}</p>
+        )}
         {loading && <p className="text-gray-400 dark:text-gray-600 text-[11px]">loading…</p>}
         {!loading && !schema && source && <p className="text-gray-400 dark:text-gray-600 text-[11px]">not found</p>}
         {schema && (

@@ -194,8 +194,9 @@ export const queries = pgTable(
   (t) => [index("queries_dataset_id_idx").on(t.datasetId)],
 );
 
-// A conversation is a session with a data source. Claude calls start_conversation
-// once when beginning to explore a source. Contains one or more inquiries.
+// A conversation is a session with a data source, created automatically on the
+// first `query` against a source (optionally with a `context` goal). Contains
+// one or more inquiries.
 export const conversations = pgTable(
   "conversations",
   {

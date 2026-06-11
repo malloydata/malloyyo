@@ -218,7 +218,7 @@ function McpSetup({ instanceName }: { instanceName: string }) {
 
       <div className="text-xs text-gray-500 dark:text-gray-400">
         Available tools: <code>list_sources</code>, <code>describe_source</code>,{" "}
-        <code>compile_query</code>, <code>run_query</code>, <code>describe_query</code>
+        <code>query</code>, <code>open_share_link</code>
       </div>
     </section>
   );

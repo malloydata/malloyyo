@@ -113,6 +113,13 @@ export const datasets = pgTable(
     githubRepo: text("github_repo"),
     githubBranch: text("github_branch"),
     githubUseToken: boolean("github_use_token").notNull().default(true),
+    // Last malloyyo-CLI publish attempt (success OR failure). Failures are recorded here
+    // for visibility but never become a servable model version — see the transactional
+    // publish design (docs/model-publishing-design.md §4.4). lastPublishError is null on success.
+    lastPublishAt: timestamp("last_publish_at", { withTimezone: true }),
+    lastPublishSha: text("last_publish_sha"),
+    lastPublishBranch: text("last_publish_branch"),
+    lastPublishError: text("last_publish_error"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .default(sql`now()`),
@@ -136,6 +143,13 @@ export const malloyModels = pgTable(
     // Sources/explores declared in this model, with optional doc-string descriptions.
     // New format: Array<{name, description?}>. Legacy format: string[] (no descriptions).
     sources: jsonb("sources").$type<Array<string | { name: string; description?: string | null }>>(),
+    // Git provenance for models pushed via the malloyyo CLI. Null for Claude-authored
+    // and (legacy) github-pull models. Stored structured so the UI can render a short
+    // SHA, a commit link, and a "dirty" badge.
+    gitRepo: text("git_repo"),
+    gitBranch: text("git_branch"),
+    gitSha: text("git_sha"),
+    gitDirty: boolean("git_dirty"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .default(sql`now()`),

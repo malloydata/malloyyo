@@ -140,6 +140,33 @@ export async function introspectModelWithReader(
   }
 }
 
+// Introspect a model from an in-memory file map (e.g. a CLI push payload).
+// Mirrors introspectModelWithReader but sources bytes from the map; malloy-config.json,
+// if present in the map, is split out and used to activate the right backend.
+export async function introspectModelFiles(
+  files: Map<string, string>,
+  entryPath: string,
+): Promise<{ ok: true; sources: SourceInfo[] } | { ok: false; error: string }> {
+  logger.debug("introspectModelFiles start", { entryPath, fileCount: files.size });
+  let handle: RuntimeHandle | undefined;
+  try {
+    handle = await buildRuntime(files);
+    const compiled = await handle.runtime.getModel(fileUrl(entryPath));
+    const sources = compiled.explores.map((e) => ({
+      name: e.name,
+      description: e.annotations.forRoute('"')[0]?.content.trim() ?? null,
+    }));
+    logger.debug("introspectModelFiles ok", { entryPath, sourceCount: sources.length });
+    return { ok: true, sources };
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    logger.error("introspectModelFiles failed", { entryPath, fileCount: files.size, error });
+    return { ok: false, error };
+  } finally {
+    await handle?.cleanup();
+  }
+}
+
 export type FieldNode = {
   name: string;
   kind: "dimension" | "measure" | "view" | "join";

@@ -2,6 +2,29 @@
 
 Steps an operator runs when pulling a new version of Malloyyo. Newest first.
 
+## malloyyo CLI model publishing (2026-06-10)
+
+Adds the `malloyyo` CLI publish path: admins push a directory of Malloy files to a
+dataset, the server compiles + introspects, and stores a new model version with git
+provenance. Adds columns for provenance and last-publish status.
+
+### Run the schema migration (once)
+
+Idempotent — safe to re-run:
+
+```bash
+psql "$DATABASE_URL" -f drizzle/manual/0002_model_publish.sql
+```
+
+What it does:
+- adds `malloy_models.git_repo / git_branch / git_sha / git_dirty` (provenance of a
+  pushed model version)
+- adds `datasets.last_publish_at / _sha / _branch / _error` (last publish attempt,
+  success or failure — failures are recorded here but never become a model version)
+
+No new env vars. Publishing is **admin-only** and authenticates with an OAuth bearer
+token (the same tokens the MCP endpoint issues).
+
 ## ltool + instance identity (2026-06-07)
 
 This release renames the MCP tools, adds shareable query links (`/ltool/<slug>`),

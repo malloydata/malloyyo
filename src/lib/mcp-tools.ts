@@ -8,6 +8,7 @@ import { compileMalloyFiles, runMalloyFiles, describeSourceFields } from "./mall
 import { env } from "./env";
 import { parseSlug } from "./slug";
 import { RUN_LABELS } from "./tool-names";
+import { QUERY_INSTRUCTIONS } from "./query_instructions";
 
 export type ToolDescriptor = {
   name: string;
@@ -99,7 +100,7 @@ export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
 // descriptions short is what makes them rank well in the client's tool search.
 export const SERVER_INSTRUCTIONS =
   `Malloy semantic-layer analytics for ${env.INSTANCE_NAME}.\n\n` +
-  `Workflow: list_sources to see what's queryable, then describe_source to read a source's measures/dimensions/views before writing Malloy. Use query to run it; set execute:false first if you want to check the generated SQL without running.\n\n` +
+  `Workflow: list_sources to see what's queryable, then describe_source to read a source's measures/dimensions/views — and a short Malloy syntax cheatsheet — before writing any query. Always call describe_source first. Use query to run it; set execute:false first if you want to check the generated SQL without running.\n\n` +
   `Pass a plain-English \`question\` with EVERY query, describing what that specific query answers. Each query is recorded and shared independently — don't try to group related queries; just describe each one.\n\n` +
   `After EVERY query you MUST output a "Query summary": (1) the question in plain English, (2) the Malloy logic (filters, grouping, aggregation, ordering), (3) any post-processing done outside Malloy, or "none". Omitting it is an error.\n\n` +
   `Each query response includes \`ltool_url\`. Append it to the END of the summary as a small inline markdown link, exactly like [↗](ltool_url) (or [↗ ${env.INSTANCE_NAME}](ltool_url)), so the user can open, tweak, or share the query.\n\n` +
@@ -224,6 +225,12 @@ function errText(msg: string): ToolResult {
   return { content: [{ type: "text", text: msg }], isError: true };
 }
 
+// Error result that also carries the Malloy cheatsheet, so a model that wrote a
+// bad query gets the fix-it syntax back with the error and can self-correct.
+function errWithHelp(msg: string): ToolResult {
+  return { content: [{ type: "text", text: msg }, { type: "text", text: QUERY_INSTRUCTIONS }], isError: true };
+}
+
 // Find or create a conversation for auto-inquiry creation.
 async function ensureConversation(userId: string, conversationId: string | undefined, sourceName: string, datasetId: string | undefined): Promise<string> {
   if (conversationId) return conversationId;
@@ -305,7 +312,7 @@ async function compileQueryTool(user: User, inquiryId: string | undefined, args:
     compiledSql: res.ok ? res.sql : undefined,
     error: res.ok ? undefined : res.error,
   });
-  if (!res.ok) return errText(`compile failed: ${res.error}`);
+  if (!res.ok) return errWithHelp(`compile failed: ${res.error}`);
   return text({ sql: res.sql });
 }
 
@@ -376,7 +383,15 @@ export async function callTool(
       const files = await modelFileMap(model);
       const fields = await describeSourceFields(files, "index.malloy", sourceName, { cacheKey: model.id });
       await logCall({ inquiryId, userId: user.id, datasetId: ds.id, toolName: "describe_source", source: sourceName });
-      return text({ source: sourceName, model: ds.name, description, fields, malloy_source: model.source });
+      // Return the source's fields PLUS a Malloy query cheatsheet. Read just before
+      // the model writes a query, this measurably helps weaker models (e.g. Haiku)
+      // get basic syntax right. Cheatsheet last = freshest in context at query time.
+      return {
+        content: [
+          { type: "text", text: JSON.stringify({ source: sourceName, model: ds.name, description, fields, malloy_source: model.source }, null, 2) },
+          { type: "text", text: QUERY_INSTRUCTIONS },
+        ],
+      };
     }
 
     // Legacy standalone compile tool (no longer in the registry, still accepted).
@@ -434,7 +449,7 @@ export async function callTool(
         const durationMs = Date.now() - t0;
         await db.insert(queries).values({ datasetId: ds.id, userId: user.id, malloySource: malloyQ, error: msg });
         await logCall({ inquiryId: inq.id, userId: user.id, datasetId: ds.id, toolName: "query", source: sourceName, malloyInput: malloyQ, error: msg, durationMs });
-        return errText(`run failed: ${msg}`);
+        return errWithHelp(`run failed: ${msg}`);
       }
     }
 

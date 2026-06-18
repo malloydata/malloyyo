@@ -1,0 +1,40 @@
+##" Test flights model.
+
+#" Reference table of airline carriers.
+source: carriers is duckdb.sql("""
+  SELECT 'AA' as code, 'American' as name
+  UNION ALL SELECT 'WN' as code, 'Southwest' as name
+""") extend {
+  primary_key: code
+  #" Lowercased carrier name.
+  dimension: lower_name is lower(name)
+  measure: carrier_count is count()
+}
+
+#" Flight facts, with nested route legs and free-form tags.
+source: flights is duckdb.sql("""
+  SELECT 1 as id, 'AA' as carrier, 100.0 as distance,
+         [{'tag': 'red', 'n': 1}, {'tag': 'blue', 'n': 2}] as legs,
+         ['x', 'y'] as tags
+  UNION ALL
+  SELECT 2 as id, 'WN' as carrier, 250.0 as distance,
+         [{'tag': 'red', 'n': 3}] as legs,
+         ['z'] as tags
+""") extend {
+  primary_key: id
+  join_one: carriers is carriers with carrier
+  #" Total distance flown.
+  measure: total_distance is distance.sum()
+  measure: flight_count is count()
+  # bar_chart
+  view: by_carrier is {
+    group_by: carriers.name
+    aggregate: flight_count
+  }
+}
+
+#" Flight count by carrier name, busiest first.
+query: top_carriers is flights -> by_carrier
+
+run: flights -> { aggregate: total_distance }
+run: flights -> { group_by: carrier; aggregate: flight_count }

@@ -1,0 +1,5 @@
+source: q is duckdb.sql("""
+  SELECT 1 AS normal, 2 AS "year", 3 AS "space name"
+""") extend {
+  measure: total is count()
+}

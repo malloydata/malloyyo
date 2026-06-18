@@ -1,0 +1,270 @@
+{
+  "entry": "file:///fixture/flights.malloy",
+  "sources": {
+    "carriers": {
+      "name": "carriers",
+      "description": "Reference table of airline carriers.",
+      "primary_key": "code",
+      "dimensions": [
+        {
+          "name": "code",
+          "type": "string",
+          "description": null,
+          "location": [
+            3,
+            31
+          ]
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "description": null,
+          "location": [
+            3,
+            31
+          ]
+        },
+        {
+          "name": "lower_name",
+          "type": "string",
+          "description": "Lowercased carrier name.",
+          "expression": "lower(name)",
+          "annotations": [
+            {
+              "route": "\"",
+              "text": "Lowercased carrier name.\n"
+            }
+          ],
+          "location": [
+            9,
+            13
+          ]
+        }
+      ],
+      "measures": [
+        {
+          "name": "carrier_count",
+          "type": "number",
+          "description": null,
+          "expression": "count()",
+          "location": [
+            10,
+            11
+          ]
+        }
+      ],
+      "views": [],
+      "joins": [],
+      "annotations": [
+        {
+          "route": "\"",
+          "text": "Reference table of airline carriers.\n"
+        }
+      ],
+      "location": [
+        3,
+        8
+      ],
+      "body": "carriers is duckdb.sql(\"\"\"\n  SELECT 'AA' as code, 'American' as name\n  UNION ALL SELECT 'WN' as code, 'Southwest' as name\n\"\"\") extend {\n  primary_key: code\n  #\" Lowercased carrier name.\n  dimension: lower_name is lower(name)\n  measure: carrier_count is count()\n}"
+    },
+    "flights": {
+      "name": "flights",
+      "description": "Flight facts, with nested route legs and free-form tags.",
+      "primary_key": "id",
+      "dimensions": [
+        {
+          "name": "id",
+          "type": "number",
+          "description": null,
+          "location": [
+            14,
+            30
+          ]
+        },
+        {
+          "name": "carrier",
+          "type": "string",
+          "description": null,
+          "location": [
+            14,
+            30
+          ]
+        },
+        {
+          "name": "distance",
+          "type": "number",
+          "description": null,
+          "location": [
+            14,
+            30
+          ]
+        }
+      ],
+      "measures": [
+        {
+          "name": "total_distance",
+          "type": "number",
+          "description": "Total distance flown.",
+          "expression": "distance.sum()",
+          "annotations": [
+            {
+              "route": "\"",
+              "text": "Total distance flown.\n"
+            }
+          ],
+          "location": [
+            26,
+            11
+          ]
+        },
+        {
+          "name": "flight_count",
+          "type": "number",
+          "description": null,
+          "expression": "count()",
+          "location": [
+            27,
+            11
+          ]
+        }
+      ],
+      "views": [
+        {
+          "name": "by_carrier",
+          "description": null,
+          "annotations": [
+            {
+              "route": "",
+              "text": "bar_chart\n"
+            }
+          ],
+          "location": [
+            29,
+            8
+          ],
+          "body": "by_carrier is {\n    group_by: carriers.name\n    aggregate: flight_count\n  }"
+        }
+      ],
+      "joins": [
+        {
+          "name": "legs",
+          "relationship": "many",
+          "description": null,
+          "location": [
+            14,
+            30
+          ],
+          "fields": {
+            "dimensions": [
+              {
+                "name": "tag",
+                "type": "string",
+                "description": null
+              },
+              {
+                "name": "n",
+                "type": "number",
+                "description": null
+              }
+            ],
+            "measures": [],
+            "views": [],
+            "joins": []
+          }
+        },
+        {
+          "name": "tags",
+          "relationship": "many",
+          "description": null,
+          "location": [
+            14,
+            30
+          ],
+          "fields": {
+            "dimensions": [
+              {
+                "name": "each",
+                "type": "string",
+                "description": null
+              }
+            ],
+            "measures": [],
+            "views": [],
+            "joins": []
+          }
+        },
+        {
+          "name": "carriers",
+          "relationship": "one",
+          "description": "Reference table of airline carriers.",
+          "source_ref": "carriers",
+          "annotations": [
+            {
+              "route": "\"",
+              "text": "Reference table of airline carriers.\n"
+            }
+          ],
+          "location": [
+            24,
+            12
+          ],
+          "body": "carriers is carriers with carrier"
+        }
+      ],
+      "annotations": [
+        {
+          "route": "\"",
+          "text": "Flight facts, with nested route legs and free-form tags.\n"
+        }
+      ],
+      "location": [
+        14,
+        8
+      ],
+      "body": "flights is duckdb.sql(\"\"\"\n  SELECT 1 as id, 'AA' as carrier, 100.0 as distance,\n         [{'tag': 'red', 'n': 1}, {'tag': 'blue', 'n': 2}] as legs,\n         ['x', 'y'] as tags\n  UNION ALL\n  SELECT 2 as id, 'WN' as carrier, 250.0 as distance,\n         [{'tag': 'red', 'n': 3}] as legs,\n         ['z'] as tags\n\"\"\") extend {\n  primary_key: id\n  join_one: carriers is carriers with carrier\n  #\" Total distance flown.\n  measure: total_distance is distance.sum()\n  measure: flight_count is count()\n  # bar_chart\n  view: by_carrier is {\n    group_by: carriers.name\n    aggregate: flight_count\n  }\n}"
+    }
+  },
+  "queries": [
+    {
+      "name": "top_carriers",
+      "description": "Flight count by carrier name, busiest first.",
+      "annotations": [
+        {
+          "route": "",
+          "text": "bar_chart\n"
+        },
+        {
+          "route": "\"",
+          "text": "Flight count by carrier name, busiest first.\n"
+        }
+      ],
+      "location": [
+        36,
+        7
+      ],
+      "body": "top_carriers is flights -> by_carrier"
+    }
+  ],
+  "runs": [
+    {
+      "index": 0,
+      "location": [
+        38,
+        5
+      ]
+    },
+    {
+      "index": 1,
+      "location": [
+        39,
+        5
+      ]
+    }
+  ],
+  "annotations": [
+    {
+      "route": "\"",
+      "text": "Test flights model.\n"
+    }
+  ]
+}

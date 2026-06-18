@@ -1,0 +1,9 @@
+import "sources.malloy"
+
+#" People who are managers.
+source: managers is people extend {
+  where: role = 'manager'
+}
+
+#" Everyone, grouped by role.
+query: by_role is people -> { group_by: role; aggregate: people_count }

@@ -1,0 +1,3 @@
+source: broken is duckdb.sql("""SELECT 1 as v""") extend {
+  dimension: oops is
+}

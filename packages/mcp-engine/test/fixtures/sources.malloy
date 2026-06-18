@@ -1,0 +1,8 @@
+#" Imported people source.
+source: people is duckdb.sql("""
+  SELECT 'ann' as name, 'manager' as role
+  UNION ALL SELECT 'bob' as name, 'ic' as role
+""") extend {
+  measure: people_count is count()
+  view: by_role_v is { group_by: role; aggregate: people_count }
+}

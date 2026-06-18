@@ -1,0 +1,133 @@
+{
+  "requested": "flights",
+  "sources": {
+    "flights": {
+      "name": "flights",
+      "description": "Flight facts, with nested route legs and free-form tags.",
+      "primary_key": "id",
+      "dimensions": [
+        {
+          "name": "id",
+          "type": "number",
+          "description": null
+        },
+        {
+          "name": "carrier",
+          "type": "string",
+          "description": null
+        },
+        {
+          "name": "distance",
+          "type": "number",
+          "description": null
+        }
+      ],
+      "measures": [
+        {
+          "name": "total_distance",
+          "type": "number",
+          "description": "Total distance flown.",
+          "expression": "distance.sum()"
+        },
+        {
+          "name": "flight_count",
+          "type": "number",
+          "description": null,
+          "expression": "count()"
+        }
+      ],
+      "views": [
+        {
+          "name": "by_carrier",
+          "description": null,
+          "annotations": [
+            {
+              "route": "",
+              "text": "bar_chart\n"
+            }
+          ]
+        }
+      ],
+      "joins": [
+        {
+          "name": "legs",
+          "relationship": "many",
+          "description": null,
+          "fields": {
+            "dimensions": [
+              {
+                "name": "tag",
+                "type": "string",
+                "description": null
+              },
+              {
+                "name": "n",
+                "type": "number",
+                "description": null
+              }
+            ],
+            "measures": [],
+            "views": [],
+            "joins": []
+          }
+        },
+        {
+          "name": "tags",
+          "relationship": "many",
+          "description": null,
+          "fields": {
+            "dimensions": [
+              {
+                "name": "each",
+                "type": "string",
+                "description": null
+              }
+            ],
+            "measures": [],
+            "views": [],
+            "joins": []
+          }
+        },
+        {
+          "name": "carriers",
+          "relationship": "one",
+          "description": "Reference table of airline carriers.",
+          "source_ref": "carriers"
+        }
+      ]
+    },
+    "carriers": {
+      "name": "carriers",
+      "description": "Reference table of airline carriers.",
+      "primary_key": "code",
+      "dimensions": [
+        {
+          "name": "code",
+          "type": "string",
+          "description": null
+        },
+        {
+          "name": "name",
+          "type": "string",
+          "description": null
+        },
+        {
+          "name": "lower_name",
+          "type": "string",
+          "description": "Lowercased carrier name.",
+          "expression": "lower(name)"
+        }
+      ],
+      "measures": [
+        {
+          "name": "carrier_count",
+          "type": "number",
+          "description": null,
+          "expression": "count()"
+        }
+      ],
+      "views": [],
+      "joins": []
+    }
+  }
+}

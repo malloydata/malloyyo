@@ -1,0 +1,1 @@
+Malloy guidance by topic: the language reference, how-to topics (setup, connections, querying), and error explanations. No topic → list topics. Use before guessing syntax and after a compile error (problems[] carry a help_topic pointer).

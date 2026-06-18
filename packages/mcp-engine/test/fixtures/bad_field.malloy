@@ -1,0 +1,3 @@
+source: nums is duckdb.sql("""SELECT 1 as v""")
+
+run: nums -> { aggregate: no_such_measure }

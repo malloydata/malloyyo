@@ -1,0 +1,1 @@
+Get a source's semantic surface — its dimensions, measures, views, and joins (with the joined sources it reaches). Read this before writing a query. Requires `model_ref` and `source`.

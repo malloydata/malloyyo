@@ -1,0 +1,1 @@
+No model_ref provided. Use `list_sources` to discover sources and the `model_ref` each lives in, then pass `model_ref` + `source`. (On a local develop server, `model_ref` is the path to a .malloy file, e.g. `index.malloy`.)

@@ -1,0 +1,1 @@
+Compile inline Malloy text (no file needed). Good for PROBING data: compiling `source: x is conn.sql("SELECT …")` or `run: conn.sql("SELECT …")` resolves and returns the schema — column names and types — without writing a file or fetching rows. Also checks a throwaway draft before it lands in a file. Same output shape as compile_file.

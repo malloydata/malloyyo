@@ -1,0 +1,1 @@
+List published Malloy models

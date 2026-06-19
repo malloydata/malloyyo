@@ -11,5 +11,5 @@ don't read the file. The tools can both inspect and diagnose problems in a file.
 You are probably doing one of these two things; read the guidance for the
 appropriate one with `yo_help`.
 
-- New model (no `index.malloy` / `malloy-config.json` yet)? -> yo_help("getting-started")
-- Existing model (or setup complete) -> yo_help("working-with-models")
+- New model (no `index.malloy` / `malloy-config.json` yet)? -> yo_help("develop/getting-started")
+- Existing model (or setup complete) -> yo_help("develop/working-with-models")

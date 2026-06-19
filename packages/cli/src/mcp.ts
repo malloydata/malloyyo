@@ -34,6 +34,7 @@ import {
   mapProblems,
   modelCatalogEntry,
   prepareSource,
+  renderInstructions,
   type BoundModel,
   type ExploreHost,
   type ModelEntry,
@@ -199,10 +200,13 @@ export async function serveMcp(opts: { root?: string; version: string }): Promis
   const root = path.resolve(opts.root ?? process.cwd());
   const currentConfig = makeConfigSource(root);
   const surface = exploreSurface(makeExploreHost(root, currentConfig));
+  // The local test window has no env.INSTANCE_NAME; honor one if set so a fox
+  // can preview a specific instance's name, else fall back to the product name.
+  const instanceName = process.env.INSTANCE_NAME || "Malloyyo";
   const server = new McpServer(
     { name: "malloyyo-explore", version: opts.version },
     {
-      instructions: surface.instructions,
+      instructions: renderInstructions(surface.instructions, instanceName),
       capabilities: { tools: {}, prompts: {}, resources: {} },
     },
   );

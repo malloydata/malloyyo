@@ -21,10 +21,22 @@ Code reads these only through the typed `prompts` tree (`src/prompts.ts`), never
 by string. The tree is `as const`, so a renamed/missing file is a **compile
 error**, not a silent empty string.
 
-**`*.md` (top level) — `yo_help` topics.** Every top-level `.md` (except this
-README) becomes a `yo_help` topic automatically: **slug = filename**, **title =
-the front-matter `description:`**. `malloy-language-reference.md` is special —
-split into one topic per `##` heading.
+**`help/**` — `yo_help` topics, namespaced by directory.** Every `.md` under
+`help/` becomes a `yo_help` topic automatically, and **the topic's name IS its
+path** (slug = path, each segment lowercased):
+
+```
+help/explore/query-workflow.md → yo_help("explore/query-workflow")
+help/language/joins.md         → yo_help("language/joins")
+help/writing-malloy-with-mcp.md → yo_help("writing-malloy-with-mcp")  (root = no namespace)
+```
+
+The directory layout IS the namespace (`explore/`, `develop/`, `language/`, …).
+A new category is just a new directory — it appears with no code change. There
+is **one name per topic, no title** — front-matter `description:` is no longer
+surfaced (fine to drop it). The one special file is
+`help/language/malloy-language-reference.md`: a vendored whole doc, split into one
+topic per `##` heading under its `language/` namespace.
 
 ## Rules that bite
 
@@ -39,9 +51,10 @@ split into one topic per `##` heading.
   you edit an `instructions.md`.
 - **Reachability:** every piece of guidance must be reachable via `yo_help` — the
   hosted `/mcp` has no prompts/resources capability, so `yo_help` is the one
-  channel every host has. New guidance goes in a top-level `*.md` (auto-listed).
+  channel every host has. New guidance goes in a `help/<area>/<name>.md` (auto-listed).
 - **Error → topic** wiring lives in `src/help.ts` `ERROR_TOPIC_MAP` (a compiler
-  error `code` → a topic slug), so a `problems[]` entry can point at its fix.
+  error `code` → a topic name, e.g. `language/fields`), so a `problems[]` entry
+  can point at its fix.
 
 ## Common edits
 
@@ -49,7 +62,7 @@ split into one topic per `##` heading.
 |---|---|---|
 | Reword a tool description | `prompts/<surface>/tools/<tool>/description.md` (one line) | `npm test` |
 | Change a surface's instructions | `prompts/<surface>/instructions.md` (+ `core/` for shared) | watch the 2KB size |
-| Add a `yo_help` topic | new top-level `<slug>.md` with front-matter `description:` | auto-listed |
+| Add a `yo_help` topic | new `help/<area>/<name>.md` | auto-listed (name = its path) |
 | Rename a tool's prompt key | rename the directory | stale refs become compile errors |
 
 Not here yet (still inline in `src/`, a deliberate fast-follow): input-schema

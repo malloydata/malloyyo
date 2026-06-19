@@ -36,6 +36,26 @@ async function queryGivens(
   }
 }
 
+/**
+ * The query's input source, named so a caller can look it up in the model
+ * namespace. Uses Malloy's experimental `Explore.referencedSource()`: it returns
+ * the namespace source the query's FROM-source references (read `.name`), or
+ * undefined when that source defines its own shape / is not nameable in the
+ * namespace. We do NOT trust `sourceExplore.name` directly — there is no
+ * guarantee the query's source name is a name in the model namespace. Best
+ * effort; undefined on any failure (including a query that did not compile).
+ */
+async function querySource(q: { getPreparedResult(): Promise<unknown> }): Promise<string | undefined> {
+  try {
+    const pr = (await q.getPreparedResult()) as {
+      sourceExplore?: { referencedSource?(): { name?: string } | undefined };
+    };
+    return pr.sourceExplore?.referencedSource?.()?.name;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Validate restricted query text against the model. No execution. */
 export async function validateRestricted(
   runtime: Runtime,
@@ -96,7 +116,14 @@ export async function runRestricted(
   }
   try {
     const q = materializer.loadRestrictedQuery(query);
-    return await executeMaterialized(q, opts, loadProblems, (p) => p, entry.href);
+    const result = await executeMaterialized(q, opts, loadProblems, (p) => p, entry.href);
+    // Derive the input source (model-centric query takes no `source` param) so a
+    // host can record what was queried. Only meaningful on a successful compile.
+    if (result.ok) {
+      const source = await querySource(q);
+      if (source) result.source = source;
+    }
+    return result;
   } catch (e) {
     if (e instanceof MalloyError) {
       return { ok: false, problems: [...loadProblems, ...mapProblems(e.problems)] };

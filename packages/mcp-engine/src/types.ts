@@ -128,6 +128,66 @@ export interface SourceInfo extends FieldGroups {
   anon_srcs?: SourceInfo[];
 }
 
+// ── explore projection wire shape ──────────────────────────────────
+// On the explore surface a source's child collections (dimensions, measures,
+// views, joins) ship as objects keyed by member name — the `name` field is
+// lifted to the key, which both shrinks the payload and lets a client look a
+// member up by name. The maps are built on a null-prototype object (see
+// project.ts `byName`) so a member named `constructor` / `__proto__` /
+// `hasOwnProperty` lands as an ordinary data key, not a prototype trap — a
+// name-keyed map of user-chosen identifiers is exactly where reserved names
+// surface. `must_quote` stays on the value (the key is the bare identifier;
+// the flag still tells a client to backtick it). `anon_srcs` stays an array:
+// it is addressed positionally by JoinInfo.anon_src_index, which a name-keyed
+// map would break.
+
+/** A field (dimension/measure) value in the explore projection: a FieldInfo
+    with `name` lifted to its map key and the develop-only `location` dropped. */
+export type ExploreField = Omit<FieldInfo, 'name' | 'location'>;
+/** A view value in the explore projection (`name` is the key; no raw `body`). */
+export type ExploreView = Omit<ViewInfo, 'name' | 'location' | 'body'>;
+/** A join value in the explore projection (`name` is the key). Inline `fields`,
+    when present, are themselves name-keyed. */
+export type ExploreJoin = Omit<JoinInfo, 'name' | 'location' | 'body' | 'fields'> & {
+  fields?: ExploreFieldGroups;
+};
+
+export interface ExploreFieldGroups {
+  dimensions: Record<string, ExploreField>;
+  measures: Record<string, ExploreField>;
+  views: Record<string, ExploreView>;
+  joins: Record<string, ExploreJoin>;
+}
+
+/** A source as projected for the explore surface: identity + child collections
+    keyed by member name. `name` is retained (sources are keyed by it one level
+    up, but it is also the source's own identity). */
+export interface ExploreSourceInfo extends ExploreFieldGroups {
+  name: string;
+  must_quote?: boolean;
+  description?: string;
+  instructions?: string;
+  primary_key: string | null;
+  annotations?: Annotation[];
+  anon_srcs?: ExploreSourceInfo[];
+}
+
+/** Explore-surface analogue of {@link SourceDescription}. */
+export interface ExploreDescription {
+  requested: string;
+  sources: Record<string, ExploreSourceInfo>;
+}
+
+/** Explore-surface analogue of {@link ModelInfo} (no develop-only `entry`;
+    `runs` are not addressable from an explore surface). */
+export interface ExploreModelInfo {
+  annotations?: Annotation[];
+  givens?: GivenInfo[];
+  sources: Record<string, ExploreSourceInfo>;
+  queries: NamedQueryInfo[];
+  runs: [];
+}
+
 // ── model level (canonical walker output) ──────────────────────────
 
 export interface GivenInfo {
@@ -231,6 +291,12 @@ export interface TruncationInfo {
 
 export interface RunResult {
   ok: boolean;
+  /** The query's input source, named so it can be looked up in the model
+      namespace (via Malloy's experimental `Explore.referencedSource()`). Absent
+      when the FROM source isn't a referenceable namespace source (inline/
+      anonymous), or on a failed compile. The host records it; the agent does not
+      pass it (model-centric query) and does not need it. */
+  source?: string;
   sql?: string;
   rows?: unknown[];
   /** Rows the query produced (bounded by rowLimit). */
@@ -310,6 +376,33 @@ export interface ModelList {
 
 // ── tool-layer envelopes ───────────────────────────────────────────
 
+/** A source as it appears in {@link ListSourcesResult}: the `source_ref` is the
+    map key, so only the choosing annotations remain on the value. */
+export interface ListedSource {
+  description?: string;
+  instructions?: string;
+  /** Present (true) only when the source_ref key must be backtick-quoted. */
+  must_quote?: boolean;
+}
+
+/** A model as it appears in {@link ListSourcesResult}: the `model_ref` is the
+    map key; its sources are keyed by `source_ref`. */
+export interface ListedModel {
+  description?: string;
+  instructions?: string;
+  sources?: Record<string, ListedSource>;
+}
+
+/** `list_sources` wire shape: models keyed by `model_ref`, each model's sources
+    keyed by `source_ref` (the refs are lifted to keys — see project.ts `byName`
+    for the same shape on describe). Both maps are built on null-prototype
+    objects so a reserved ref (`constructor` / `__proto__` / …) is an ordinary
+    data key. */
+export interface ListSourcesResult {
+  ok: boolean;
+  models: Record<string, ListedModel>;
+}
+
 export interface SourceDescribeResult {
   ok: boolean;
   /** The model the source was resolved in. */
@@ -322,7 +415,7 @@ export interface SourceDescribeResult {
    * named queries are a source's `views`; model givens come from the
    * `query`/`execute:false` loop, not from describe.
    */
-  sources?: Record<string, SourceInfo>;
+  sources?: Record<string, ExploreSourceInfo>;
   /**
    * The requested source + closure as VERBATIM Malloy — delivered as its own
    * clean content block (toContent lifts it out so code is never escaped in the
@@ -333,8 +426,9 @@ export interface SourceDescribeResult {
 }
 
 export interface HelpTopic {
-  slug: string;
-  title: string;
+  /** The topic's one identifier: its namespaced path, e.g. `language/joins`.
+      This is what the index lists AND what you pass back — there is no title. */
+  name: string;
   body: string;
 }
 

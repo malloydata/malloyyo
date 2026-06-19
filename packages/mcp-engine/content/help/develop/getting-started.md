@@ -20,7 +20,7 @@ throwaway probe inline with `compile` (no file needed):
 If it compiles, the connection is good. If not, fix the connection / config
 before going further — a broken connection produces an empty schema and then a
 cascade of misleading `field-not-found` errors; ignore the cascade and fix the
-connection. Call `yo_help("connection-setup")` for how to set up or repair a connection.
+connection. Call `yo_help("develop/connection-setup")` for how to set up or repair a connection.
 
 ## 2. Identify the tables the model needs
 
@@ -54,7 +54,7 @@ need — e.g. globbing or unioning several files:
 
     source: users_base is CONN.sql("SELECT * FROM read_parquet('data/users-*.parquet')")
 
-(`read_parquet` there is DuckDB SQL, not Malloy — see `yo_help("connection-setup")`.)
+(`read_parquet` there is DuckDB SQL, not Malloy — see `yo_help("develop/connection-setup")`.)
 
 ## 4. Assemble index.malloy — the published surface
 

@@ -29,7 +29,7 @@ for (const [label, text, model] of FORBIDDEN) {
     assert.equal(result.ok, false);
     const p = result.problems.find((x) => x.code === 'restricted-construct-forbidden');
     assert.ok(p, `expected restricted-construct-forbidden, got ${JSON.stringify(result.problems)}`);
-    assert.equal(p.help_topic, 'restricted-queries');
+    assert.equal(p.help_topic, 'explore/restricted-queries');
   });
 }
 

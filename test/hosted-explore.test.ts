@@ -8,8 +8,10 @@
 // dep. No HTTP, no OAuth, no ingest pipeline: this isolates the host logic the
 // route is a thin wrapper over.
 //
-// Addressing is SOURCE-centric: list_sources lists sources; describe_source and
-// query resolve a bare source against the catalog (model_ref optional).
+// Addressing: list_sources lists sources; describe_source resolves a bare source
+// against the catalog (model_ref optional). query is MODEL-centric — it takes a
+// required model_ref + Malloy (no source param); the engine derives the queried
+// source via Explore.referencedSource for the host to record.
 //
 // Run via `npm run test:hosted` (scripts/hosted-test.sh stands up Postgres,
 // pushes the schema, and runs this with DATABASE_URL pointed at it).
@@ -90,12 +92,13 @@ test("list_sources surfaces each model's sources with their annotations", async 
   const r = await host().call("list_sources", {});
   const data = JSON.parse(blockText(r, 0)) as {
     ok: boolean;
-    models: Array<{ model_ref: string; sources?: Array<{ source_ref: string; description?: string }> }>;
+    // models keyed by model_ref; each model's sources keyed by source_ref.
+    models: Record<string, { sources?: Record<string, { description?: string }> }>;
   };
   assert.equal(data.ok, true);
-  const entry = data.models.find((e) => e.model_ref === "petshop");
+  const entry = data.models["petshop"];
   assert.ok(entry, "petshop is listed");
-  const sales = entry!.sources?.find((s) => s.source_ref === "sales");
+  const sales = entry!.sources?.["sales"];
   assert.ok(sales, "its `sales` source is listed");
   // Description comes from the model's #" annotation (compiled fresh), not the DB.
   assert.equal(sales!.description, "Pet shop sales.");
@@ -107,7 +110,7 @@ test("describe_source resolves a bare source: schema (block 1) + verbatim text (
   const schema = JSON.parse(blockText(r, 0)) as {
     ok: boolean;
     model_ref: string;
-    sources: Record<string, { measures: Array<{ name: string }>; views: Array<{ name: string }> }>;
+    sources: Record<string, { measures: Record<string, unknown>; views: Record<string, unknown> }>;
   };
   assert.equal(schema.ok, true);
   assert.equal(schema.model_ref, "petshop", "bare source resolved to its model");
@@ -126,14 +129,14 @@ test("describe_source on an unknown source fails cleanly (no throw)", async () =
 
 test("query execute:false validates; execute:true runs on DuckDB + records a share link", async () => {
   const v = await host().call("query", {
-    source: "sales",
+    model_ref: "petshop",
     malloy: "run: sales -> by_animal",
     execute: false,
   });
   assert.equal((JSON.parse(blockText(v, 0)) as { ok: boolean }).ok, true, "compiles");
 
   const run = await host().call("query", {
-    source: "sales",
+    model_ref: "petshop",
     malloy: "run: sales -> { aggregate: total_qty }",
     execute: true,
     question: "total units sold",
@@ -142,14 +145,15 @@ test("query execute:false validates; execute:true runs on DuckDB + records a sha
   const payload = JSON.parse(blockText(run, 1)) as {
     rows: Array<{ total_qty: number }>;
     model_ref?: string;
-    ltool_url?: string;
+    ltool_link?: { text: string; url: string };
     sql?: unknown;
     host_only?: unknown;
   };
   assert.equal(payload.rows.length, 1, "one aggregate row");
   assert.equal(payload.rows[0]!.total_qty, 6, "DuckDB actually summed 2+3+1");
   assert.equal(payload.model_ref, "petshop", "result reports the resolved model");
-  assert.ok(payload.ltool_url, "a share link was minted and recorded");
+  assert.ok(payload.ltool_link?.url, "a share link was minted and recorded");
+  assert.match(payload.ltool_link?.text ?? "", /↗/, "link carries a branded label");
   // The agent must NOT see SQL on an executed run, nor the host_only channel.
   assert.equal(payload.sql, undefined, "no SQL shown to the agent on execute:true");
   assert.equal(payload.host_only, undefined, "host_only channel never reaches the agent");
@@ -176,7 +180,7 @@ test("query execute:false validates; execute:true runs on DuckDB + records a sha
 
 test("query without a question is refused (host policy)", async () => {
   const r = await host().call("query", {
-    source: "sales",
+    model_ref: "petshop",
     malloy: "run: sales -> { aggregate: total_qty }",
     execute: true,
   });
@@ -196,7 +200,7 @@ test("multi-file model: compiles across the import; block 2 slices the entry sou
 
   // And it actually runs across the import boundary on DuckDB.
   const run = await host().call("query", {
-    source: "pets",
+    model_ref: "multimod",
     malloy: "run: pets -> by_animal",
     execute: true,
     question: "by animal",

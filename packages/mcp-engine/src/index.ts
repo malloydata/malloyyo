@@ -15,12 +15,22 @@ export type {
   Annotation,
   CompileResult,
   DescribeResult,
+  ExploreDescription,
+  ExploreField,
+  ExploreFieldGroups,
+  ExploreJoin,
+  ExploreModelInfo,
+  ExploreSourceInfo,
+  ExploreView,
   FieldGroups,
   FieldInfo,
   GivenInfo,
   HelpTopic,
   HostOnly,
   JoinInfo,
+  ListedModel,
+  ListedSource,
+  ListSourcesResult,
   Loc,
   ModelEntry,
   ModelInfo,
@@ -55,6 +65,7 @@ export {
   engineSkills,
 } from './help';
 export { prettify, type PrettifyOutcome } from './prettify';
+export { INSTANCE_PLACEHOLDER, renderInstructions } from './instance';
 export {
   mapProblems,
   errorProblem,

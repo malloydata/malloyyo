@@ -189,8 +189,8 @@ export function yoHelpTool(): ToolDef {
         topic: {
           type: 'string',
           description:
-            'Topic slug or title (case-insensitive; substrings match). ' +
-            'Omit to list all available topics.',
+            'A topic name from the index, e.g. "explore/query-workflow" or ' +
+            '"language/joins" (case-insensitive). Omit to list all topic names.',
         },
       },
       additionalProperties: false,
@@ -202,7 +202,7 @@ export function yoHelpTool(): ToolDef {
       if (!hit) {
         return { error: `No topic matches '${topic}'.`, topics: listHelpTopics() };
       }
-      return { slug: hit.slug, title: hit.title, body: hit.body };
+      return { name: hit.name, body: hit.body };
     },
   };
 }

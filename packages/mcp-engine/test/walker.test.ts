@@ -8,6 +8,7 @@ import {
   projectModel,
   selectSource,
   projectDescription,
+  type SourceInfo,
 } from '../src/index';
 import {
   checkGolden,
@@ -163,6 +164,40 @@ test('transitive import: explore projection of an anon closure (golden)', async 
   assert.equal(actual, expected);
 });
 
+test('explore projection: reserved member names are safe own data keys', () => {
+  // The child collections are keyed by member NAME, and a Malloy identifier can
+  // be `constructor` / `__proto__` / `hasOwnProperty` — names that, on a normal
+  // object, would either mutate the prototype or collide with an inherited
+  // method. byName builds the map on a null-prototype object so each lands as an
+  // ordinary own data key.
+  const src: SourceInfo = {
+    name: 'weird',
+    primary_key: null,
+    dimensions: [
+      { name: '__proto__', type: 'string' },
+      { name: 'constructor', type: 'number' },
+      { name: 'hasOwnProperty', type: 'boolean' },
+    ],
+    measures: [],
+    views: [],
+    joins: [],
+  };
+  const projected = projectDescription({ requested: 'weird', sources: { weird: src } }, 'explore');
+  const dims = projected.sources['weird']!.dimensions;
+  assert.deepEqual(
+    Object.keys(dims).sort(),
+    ['__proto__', 'constructor', 'hasOwnProperty'],
+    'every reserved name is an own enumerable key',
+  );
+  assert.equal(dims['__proto__']!.type, 'string', '__proto__ is data, not the prototype');
+  assert.equal(dims['constructor']!.type, 'number', 'constructor is data, not Object.constructor');
+  assert.equal(dims['hasOwnProperty']!.type, 'boolean');
+  // …and survives the JSON round-trip that is the actual wire form.
+  const round = JSON.parse(JSON.stringify(dims));
+  assert.equal(round['__proto__'].type, 'string', '__proto__ round-trips as data');
+  assert.equal(round['constructor'].type, 'number');
+});
+
 test('must_quote: reserved-word and funny-character field names are flagged', async () => {
   const result = await withFixtureRuntime((rt) =>
     compile(rt, fixtureUrl('quoting.malloy'), { readSource }),
@@ -218,7 +253,7 @@ test('field-not-found problems carry a help_topic', async () => {
   assert.equal(result.ok, false);
   const p = result.problems.find((x) => x.code === 'field-not-found');
   assert.ok(p, 'expected a field-not-found problem');
-  assert.equal(p.help_topic, 'fields');
+  assert.equal(p.help_topic, 'language/fields');
   assert.equal(typeof p.line, 'number');
 });
 

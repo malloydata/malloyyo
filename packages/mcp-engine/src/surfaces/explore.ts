@@ -23,6 +23,9 @@ import { prompts } from '../prompts';
 import { codeProblem } from '../problems';
 import { HOST_ONLY } from '../types';
 import type {
+  ListedModel,
+  ListedSource,
+  ListSourcesResult,
   ModelEntry,
   ModelList,
   Problem,
@@ -97,7 +100,7 @@ function refNudge(ref: string, inspect: InspectHint): (p: Problem) => Problem {
       message:
         `${p.message} — call ${inspect.tool} with ${inspect.param}="${ref}"${also} ` +
         'to see what fields, measures, views, and joins exist.',
-      help_topic: p.help_topic ?? 'fields',
+      help_topic: p.help_topic ?? 'language/fields',
     };
   };
 }
@@ -227,18 +230,19 @@ async function resolveModel(
   };
 }
 
-/** Field-not-found recovery for the source-centric surface: point at
-    describe_source for this exact (model_ref, source). */
-function srcNudge(modelRef: string, source: string): (p: Problem) => Problem {
+/** Field-not-found recovery for the model-centric query: the agent already
+    knows the source it queried (it's in its `run:`), so point it at
+    describe_source for that source, scoped to this model. */
+function modelNudge(modelRef: string): (p: Problem) => Problem {
   return (p) => {
     if (p.code !== 'field-not-found') return p;
     return {
       ...p,
       message:
-        `${p.message} — call describe_source with source="${source}"` +
-        (modelRef ? ` model_ref="${modelRef}"` : '') +
+        `${p.message} — call describe_source for the source you queried` +
+        (modelRef ? ` (model_ref="${modelRef}")` : '') +
         ' to see what fields, measures, views, and joins exist.',
-      help_topic: p.help_topic ?? 'fields',
+      help_topic: p.help_topic ?? 'language/fields',
     };
   };
 }
@@ -261,23 +265,30 @@ function listSourcesTool(host: ExploreHost): ToolDef {
     title: prompts.explore.tools.list_sources.title,
     description: prompts.explore.tools.list_sources.description,
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
-    handler: async () => {
+    handler: async (): Promise<ListSourcesResult> => {
       const { entries } = await host.list!();
-      const models = entries.map((e) => {
-        const m: Record<string, unknown> = { model_ref: e.model_ref };
+      // models keyed by model_ref, each model's sources keyed by source_ref;
+      // the ref is the key, not a field. Null-prototype maps so a reserved ref
+      // (`constructor`, `__proto__`, …) is an ordinary data key. Insertion
+      // order follows `entries`.
+      const models: Record<string, ListedModel> = Object.create(null);
+      for (const e of entries) {
+        const m: ListedModel = {};
         if (e.description) m.description = e.description;
         if (e.instructions) m.instructions = e.instructions;
         if (e.sources?.length) {
-          m.sources = e.sources.map((s) => {
-            const o: Record<string, unknown> = { source_ref: s.source_ref };
+          const sources: Record<string, ListedSource> = Object.create(null);
+          for (const s of e.sources) {
+            const o: ListedSource = {};
             if (s.description) o.description = s.description;
             if (s.instructions) o.instructions = s.instructions;
             if (s.must_quote) o.must_quote = true;
-            return o;
-          });
+            sources[s.source_ref] = o;
+          }
+          m.sources = sources;
         }
-        return m;
-      });
+        models[e.model_ref] = m;
+      }
       return { ok: true, models };
     },
   };
@@ -360,12 +371,11 @@ function exploreQueryTool(host: ExploreHost, opts: ExploreSurfaceOptions): ToolD
     inputSchema: {
       type: 'object',
       properties: {
-        source: { type: 'string', description: 'The source the query runs against.' },
-        malloy: { type: 'string', description: 'Malloy query text, e.g. `run: orders -> { ... }`.' },
         model_ref: {
           type: 'string',
-          description: 'The model the source lives in (optional when the source name is unique).',
+          description: 'The model to query (the model_ref from list_sources / describe_source).',
         },
+        malloy: { type: 'string', description: 'Malloy query text, e.g. `run: source -> { ... }`.' },
         question: {
           type: 'string',
           description: 'Plain-English description of what this query answers; hosts may record or share it.',
@@ -380,21 +390,20 @@ function exploreQueryTool(host: ExploreHost, opts: ExploreSurfaceOptions): ToolD
         },
         max_rows: { type: 'integer', minimum: 1, maximum: 10000, description: `Row cap (default ${DEFAULT_ROW_LIMIT}).` },
       },
-      required: ['source', 'malloy'],
+      required: ['model_ref', 'malloy'],
       additionalProperties: false,
     },
     handler: async (args) => {
-      const source = argString(args, 'source');
-      const modelRefArg = argOptString(args, 'model_ref');
+      const modelRef = argString(args, 'model_ref');
+      if (!modelRef.trim()) {
+        return { ok: false, problems: [codeProblem('model-ref-required', prompts.shared.errors['no-model-ref'])] };
+      }
       const execute = argOptBool(args, 'execute') ?? true;
-      const r = await resolveModel(host, source, modelRefArg);
-      if ('problem' in r) return { ok: false, problems: [r.problem] };
-      const modelRef = r.model_ref;
       try {
         return await host.withModel(modelRef, async (m) => {
-          const res = await executeQuery(m, args, srcNudge(modelRef, source), opts.result);
+          const res = await executeQuery(m, args, modelNudge(modelRef), opts.result);
           // execute:false: SQL is the confirmatory-inspect channel — the agent
-          // SHOULD see it; just tag which model the source resolved to.
+          // SHOULD see it; just tag the model.
           if (!execute) return { ...res, model_ref: modelRef };
           // execute:true: withhold SQL from the agent (SQL rides execute:false),
           // but the run generated it — park it on the host_only channel toContent

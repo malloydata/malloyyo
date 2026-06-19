@@ -46,7 +46,7 @@ function unauthorized(description: string, request: Request): Response {
 }
 
 const PROTOCOL_VERSION = "2025-03-26";
-const SERVER_INFO = { name: env.INSTANCE_NAME, version: "0.1.0" };
+const SERVER_INFO = { name: env.INSTANCE_NAME, version: "0.2.0" };
 
 export async function POST(req: Request) {
   const authHeader = req.headers.get("authorization");

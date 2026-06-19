@@ -10,7 +10,7 @@ a `malloy-config.json`.
 ## Understand the model
 
 - **Read `malloy-config.json` directly** — it is JSON, so read it as text. It
-  lists the connection(s) the model queries against; `yo_help("connection-setup")` explains
+  lists the connection(s) the model queries against; `yo_help("develop/connection-setup")` explains
   the format (and how to set one up or repair it).
 - **Do NOT read `.malloy` as text — compile it.** `compile_file` returns the
   structured model: each source with its fields, joins, views, and named queries,

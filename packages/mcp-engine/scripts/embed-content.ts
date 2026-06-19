@@ -10,17 +10,25 @@ import url from 'node:url';
 
 const here = path.dirname(url.fileURLToPath(import.meta.url));
 const contentDir = path.join(here, '..', 'content');
+const helpDir = path.join(contentDir, 'help');
 const promptsDir = path.join(contentDir, 'prompts');
 const outFile = path.join(here, '..', 'src', 'content', 'generated.ts');
 
-// Flat help-topic content (top-level content/*.md). The `prompts` subdir is
-// skipped here (not a .md file) and handled as a tree below.
+// Help-topic content lives under content/help/**, namespaced by directory:
+// content/help/explore/query-workflow.md → key "explore/query-workflow.md".
+// The directory layout IS the topic namespace; help.ts derives each topic's
+// name from the key (slug = the path). A new category is just a new directory
+// — it appears with no code change. README.md (author docs) lives in content/,
+// outside help/, so it is never shipped. Keys are POSIX-style ('/').
 const files: Record<string, string> = {};
-for (const name of fs.readdirSync(contentDir).sort()) {
-  if (!name.endsWith('.md')) continue;
-  if (name === 'README.md') continue; // docs for authors, not shippable content
-  files[name] = fs.readFileSync(path.join(contentDir, name), 'utf8');
+function collectHelp(dir: string, prefix: string): void {
+  for (const name of fs.readdirSync(dir).sort()) {
+    const full = path.join(dir, name);
+    if (fs.statSync(full).isDirectory()) collectHelp(full, prefix + name + '/');
+    else if (name.endsWith('.md')) files[prefix + name] = fs.readFileSync(full, 'utf8');
+  }
 }
+if (fs.existsSync(helpDir)) collectHelp(helpDir, '');
 
 // Nested prompt tree (content/prompts/**.md). Each directory is a key; each
 // .md file is a leaf keyed by its basename, value = its trimmed text. Emitted

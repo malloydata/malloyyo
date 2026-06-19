@@ -46,5 +46,6 @@ validates and points at the offending field.
 
 ## Before writing non-trivial Malloy
 
-Pull the `malloy-language-reference` topic first. The language has real scoping
-and typing rules the compiler enforces — reading the reference beats guessing.
+Browse the `language/*` topics first (start with `yo_help("language/overview")`).
+The language has real scoping and typing rules the compiler enforces — reading
+the reference beats guessing.

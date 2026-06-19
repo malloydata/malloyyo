@@ -75,12 +75,13 @@ test('explore: two-channel annotations + descriptive relationship', async () => 
   // `#"` → description, `#(agent)` → instructions: two distinct channels.
   assert.equal(flights.description, 'Flight facts, with nested route legs and free-form tags.');
   assert.equal(flights.instructions, 'Grain is one row per flight; join carriers for airline names.');
-  const total = flights.measures.find((m) => m.name === 'total_distance');
+  // Child collections are keyed by member name (name lifted to the key).
+  const total = flights.measures['total_distance'];
   assert.equal(total?.instructions, 'Sum across flights; do not average a pre-summed value.');
   // promoted routes (doc + agent) are stripped from annotations[] (not double-sent).
   assert.equal(flights.annotations, undefined);
   // descriptive relationship name (join_one → many_to_one).
-  const carriers = flights.joins.find((j) => j.name === 'carriers');
+  const carriers = flights.joins['carriers'];
   assert.equal(carriers?.relationship, 'many_to_one');
 });
 
@@ -200,7 +201,6 @@ test('explore: field-not-found is nudged toward describe_source', async () => {
   const s = exploreSurface(testExploreHost());
   const result = (await tool(s, 'query').handler({
     model_ref: 'flights.malloy',
-    source: 'flights',
     malloy: 'run: flights -> { aggregate: not_real }',
   })) as RunResult;
   assert.equal(result.ok, false);
@@ -212,35 +212,39 @@ test('explore: list_sources lists sources with their annotations (no queries)', 
   const s = exploreSurface(testExploreHost({ withList: true }));
   const result = (await tool(s, 'list_sources').handler({})) as {
     ok: boolean;
-    models: Array<{
-      model_ref: string;
-      sources?: Array<{ source_ref: string; description?: string; instructions?: string }>;
-      queries?: unknown;
-    }>;
+    // models keyed by model_ref; each model's sources keyed by source_ref.
+    models: Record<
+      string,
+      {
+        sources?: Record<string, { description?: string; instructions?: string }>;
+        queries?: unknown;
+      }
+    >;
   };
   assert.equal(result.ok, true);
-  const flights = result.models.find((m) => m.model_ref === 'flights.malloy');
+  const flights = result.models['flights.malloy'];
   assert.ok(flights, 'flights model is listed');
-  const names = (flights.sources ?? []).map((s) => s.source_ref).sort();
+  const names = Object.keys(flights.sources ?? {}).sort();
   assert.deepEqual(names, ['carriers', 'flights'], 'exported sources listed by ref');
-  const carriers = flights.sources!.find((s) => s.source_ref === 'carriers');
+  const carriers = flights.sources!['carriers'];
   assert.equal(carriers?.description, 'Reference table of airline carriers.', 'source description carried');
-  const flightsSrc = flights.sources!.find((s) => s.source_ref === 'flights');
+  const flightsSrc = flights.sources!['flights'];
   assert.match(flightsSrc?.instructions ?? '', /Grain is one row per flight/, 'agent instructions carried');
   // Named queries are deferred out of the MVP listing.
   assert.equal(flights.queries, undefined, 'no queries key in list_sources today');
 });
 
-test('yo_help: shared tool answers topics and lists them', async () => {
+test('yo_help: index is a flat list of names; a name returns { name, body }', async () => {
   const s = exploreSurface(testExploreHost());
-  const list = (await tool(s, 'yo_help').handler({})) as {
-    topics: Array<{ slug: string }>;
-  };
+  const list = (await tool(s, 'yo_help').handler({})) as { topics: string[] };
   assert.ok(list.topics.length > 5);
+  assert.ok(list.topics.every((t) => typeof t === 'string'), 'one name per topic');
+  assert.ok(list.topics.includes('explore/query-workflow'));
   const topic = (await tool(s, 'yo_help').handler({
-    topic: 'restricted-queries',
-  })) as { slug: string; body: string };
-  assert.equal(topic.slug, 'restricted-queries');
+    topic: 'explore/query-workflow',
+  })) as { name: string; body: string };
+  assert.equal(topic.name, 'explore/query-workflow');
+  assert.ok(topic.body.length > 0);
 });
 
 test('mergeSurfaces: dedupes identical tools across surfaces', () => {

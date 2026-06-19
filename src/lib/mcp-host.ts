@@ -21,6 +21,7 @@ import {
   compile,
   exploreSurface,
   modelCatalogEntry,
+  renderInstructions,
   toContent,
   HOST_ONLY,
   type BoundModel,
@@ -54,6 +55,14 @@ export type ToolResult = {
 // keys files by this file:// URL (see malloy.ts fileUrl/splitFiles).
 const ENTRY = new URL("file:///index.malloy");
 const TAG = `[${env.INSTANCE_NAME}]`;
+// Host-owned instruction block, appended to the engine's (instance-agnostic)
+// explore instructions on the hosted surface only. Multi-instance routing is the
+// host's concern — the engine doesn't tag tools and the local CLI doesn't either
+// — so the line explaining the [INSTANCE] tag lives here, with the real name
+// already interpolated (no token).
+const HOST_POLICY =
+  `Tools are tagged ${TAG} — if several instances are connected, ` +
+  `route to the one the user means.`;
 
 function text(value: unknown): ToolResult {
   return { content: [{ type: "text", text: typeof value === "string" ? value : JSON.stringify(value, null, 2) }] };
@@ -63,6 +72,14 @@ function errText(msg: string): ToolResult {
 }
 function ltoolUrl(baseUrl: string, slug: string | null): string | undefined {
   return slug ? `${baseUrl.replace(/\/$/, "")}/ltool/${slug}` : undefined;
+}
+/** A ready-to-render share link: the agent makes a markdown link from `text` +
+    `url`. The host owns the LABEL (the instance brand) so it's real data, not a
+    placeholder the agent has to assemble. */
+type LtoolLink = { text: string; url: string };
+function ltoolLink(baseUrl: string, slug: string | null): LtoolLink | undefined {
+  const url = ltoolUrl(baseUrl, slug);
+  return url ? { text: `↗ ${env.INSTANCE_NAME}`, url } : undefined;
 }
 
 type DatasetRow = { id: string; name: string };
@@ -144,13 +161,16 @@ async function recordQuery(
   args: Record<string, unknown>,
   result: QueryRunResult,
   baseUrl: string,
-): Promise<string | undefined> {
+): Promise<LtoolLink | undefined> {
   const modelRef = String(result.model_ref ?? args.model_ref ?? "");
   const found = modelRef ? await findModelByRef(user.id, modelRef) : null;
   if (!found) return undefined;
   const question = String(args.question ?? "").trim();
   const malloyQ = String(args.malloy ?? "");
-  const source = String(args.source ?? modelRef);
+  // Model-centric query takes no `source` arg; the engine derives the queried
+  // source (Explore.referencedSource) and reports it on the result. Fall back to
+  // the model_ref when it isn't a referenceable namespace source.
+  const source = String(result.source ?? modelRef);
   // The explore surface withholds SQL from the agent but hands it to the host
   // via the host_only channel (see the engine's toContent) — record it, as the
   // old surface did.
@@ -179,7 +199,7 @@ async function recordQuery(
     rowCount: result.row_count,
     durationMs: result.total_time_ms,
   });
-  return ltoolUrl(baseUrl, inq.slug);
+  return ltoolLink(baseUrl, inq.slug);
 }
 
 async function openShareLink(args: Record<string, unknown>, baseUrl: string): Promise<ToolResult> {
@@ -192,7 +212,7 @@ async function openShareLink(args: Record<string, unknown>, baseUrl: string): Pr
     source: res.source,
     question: res.question,
     malloy: res.malloy,
-    ltool_url: ltoolUrl(baseUrl, slug),
+    ltool_link: ltoolLink(baseUrl, slug),
   });
 }
 
@@ -264,16 +284,16 @@ export function buildHostedExploreSurface(user: User, baseUrl: string): HostedSu
       // generic object) to the explore query shape; everything downstream
       // (recording, the host_only strip) is then typed.
       const runResult = result as unknown as QueryRunResult;
-      const ltool = await recordQuery(user, args, runResult, baseUrl);
+      const link = await recordQuery(user, args, runResult, baseUrl);
       // host_only carried the SQL for recording (above); it must NOT reach the
       // agent — strip it from the payload the agent sees.
       const { [HOST_ONLY]: _hostOnly, ...rest } = runResult;
-      const withLink = { ...rest, ltool_url: ltool };
+      const withLink = { ...rest, ltool_link: link };
       const reminder =
         `End your reply with a "Query summary": (1) the question in plain English, ` +
         `(2) the Malloy logic (filters, grouping, aggregation, ordering), ` +
         `(3) post-processing outside Malloy or "none".` +
-        (ltool ? ` Then append the share link as a small inline markdown link, exactly: [↗](${ltool})` : "");
+        (link ? ` Then append \`ltool_link\` as a markdown link using its \`text\` and \`url\`.` : "");
       return {
         content: [
           { type: "text", text: reminder },
@@ -285,5 +305,12 @@ export function buildHostedExploreSurface(user: User, baseUrl: string): HostedSu
     return toContent(result) as ToolResult;
   }
 
-  return { instructions: surface.instructions, descriptors, call };
+  // Render the instance name into the engine's instructions ({{INSTANCE_NAME}}
+  // → env.INSTANCE_NAME) — the same instance stamp the descriptors get via TAG —
+  // then append the host-only policy block (multi-instance tag routing).
+  return {
+    instructions: `${renderInstructions(surface.instructions, env.INSTANCE_NAME)}\n\n${HOST_POLICY}`,
+    descriptors,
+    call,
+  };
 }

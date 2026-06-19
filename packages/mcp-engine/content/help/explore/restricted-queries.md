@@ -1,7 +1,9 @@
-# Working in an explore query
+# Restricted Query Explanation
 
 The `query` tool runs your Malloy against a **published model**. You have that
-model's entire published surface to work with — and you can build on it.
+model's entire published surface to work with — and you can build on it. The
+model is an inentionally curated subset of the data available in the
+database.
 
 ## You can
 
@@ -17,7 +19,7 @@ model's entire published surface to work with — and you can build on it.
 - Use a model field that was itself defined with raw SQL — the author vouched
   for the model's own definitions.
 
-## A few constructs reach outside the model
+## What is "Restricted"
 
 If you see `restricted-construct-forbidden`, the query used something that
 reaches *outside* the published model: pulling in another file (`import`),

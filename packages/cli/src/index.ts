@@ -8,7 +8,7 @@ import { serveMcp } from "./mcp.js";
 import { clearCreds } from "./store.js";
 import type { PublishRequest, ModelStatus } from "./protocol.js";
 
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
 
 function shortSha(sha?: string): string {
   return sha ? sha.slice(0, 7) : "";

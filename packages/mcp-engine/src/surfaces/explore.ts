@@ -390,9 +390,14 @@ function exploreQueryTool(host: ExploreHost, opts: ExploreSurfaceOptions): ToolD
           }
           const full = await runRestricted(m.runtime, m.entry, malloy, { rowLimit, givens: givens as never });
           const budgeted = await applyResultBudget(full, opts.result, { toolName: 'query', args });
-          // Explore: SQL is output, not input — it rides execute:false, never the run.
-          delete (budgeted as { sql?: string }).sql;
-          return { ...budgeted, model_ref: modelRef, problems: budgeted.problems.map(fix) };
+          // Explore: the agent never sees SQL on an executed run (it rides
+          // execute:false). But the run DID generate it — withhold it from the
+          // agent while keeping it available to the host (which records it) via
+          // the reserved host_only channel that toContent drops. See toContent.
+          const { sql, ...rest } = budgeted as { sql?: string };
+          const out: Record<string, unknown> = { ...rest, model_ref: modelRef, problems: budgeted.problems.map(fix) };
+          if (sql !== undefined) out.host_only = { sql };
+          return out;
         });
       } catch (e) {
         return { ok: false, problems: [refModelProblem(modelRef, e)] };

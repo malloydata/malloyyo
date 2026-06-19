@@ -44,15 +44,22 @@ export interface ResultPolicy {
 
 export const DEFAULT_RESULT_BYTES = 25_000;
 
-/** Serializer: typed result → MCP content + structuredContent. A reserved
-    `malloy_text` field is lifted OUT into its own clean text block (verbatim
-    Malloy) so code is never escaped inside the JSON block, and is removed from
-    the JSON/structuredContent so it isn't double-sent. */
+/** Serializer: typed result → MCP content + structuredContent. Two reserved
+    fields are special-cased:
+    - `malloy_text` is lifted OUT into its own clean text block (verbatim Malloy)
+      so code is never escaped inside the JSON block, and removed from the
+      JSON/structuredContent so it isn't double-sent.
+    - `host_only` is DROPPED entirely (no block, not serialized). It carries data
+      the surface produced for the HOST but deliberately withholds from the agent
+      (e.g. the SQL of an executed run — recorded by the host, never shown). The
+      host reads it off the raw result before serializing; every other consumer
+      (the CLI's attachSurface, structuredContent) never sees it. */
 export function toContent(result: object): {
   content: Array<{ type: 'text'; text: string }>;
   structuredContent: Record<string, unknown>;
 } {
-  const { malloy_text, ...rest } = result as { malloy_text?: unknown };
+  const { malloy_text, host_only: _host_only, ...rest } =
+    result as { malloy_text?: unknown; host_only?: unknown };
   const content: Array<{ type: 'text'; text: string }> = [
     { type: 'text', text: JSON.stringify(rest, null, 2) },
   ];

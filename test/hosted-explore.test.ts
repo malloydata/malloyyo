@@ -16,7 +16,8 @@
 
 import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
-import { db, users, datasets, malloyModels, malloyModelFiles, type User } from "@/db";
+import { desc, eq } from "drizzle-orm";
+import { db, users, datasets, malloyModels, malloyModelFiles, queries, toolCalls, type User } from "@/db";
 import { buildHostedExploreSurface } from "@/lib/mcp-host";
 
 const MODEL = `#" Pet shop sales.
@@ -142,11 +143,35 @@ test("query execute:false validates; execute:true runs on DuckDB + records a sha
     rows: Array<{ total_qty: number }>;
     model_ref?: string;
     ltool_url?: string;
+    sql?: unknown;
+    host_only?: unknown;
   };
   assert.equal(payload.rows.length, 1, "one aggregate row");
   assert.equal(payload.rows[0]!.total_qty, 6, "DuckDB actually summed 2+3+1");
   assert.equal(payload.model_ref, "petshop", "result reports the resolved model");
   assert.ok(payload.ltool_url, "a share link was minted and recorded");
+  // The agent must NOT see SQL on an executed run, nor the host_only channel.
+  assert.equal(payload.sql, undefined, "no SQL shown to the agent on execute:true");
+  assert.equal(payload.host_only, undefined, "host_only channel never reaches the agent");
+  assert.ok(!blockText(run, 1).toLowerCase().includes("select "), "agent JSON carries no SQL text");
+
+  // ...but the SQL WAS recorded (matching the old surface): the most recent
+  // query row + tool-call row for this dataset carry compiledSql.
+  const [petshop] = await db.select().from(datasets).where(eq(datasets.name, "petshop"));
+  const [qrow] = await db
+    .select({ compiledSql: queries.compiledSql, malloySource: queries.malloySource })
+    .from(queries)
+    .where(eq(queries.datasetId, petshop!.id))
+    .orderBy(desc(queries.createdAt))
+    .limit(1);
+  assert.match(qrow!.compiledSql ?? "", /select/i, "queries.compiledSql recorded the generated SQL");
+  const [tc] = await db
+    .select({ compiledSql: toolCalls.compiledSql })
+    .from(toolCalls)
+    .where(eq(toolCalls.datasetId, petshop!.id))
+    .orderBy(desc(toolCalls.createdAt))
+    .limit(1);
+  assert.match(tc!.compiledSql ?? "", /select/i, "toolCalls.compiledSql recorded the generated SQL");
 });
 
 test("query without a question is refused (host policy)", async () => {

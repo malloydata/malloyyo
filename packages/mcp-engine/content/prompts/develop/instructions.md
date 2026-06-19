@@ -9,7 +9,7 @@ When interacting with a .malloy file, use the compile() or compile_file() tools,
 don't read the file. The tools can both inspect and diagnose problems in a file.
 
 You are probably doing one of these two things; read the guidance for the
-appropriate one with `yo_help(MALLOYYO-XXXXXX)`.
+appropriate one with `yo_help`.
 
-- New model (no `index.malloy` / `malloy-config.json` yet)? -> MALLOYYO-SETUP
-- Existing model (or setup complete) -> MALLOYYO-DEVELOP
+- New model (no `index.malloy` / `malloy-config.json` yet)? -> yo_help("getting-started")
+- Existing model (or setup complete) -> yo_help("working-with-models")

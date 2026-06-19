@@ -21,48 +21,63 @@ library's deliverable #1 (the exported types). Decided by comparing malloy-cli's
 
 ## Shape
 
+Two layers carry this shape. The pure selection helper returns
+`SourceDescription { requested, sources }`; the `describe_source` TOOL wraps it
+as `SourceDescribeResult { ok, model_ref, source, sources, malloy_text?, problems }`
+— `source` is the wire key for the requested name, and the requested source +
+its join closure ride out verbatim as a separate `malloy_text` block (so Malloy
+is never escaped inside JSON). The `sources` map shape:
+
 ```jsonc
-// result of describe / describe_source
-{
-  "requested": "orders",       // the source asked about
-  "sources": {                 // requested source + transitive join targets, deduped, keyed by name
-    "orders": {
-      "name": "orders",
-      "description": "…|null",                              // description annotation, promoted
-      "primary_key": "id|null",
-      "annotations": [{ "route": "...", "text": "..." }],   // full set (render tags, etc.)
-      "dimensions": [ Field, … ],
-      "measures":   [ Field, … ],
-      "views":      [ View,  … ],
-      "joins":      [ Join,  … ]
-    },
-    "customers": { … }         // referenced by orders.joins → described once here
-  }
+"sources": {                 // requested source + transitive join targets, deduped, keyed by name
+  "orders": {
+    "name": "orders",
+    "description": "…",       // #" doc route, promoted; OMITTED when absent
+    "instructions": "…",      // #(agent) route, promoted; OMITTED when absent
+    "must_quote": true,       // only when the name needs backtick-quoting in Malloy
+    "primary_key": "id|null", // the one field that is null (not omitted) when there is none
+    "annotations": [{ "route": "...", "text": "..." }],  // leftover routes (render tags, …)
+    "dimensions": [ Field, … ],
+    "measures":   [ Field, … ],
+    "views":      [ View,  … ],
+    "joins":      [ Join,  … ],
+    "anon_srcs":  [ Source, … ]  // un-nameable join targets (see Join.anon_src_index); omitted when none
+  },
+  "customers": { … }          // referenced by orders.joins → described once here
 }
 
 Field = {
   "name": "total_amount",
   "type": "number",            // string|number|date|timestamp|boolean|…
-  "expression": "sum(amount)", // present when it differs from the name (esp. measures)
-  "description": "…|null",
-  "annotations": [ … ]         // optional
+  "expression": "sum(amount)", // present only when it differs from the name (esp. measures)
+  "description": "…",          // #" route; omitted when absent
+  "instructions": "…",         // #(agent) route; omitted when absent
+  "must_quote": true,          // only when the name needs backtick-quoting
+  "annotations": [ … ]         // leftover routes; omitted when empty
   // develop surface only: "location": [line, col]
 }
 
 View = {
   "name": "by_month",
-  "description": "…|null"
-  // develop surface only: "body": "<verbatim definition text>"
+  "description": "…", "instructions": "…", "must_quote": true,  // each omitted when absent
+  "body": "<verbatim definition text>"   // sliced from its location, when readSource was available
+  // develop surface only: "location": [line, col]
 }
 
 Join = {
   "name": "customer",
-  "relationship": "one|many|cross",   // standardized vocab
-  "source_ref": "customers",          // look up in sources{} above
-  "description": "…|null"
+  "relationship": "one_to_many | many_to_one | cross",  // descriptive vocab
+  "source_ref": "customers",      // nameable target → look up in sources{} above
+  "anon_src_index": 0,            // OR: un-nameable target → index into the owning source's anon_srcs
+  "description": "…", "instructions": "…", "must_quote": true,  // each omitted when absent
+  "body": "<verbatim `name is target on …` text>"   // when readSource was available
   // develop surface only: "location": [line, col]
+  // invariant: a join has source_ref, anon_src_index, and/or inline fields
 }
 ```
+
+Note: the lone camelCase wire key today is `mustQuote`; the docs write `must_quote`
+because a snake_case sweep of that one key is the planned format-pass cleanup.
 
 ## Per-surface projection — same shape, different fields
 
@@ -74,9 +89,13 @@ Join = {
 This single definition supersedes both today's `describe_source` (thin + raw dump
 + always-inline joins) and malloy-cli's compile-only shape.
 
-## Open
+## Settled
 
-- **Split-into-typed-arrays** (current pick) vs **flat-`kind`** — going with split
-  (an AI reading "here are the measures" is clearer), applied at every level.
-- Relationship vocab standardized to `one|many|cross` (today malloyyo emits
-  `one_to_many` etc.; malloy-cli emits `one|many|cross`).
+- **Split-into-typed-arrays** (not flat-`kind`) — an AI reading "here are the
+  measures" is clearer; applied at every level.
+- **Relationship vocab is descriptive** — `one_to_many | many_to_one | cross`
+  (the join's fan-out direction), not the terser `one|many|cross`.
+- **Two annotation channels** — `#"` → `description` (for humans), `#(agent)` →
+  `instructions` (for the agent using the object). Both promoted out of
+  `annotations[]` and omitted when absent; the leftover routes stay in
+  `annotations[]`.

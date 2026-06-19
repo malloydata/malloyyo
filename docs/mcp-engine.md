@@ -1,18 +1,11 @@
 # The shared MCP engine — design
 
-**Status:** IMPLEMENTED (2026-06-12). The engine is `packages/mcp-engine`
-(all three layers, 83 tests incl. walker goldens and a live SDK round-trip);
-the fox develop/explore server is `malloyyo mcp` (`packages/cli/src/mcp.ts`,
-11 e2e contract tests). The first real fox session (~/open_payments,
-2026-06-12) exercised the develop loop end-to-end — grounding lookups,
-compile-iterate, query-by-ref, prettify-on-formatted:false — and produced
-three fixes (help body-token fallback, relative-path guidance, live
-malloy-config reload). **Next: exercise the local explore server (the test
-window) with a real fox, then the hosted explore redo (workstream #3).**
-This doc remains the normative design; decisions 13–19 record what
-implementation taught.
-**Keystone of the MVP** (CLAUDE.md → Planned work). Companion to
-[`source-bindings.md`](./source-bindings.md) and
+**Status:** IMPLEMENTED. The engine is `packages/mcp-engine` (all three layers,
+with walker goldens and a live SDK round-trip); the local explore server is
+`malloyyo mcp` (`packages/cli/src/mcp.ts`); the hosted `/mcp` runs on the engine
+via `src/lib/mcp-host.ts`. This doc is the normative design; the decisions log
+records what implementation taught.
+Companion to
 [`describe-shape.md`](./describe-shape.md) — the types below are the normative
 TS rendering of the describe-shape, with extensions noted in §Decisions.
 
@@ -57,11 +50,15 @@ The library is pure logic plus bundled language-reference content.
    no completeness guarantee (`next_cursor` exhaustion means "end of this
    view," not "end of the catalog"). Absent `list`, the server's instructions
    explain how refs are formed (self-description as graceful degradation).
-3. **The model is the addressable unit** — because it is the compilation unit.
-   A restricted query compiles against a model and may reference any source or
-   named query in it. Sources and queries are *contents* revealed by describe,
-   never top-level namespace entries. (Source-first flattening was malloyyo's
-   package convention leaking into the contract, and it shadow-collides today.)
+3. **The model is the engine's addressable unit** — because it is the
+   compilation unit: `withModel(ref)` is model-keyed, and a restricted query
+   compiles against a model and may reference any source or named query in it.
+   The explore SURFACE layered on top is **source-centric** (main's interaction):
+   `list_sources` discovers sources, and `describe_source`/`query` take a bare
+   `source`, resolving it to its model (with `model_ref` to disambiguate). So
+   discovery is source-first while addressing stays model-keyed underneath —
+   resolution maps one to the other. (Earlier drafts argued against source-first
+   flattening; main chose it for the surface deliberately.)
 4. **Context is the budget.** The agent reading responses is an LLM. Row limits bound memory,
    not context (Malloy results nest). Responses are byte-budgeted at
    serialization; completeness belongs in an artifact (spill → link), not in
@@ -80,9 +77,16 @@ The library is pure logic plus bundled language-reference content.
 
 ## Layer 1 — types (the wire contract)
 
-Wire keys are `snake_case` throughout. `description` is always emitted
-(`null` when absent — it is signal); other optional fields are omitted when
-empty/absent. TS-side option bags use camelCase.
+**`packages/mcp-engine/src/types.ts` is authoritative for exact field shapes;**
+the blocks below are illustrative and may lag it. Two deltas the implementation
+settled that these renderings predate: (1) `description`/`instructions` and the
+other optional fields are **omitted when absent**, never `null` (only
+`primary_key` is `string | null`); (2) annotations split into **two promoted
+channels** — `#"` → `description`, `#(agent)` → `instructions` — plus a
+`mustQuote` flag on every name written in Malloy.
+
+Wire keys are `snake_case` throughout (the lone camelCase holdover, `mustQuote`,
+is slated for the snake_case format pass). TS-side option bags use camelCase.
 
 ```ts
 // ── primitives ─────────────────────────────────────────────────────
@@ -98,7 +102,7 @@ export interface Problem {
   code: string;                  // malloy's stable error code
   uri?: string;
   line?: number; column?: number; end_line?: number; end_column?: number;
-  /** Set when `code` maps to a language_help topic. */
+  /** Set when `code` maps to a yo_help topic. */
   help_topic?: string;
 }
 
@@ -433,7 +437,7 @@ export interface ResultPolicy {
 export function exploreSurface(host: ExploreHost, opts?: { result?: ResultPolicy }): ToolSurface;
 export function developSurface(host: DevelopHost, opts?: { result?: ResultPolicy }): ToolSurface;
 
-/** Concatenate surfaces; dedupe identical shared tools (language_help);
+/** Concatenate surfaces; dedupe identical shared tools (yo_help);
     accidental name collisions THROW at construction. */
 export function mergeSurfaces(...surfaces: ToolSurface[]): ToolSurface;
 
@@ -450,49 +454,50 @@ export const guidance: { core: string; develop: string; explore: string };
 
 ### The tool sets (canonical names)
 
+The explore surface is **source-centric**: the reference to a thing is a
+`source` (+ optional `model_ref` to disambiguate when a bare source name is
+ambiguous across the catalog).
+
 | explore | develop |
 |---|---|
-| `list_models` — only when `host.list` exists; advisory, paged | `compile_file (path, expand?, emit_run_sql?)` — compile-and-inspect; IS describe here |
-| `describe_model (ref, source?)` — self-budgeting, see below | `compile (source, base_path?)` — inline draft |
-| `query (ref, malloy, question?, givens?, execute?, max_rows?)` | `query` — **the same tool**, ref = a model file path |
-| `language_help (topic?)` *(shared)* | `prettify`, `language_help` *(shared)* |
+| `list_sources` — only when `host.list` exists; lists exported sources + their annotations | `compile_file (path, expand?, emit_run_sql?)` — compile-and-inspect; IS describe here |
+| `describe_source (source, model_ref?)` — the source + its join closure | `compile (source, base_path?)` — inline draft |
+| `query (source, malloy, model_ref?, question?, givens?, execute?, max_rows?)` | `query` — `queryTool`, keyed by `model_ref` (= a model file path) |
+| `yo_help (topic?)` *(shared)* | `prettify`, `yo_help` *(shared)* |
 
-**One query tool everywhere** (`queryTool(host, opts)` is exported for
-custom compositions; `opts.inspect` retargets the field-not-found nudge —
-develop points at `compile_file`, explore at `describe_model`). The
-surfaces differ by what surrounds the query: develop adds compile-and-
-inspect over arbitrary project paths (so its agent can write .malloy
-files); explore adds catalog/describe over published refs. The old open
-toolset (`run`/`run_file`/`list_runs`) is gone from the turnkey develop
-surface — query subsumes execution, runs are visible in compile output —
-but the helpers remain exported for custom compositions (e.g. malloy-cli's
-open mode when it adopts the engine). See brain
-`mcp-fox-mode/develop-server.md` for the develop-server plan this
-implements.
+**One query core everywhere.** `queryTool(host, opts)` (model_ref-based, reused
+by develop) and the explore source-centric `query` share `executeQuery()` — the
+parse → validate-or-run → budget → field-not-found-nudge body — and differ only
+in how they resolve the model and decorate the result (explore reports the
+resolved `model_ref` and routes an executed run's SQL to the `host_only` channel
+so the agent never sees SQL on `execute:true`). The surfaces differ by what
+surrounds the query: develop adds compile-and-inspect over arbitrary project
+paths (so its agent can write `.malloy` files); explore adds catalog +
+source-describe over published refs. The old open toolset
+(`run`/`run_file`/`list_runs`) is gone — query subsumes execution.
 
-**`describe_model` is self-budgeting** (principle 4 applied to describes):
-
-- *focused* (`source` given) → the describe-shape closure for that source;
-- *unfocused, fits budget* → full explore-projected `ModelInfo`;
-- *unfocused, too big* → an **index**: source names + descriptions, plus
-  directions to focus.
-
-Named queries and givens ride along at **every** detail level (small,
-load-bearing — curated queries are the model author's "start here"). The
-response declares its shape so the agent never guesses:
+**`describe_source` resolves one source** (`model_ref` optional — a uniquely
+named exported source resolves against the catalog; ambiguous → "pick one";
+any named source resolves when `model_ref` is given, even unexported). It
+returns three content blocks: a structured digest (the source + its deduped join
+closure, two-channel annotations, `must_quote`), the requested source + closure
+as **verbatim Malloy** (`malloy_text`, lifted into its own block so code is never
+escaped in JSON), and a query cheatsheet. The envelope:
 
 ```ts
-export interface ModelDescribeResult {
+export interface SourceDescribeResult {
   ok: boolean;
-  ref: string;
-  detail: 'full' | 'index' | 'focus';
-  sources?: Record<string, SourceInfo>;                       // full | focus
-  source_index?: Array<{ name: string; description: string | null }>;  // index
-  queries: NamedQueryInfo[];     // always (explore projection)
-  givens?: GivenInfo[];          // always; model scope
+  model_ref: string;                          // the model the source resolved in
+  source: string;                             // the requested source
+  sources?: Record<string, SourceInfo>;       // requested source + join closure, deduped
+  malloy_text?: string;                       // verbatim Malloy, its own content block
   problems: Problem[];
 }
 ```
+
+(Givens are not on describe — a source's join tree is only potentially
+activated, so it is never an authoritative given scope. Givens come from the
+`query` `execute:false` loop, computed from the compiled query.)
 
 **`query`** routes `execute:false` → `validateRestricted` (returns the
 query's transitive `givens`, full detail — the authoritative "what must I
@@ -543,7 +548,7 @@ SDK offers no later injection).
 every host, every layer.** Different clients do not want different rules.
 
 **Universal canon** (merged from both ancestors, owned here):
-- Compiler is ground truth: iterate on `problems[]`; call `language_help`
+- Compiler is ground truth: iterate on `problems[]`; call `yo_help`
   before guessing syntax and after any non-obvious error (`help_topic` points
   the way).
 - Develop surface: compile, don't read `.malloy` as text.
@@ -553,14 +558,14 @@ every host, every layer.** Different clients do not want different rules.
   by the result budget; the instruction explains the mechanism).
 - Always show the user the Malloy that ran — even on failure — and timing on
   success.
-- The restricted-query rules (also a `language_help` topic, see §Content).
+- The restricted-query rules (also a `yo_help` topic, see §Content).
 
 **Host policy** (appended/decorated, never in the engine): `question`
 recording, share links, Query-summary format, instance routing tags,
 notebook logging.
 
 **Delivery channels**, all fed from the same canon: server instructions
-(assembled per surface), tool descriptions, problem nudges, `language_help`
+(assembled per surface), tool descriptions, problem nudges, `yo_help`
 topics, skills (as data; prompts/resources for SDK hosts), and the result
 echo. The exported `guidance` blocks let custom layer-2 surfaces inherit
 the canon without turnkey. Two channel rules learned in production
@@ -575,7 +580,7 @@ the canon without turnkey. Two channel rules learned in production
   Query-summary + share-link reminder rides on result decoration).
 
 **Reachability rule:** every piece of guidance must be reachable through
-`language_help`, because it is the one channel every host has. (Today
+`yo_help`, because it is the one channel every host has. (Today
 `writing-malloy-with-mcp` ships only as an MCP prompt — invisible to the
 hosted endpoint. Fixed by folding skill content into the topic index.)
 
@@ -598,7 +603,7 @@ hosted endpoint. Fixed by folding skill content into the topic index.)
 - **Build:** esbuild → ESM `dist/`, `tsc --emitDeclarationOnly`,
   `"type": "module"` — mirrors `packages/cli`.
 
-## `language_help` content plan
+## `yo_help` content plan
 
 - Copy `malloy-cli/skills/malloy-language-reference.md` into
   `packages/mcp-engine/content/` with a provenance header (copied-from +
@@ -752,7 +757,7 @@ is the one piece worth covering *before* building on it.
 
 19. **Develop surface recomposed onto the query tool** (2026-06-12, per
     brain `mcp-fox-mode/develop-server.md`): develop =
-    compile_file/compile/query/prettify/language_help. `queryTool` factored
+    compile_file/compile/query/prettify/yo_help. `queryTool` factored
     out with an `InspectHint` so each surface's field-not-found nudge points
     at its own inspect tool. The old open set survives as helpers only.
 

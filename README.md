@@ -1,12 +1,22 @@
 # malloyyo
 
-An MCP server that gives AI a **semantic model** of your data — so it returns accurate results, consistent results, with much less AI cognitive load.
+A **natural-language interface to any application's data** — accurate and consistent, served to any AI over MCP.
 
-Point an AI at a raw database and it build a query from scratch. The problem is that, tomorrow, when you ask the same question, it might write a different query with different results. Numbers aren't consistent. Sometimes it guesses: wrong joins, invented columns, aggregations double-counted on fan-out — and the answers *look* right. Malloyyo puts a [Malloy](https://malloydata.dev) semantic model — the measures, dimensions, and joins defined once and correctly — between the AI and your data. The AI composes queries against that model instead of writing SQL from scratch, so the numbers come back right by construction.
+**Problem:** AI + document context + your analytical database = **inconsistent** results. Pointed at a raw database, an AI writes SQL from scratch — so the same question tomorrow yields a different query and different numbers, with wrong joins, invented columns, or fan-out double-counts that still *look* right.
 
-You develop the model locally with the [Malloy CLI](https://github.com/malloydata/malloy-cli). Claude (and other AIs) already know the Malloy language the same way they know Python, so building your semantic model is easy and assisted. You then publish it with the [`malloyyo` CLI](packages/cli) (or point Malloyyo at a GitHub repo). **Malloyyo runs on a built-in DuckDB engine** — so a model can query Parquet files over plain HTTP (S3, GCS, any web server) with **no warehouse required** — or compile against your own analytical database (BigQuery, Snowflake, MotherDuck, Databricks, and more). It serves the model as a personal MCP endpoint for claude.ai, Claude Desktop, or any MCP client — running on Vercel or self-hosted in Docker.
+**Solution:** AI + a [Malloy](https://malloydata.dev) **semantic layer** + your analytical database = **consistent** results. Measures, dimensions, and joins are defined once, correctly; the AI composes queries against the model instead of writing SQL, so numbers come back right by construction.
 
-The Malloyyo server keeps the history of every query and lets you run, share, and explore further. Try [the Malloyyo demo server](https://malloyyo.vercel.app/ltool/main_7zfqmk7cv6) and "Explore further with Claude" — sign in with any Google account.
+Malloyyo is the thin layer that serves that model:
+
+- **Thin by design** — it sits between the AI and your data, nothing more.
+- **Develop, then publish** — build the model locally and `malloyyo publish` it (or point Malloyyo at a GitHub repo).
+- **Claude already knows Malloy** — the same way it knows Python — so authoring is fast and assisted.
+- **Readable, full-featured queries** — Malloy is a complete query language (join, nest, aggregate, filter) that stays legible: you can read a query and see at a glance it's doing the right thing.
+- **DuckDB built in** — query Parquet over plain HTTP (S3, GCS, any web server) with **no warehouse required**, or attach your own (BigQuery, Snowflake, MotherDuck, Databricks, …).
+- **Tight control** — the AI can only query what's in the semantic model; nothing outside it is reachable.
+
+Try [the demo server](https://malloyyo.vercel.app/ltool/main_7zfqmk7cv6) and "Explore further with Claude" — sign in with any Google account.
+
 ## How it works
 
 ```
@@ -22,15 +32,15 @@ The Malloyyo server keeps the history of every query and lets you run, share, an
                           │                            │   • Malloy CLI     │
                           │                            │   • Malloyyo CLI   │
                           │                            │   • Claude         │
-                          │                            └──┬──────────────┬──┘
-                          │                          push │              │ develop
-   ┌──────────────────────▼──────────────────────┐  (deploy)            │
-   │                   Malloyyo                   │◀────────┘            │
-   │        load · compile · store · serve        │                     │
-   └──────┬─────────────────────────────┬─────────┘                     │
+                          │                            └─────┬───────────┬──┘
+                          │                          push    │           │ develop
+   ┌──────────────────────▼───────────────────────┐  (deploy)|           │
+   │                   Malloyyo                   │◀────────┘           │
+   │        load · compile · store · serve        │                      │
+   └──────┬─────────────────────────────┬─────────┘                      │
           │                             │                                │
-   ┌──────▼──────┐             ┌─────────▼───────┐                       │
-   │    Neon     │             │  Analytical DB  │◀──────────────────────┘
+   ┌──────▼──────┐             ┌────────▼────────┐                       │
+   │    Neon     │             │  Analytical DB  │◀─────────────────────┘
    │  Postgres   │             │  • BigQuery     │  direct (dev)
    │  metadata   │             │  • MotherDuck   │
    │             │             │  • Snowflake    │
@@ -220,3 +230,7 @@ Open <http://localhost:3000>.
 3. **`src/lib/malloy.ts`** — single-file and multi-file Malloy compilation and execution via `InMemoryURLReader`.
 4. **`src/lib/mcp-tools.ts`** + **`src/app/mcp/route.ts`** — the MCP server. Tools are pure functions; the route is a JSON-RPC dispatcher.
 5. **`src/db/schema.ts`** — Drizzle schema for all Postgres tables.
+
+## Questions?
+
+Find us on [Slack](https://join.slack.com/t/malloy-community/shared_invite/zt-2dvtske75-TJQfolRtZGXLS24RhTQ79g) — the Malloy community.

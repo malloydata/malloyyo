@@ -260,9 +260,10 @@ export function buildHostedExploreSurface(user: User, baseUrl: string): HostedSu
     // echo — the reliable place to make the client write the summary and append
     // the link (clients read the tool result every turn before summarizing).
     if (executing && result.ok) {
-      // One cast from the generic handler return to the explore query shape;
-      // everything downstream (recording, the host_only strip) is then typed.
-      const runResult = result as QueryRunResult;
+      // One cast at the untyped wire boundary (the tool handler returns the
+      // generic object) to the explore query shape; everything downstream
+      // (recording, the host_only strip) is then typed.
+      const runResult = result as unknown as QueryRunResult;
       const ltool = await recordQuery(user, args, runResult, baseUrl);
       // host_only carried the SQL for recording (above); it must NOT reach the
       // agent — strip it from the payload the agent sees.

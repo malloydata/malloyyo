@@ -65,15 +65,23 @@ export function hasError(problems: Problem[]): boolean {
  * every tool result; surfaces forward it untouched. (Engine rule: a bad
  * config is user input — it becomes problems[], never a throw.)
  */
-export async function gateConfigProblems<T extends { ok: boolean; problems: Problem[] }>(
+// `T` is intentionally unconstrained: hosts wrap this around withModel/list
+// callbacks whose result is sometimes a tool envelope ({ok,problems}) and
+// sometimes not (ModelEntry from list). The casts are the honest price of that
+// generality — on a config error we fabricate the standard error envelope; when
+// the result already carries problems[], we prepend the config ones.
+export async function gateConfigProblems<T>(
   configProblems: Problem[],
   run: () => Promise<T>,
 ): Promise<T> {
   if (hasError(configProblems)) {
-    // The short-circuit IS a tool envelope; the bound makes that honest.
-    return { ok: false, problems: configProblems } as T;
+    return { ok: false, problems: configProblems } as unknown as T;
   }
   const result = await run();
   if (configProblems.length === 0) return result;
-  return { ...result, problems: [...configProblems, ...result.problems] };
+  const r = result as unknown as { problems?: Problem[] };
+  if (Array.isArray(r.problems)) {
+    return { ...result, problems: [...configProblems, ...r.problems] } as T;
+  }
+  return result;
 }

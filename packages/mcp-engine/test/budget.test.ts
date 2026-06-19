@@ -28,7 +28,7 @@ test('budget: oversize results drop whole rows from the end', async () => {
   assert.equal(out.rows_returned, out.rows!.length);
   assert.equal(out.row_count, 100, 'row_count still reports what the query produced');
   assert.equal(out.truncated?.reason, 'byte_budget');
-  assert.ok(out.truncated?.hint.includes('Malloy'));
+  assert.match(out.truncated?.hint ?? '', /aggregate|top-?n|fewer|limit/i);
   // first-N: kept rows are the head, in order
   assert.deepEqual((out.rows as Array<{ i: number }>).map((r) => r.i),
     Array.from({ length: out.rows!.length }, (_, i) => i));

@@ -83,10 +83,9 @@ settled that these renderings predate: (1) `description`/`instructions` and the
 other optional fields are **omitted when absent**, never `null` (only
 `primary_key` is `string | null`); (2) annotations split into **two promoted
 channels** — `#"` → `description`, `#(agent)` → `instructions` — plus a
-`mustQuote` flag on every name written in Malloy.
+`must_quote` flag on every name written in Malloy.
 
-Wire keys are `snake_case` throughout (the lone camelCase holdover, `mustQuote`,
-is slated for the snake_case format pass). TS-side option bags use camelCase.
+Wire keys are `snake_case` throughout. TS-side option bags use camelCase.
 
 ```ts
 // ── primitives ─────────────────────────────────────────────────────

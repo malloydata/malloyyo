@@ -272,7 +272,7 @@ function listSourcesTool(host: ExploreHost): ToolDef {
             const o: Record<string, unknown> = { source_ref: s.source_ref };
             if (s.description) o.description = s.description;
             if (s.instructions) o.instructions = s.instructions;
-            if (s.mustQuote) o.mustQuote = true;
+            if (s.must_quote) o.must_quote = true;
             return o;
           });
         }

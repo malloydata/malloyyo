@@ -14,7 +14,7 @@ function sourceEntryOf(s: SourceInfo): SourceEntry {
   const e: SourceEntry = { source_ref: s.name };
   if (s.description) e.description = s.description;
   if (s.instructions) e.instructions = s.instructions;
-  if (s.mustQuote) e.mustQuote = true;
+  if (s.must_quote) e.must_quote = true;
   return e;
 }
 

@@ -76,9 +76,6 @@ Join = {
 }
 ```
 
-Note: the lone camelCase wire key today is `mustQuote`; the docs write `must_quote`
-because a snake_case sweep of that one key is the planned format-pass cleanup.
-
 ## Per-surface projection — same shape, different fields
 
 - **explore:** omit `location`, omit view `body`, and **never** include raw

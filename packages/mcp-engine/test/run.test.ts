@@ -65,7 +65,8 @@ test('run: row_limit truncation is reported with a hint', async () => {
   assert.equal(result.ok, true);
   assert.equal(result.rows?.length, 1);
   assert.equal(result.truncated?.reason, 'row_limit');
-  assert.ok(result.truncated?.hint.includes('Malloy'));
+  // The hint must give actionable recovery, not just mention the product.
+  assert.match(result.truncated?.hint ?? '', /aggregate|top-?n|fewer|limit/i);
 });
 
 test('run: stableResult attaches the interfaces-format result', async () => {

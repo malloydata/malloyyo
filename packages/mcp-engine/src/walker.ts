@@ -287,7 +287,7 @@ function buildAnonSource(
     ...groups,
   };
   applyDocs(out, ef.annotations);
-  if (needsQuote(name)) out.mustQuote = true;
+  if (needsQuote(name)) out.must_quote = true;
   const annotations = annotationList(ef.annotations);
   if (annotations.length > 0) out.annotations = annotations;
   return out;
@@ -319,7 +319,7 @@ function walkFields(
       else if (cls.kind === 'anon' && !inlineMode) {
         join.anon_src_index = allocAnon(ef, cls.refId, depth + 1, ctx, anon);
       }
-      if (needsQuote(f.name)) join.mustQuote = true;
+      if (needsQuote(f.name)) join.must_quote = true;
       if (annotations.length > 0) join.annotations = annotations;
       if (loc) join.location = loc;
       // Slice the join's declaration (`name is target on/with …` — carries the
@@ -351,7 +351,7 @@ function walkFields(
       // the view is described by its name + sliced body, not an expression.
       const view: ViewInfo = { name: f.name };
       applyDocs(view, f.annotations);
-      if (needsQuote(f.name)) view.mustQuote = true;
+      if (needsQuote(f.name)) view.must_quote = true;
       if (annotations.length > 0) view.annotations = annotations;
       if (loc) view.location = loc;
       // Body follows the definition's OWN location — across imports too (the
@@ -368,7 +368,7 @@ function walkFields(
     const af = f as AtomicField;
     const info: FieldInfo = { name: f.name, type: af.type };
     applyDocs(info, f.annotations);
-    if (needsQuote(f.name)) info.mustQuote = true;
+    if (needsQuote(f.name)) info.must_quote = true;
     // The API's `expression` getter echoes the field name; the defining
     // source expression lives on the raw structDef field as `code`.
     const raw = structDefFields.find((x) => x.name === f.name);
@@ -395,7 +395,7 @@ function walkExplore(e: Explore, ctx: WalkContext): SourceInfo {
     ...groups,
   };
   applyDocs(out, e.annotations);
-  if (needsQuote(e.name)) out.mustQuote = true;
+  if (needsQuote(e.name)) out.must_quote = true;
   if (annotations.length > 0) out.annotations = annotations;
   const mLoc = e.location as MalloyLocation | undefined;
   if (isLocal(mLoc, ctx.rootUri)) {
@@ -502,7 +502,7 @@ function walkModel(model: Model, rootUri: string, opts: CompileOptions,
     const annotations = annotationList(pq.annotations);
     const info: NamedQueryInfo = { name: queryName };
     applyDocs(info, pq.annotations);
-    if (needsQuote(queryName)) info.mustQuote = true;
+    if (needsQuote(queryName)) info.must_quote = true;
     if (annotations.length > 0) info.annotations = annotations;
     const loc = pq.location;
     if (isLocal(loc, rootUri)) {

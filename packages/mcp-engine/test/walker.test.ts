@@ -163,18 +163,18 @@ test('transitive import: explore projection of an anon closure (golden)', async 
   assert.equal(actual, expected);
 });
 
-test('mustQuote: reserved-word and funny-character field names are flagged', async () => {
+test('must_quote: reserved-word and funny-character field names are flagged', async () => {
   const result = await withFixtureRuntime((rt) =>
     compile(rt, fixtureUrl('quoting.malloy'), { readSource }),
   );
   assert.equal(result.ok, true, JSON.stringify(result.problems));
   const dims = result.model!.sources['q']!.dimensions;
-  const flag = (n: string) => dims.find((d) => d.name === n)?.mustQuote;
-  assert.equal(flag('year'), true, 'reserved word → mustQuote');
-  assert.equal(flag('space name'), true, 'funny characters → mustQuote');
+  const flag = (n: string) => dims.find((d) => d.name === n)?.must_quote;
+  assert.equal(flag('year'), true, 'reserved word → must_quote');
+  assert.equal(flag('space name'), true, 'funny characters → must_quote');
   assert.equal(flag('normal'), undefined, 'plain identifier → no flag');
   const total = result.model!.sources['q']!.measures.find((m) => m.name === 'total');
-  assert.equal(total?.mustQuote, undefined, 'plain measure → no flag');
+  assert.equal(total?.must_quote, undefined, 'plain measure → no flag');
 });
 
 test('exportedOnly: only exported sources are top-level (explore surface)', async () => {

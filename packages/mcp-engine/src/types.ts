@@ -5,7 +5,7 @@
 // "one definition everywhere" that makes surfaces congruent.
 //
 // Conventions: wire keys are snake_case. Optional fields (`description`,
-// `instructions`, `mustQuote`, …) are OMITTED when empty or unavailable —
+// `instructions`, `must_quote`, …) are OMITTED when empty or unavailable —
 // never emitted as null (a null would bloat field lists for no signal). Fields
 // marked "develop only" are stripped by the explore projection (see project.ts).
 
@@ -38,7 +38,7 @@ export interface FieldInfo {
   name: string;
   /** Present (true) only when `name` must be backtick-quoted to write in
       Malloy (reserved word, or non-identifier characters). */
-  mustQuote?: boolean;
+  must_quote?: boolean;
   /** Malloy atomic type: string | number | date | timestamp | boolean | … */
   type: string;
   /** Only when the defining expression differs from the field name. */
@@ -52,7 +52,7 @@ export interface FieldInfo {
 export interface ViewInfo {
   name: string;
   /** Present (true) only when `name` must be backtick-quoted in Malloy. */
-  mustQuote?: boolean;
+  must_quote?: boolean;
   description?: string;
   instructions?: string;
   annotations?: Annotation[];
@@ -66,7 +66,7 @@ export interface ViewInfo {
 export interface JoinInfo {
   name: string;
   /** Present (true) only when `name` must be backtick-quoted in Malloy. */
-  mustQuote?: boolean;
+  must_quote?: boolean;
   relationship: 'one_to_many' | 'many_to_one' | 'cross';
   /** Set when the target is a named source reachable in this model's namespace
       — look it up in `sources`. */
@@ -107,7 +107,7 @@ export interface FieldGroups {
 export interface SourceInfo extends FieldGroups {
   name: string;
   /** Present (true) only when `name` must be backtick-quoted in Malloy. */
-  mustQuote?: boolean;
+  must_quote?: boolean;
   description?: string;
   instructions?: string;
   primary_key: string | null;
@@ -147,7 +147,7 @@ export interface GivenInfo {
 export interface NamedQueryInfo {
   name: string;
   /** Present (true) only when `name` must be backtick-quoted in Malloy. */
-  mustQuote?: boolean;
+  must_quote?: boolean;
   description?: string;
   instructions?: string;
   annotations?: Annotation[];
@@ -283,7 +283,7 @@ export interface SourceEntry {
   description?: string;
   instructions?: string;
   /** Present (true) only when `source_ref` must be backtick-quoted in Malloy. */
-  mustQuote?: boolean;
+  must_quote?: boolean;
 }
 
 export interface ModelEntry {

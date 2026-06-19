@@ -11,7 +11,7 @@ and a language reference manual (malloy syntax is still evolving).
 
 Tools that inspect Malloy code return objects with schemas, among other things.
 An entry with a name which requires `back-tick-quoting` (reserved word, special characters),
-will have `mustQuote: true`
+will have `must_quote: true`
 
 When limiting queries, do ranking, top-N, and member selection in Malloy,
 not in client code.  Results are byte-budgeted: oversized results are

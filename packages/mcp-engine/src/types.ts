@@ -43,7 +43,8 @@ export interface FieldInfo {
   type: string;
   /** Only when the defining expression differs from the field name. */
   expression?: string;
-  description: string | null;
+  description?: string;
+  instructions?: string;
   annotations?: Annotation[];
   location?: Loc; // develop only
 }
@@ -52,7 +53,8 @@ export interface ViewInfo {
   name: string;
   /** Present (true) only when `name` must be backtick-quoted in Malloy. */
   mustQuote?: boolean;
-  description: string | null;
+  description?: string;
+  instructions?: string;
   annotations?: Annotation[];
   location?: Loc; // develop only
   /** The view's defining source text (`name is { … }`), sliced from its
@@ -65,7 +67,7 @@ export interface JoinInfo {
   name: string;
   /** Present (true) only when `name` must be backtick-quoted in Malloy. */
   mustQuote?: boolean;
-  relationship: 'one' | 'many' | 'cross';
+  relationship: 'one_to_many' | 'many_to_one' | 'cross';
   /** Set when the target is a named source — look it up in `sources`. */
   source_ref?: string;
   /**
@@ -74,7 +76,8 @@ export interface JoinInfo {
    * requested. Invariant: every join has source_ref and/or fields.
    */
   fields?: FieldGroups;
-  description: string | null;
+  description?: string;
+  instructions?: string;
   annotations?: Annotation[];
   location?: Loc; // develop only
   /** The join's defining source text (`name is target on …`/`with …`), sliced
@@ -95,7 +98,8 @@ export interface SourceInfo extends FieldGroups {
   name: string;
   /** Present (true) only when `name` must be backtick-quoted in Malloy. */
   mustQuote?: boolean;
-  description: string | null;
+  description?: string;
+  instructions?: string;
   primary_key: string | null;
   annotations?: Annotation[];
   location?: Loc; // develop only (absent also means: defined in an import)
@@ -115,7 +119,8 @@ export interface GivenInfo {
   type: string;
   /** True when the declaration provides a default — caller may omit a value. */
   has_default: boolean;
-  description: string | null;
+  description?: string;
+  instructions?: string;
   annotations?: Annotation[];
   location?: Loc; // develop only
   body?: string; // sliced declaration source (develop + explore when readSource present)
@@ -125,7 +130,8 @@ export interface NamedQueryInfo {
   name: string;
   /** Present (true) only when `name` must be backtick-quoted in Malloy. */
   mustQuote?: boolean;
-  description: string | null;
+  description?: string;
+  instructions?: string;
   annotations?: Annotation[];
   /** Transitive given names this query references (authoritative at query scope). */
   givens?: string[];
@@ -236,7 +242,8 @@ export interface ModelEntry {
   /** Host-defined: a dataset name for a registry host, a relative path for a
       directory host, … Resolution must be O(one lookup). */
   model_ref: string;
-  description: string | null;
+  description?: string;
+  instructions?: string;
   /** Advisory hints when the host knows them cheaply (e.g. stored at publish
       time). Never required, never guaranteed complete. */
   sources?: string[];

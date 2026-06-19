@@ -63,6 +63,26 @@ test('explore: describe_source returns the source + join closure, source text bu
   assert.match(malloy, /source: carriers is/, 'block 2 includes the joined (closure) source');
 });
 
+test('explore: two-channel annotations + descriptive relationship', async () => {
+  const s = exploreSurface(testExploreHost());
+  const result = (await tool(s, 'describe_source').handler({
+    model_ref: 'flights.malloy',
+    source: 'flights',
+  })) as SourceDescribeResult;
+  assert.equal(result.ok, true);
+  const flights = result.sources!['flights']!;
+  // `#"` → description, `#(agent)` → instructions: two distinct channels.
+  assert.equal(flights.description, 'Flight facts, with nested route legs and free-form tags.');
+  assert.equal(flights.instructions, 'Grain is one row per flight; join carriers for airline names.');
+  const total = flights.measures.find((m) => m.name === 'total_distance');
+  assert.equal(total?.instructions, 'Sum across flights; do not average a pre-summed value.');
+  // promoted routes (doc + agent) are stripped from annotations[] (not double-sent).
+  assert.equal(flights.annotations, undefined);
+  // descriptive relationship name (join_one → many_to_one).
+  const carriers = flights.joins.find((j) => j.name === 'carriers');
+  assert.equal(carriers?.relationship, 'many_to_one');
+});
+
 test('explore: describe_source on unknown source lists what exists', async () => {
   const s = exploreSurface(testExploreHost());
   const result = (await tool(s, 'describe_source').handler({

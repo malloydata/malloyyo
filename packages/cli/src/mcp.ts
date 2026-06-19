@@ -179,7 +179,7 @@ function makeExploreHost(root: string, currentConfig: () => Promise<LoadedConfig
       if (!published(ENTRY)) return { entries: [] };
       const entry = await withRuntime({ url: ENTRY }, async (m): Promise<ModelEntry> => {
         const compiled = await compile(m.runtime, m.entry, { exportedOnly: true });
-        const e: ModelEntry = { model_ref: ENTRY, description: null };
+        const e: ModelEntry = { model_ref: ENTRY };
         if (compiled.ok && compiled.model) {
           const sources = Object.keys(compiled.model.sources);
           const queries = compiled.model.queries.map((q) => q.name);

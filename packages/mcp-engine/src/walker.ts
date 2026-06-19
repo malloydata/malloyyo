@@ -88,12 +88,35 @@ function annotationList(a: Annotations | undefined): Annotation[] {
 /** Promote the doc-comment route (`#" …`) to the description field — every
     `#"` doc line, in source order, joined (not just the first). Other routes
     (render tags `#`, etc.) are NOT description and stay out. */
-function descriptionOf(annotations: Annotation[]): string | null {
-  const docs = annotations
-    .filter((a) => a.route === '"')
-    .map((a) => a.text.trim())
-    .filter(Boolean);
+function descriptionOf(a: Annotations | undefined): string | null {
+  // forRoute('"') is Malloy's sanctioned reader for the doc-string channel
+  // (excludes malformed routes; returns inherited+local notes, inherited-first).
+  const docs = (a?.forRoute('"') ?? []).map((n) => n.content.trim()).filter(Boolean);
   return docs.length ? docs.join('\n') : null;
+}
+
+/** Promote the agent route (`#(agent) …`) to `instructions` — the "instructions
+    for agents using this object" channel — every `#(agent)` line in source
+    order, joined. Distinct from the human `description` (`#"`). */
+function agentNotesOf(a: Annotations | undefined): string | null {
+  // `#(agent) …` stakes the app route `agent` (Malloy's bracketed-route
+  // mechanism); forRoute('agent') is the sanctioned reader for its content.
+  const notes = (a?.forRoute('agent') ?? []).map((n) => n.content.trim()).filter(Boolean);
+  return notes.length ? notes.join('\n') : null;
+}
+
+/** Apply the two annotation channels onto an object: `description` (doc route)
+    and `instructions` (agent route). Each is set only when present — never a
+    null/empty key (token economy on field lists). */
+function applyDocs<T extends { description?: string; instructions?: string }>(
+  obj: T,
+  a: Annotations | undefined,
+): T {
+  const d = descriptionOf(a);
+  if (d) obj.description = d;
+  const i = agentNotesOf(a);
+  if (i) obj.instructions = i;
+  return obj;
 }
 
 function isLocal(loc: { url: string } | undefined, rootUri: string): boolean {
@@ -119,10 +142,13 @@ function sliceSource(
   return out.join('\n');
 }
 
-function joinRel(ef: ExploreField): 'one' | 'many' | 'cross' {
+function joinRel(ef: ExploreField): 'one_to_many' | 'many_to_one' | 'cross' {
+  // join_one → at most one joined row per source row (no fan-out) = many:one;
+  // join_many → many joined rows per source row (fan-out) = one:many.
   const j = (ef.structDef as { join?: string }).join;
-  if (j === 'one' || j === 'many' || j === 'cross') return j;
-  return 'one';
+  if (j === 'many') return 'one_to_many';
+  if (j === 'cross') return 'cross';
+  return 'many_to_one';
 }
 
 function isScalarArray(parent: ExploreField): boolean {
@@ -196,7 +222,6 @@ function walkFields(
   const groups = emptyGroups();
   for (const f of fields) {
     const annotations = annotationList(f.annotations);
-    const description = descriptionOf(annotations);
     const mLoc = f.location as MalloyLocation | undefined;
     const local = isLocal(mLoc, ctx.rootUri);
     const loc = local ? toLoc(mLoc) : undefined;
@@ -204,11 +229,8 @@ function walkFields(
     if (f.isExploreField()) {
       const ef = f as ExploreField;
       const ref = resolveSourceRef(ef, ctx.knownSources);
-      const join: JoinInfo = {
-        name: f.name,
-        relationship: joinRel(ef),
-        description,
-      };
+      const join: JoinInfo = { name: f.name, relationship: joinRel(ef) };
+      applyDocs(join, f.annotations);
       if (ref) join.source_ref = ref;
       if (needsQuote(f.name)) join.mustQuote = true;
       if (annotations.length > 0) join.annotations = annotations;
@@ -236,7 +258,8 @@ function walkFields(
 
     if (f.isQueryField()) {
       const qf = f as QueryField;
-      const view: ViewInfo = { name: f.name, description };
+      const view: ViewInfo = { name: f.name };
+      applyDocs(view, f.annotations);
       if (needsQuote(f.name)) view.mustQuote = true;
       if (annotations.length > 0) view.annotations = annotations;
       if (loc) view.location = loc;
@@ -254,7 +277,8 @@ function walkFields(
     }
 
     const af = f as AtomicField;
-    const info: FieldInfo = { name: f.name, type: af.type, description };
+    const info: FieldInfo = { name: f.name, type: af.type };
+    applyDocs(info, f.annotations);
     if (needsQuote(f.name)) info.mustQuote = true;
     // The API's `expression` getter echoes the field name; the defining
     // source expression lives on the raw structDef field as `code`.
@@ -275,10 +299,10 @@ function walkExplore(e: Explore, ctx: WalkContext): SourceInfo {
   const annotations = annotationList(e.annotations);
   const out: SourceInfo = {
     name: e.name,
-    description: descriptionOf(annotations),
     primary_key: e.primaryKey ?? null,
     ...groups,
   };
+  applyDocs(out, e.annotations);
   if (needsQuote(e.name)) out.mustQuote = true;
   if (annotations.length > 0) out.annotations = annotations;
   const mLoc = e.location as MalloyLocation | undefined;
@@ -335,8 +359,8 @@ export function describeGiven(
     name: surfaceName,
     type: renderGivenType(g.type),
     has_default: g.default !== undefined,
-    description: descriptionOf(annotations),
   };
+  applyDocs(info, g.annotations);
   if (annotations.length > 0) info.annotations = annotations;
   const loc = g.location;
   if (ctx && loc) {
@@ -383,10 +407,8 @@ function walkModel(model: Model, rootUri: string, opts: CompileOptions,
   for (const queryName of modelQueries.named) {
     const pq = model.getPreparedQueryByName(queryName);
     const annotations = annotationList(pq.annotations);
-    const info: NamedQueryInfo = {
-      name: queryName,
-      description: descriptionOf(annotations),
-    };
+    const info: NamedQueryInfo = { name: queryName };
+    applyDocs(info, pq.annotations);
     if (needsQuote(queryName)) info.mustQuote = true;
     if (annotations.length > 0) info.annotations = annotations;
     const loc = pq.location;

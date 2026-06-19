@@ -29,14 +29,14 @@ function omit<T extends object, K extends keyof T>(o: T, ...keys: K[]): Omit<T, 
   return out as Omit<T, K>;
 }
 
-// The `'"'` (doc-string) route is already promoted into `description`; on the
-// explore surface drop it from `annotations[]` so the doc text isn't shipped
-// twice. Every other route (render tags `#`, app-staked routes) is kept — no
-// way to know what a client wants from them. The `annotations` key is omitted
-// (not emitted empty) when nothing else remains.
+// The `'"'` (→ `description`) and `'agent'` (→ `instructions`) routes are
+// already promoted into their own fields; drop them from `annotations[]` so the
+// text isn't shipped twice. Every other route (render tags `#`, app-staked
+// routes) is kept — no way to know what a client wants from them. The
+// `annotations` key is omitted (not emitted empty) when nothing else remains.
 function withoutDocRoute<T extends { annotations?: Annotation[] }>(x: T): T {
   if (!x.annotations) return x;
-  const kept = x.annotations.filter((a) => a.route !== '"');
+  const kept = x.annotations.filter((a) => a.route !== '"' && a.route !== 'agent');
   if (kept.length === x.annotations.length) return x;
   const base = omit(x, 'annotations') as T;
   return kept.length ? { ...base, annotations: kept } : base;

@@ -3,13 +3,11 @@
   "sources": {
     "nums": {
       "name": "nums",
-      "description": null,
       "primary_key": null,
       "dimensions": [
         {
           "name": "v",
           "type": "number",
-          "description": null,
           "location": [
             4,
             27
@@ -69,7 +67,6 @@
       "name": "TARGET",
       "type": "number",
       "has_default": true,
-      "description": null,
       "location": [
         2,
         2

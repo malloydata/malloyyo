@@ -70,7 +70,7 @@ test('flights: every join carries source_ref and/or inline fields', async () => 
   }
   const legs = flights.joins.find((j) => j.name === 'legs');
   assert.ok(legs?.fields, 'repeated record join inlines fields');
-  assert.equal(legs.relationship, 'many');
+  assert.equal(legs.relationship, 'one_to_many');
   const tags = flights.joins.find((j) => j.name === 'tags');
   assert.ok(tags?.fields, 'scalar array join inlines fields');
   assert.ok(

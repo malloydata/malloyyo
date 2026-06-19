@@ -101,7 +101,6 @@ export function testExploreHost(opts: { withList?: boolean } = {}): ExploreHost 
     host.list = async (): Promise<ModelList> => ({
       entries: [...files.keys()].sort().map((href) => ({
         model_ref: href.slice(FIXTURE_BASE.length),
-        description: null,
       })),
     });
   }

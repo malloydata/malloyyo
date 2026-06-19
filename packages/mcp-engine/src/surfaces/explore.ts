@@ -381,15 +381,18 @@ function exploreQueryTool(host: ExploreHost, opts: ExploreSurfaceOptions): ToolD
       try {
         return await host.withModel(modelRef, async (m) => {
           const fix = srcNudge(modelRef, source);
+          // The model the source resolved to. Reported so the agent (and a host
+          // recording/sharing the call) knows which model answered, without
+          // re-running the source→model resolution the surface just did.
           if (!execute) {
             const v = await validateRestricted(m.runtime, m.entry, malloy);
-            return { ...v, problems: v.problems.map(fix) };
+            return { ...v, model_ref: modelRef, problems: v.problems.map(fix) };
           }
           const full = await runRestricted(m.runtime, m.entry, malloy, { rowLimit, givens: givens as never });
           const budgeted = await applyResultBudget(full, opts.result, { toolName: 'query', args });
           // Explore: SQL is output, not input — it rides execute:false, never the run.
           delete (budgeted as { sql?: string }).sql;
-          return { ...budgeted, problems: budgeted.problems.map(fix) };
+          return { ...budgeted, model_ref: modelRef, problems: budgeted.problems.map(fix) };
         });
       } catch (e) {
         return { ok: false, problems: [refModelProblem(modelRef, e)] };

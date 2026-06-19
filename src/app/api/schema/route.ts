@@ -3,10 +3,15 @@
 
 import { NextResponse } from "next/server";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
-import { callTool } from "@/lib/mcp-tools";
+import { findBySource, modelFileMap } from "@/lib/mcp-tools";
+import { describeSourceFields } from "@/lib/malloy";
 
 export const runtime = "nodejs";
 
+// The web dataset-page schema viewer. This is a SEPARATE consumer from the MCP
+// explore surface (which now runs on the engine): the UI wants the flat field
+// tree (describeSourceFields), not the engine's describe shape. Same JSON the
+// old callTool("describe_source") returned, so the React view is unchanged.
 export async function GET(req: Request) {
   let user;
   try { user = await getSessionUser(); } catch (err) {
@@ -17,8 +22,11 @@ export async function GET(req: Request) {
   const source = new URL(req.url).searchParams.get("source");
   if (!source) return NextResponse.json({ error: "source is required" }, { status: 400 });
 
-  const result = await callTool(user, "describe_source", { source });
-  if (result.isError) return NextResponse.json({ error: result.content[0]?.text }, { status: 404 });
+  const found = await findBySource(user.id, source);
+  if (!found) return NextResponse.json({ error: `source '${source}' not found` }, { status: 404 });
 
-  return NextResponse.json(JSON.parse(result.content[0]?.text ?? "{}"));
+  const { ds, model, description } = found;
+  const files = await modelFileMap(model);
+  const fields = await describeSourceFields(files, "index.malloy", source, { cacheKey: model.id });
+  return NextResponse.json({ source, model: ds.name, description, fields, malloy_source: model.source });
 }

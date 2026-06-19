@@ -385,6 +385,19 @@ async function withRuntime<T>(
   }
 }
 
+// Lease a pooled Runtime for the mcp-engine host. The engine is pure logic over
+// an injected Runtime; this hands it one (leased from the per-model-version pool
+// with a cacheKey, throwaway without) and returns it after. Deliberately has NO
+// dataDir overlay — hosted local-data loading (MALLOY_DATA_DIR) is out of scope;
+// models attach their own sources (http/parquet/attached DBs/warehouses).
+export async function withModelRuntime<T>(
+  files: Map<string, string>,
+  cacheKey: string | undefined,
+  fn: (runtime: malloy.Runtime) => Promise<T>,
+): Promise<T> {
+  return withRuntime(files, cacheKey, (runtime) => fn(runtime as malloy.Runtime));
+}
+
 // Compile a file map and return the full hierarchical field tree for a named source.
 export async function describeSourceFields(
   files: Map<string, string>,

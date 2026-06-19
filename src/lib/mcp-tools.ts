@@ -2,111 +2,18 @@
 // SPDX-License-Identifier: MIT
 
 import { eq, and, desc, or, count, isNull, inArray } from "drizzle-orm";
-import { db, datasets, malloyModels, malloyModelFiles, queries, conversations, inquiries, toolCalls, favorites, type User } from "@/db";
+import { db, datasets, malloyModels, malloyModelFiles, queries, conversations, inquiries, toolCalls, favorites } from "@/db";
 import type { SourceInfo } from "./malloy";
-import { compileMalloyFiles, runMalloyFiles, describeSourceFields } from "./malloy";
+import { runMalloyFiles } from "./malloy";
 import { env } from "./env";
 import { parseSlug } from "./slug";
 import { RUN_LABELS } from "./tool-names";
-import { QUERY_INSTRUCTIONS } from "./query_instructions";
 
-export type ToolDescriptor = {
-  name: string;
-  description: string;
-  inputSchema: Record<string, unknown>;
-};
-
-// Every description is prefixed with this so that, when several Malloyyo
-// instances are connected to the same Claude client, the tools self-identify
-// and Claude can route a request to the right instance.
-const TAG = `[${env.INSTANCE_NAME}]`;
-
-// Four tools, each owning a distinct concept word so the client's relevance
-// search separates them cleanly (only `query` carries "query"). Descriptions
-// stay to one line — behavioral policy lives in SERVER_INSTRUCTIONS below, not
-// stuffed into each tool, which is what used to dilute the search match.
-export const TOOL_DESCRIPTORS: ToolDescriptor[] = [
-  {
-    name: "query",
-    description:
-      `${TAG} Run a Malloy query against a source and return the rows, plus a shareable link. Pass a plain-English \`question\` describing what THIS query answers — every call is recorded and shared on its own, so give each one its own question. Set execute:false to return just the generated SQL without running it. Read describe_source first so you reuse the model's existing measures and dimensions.`,
-    inputSchema: {
-      type: "object",
-      properties: {
-        source: { type: "string", description: "The Malloy source name to query." },
-        malloy: {
-          type: "string",
-          description: "Malloy query starting with `run:` that references the source name.",
-        },
-        question: {
-          type: "string",
-          description: "Plain-English description of what this specific query answers. Recorded as the query's label and share text — make it describe this query, not the broader session.",
-        },
-        execute: {
-          type: "boolean",
-          description: "Default true (run and return rows). Set false to compile only and return the generated SQL.",
-        },
-        max_rows: {
-          type: "integer",
-          minimum: 1,
-          maximum: 10000,
-          description: "Maximum rows to return (default 10000). `truncated: true` in the response means more rows exist.",
-        },
-      },
-      required: ["source", "malloy", "question"],
-      additionalProperties: false,
-    },
-  },
-  {
-    name: "list_sources",
-    description:
-      `${TAG} List the Malloy sources you can query on this endpoint. Drill into one with describe_source before querying.`,
-    inputSchema: {
-      type: "object",
-      properties: {},
-      additionalProperties: false,
-    },
-  },
-  {
-    name: "describe_source",
-    description:
-      `${TAG} Get a source's Malloy semantic model — its measures, dimensions, views, and joins. Read this before writing a query; the model usually already defines the aggregations you need.`,
-    inputSchema: {
-      type: "object",
-      properties: {
-        source: { type: "string", description: "The Malloy source name to describe." },
-      },
-      required: ["source"],
-      additionalProperties: false,
-    },
-  },
-  {
-    name: "open_share_link",
-    description:
-      `${TAG} Resolve a ${env.INSTANCE_NAME} share link or slug back into its source, original question, and Malloy. Use when the user pastes a share link. Does not run the query — show it and ask how they'd like to proceed.`,
-    inputSchema: {
-      type: "object",
-      properties: {
-        slug: { type: "string", description: "The share slug, e.g. `main_k7m2qx9p4b`, or a full /ltool/ link." },
-      },
-      required: ["slug"],
-      additionalProperties: false,
-    },
-  },
-];
-
-// Behavioral policy is sent ONCE in the MCP `initialize` result (server
-// instructions) rather than repeated in every tool description — keeping the
-// descriptions short is what makes them rank well in the client's tool search.
-export const SERVER_INSTRUCTIONS =
-  `Malloy semantic-layer analytics for ${env.INSTANCE_NAME}.\n\n` +
-  `Workflow: list_sources to see what's queryable, then describe_source to read a source's measures/dimensions/views — and a short Malloy syntax cheatsheet — before writing any query. Always call describe_source first. Use query to run it; set execute:false first if you want to check the generated SQL without running.\n\n` +
-  `Pass a plain-English \`question\` with EVERY query, describing what that specific query answers. Each query is recorded and shared independently — don't try to group related queries; just describe each one.\n\n` +
-  `After EVERY query you MUST output a "Query summary": (1) the question in plain English, (2) the Malloy logic (filters, grouping, aggregation, ordering), (3) any post-processing done outside Malloy, or "none". Omitting it is an error.\n\n` +
-  `Each query response includes \`ltool_url\`. Append it to the END of the summary as a small inline markdown link, exactly like [↗](ltool_url) (or [↗ ${env.INSTANCE_NAME}](ltool_url)), so the user can open, tweak, or share the query.\n\n` +
-  `Do ranking, top-N, and member selection in Malloy, not in client code.\n\n` +
-  `When the user pastes a share link, call open_share_link and do not run the query until they say how to proceed.\n\n` +
-  `Tools are tagged [${env.INSTANCE_NAME}] — if several instances are connected, route to the one the user means.`;
+// NOTE: the MCP tool surface (tool descriptors, server instructions, and the
+// callTool dispatcher) USED to live here. It has been deleted — the deployed
+// /mcp now runs entirely on the mcp-engine exploreSurface, wired in
+// src/lib/mcp-host.ts. What remains here is the DB/query plumbing that the host
+// (and the web UI) share: model resolution, file maps, recording, sharing.
 
 // Normalize DB sources column — legacy string[] or new {name, description?}[] format.
 function normalizeSources(raw: unknown): SourceInfo[] {
@@ -116,34 +23,7 @@ function normalizeSources(raw: unknown): SourceInfo[] {
   );
 }
 
-async function listAllSources(userId: string) {
-  const dsList = await db
-    .select({ id: datasets.id, name: datasets.name })
-    .from(datasets)
-    .where(and(
-      or(eq(datasets.userId, userId), eq(datasets.isPublic, true)),
-      eq(datasets.status, "ready"),
-    ));
-
-  const result: Array<{ source: string; model: string; description?: string | null }> = [];
-
-  for (const ds of dsList) {
-    const model = await latestModel(ds.id);
-    const sources = normalizeSources(model?.sources);
-    if (sources.length === 0) {
-      result.push({ source: ds.name, model: ds.name });
-    } else if (sources.length === 1) {
-      result.push({ source: sources[0].name, description: sources[0].description, model: ds.name });
-    } else {
-      for (const src of sources) {
-        result.push({ source: src.name, description: src.description, model: ds.name });
-      }
-    }
-  }
-  return result;
-}
-
-async function findBySource(userId: string, sourceName: string) {
+export async function findBySource(userId: string, sourceName: string) {
   const dsList = await db
     .select()
     .from(datasets)
@@ -166,7 +46,7 @@ async function findBySource(userId: string, sourceName: string) {
   return null;
 }
 
-async function latestModel(datasetId: string) {
+export async function latestModel(datasetId: string) {
   const [row] = await db
     .select()
     .from(malloyModels)
@@ -176,7 +56,7 @@ async function latestModel(datasetId: string) {
   return row;
 }
 
-async function modelFileMap(model: { id: string; source: string }): Promise<Map<string, string>> {
+export async function modelFileMap(model: { id: string; source: string }): Promise<Map<string, string>> {
   const files = await db
     .select({ path: malloyModelFiles.path, content: malloyModelFiles.content })
     .from(malloyModelFiles)
@@ -195,7 +75,7 @@ async function nextSequence(inquiryId: string): Promise<number> {
   return Number(row?.n ?? 0);
 }
 
-async function logCall(fields: {
+export async function logCall(fields: {
   inquiryId?: string;
   userId: string;
   datasetId?: string;
@@ -211,28 +91,8 @@ async function logCall(fields: {
   await db.insert(toolCalls).values({ ...fields, sequence: seq }).catch(() => {});
 }
 
-export type ToolResult = {
-  content: Array<{ type: "text"; text: string }>;
-  isError?: boolean;
-};
-
-function text(value: unknown): ToolResult {
-  const s = typeof value === "string" ? value : JSON.stringify(value, null, 2);
-  return { content: [{ type: "text", text: s }] };
-}
-
-function errText(msg: string): ToolResult {
-  return { content: [{ type: "text", text: msg }], isError: true };
-}
-
-// Error result that also carries the Malloy cheatsheet, so a model that wrote a
-// bad query gets the fix-it syntax back with the error and can self-correct.
-function errWithHelp(msg: string): ToolResult {
-  return { content: [{ type: "text", text: msg }, { type: "text", text: QUERY_INSTRUCTIONS }], isError: true };
-}
-
 // Find or create a conversation for auto-inquiry creation.
-async function ensureConversation(userId: string, conversationId: string | undefined, sourceName: string, datasetId: string | undefined): Promise<string> {
+export async function ensureConversation(userId: string, conversationId: string | undefined, sourceName: string, datasetId: string | undefined): Promise<string> {
   if (conversationId) return conversationId;
   const [conv] = await db
     .insert(conversations)
@@ -292,170 +152,6 @@ export async function sharedQueryListContext(slug: string, userId: string): Prom
     favoritedByMe: Number(mine?.n ?? 0) > 0,
     authoredByMe: Number(authored?.n ?? 0) > 0,
   };
-}
-
-// Compile-only path: shared by `query` with execute:false and the legacy
-// standalone compile_query tool. Logged under the "compile_query" label (which
-// is no longer a registered tool, just a history label) so executed runs and
-// compile checks stay distinguishable in history without a schema change.
-async function compileQueryTool(user: User, inquiryId: string | undefined, args: Record<string, unknown>): Promise<ToolResult> {
-  const sourceName = String(args.source ?? args.dataset ?? "");
-  const malloyQ = String(args.malloy ?? "");
-  const found = await findBySource(user.id, sourceName);
-  if (!found) return errText(`source '${sourceName}' not found`);
-  const { ds, model } = found;
-  const files = await modelFileMap(model);
-  const res = await compileMalloyFiles(files, "index.malloy", malloyQ, { cacheKey: model.id });
-  await logCall({
-    inquiryId, userId: user.id, datasetId: ds.id, toolName: "compile_query",
-    source: sourceName, malloyInput: malloyQ,
-    compiledSql: res.ok ? res.sql : undefined,
-    error: res.ok ? undefined : res.error,
-  });
-  if (!res.ok) return errWithHelp(`compile failed: ${res.error}`);
-  return text({ sql: res.sql });
-}
-
-export async function callTool(
-  user: User,
-  name: string,
-  args: Record<string, unknown>,
-  opts: { origin?: string } = {},
-): Promise<ToolResult> {
-  const inquiryId = typeof args.inquiry_id === "string" ? args.inquiry_id : undefined;
-  const baseUrl = (opts.origin ?? env.APP_BASE_URL).replace(/\/$/, "");
-  const ltoolUrl = (slug: string | null) => (slug ? `${baseUrl}/ltool/${slug}` : undefined);
-
-  switch (name) {
-    case "start_conversation": {
-      const sourceName = String(args.source ?? "").trim();
-      const context = typeof args.context === "string" ? args.context.trim() : undefined;
-      const found = sourceName ? await findBySource(user.id, sourceName) : null;
-      const [conv] = await db
-        .insert(conversations)
-        .values({
-          userId: user.id,
-          datasetId: found?.ds.id,
-          source: sourceName || undefined,
-          context,
-        })
-        .returning({ id: conversations.id });
-      return text({ conversation_id: conv.id });
-    }
-
-    case "start_inquiry": {
-      const conversationId = String(args.conversation_id ?? "").trim();
-      const question = String(args.question ?? "").trim();
-      if (!conversationId) return errText("conversation_id is required");
-      if (!question) return errText("question is required");
-      const [seq] = await db
-        .select({ n: count() })
-        .from(inquiries)
-        .where(eq(inquiries.conversationId, conversationId));
-      const [inq] = await db
-        .insert(inquiries)
-        .values({ conversationId, question, sequence: Number(seq?.n ?? 0) })
-        .returning({ id: inquiries.id });
-      return text({ inquiry_id: inq.id });
-    }
-
-    case "list_sources":
-    case "list_datasets": {
-      const sources = await listAllSources(user.id);
-      await logCall({ inquiryId, userId: user.id, toolName: "list_sources" });
-      return text(sources);
-    }
-
-    case "open_share_link":
-    case "describe_query": {
-      const slug = String(args.slug ?? "").trim().replace(/^.*\/ltool\//, "");
-      if (!slug) return errText("slug is required");
-      const res = await loadSharedQuery(slug);
-      if (!res.ok) return errText(res.error);
-      return text({ instance: res.instance, source: res.source, question: res.question, malloy: res.malloy, ltool_url: ltoolUrl(slug) });
-    }
-
-    case "describe_source": {
-      const sourceName = String(args.source ?? args.dataset ?? "");
-      const found = await findBySource(user.id, sourceName);
-      if (!found) return errText(`source '${sourceName}' not found`);
-      const { ds, model, description } = found;
-      const files = await modelFileMap(model);
-      const fields = await describeSourceFields(files, "index.malloy", sourceName, { cacheKey: model.id });
-      await logCall({ inquiryId, userId: user.id, datasetId: ds.id, toolName: "describe_source", source: sourceName });
-      // Return the source's fields PLUS a Malloy query cheatsheet. Read just before
-      // the model writes a query, this measurably helps weaker models (e.g. Haiku)
-      // get basic syntax right. Cheatsheet last = freshest in context at query time.
-      return {
-        content: [
-          { type: "text", text: JSON.stringify({ source: sourceName, model: ds.name, description, fields, malloy_source: model.source }, null, 2) },
-          { type: "text", text: QUERY_INSTRUCTIONS },
-        ],
-      };
-    }
-
-    // Legacy standalone compile tool (no longer in the registry, still accepted).
-    case "compile_query":
-      return compileQueryTool(user, inquiryId, args);
-
-    case "query":
-    case "run_query": {
-      // execute:false → compile only (the old compile_query behavior).
-      if (args.execute === false) return compileQueryTool(user, inquiryId, args);
-
-      const question = typeof args.question === "string" ? args.question.trim() : "";
-      if (!question) return errText("'question' is required: a plain-English description of what this query answers.");
-
-      const sourceName = String(args.source ?? args.dataset ?? "");
-      const malloyQ = String(args.malloy ?? "");
-      const maxRows = Math.max(1, Math.min(10000, Number(args.max_rows ?? 10000)));
-      const found = await findBySource(user.id, sourceName);
-      if (!found) return errText(`source '${sourceName}' not found`);
-      const { ds, model } = found;
-      if (ds.status !== "ready") return errText(`source '${sourceName}' is not ready`);
-
-      // Each query is its own inquiry: a fresh record + share slug per call, so
-      // unrelated queries can never collapse onto one record. Claude no longer
-      // threads an inquiry_id — it just labels every query with its question.
-      const convId = await ensureConversation(user.id, undefined, sourceName, ds.id);
-      const [inq] = await db
-        .insert(inquiries)
-        .values({ conversationId: convId, question, sequence: 0 })
-        .returning({ id: inquiries.id, slug: inquiries.slug });
-
-      const files = await modelFileMap(model);
-      const t0 = Date.now();
-      try {
-        const res = await runMalloyFiles(files, "index.malloy", malloyQ, { rowLimit: maxRows, cacheKey: model.id });
-        const durationMs = Date.now() - t0;
-        const capped = res.rows.slice(0, maxRows);
-        await db.insert(queries).values({ datasetId: ds.id, userId: user.id, malloySource: malloyQ, compiledSql: res.sql, rowCount: res.rowCount, durationMs });
-        await logCall({ inquiryId: inq.id, userId: user.id, datasetId: ds.id, toolName: "query", source: sourceName, malloyInput: malloyQ, compiledSql: res.sql, rowCount: res.rowCount, durationMs });
-        const ltool = ltoolUrl(inq.slug);
-        // The behavioral directive is echoed in the result (not just the server
-        // instructions) because clients read the tool result every turn right
-        // before summarizing — the most reliable place to make Claude append the
-        // link and write the summary, while the description stays lean for ranking.
-        const reminder = `End your reply with a "Query summary": (1) the question in plain English, (2) the Malloy logic (filters, grouping, aggregation, ordering), (3) post-processing outside Malloy or "none".` +
-          (ltool ? ` Then append the share link as a small inline markdown link, exactly: [↗](${ltool})` : ``);
-        return {
-          content: [
-            { type: "text", text: reminder },
-            { type: "text", text: JSON.stringify({ ltool_url: ltool, row_count: res.rowCount, rows: capped, truncated: res.rowCount > capped.length, duration_ms: durationMs }, null, 2) },
-          ],
-        };
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        const durationMs = Date.now() - t0;
-        await db.insert(queries).values({ datasetId: ds.id, userId: user.id, malloySource: malloyQ, error: msg });
-        await logCall({ inquiryId: inq.id, userId: user.id, datasetId: ds.id, toolName: "query", source: sourceName, malloyInput: malloyQ, error: msg, durationMs });
-        return errWithHelp(`run failed: ${msg}`);
-      }
-    }
-
-    default:
-      return errText(`unknown tool: ${name}`);
-  }
 }
 
 export type WebRunResult =

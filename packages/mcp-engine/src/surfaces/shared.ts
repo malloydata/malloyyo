@@ -8,6 +8,7 @@
 
 import { getHelpTopic, listHelpTopics, engineSkills } from '../help';
 import { prompts } from '../prompts';
+import { HOST_ONLY } from '../types';
 import type { HelpTopic, Problem, RunResult } from '../types';
 
 export interface ToolDef {
@@ -58,8 +59,8 @@ export function toContent(result: object): {
   content: Array<{ type: 'text'; text: string }>;
   structuredContent: Record<string, unknown>;
 } {
-  const { malloy_text, host_only: _host_only, ...rest } =
-    result as { malloy_text?: unknown; host_only?: unknown };
+  const { malloy_text, [HOST_ONLY]: _hostOnly, ...rest } =
+    result as { malloy_text?: unknown; [HOST_ONLY]?: unknown };
   const content: Array<{ type: 'text'; text: string }> = [
     { type: 'text', text: JSON.stringify(rest, null, 2) },
   ];
@@ -70,14 +71,41 @@ export function toContent(result: object): {
 }
 
 /**
+ * Merge surfaces' instructions without repeating the shared canon. Each surface
+ * appends the same core guidance to its own blocks, so a naive concat would emit
+ * core once per surface (and blow the instruction cap). Collapse the longest run
+ * of identical TRAILING blocks (the shared canon) to a single copy: the result
+ * is each surface's unique lead blocks, then the shared tail once. Generic: no
+ * coupling to which blocks are "core".
+ */
+function mergeInstructions(raw: Array<string | undefined>): string {
+  const lists = raw
+    .map((s) => (s ?? '').split('\n\n').map((b) => b.trim()).filter(Boolean))
+    .filter((l) => l.length > 0);
+  if (lists.length === 0) return '';
+  if (lists.length === 1) return lists[0]!.join('\n\n');
+  let common = 0;
+  const minLen = Math.min(...lists.map((l) => l.length));
+  while (
+    common < minLen &&
+    lists.every((l) => l[l.length - 1 - common] === lists[0]![lists[0]!.length - 1 - common])
+  ) {
+    common++;
+  }
+  const tail = lists[0]!.slice(lists[0]!.length - common);
+  const leads = lists.flatMap((l) => l.slice(0, l.length - common));
+  return [...leads, ...tail].join('\n\n');
+}
+
+/**
  * Concatenate surfaces; dedupe tools whose name AND definition match (the
  * shared yo_help); an accidental collision of same-name different
- * tools throws at construction rather than shadowing.
+ * tools throws at construction rather than shadowing. Instructions merge via
+ * mergeInstructions so the shared canon is emitted once.
  */
 export function mergeSurfaces(...surfaces: ToolSurface[]): ToolSurface {
   const tools = new Map<string, ToolDef>();
   const skills = new Map<string, ToolSurface['skills'][number]>();
-  const instructions: string[] = [];
   for (const s of surfaces) {
     for (const t of s.tools) {
       const existing = tools.get(t.name);
@@ -95,14 +123,11 @@ export function mergeSurfaces(...surfaces: ToolSurface[]): ToolSurface {
       tools.set(t.name, t);
     }
     for (const sk of s.skills) skills.set(sk.name, sk);
-    if (s.instructions && !instructions.includes(s.instructions)) {
-      instructions.push(s.instructions);
-    }
   }
   return {
     tools: [...tools.values()],
     skills: [...skills.values()],
-    instructions: instructions.join('\n\n'),
+    instructions: mergeInstructions(surfaces.map((s) => s.instructions)),
   };
 }
 

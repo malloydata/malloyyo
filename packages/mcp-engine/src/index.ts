@@ -19,6 +19,7 @@ export type {
   FieldInfo,
   GivenInfo,
   HelpTopic,
+  HostOnly,
   JoinInfo,
   Loc,
   ModelEntry,
@@ -36,7 +37,9 @@ export type {
   Surface,
   TruncationInfo,
   ViewInfo,
+  WithHostOnly,
 } from './types';
+export { HOST_ONLY } from './types';
 
 // Layer 2 — helpers
 export { compile, listRuns, type CompileOptions, type RunListing } from './walker';

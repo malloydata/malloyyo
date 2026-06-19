@@ -19,12 +19,9 @@ export const guidance = {
   explore: prompts.explore.instructions,
 } as const;
 
-export function assembleInstructions(kind: 'develop' | 'explore' | 'both'): string {
-  const parts =
-    kind === 'both'
-      ? [guidance.develop, guidance.explore, guidance.core]
-      : kind === 'develop'
-        ? [guidance.develop, guidance.core]
-        : [guidance.explore, guidance.core];
-  return parts.join('\n\n');
+export function assembleInstructions(kind: 'develop' | 'explore'): string {
+  const surface = kind === 'develop' ? guidance.develop : guidance.explore;
+  // Each shipped surface = its own block + the shared core. A COMBINED surface
+  // is assembled by mergeSurfaces (which emits the shared core once), not here.
+  return [surface, guidance.core].join('\n\n');
 }

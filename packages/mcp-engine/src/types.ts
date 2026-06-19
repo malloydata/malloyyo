@@ -4,10 +4,10 @@
 // Layer 1 — the wire contract. Every surface imports these; they are the
 // "one definition everywhere" that makes surfaces congruent.
 //
-// Conventions: wire keys are snake_case. `description` is always emitted
-// (null when absent — it is signal); other optional fields are omitted when
-// empty or unavailable. Fields marked "develop only" are stripped by the
-// explore projection (see project.ts).
+// Conventions: wire keys are snake_case. Optional fields (`description`,
+// `instructions`, `mustQuote`, …) are OMITTED when empty or unavailable —
+// never emitted as null (a null would bloat field lists for no signal). Fields
+// marked "develop only" are stripped by the explore projection (see project.ts).
 
 /** [line, column], 0-based, start position only. Develop surface only. */
 export type Loc = [number, number];
@@ -253,6 +253,26 @@ export interface DescribeResult {
   description?: SourceDescription;
   problems: Problem[];
 }
+
+// ── the host-only channel ──────────────────────────────────────────
+
+/** The reserved key under which a surface parks data for the HOST that the
+    AGENT must never see. `toContent` drops it entirely (no block, not
+    serialized); a host reads it off the raw result before that. Exported so the
+    one key name is shared, not re-typed at each site. */
+export const HOST_ONLY = 'host_only' as const;
+
+/** What rides on {@link HOST_ONLY}: today only the SQL of an executed run — the
+    explore surface withholds SQL from the agent on execute:true (it rides
+    execute:false), but the run generated it and a host records it. Typed
+    end-to-end so a host reads `result.host_only.sql`, not a magic shape. */
+export interface HostOnly {
+  sql?: string;
+}
+
+/** A result carrying the host-only channel. The `[HOST_ONLY]` computed key keeps
+    the single source of truth for the name. */
+export type WithHostOnly<T> = T & { [HOST_ONLY]?: HostOnly };
 
 // ── catalog entries (advisory list) ────────────────────────────────
 

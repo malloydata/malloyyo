@@ -65,18 +65,15 @@ export function hasError(problems: Problem[]): boolean {
  * every tool result; surfaces forward it untouched. (Engine rule: a bad
  * config is user input — it becomes problems[], never a throw.)
  */
-export async function gateConfigProblems<T>(
+export async function gateConfigProblems<T extends { ok: boolean; problems: Problem[] }>(
   configProblems: Problem[],
   run: () => Promise<T>,
 ): Promise<T> {
   if (hasError(configProblems)) {
-    return { ok: false, problems: configProblems } as unknown as T;
+    // The short-circuit IS a tool envelope; the bound makes that honest.
+    return { ok: false, problems: configProblems } as T;
   }
   const result = await run();
   if (configProblems.length === 0) return result;
-  const r = result as unknown as { problems?: Problem[] };
-  if (Array.isArray(r.problems)) {
-    return { ...result, problems: [...configProblems, ...r.problems] } as T;
-  }
-  return result;
+  return { ...result, problems: [...configProblems, ...result.problems] };
 }

@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   exploreSurface,
+  HOST_ONLY,
   mergeSurfaces,
   toContent,
   type SourceDescribeResult,
@@ -151,6 +152,29 @@ test('explore: query executes restricted text with givens', async () => {
   assert.equal(result.sql, undefined, 'execute:true does not carry SQL (output, not input)');
 });
 
+test('explore: executed query withholds SQL from the agent but keeps it on host_only', async () => {
+  // The safety invariant: an executed run must never serialize SQL to the agent,
+  // yet a host must still be able to record it. SQL rides the host_only channel,
+  // which toContent drops entirely.
+  const s = exploreSurface(testExploreHost());
+  const result = (await tool(s, 'query').handler({
+    model_ref: 'flights.malloy',
+    malloy: 'run: flights -> { aggregate: flight_count }',
+  })) as Record<string, unknown>;
+  assert.equal(result['ok'], true, JSON.stringify(result['problems']));
+  // The run DID generate SQL — it's on the typed host_only channel for the host.
+  const hostOnly = result[HOST_ONLY] as { sql?: string } | undefined;
+  assert.match(hostOnly?.sql ?? '', /select/i, 'host_only carries the generated SQL');
+  assert.equal(result['sql'], undefined, 'no top-level sql on an executed run');
+
+  // After serialization, the agent sees neither sql nor the host_only channel.
+  const wire = toContent(result);
+  const jsonText = wire.content[0]?.text ?? '';
+  assert.ok(!jsonText.toLowerCase().includes('select'), 'agent JSON carries no SQL text');
+  assert.ok(!('sql' in wire.structuredContent), 'structuredContent has no sql');
+  assert.ok(!(HOST_ONLY in wire.structuredContent), 'structuredContent has no host_only');
+});
+
 test('explore: query rejects forbidden constructs', async () => {
   const s = exploreSurface(testExploreHost());
   const result = (await tool(s, 'query').handler({
@@ -229,6 +253,21 @@ test('mergeSurfaces: dedupes identical tools across surfaces', () => {
   assert.equal(new Set(names).size, names.length, 'no duplicate tool names');
   assert.equal(names.filter((n) => n === 'query').length, 1);
   assert.equal(names.filter((n) => n === 'yo_help').length, 1);
+});
+
+test('mergeSurfaces: the shared canon (core) is emitted once, not per surface', () => {
+  // Each surface appends the same core guidance to its own lead blocks. A naive
+  // concat would repeat core (and blow the instruction cap); the merge must
+  // collapse the shared trailing blocks to one copy, keeping each unique lead.
+  const core = 'CORE ONE\n\nCORE TWO';
+  const s1: ToolSurface = { tools: [], skills: [], instructions: `LEAD A\n\n${core}` };
+  const s2: ToolSurface = { tools: [], skills: [], instructions: `LEAD B\n\n${core}` };
+  const merged = mergeSurfaces(s1, s2);
+  assert.equal(
+    merged.instructions,
+    'LEAD A\n\nLEAD B\n\nCORE ONE\n\nCORE TWO',
+    'unique leads kept, shared core emitted once',
+  );
 });
 
 test('mergeSurfaces: a real name collision throws at construction', () => {

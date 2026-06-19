@@ -22,10 +22,17 @@ import {
   exploreSurface,
   modelCatalogEntry,
   toContent,
+  HOST_ONLY,
   type BoundModel,
   type ExploreHost,
   type ModelEntry,
+  type RunResult,
+  type WithHostOnly,
 } from "@malloyyo/mcp-engine";
+
+/** What the explore `query` tool returns on an executed run: the run result,
+    the model it resolved to, and the host-only SQL channel. */
+type QueryRunResult = WithHostOnly<RunResult & { model_ref?: string }>;
 import { withModelRuntime } from "./malloy";
 import {
   ensureConversation,
@@ -151,7 +158,7 @@ function makeExploreHost(userId: string): ExploreHost {
 async function recordQuery(
   user: User,
   args: Record<string, unknown>,
-  result: { model_ref?: unknown; row_count?: number; total_time_ms?: number; host_only?: { sql?: string } },
+  result: QueryRunResult,
   baseUrl: string,
 ): Promise<string | undefined> {
   const modelRef = String(result.model_ref ?? args.model_ref ?? "");
@@ -161,8 +168,9 @@ async function recordQuery(
   const malloyQ = String(args.malloy ?? "");
   const source = String(args.source ?? modelRef);
   // The explore surface withholds SQL from the agent but hands it to the host
-  // via host_only (see the engine's toContent) — record it, as the old surface did.
-  const compiledSql = result.host_only?.sql;
+  // via the host_only channel (see the engine's toContent) — record it, as the
+  // old surface did.
+  const compiledSql = result[HOST_ONLY]?.sql;
   const convId = await ensureConversation(user.id, undefined, source, found.ds.id);
   const [inq] = await db
     .insert(inquiries)
@@ -268,10 +276,13 @@ export function buildHostedExploreSurface(user: User, baseUrl: string): HostedSu
     // echo — the reliable place to make the client write the summary and append
     // the link (clients read the tool result every turn before summarizing).
     if (executing && result.ok) {
-      const ltool = await recordQuery(user, args, result, baseUrl);
+      // One cast from the generic handler return to the explore query shape;
+      // everything downstream (recording, the host_only strip) is then typed.
+      const runResult = result as QueryRunResult;
+      const ltool = await recordQuery(user, args, runResult, baseUrl);
       // host_only carried the SQL for recording (above); it must NOT reach the
       // agent — strip it from the payload the agent sees.
-      const { host_only: _host_only, ...rest } = result as { host_only?: unknown };
+      const { [HOST_ONLY]: _hostOnly, ...rest } = runResult;
       const withLink = { ...rest, ltool_url: ltool };
       const reminder =
         `End your reply with a "Query summary": (1) the question in plain English, ` +

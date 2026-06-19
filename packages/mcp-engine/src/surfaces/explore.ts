@@ -21,12 +21,16 @@ import { DEFAULT_ROW_LIMIT } from '../run';
 import { assembleInstructions } from '../guidance';
 import { prompts } from '../prompts';
 import { codeProblem } from '../problems';
+import { HOST_ONLY } from '../types';
 import type {
   ModelEntry,
   ModelList,
   Problem,
+  QueryValidationResult,
+  RunResult,
   SourceDescribeResult,
   SourceDescription,
+  WithHostOnly,
 } from '../types';
 import {
   argOptBool,
@@ -104,6 +108,30 @@ export interface QueryToolOptions {
   inspect?: InspectHint;
 }
 
+/** The query core both query tools share once they've leased a model and built
+    their field-not-found nudge: parse the query args, then either validate
+    (execute:false → SQL + the givens the query references) or run (execute:true
+    → budgeted rows). Model resolution and result decoration differ per surface
+    and stay in the callers. */
+async function executeQuery(
+  m: BoundModel,
+  args: Record<string, unknown>,
+  fix: (p: Problem) => Problem,
+  result?: ResultPolicy,
+): Promise<RunResult | QueryValidationResult> {
+  const malloy = argString(args, 'malloy');
+  const execute = argOptBool(args, 'execute') ?? true;
+  const givens = argRecord(args, 'givens');
+  const rowLimit = Math.max(1, Math.min(10_000, argOptNumber(args, 'max_rows') ?? DEFAULT_ROW_LIMIT));
+  if (!execute) {
+    const v = await validateRestricted(m.runtime, m.entry, malloy);
+    return { ...v, problems: v.problems.map(fix) };
+  }
+  const full = await runRestricted(m.runtime, m.entry, malloy, { rowLimit, givens });
+  const budgeted = await applyResultBudget(full, result, { toolName: 'query', args });
+  return { ...budgeted, problems: budgeted.problems.map(fix) };
+}
+
 /** Model_ref-based query tool — one definition the develop surface reuses
     (pointed at a model file path). The explore surface does NOT use this; it
     has its own source-centric query. */
@@ -145,22 +173,10 @@ export function queryTool(
       if (!ref.trim()) {
         return { ok: false, problems: [codeProblem('model-ref-required', prompts.shared.errors['no-model-ref'])] };
       }
-      const malloy = argString(args, 'malloy');
-      const execute = argOptBool(args, 'execute') ?? true;
-      const givens = argRecord(args, 'givens');
-      const maxRows = argOptNumber(args, 'max_rows');
-      const rowLimit = Math.max(1, Math.min(10_000, maxRows ?? DEFAULT_ROW_LIMIT));
       try {
-        return await host.withModel(ref, async (m) => {
-          const fix = refNudge(ref, inspect);
-          if (!execute) {
-            const v = await validateRestricted(m.runtime, m.entry, malloy);
-            return { ...v, problems: v.problems.map(fix) };
-          }
-          const full = await runRestricted(m.runtime, m.entry, malloy, { rowLimit, givens: givens as never });
-          const budgeted = await applyResultBudget(full, opts.result, { toolName: 'query', args });
-          return { ...budgeted, problems: budgeted.problems.map(fix) };
-        });
+        return await host.withModel(ref, (m) =>
+          executeQuery(m, args, refNudge(ref, inspect), opts.result),
+        );
       } catch (e) {
         return { ok: false, problems: [refModelProblem(ref, e)] };
       }
@@ -230,7 +246,7 @@ function srcNudge(modelRef: string, source: string): (p: Problem) => Problem {
 /** Block 2 of describe_source: requested source + closure as verbatim Malloy,
     sliced from each definition's body (prepend the `source:` keyword the slice
     omits). Sources whose body could not be re-read are skipped. */
-function renderSourcesMalloy(sel: SourceDescription): string {
+function sourcesAsMalloy(sel: SourceDescription): string {
   return Object.values(sel.sources)
     .filter((s) => s.body)
     .map((s) => `source: ${s.body}`)
@@ -321,7 +337,7 @@ function describeSourceTool(host: ExploreHost): ToolDef {
               ],
             };
           }
-          const malloy_text = renderSourcesMalloy(sel);
+          const malloy_text = sourcesAsMalloy(sel);
           const projected = projectDescription(sel, 'explore');
           const base: SourceDescribeResult = {
             ok: true, model_ref: modelRef, source,
@@ -369,34 +385,24 @@ function exploreQueryTool(host: ExploreHost, opts: ExploreSurfaceOptions): ToolD
     },
     handler: async (args) => {
       const source = argString(args, 'source');
-      const malloy = argString(args, 'malloy');
       const modelRefArg = argOptString(args, 'model_ref');
       const execute = argOptBool(args, 'execute') ?? true;
-      const givens = argRecord(args, 'givens');
-      const maxRows = argOptNumber(args, 'max_rows');
-      const rowLimit = Math.max(1, Math.min(10_000, maxRows ?? DEFAULT_ROW_LIMIT));
       const r = await resolveModel(host, source, modelRefArg);
       if ('problem' in r) return { ok: false, problems: [r.problem] };
       const modelRef = r.model_ref;
       try {
         return await host.withModel(modelRef, async (m) => {
-          const fix = srcNudge(modelRef, source);
-          // The model the source resolved to. Reported so the agent (and a host
-          // recording/sharing the call) knows which model answered, without
-          // re-running the source→model resolution the surface just did.
-          if (!execute) {
-            const v = await validateRestricted(m.runtime, m.entry, malloy);
-            return { ...v, model_ref: modelRef, problems: v.problems.map(fix) };
-          }
-          const full = await runRestricted(m.runtime, m.entry, malloy, { rowLimit, givens: givens as never });
-          const budgeted = await applyResultBudget(full, opts.result, { toolName: 'query', args });
-          // Explore: the agent never sees SQL on an executed run (it rides
-          // execute:false). But the run DID generate it — withhold it from the
-          // agent while keeping it available to the host (which records it) via
-          // the reserved host_only channel that toContent drops. See toContent.
-          const { sql, ...rest } = budgeted as { sql?: string };
-          const out: Record<string, unknown> = { ...rest, model_ref: modelRef, problems: budgeted.problems.map(fix) };
-          if (sql !== undefined) out.host_only = { sql };
+          const res = await executeQuery(m, args, srcNudge(modelRef, source), opts.result);
+          // execute:false: SQL is the confirmatory-inspect channel — the agent
+          // SHOULD see it; just tag which model the source resolved to.
+          if (!execute) return { ...res, model_ref: modelRef };
+          // execute:true: withhold SQL from the agent (SQL rides execute:false),
+          // but the run generated it — park it on the host_only channel toContent
+          // drops, so a host can record it. Plus the resolved model_ref, so the
+          // host needn't re-run resolution. Typed end-to-end via WithHostOnly.
+          const { sql, ...rest } = res as RunResult;
+          const out: WithHostOnly<RunResult & { model_ref: string }> = { ...rest, model_ref: modelRef };
+          if (sql !== undefined) out[HOST_ONLY] = { sql };
           return out;
         });
       } catch (e) {

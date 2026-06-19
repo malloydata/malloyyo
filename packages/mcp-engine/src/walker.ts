@@ -19,7 +19,6 @@ import type {
   ExploreField,
   Field,
   Model,
-  QueryField,
   Runtime,
 } from '@malloydata/malloy';
 import {
@@ -88,21 +87,21 @@ function annotationList(a: Annotations | undefined): Annotation[] {
 /** Promote the doc-comment route (`#" …`) to the description field — every
     `#"` doc line, in source order, joined (not just the first). Other routes
     (render tags `#`, etc.) are NOT description and stay out. */
-function descriptionOf(a: Annotations | undefined): string | null {
+function descriptionOf(a: Annotations | undefined): string | undefined {
   // forRoute('"') is Malloy's sanctioned reader for the doc-string channel
   // (excludes malformed routes; returns inherited+local notes, inherited-first).
   const docs = (a?.forRoute('"') ?? []).map((n) => n.content.trim()).filter(Boolean);
-  return docs.length ? docs.join('\n') : null;
+  return docs.length ? docs.join('\n') : undefined;
 }
 
 /** Promote the agent route (`#(agent) …`) to `instructions` — the "instructions
     for agents using this object" channel — every `#(agent)` line in source
     order, joined. Distinct from the human `description` (`#"`). */
-function agentNotesOf(a: Annotations | undefined): string | null {
+function agentNotesOf(a: Annotations | undefined): string | undefined {
   // `#(agent) …` stakes the app route `agent` (Malloy's bracketed-route
   // mechanism); forRoute('agent') is the sanctioned reader for its content.
   const notes = (a?.forRoute('agent') ?? []).map((n) => n.content.trim()).filter(Boolean);
-  return notes.length ? notes.join('\n') : null;
+  return notes.length ? notes.join('\n') : undefined;
 }
 
 /** Apply the two annotation channels onto an object: `description` (doc route)
@@ -348,7 +347,8 @@ function walkFields(
     }
 
     if (f.isQueryField()) {
-      const qf = f as QueryField;
+      // A QueryField's "expression" is just the view name, so we never read it;
+      // the view is described by its name + sliced body, not an expression.
       const view: ViewInfo = { name: f.name };
       applyDocs(view, f.annotations);
       if (needsQuote(f.name)) view.mustQuote = true;
@@ -361,8 +361,6 @@ function walkFields(
         const body = sliceSource(ctx.readSource(mLoc.url), mLoc);
         if (body) view.body = body;
       }
-      // QueryField expression is usually the view name itself — drop it.
-      void qf;
       groups.views.push(view);
       continue;
     }

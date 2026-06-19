@@ -19,7 +19,10 @@ export interface RunOptions {
   index?: number;
   /** Memory/transfer cap, not a context cap (that is the byte budget's job). */
   rowLimit?: number;
-  givens?: Record<string, GivenValue>;
+  /** Given values keyed by surface name, as they arrive off the wire (JSON,
+      so `unknown`-valued). Coerced to Malloy's `GivenValue` at the compile seam
+      below — the compiler is the validator, so callers don't pre-narrow. */
+  givens?: Record<string, unknown>;
   /** Attach the interfaces-format result (API.util.wrapResult) as
       `stable_result` — for host renderers, never sent over MCP. */
   stableResult?: boolean;
@@ -42,7 +45,11 @@ export async function executeMaterialized(
 ): Promise<RunResult> {
   const rowLimit = opts.rowLimit ?? DEFAULT_ROW_LIMIT;
   const retry = opts.retry ?? (<T>(op: () => Promise<T>) => op());
-  const compileOpts = opts.givens ? { givens: opts.givens } : undefined;
+  // The one wire→Malloy coercion for givens: values are user JSON, validated by
+  // the compiler when it binds them (a bad value surfaces as a compile problem).
+  const compileOpts = opts.givens
+    ? { givens: opts.givens as Record<string, GivenValue> }
+    : undefined;
   try {
     const t0 = Date.now();
     const sql = (await query.getSQL(compileOpts)).trim();

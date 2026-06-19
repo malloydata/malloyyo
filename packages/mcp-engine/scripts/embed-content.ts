@@ -18,6 +18,7 @@ const outFile = path.join(here, '..', 'src', 'content', 'generated.ts');
 const files: Record<string, string> = {};
 for (const name of fs.readdirSync(contentDir).sort()) {
   if (!name.endsWith('.md')) continue;
+  if (name === 'README.md') continue; // docs for authors, not shippable content
   files[name] = fs.readFileSync(path.join(contentDir, name), 'utf8');
 }
 

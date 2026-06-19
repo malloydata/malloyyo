@@ -15,7 +15,7 @@
 // dataset is 1:1 with a model_ref (the dataset name), so once the engine reports
 // the model_ref a query resolved to, recording is a direct dataset lookup.
 
-import { and, desc, eq, or } from "drizzle-orm";
+import { desc } from "drizzle-orm";
 import { db, datasets, inquiries, queries, type User } from "@/db";
 import {
   compile,
@@ -40,6 +40,7 @@ import {
   loadSharedQuery,
   logCall,
   modelFileMap,
+  visibleDatasetWhere,
 } from "./mcp-tools";
 import { env } from "./env";
 
@@ -66,17 +67,12 @@ function ltoolUrl(baseUrl: string, slug: string | null): string | undefined {
 
 type DatasetRow = { id: string; name: string };
 
-// Datasets this user may query: their own or public, and ready.
+// Datasets this user may query — via the shared visibility predicate.
 async function visibleDatasets(userId: string): Promise<DatasetRow[]> {
   return db
     .select({ id: datasets.id, name: datasets.name })
     .from(datasets)
-    .where(
-      and(
-        or(eq(datasets.userId, userId), eq(datasets.isPublic, true)),
-        eq(datasets.status, "ready"),
-      ),
-    )
+    .where(visibleDatasetWhere(userId))
     .orderBy(desc(datasets.createdAt));
 }
 
@@ -89,30 +85,18 @@ async function findModelByRef(userId: string, ref: string) {
   return model ? { ds, model } : null;
 }
 
-// Re-read a model file by href so the engine can slice view/join/source text
-// (location-slicing). Mirrors malloy.ts fileUrl/splitFiles key construction so a
-// definition's `location.url` (file:///<repo-path>) matches.
-function hostReadSource(files: Map<string, string>): (href: string) => string | undefined {
-  const urlMap = new Map<string, string>();
-  for (const [path, content] of files) {
-    if (path === "malloy-config.json") continue;
-    urlMap.set(`file:///${path.replace(/^\//, "")}`, content);
-  }
-  return (href) => urlMap.get(href);
-}
-
 // Lease a pooled Runtime over one dataset's latest model and hand the engine a
 // BoundModel. The whole hosted-vs-local difference lives here — same engine.
-function leaseDataset<T>(
+// readSource (for location-slicing) comes from withModelRuntime, keyed exactly
+// as the runtime keys files, so the host doesn't re-derive that map.
+async function leaseDataset<T>(
   model: { id: string; source: string },
   fn: (m: BoundModel) => Promise<T>,
 ): Promise<T> {
-  return modelFileMap(model).then((files) => {
-    const readSource = hostReadSource(files);
-    return withModelRuntime(files, model.id, (runtime) =>
-      fn({ runtime, entry: ENTRY, readSource }),
-    );
-  });
+  const files = await modelFileMap(model);
+  return withModelRuntime(files, model.id, (runtime, readSource) =>
+    fn({ runtime, entry: ENTRY, readSource }),
+  );
 }
 
 // The engine's ExploreHost: withModel resolves + leases a pooled Runtime; list

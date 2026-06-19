@@ -15,6 +15,15 @@ import { RUN_LABELS } from "./tool-names";
 // src/lib/mcp-host.ts. What remains here is the DB/query plumbing that the host
 // (and the web UI) share: model resolution, file maps, recording, sharing.
 
+// The datasets a user may query: their own or public, and ready. One home for
+// the predicate — the host's findModelByRef and findBySource both build on it.
+export function visibleDatasetWhere(userId: string) {
+  return and(
+    or(eq(datasets.userId, userId), eq(datasets.isPublic, true)),
+    eq(datasets.status, "ready"),
+  );
+}
+
 // Normalize DB sources column — legacy string[] or new {name, description?}[] format.
 function normalizeSources(raw: unknown): SourceInfo[] {
   if (!Array.isArray(raw)) return [];
@@ -27,10 +36,7 @@ export async function findBySource(userId: string, sourceName: string) {
   const dsList = await db
     .select()
     .from(datasets)
-    .where(and(
-      or(eq(datasets.userId, userId), eq(datasets.isPublic, true)),
-      eq(datasets.status, "ready"),
-    ))
+    .where(visibleDatasetWhere(userId))
     .orderBy(desc(datasets.createdAt));
 
   for (const ds of dsList) {

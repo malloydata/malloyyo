@@ -1,6 +1,6 @@
 # malloyyo
 
-A **natural-language interface to any application's data** — accurate and consistent, served to any AI over MCP.
+A **natural-language interface to any corpus of data, however complex** — accurate and consistent, served to any AI over MCP.
 
 **Problem:** AI + document context + your analytical database = **inconsistent** results. Pointed at a raw database, an AI writes SQL from scratch — so the same question tomorrow yields a different query and different numbers, with wrong joins, invented columns, or fan-out double-counts that still *look* right.
 
@@ -14,8 +14,11 @@ Malloyyo is the thin layer that serves that model:
 - **Readable, full-featured queries** — Malloy is a complete query language (join, nest, aggregate, filter) that stays legible: you can read a query and see at a glance it's doing the right thing.
 - **DuckDB built in** — query Parquet over plain HTTP (S3, GCS, any web server) with **no warehouse required**, or attach your own (BigQuery, Snowflake, MotherDuck, Databricks, …).
 - **Tight control** — the AI can only query what's in the semantic model; nothing outside it is reachable.
+- **Deploy in minutes** — one-click to Vercel, or self-host with Docker.
 
 Try [the demo server](https://malloyyo.vercel.app/ltool/main_7zfqmk7cv6) and "Explore further with Claude" — sign in with any Google account.
+
+**Questions, or built something cool? We'd love to hear from you.** Come say hi on [Slack](https://join.slack.com/t/malloy-community/shared_invite/zt-2dvtske75-TJQfolRtZGXLS24RhTQ79g), and learn more about Malloy at [malloydata.dev](https://www.malloydata.dev) and in the [documentation](https://docs.malloydata.dev).
 
 ## How it works
 
@@ -230,7 +233,3 @@ Open <http://localhost:3000>.
 3. **`src/lib/malloy.ts`** — single-file and multi-file Malloy compilation and execution via `InMemoryURLReader`.
 4. **`src/lib/mcp-tools.ts`** + **`src/app/mcp/route.ts`** — the MCP server. Tools are pure functions; the route is a JSON-RPC dispatcher.
 5. **`src/db/schema.ts`** — Drizzle schema for all Postgres tables.
-
-## Questions?
-
-Find us on [Slack](https://join.slack.com/t/malloy-community/shared_invite/zt-2dvtske75-TJQfolRtZGXLS24RhTQ79g) — the Malloy community.

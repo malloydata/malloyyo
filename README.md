@@ -14,6 +14,7 @@ Malloyyo is the thin layer that serves that model:
 - **Readable, full-featured queries** — Malloy is a complete query language (join, nest, aggregate, filter) that stays legible: you can read a query and see at a glance it's doing the right thing.
 - **DuckDB built in** — query Parquet over plain HTTP (S3, GCS, any web server) with **no warehouse required**, or attach your own (BigQuery, Snowflake, MotherDuck, Databricks, …).
 - **Tight control** — the AI can only query what's in the semantic model; nothing outside it is reachable.
+- **A web interface, too** — every query is logged, so you can browse, edit, favorite, re-run, and share them in the browser (ltool), and hand any one off to "Explore further with Claude." Because Malloy renders a whole dashboard as a single query, one saved query can be a full report.
 - **Deploy in minutes** — one-click to Vercel, or self-host with Docker.
 
 Try [the demo server](https://malloyyo.vercel.app/ltool/main_7zfqmk7cv6) and "Explore further with Claude" — sign in with any Google account.

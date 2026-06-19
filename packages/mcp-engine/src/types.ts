@@ -68,12 +68,22 @@ export interface JoinInfo {
   /** Present (true) only when `name` must be backtick-quoted in Malloy. */
   mustQuote?: boolean;
   relationship: 'one_to_many' | 'many_to_one' | 'cross';
-  /** Set when the target is a named source — look it up in `sources`. */
+  /** Set when the target is a named source reachable in this model's namespace
+      — look it up in `sources`. */
   source_ref?: string;
   /**
-   * Inline field groups: present when the target is anonymous (nested or
-   * repeated record — no name to reference), or when expand:'inline' was
-   * requested. Invariant: every join has source_ref and/or fields.
+   * Set when the target is an unmodified reference to a source that is NOT
+   * nameable in this model's namespace (e.g. reached only through a transitive
+   * import) — an index into the OWNING source's `anon_srcs` array. Navigate-only:
+   * an anon source is a describe target, never a query target (it has no name to
+   * write in Malloy). Joins to the same un-nameable source share one index.
+   */
+  anon_src_index?: number;
+  /**
+   * Inline field groups: present when the target defines its own shape (a
+   * nested/repeated record, a SQL block, a query source, or a modified/extended
+   * source — nothing to reference), or when expand:'inline' was requested.
+   * Invariant: every join has source_ref, anon_src_index, and/or fields.
    */
   fields?: FieldGroups;
   description?: string;
@@ -108,6 +118,14 @@ export interface SourceInfo extends FieldGroups {
       source text is delivered as a separate clean Malloy content block (not
       escaped in JSON). Absent when the source could not be re-read. */
   body?: string;
+  /**
+   * Un-nameable join targets owned by this source: sources reached through a
+   * join whose target cannot be named in this model's namespace (a transitive
+   * import). A JoinInfo.anon_src_index indexes into this array. Deduped — joins
+   * to the same un-nameable source share one entry. Omitted when empty. These
+   * are describe-only; they carry no addressable name.
+   */
+  anon_srcs?: SourceInfo[];
 }
 
 // ── model level (canonical walker output) ──────────────────────────

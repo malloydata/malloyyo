@@ -69,14 +69,19 @@ function projectGroups(g: FieldGroups): FieldGroups {
 }
 
 export function projectSource(s: SourceInfo): SourceInfo {
-  const base = omit(s, 'location', 'body', 'dimensions', 'measures', 'views', 'joins');
+  const base = omit(
+    s, 'location', 'body', 'anon_srcs', 'dimensions', 'measures', 'views', 'joins',
+  );
   const groups = projectGroups({
     dimensions: s.dimensions,
     measures: s.measures,
     views: s.views,
     joins: s.joins,
   });
-  return withoutDocRoute({ ...base, ...groups });
+  const projected = withoutDocRoute({ ...base, ...groups }) as SourceInfo;
+  // anon_srcs are full sources (navigate-only) — project each the same way.
+  if (s.anon_srcs) projected.anon_srcs = s.anon_srcs.map(projectSource);
+  return projected;
 }
 
 export function projectGiven(g: GivenInfo): GivenInfo {

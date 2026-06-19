@@ -27,6 +27,14 @@ function collectRefs(groups: FieldGroups, into: Set<string>): void {
   }
 }
 
+/** A source's own joins plus the joins of every anon source it owns — an anon
+    (un-nameable) target can still join a source that IS nameable here, and that
+    nameable target belongs in the closure. */
+function collectSourceRefs(s: SourceInfo, into: Set<string>): void {
+  collectRefs(s, into);
+  for (const a of s.anon_srcs ?? []) collectSourceRefs(a, into);
+}
+
 /**
  * Pure selection: requested source + transitive join closure. No I/O.
  * Returns undefined when the model has no such source.
@@ -46,7 +54,7 @@ export function selectSource(
     if (!info) continue; // a ref may name something outside sources{} (rare)
     sources[next] = info;
     const refs = new Set<string>();
-    collectRefs(info, refs);
+    collectSourceRefs(info, refs);
     for (const r of refs) if (!sources[r]) queue.push(r);
   }
   return { requested: name, sources };

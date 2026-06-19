@@ -120,6 +120,49 @@ test('multi-file model: full namespace described, locality via location', async 
   assert.ok(!importedView?.location, 'imported view: no develop-only coord');
 });
 
+test('transitive import: un-nameable join targets become deduped anon_srcs', async () => {
+  // tx_index imports tx_mid imports tx_bottom. Loaded from tx_index, tx_flights'
+  // joins to tx_carriers (defined in tx_bottom) cannot be named here — Malloy's
+  // referencedSource() is undefined while referenceSourceID is set. Both joins
+  // point at the SAME bottom source → one anon_srcs entry, shared index.
+  const result = await withFixtureRuntime((rt) =>
+    compile(rt, fixtureUrl('tx_index.malloy'), { readSource }),
+  );
+  assert.equal(result.ok, true, JSON.stringify(result.problems));
+  const flights = result.model?.sources['tx_flights'];
+  assert.ok(flights, 'tx_flights is in the namespace (via import)');
+  const carriers = flights.joins.find((j) => j.name === 'carriers');
+  const alt = flights.joins.find((j) => j.name === 'alt');
+  assert.equal(carriers?.source_ref, undefined, 'un-nameable: no source_ref');
+  assert.equal(carriers?.fields, undefined, 'un-nameable: not inlined either');
+  assert.equal(carriers?.anon_src_index, 0, 'first un-nameable target → index 0');
+  assert.equal(alt?.anon_src_index, 0, 'second join to the SAME source → same index (deduped)');
+  assert.equal(flights.anon_srcs?.length, 1, 'one anon source, not two');
+  assert.equal(flights.anon_srcs?.[0]?.name, 'tx_carriers', 'label derived from the reference id');
+  assert.ok(
+    flights.anon_srcs?.[0]?.measures.some((m) => m.name === 'tx_carrier_count'),
+    'the anon source carries its own fields',
+  );
+});
+
+test('transitive import: explore projection of an anon closure (golden)', async () => {
+  const result = await withFixtureRuntime((rt) =>
+    compile(rt, fixtureUrl('tx_index.malloy'), { readSource }),
+  );
+  assert.ok(result.model);
+  const closure = selectSource(result.model, 'tx_flights');
+  assert.ok(closure);
+  // tx_carriers is un-nameable, so it does NOT enter the model-sources closure;
+  // it rides inside tx_flights.anon_srcs.
+  assert.deepEqual(Object.keys(closure.sources), ['tx_flights']);
+  const explore = projectDescription(closure, 'explore');
+  const text = JSON.stringify(explore);
+  assert.ok(!text.includes('"location"'), 'no develop-only coords in anon sources');
+  assert.ok(!text.includes('"body"'), 'no raw body in the explore JSON');
+  const { expected, actual } = checkGolden('tx_flights.closure.explore.json', explore);
+  assert.equal(actual, expected);
+});
+
 test('mustQuote: reserved-word and funny-character field names are flagged', async () => {
   const result = await withFixtureRuntime((rt) =>
     compile(rt, fixtureUrl('quoting.malloy'), { readSource }),

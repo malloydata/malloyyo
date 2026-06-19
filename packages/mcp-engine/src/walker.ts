@@ -185,21 +185,56 @@ function fieldKind(
   return 'dimension';
 }
 
-function resolveSourceRef(
-  ef: ExploreField,
-  knownSources: Set<string>,
-): string | undefined {
-  if (isScalarArray(ef) || isRepeatedRecord(ef) || isAnonymousRecord(ef)) {
+/**
+ * What a join's target IS, resolved from Malloy's authoritative reference
+ * tracking (the experimental `referenceSourceID` / `referencedSource()` pair)
+ * rather than guessed from structDef shape:
+ *  - 'ref'  — an unmodified reference to a source that is named in this model's
+ *             namespace and is a known top-level source → emit `source_ref`.
+ *  - 'anon' — an unmodified reference to a source that CANNOT be named here
+ *             (reached only through a transitive import) → emit `anon_src_index`
+ *             into the owning source's `anon_srcs`, deduped by `refId`.
+ *  - 'own'  — the join defines its own shape (table, SQL, query, nested/repeated
+ *             record, or a modified/extended source — no source to reference),
+ *             OR names a private/unexported source we deliberately don't surface
+ *             → inline its fields.
+ */
+type JoinClass =
+  | { kind: 'ref'; name: string }
+  | { kind: 'anon'; refId: string }
+  | { kind: 'own' };
+
+/** `referencedSource()` is experimental and can throw; never let it break a
+    describe — an unresolved reference degrades to inline. */
+function safeReferencedSource(ef: ExploreField): Explore | undefined {
+  try {
+    return (ef as { referencedSource?: () => Explore | undefined }).referencedSource?.();
+  } catch {
     return undefined;
   }
-  const sd = ef.structDef as { name?: string; sourceID?: string };
-  if (sd.sourceID) {
-    const origName = sd.sourceID.split('@')[0];
-    if (origName && knownSources.has(origName)) return origName;
+}
+
+function classifyJoinTarget(ef: ExploreField, knownSources: Set<string>): JoinClass {
+  // Undefined ⇒ this join defines its own shape (incl. nested/repeated records
+  // and scalar arrays, which report no referenceID) → inline.
+  const refId = (ef as { referenceSourceID?: string }).referenceSourceID;
+  if (refId === undefined) return { kind: 'own' };
+  const ref = safeReferencedSource(ef);
+  if (ref) {
+    // Nameable here. Reference it only if it is an addressable top-level source;
+    // a private/unexported target can't be addressed, so inline it.
+    if (knownSources.has(ref.name)) return { kind: 'ref', name: ref.name };
+    return { kind: 'own' };
   }
-  if (sd.name && knownSources.has(sd.name)) return sd.name;
-  if (knownSources.has(ef.name)) return ef.name;
-  return undefined;
+  // A real reference, but to a source not nameable in this namespace → anon.
+  return { kind: 'anon', refId };
+}
+
+/** Per-source accumulator for un-nameable join targets: `byId` dedups by
+    `referenceSourceID`; `srcs` is the source's `anon_srcs` array. */
+interface AnonAcc {
+  byId: Map<string, number>;
+  srcs: SourceInfo[];
 }
 
 interface WalkContext {
@@ -213,11 +248,58 @@ function emptyGroups(): FieldGroups {
   return { dimensions: [], measures: [], views: [], joins: [] };
 }
 
+/** Allocate (or reuse) an `anon_srcs` slot for an un-nameable join target.
+    Reserves the index BEFORE walking the target's fields so a cyclic/self
+    reference reuses the in-progress slot instead of recursing forever. */
+function allocAnon(
+  ef: ExploreField,
+  refId: string,
+  depth: number,
+  ctx: WalkContext,
+  anon: AnonAcc,
+): number {
+  const existing = anon.byId.get(refId);
+  if (existing !== undefined) return existing;
+  const idx = anon.srcs.length;
+  anon.byId.set(refId, idx);
+  // Reserve the slot, then fill it (cycle-safe).
+  anon.srcs.push(undefined as unknown as SourceInfo);
+  anon.srcs[idx] = buildAnonSource(ef, refId, depth, ctx, anon);
+  return idx;
+}
+
+/** An un-nameable join target rendered as a SourceInfo. The name is cosmetic
+    (it has no writable name here) — derive a readable label from the reference
+    id (`carriers@file://…` → `carriers`). No location/body: the join's own
+    location points at the join statement, not the target's defining file. */
+function buildAnonSource(
+  ef: ExploreField,
+  refId: string,
+  depth: number,
+  ctx: WalkContext,
+  anon: AnonAcc,
+): SourceInfo {
+  const structDefFields = (ef.structDef.fields as StructDefField[]) ?? [];
+  const groups = walkFields(ef.allFields, structDefFields, depth, ctx, anon);
+  const name = refId.split('@')[0] || ef.name;
+  const out: SourceInfo = {
+    name,
+    primary_key: (ef as { primaryKey?: string }).primaryKey ?? null,
+    ...groups,
+  };
+  applyDocs(out, ef.annotations);
+  if (needsQuote(name)) out.mustQuote = true;
+  const annotations = annotationList(ef.annotations);
+  if (annotations.length > 0) out.annotations = annotations;
+  return out;
+}
+
 function walkFields(
   fields: Field[],
   structDefFields: StructDefField[],
   depth: number,
   ctx: WalkContext,
+  anon: AnonAcc,
 ): FieldGroups {
   const groups = emptyGroups();
   for (const f of fields) {
@@ -228,10 +310,16 @@ function walkFields(
 
     if (f.isExploreField()) {
       const ef = f as ExploreField;
-      const ref = resolveSourceRef(ef, ctx.knownSources);
+      const cls = classifyJoinTarget(ef, ctx.knownSources);
+      const inlineMode = ctx.opts.expand === 'inline';
       const join: JoinInfo = { name: f.name, relationship: joinRel(ef) };
       applyDocs(join, f.annotations);
-      if (ref) join.source_ref = ref;
+      if (cls.kind === 'ref') join.source_ref = cls.name;
+      // Anonymous targets live in the owning source's anon_srcs; in inline mode
+      // we inline their fields instead, so don't also allocate a slot.
+      else if (cls.kind === 'anon' && !inlineMode) {
+        join.anon_src_index = allocAnon(ef, cls.refId, depth + 1, ctx, anon);
+      }
       if (needsQuote(f.name)) join.mustQuote = true;
       if (annotations.length > 0) join.annotations = annotations;
       if (loc) join.location = loc;
@@ -245,11 +333,14 @@ function walkFields(
         if (body) join.body = body;
       }
 
-      const shouldInline = ctx.opts.expand === 'inline' || !ref;
+      // Inline when the target defines its own shape (nothing to reference), or
+      // when the client asked for inline expansion. Ref'd and anon targets are
+      // navigated, not inlined.
+      const shouldInline = inlineMode || cls.kind === 'own';
       if (shouldInline && depth < MAX_JOIN_DEPTH) {
         const childStructFields =
           (ef.structDef.fields as StructDefField[]) ?? [];
-        const sub = walkFields(ef.allFields, childStructFields, depth + 1, ctx);
+        const sub = walkFields(ef.allFields, childStructFields, depth + 1, ctx, anon);
         join.fields = stripScalarArrayValue(ef, sub);
       }
       groups.joins.push(join);
@@ -295,7 +386,10 @@ function walkFields(
 
 function walkExplore(e: Explore, ctx: WalkContext): SourceInfo {
   const structDefFields = (e.structDef.fields as StructDefField[]) ?? [];
-  const groups = walkFields(e.allFields, structDefFields, 0, ctx);
+  // Fresh accumulator per top-level source: anon_srcs and their dedup are
+  // scoped to the source that owns the un-nameable joins.
+  const anon: AnonAcc = { byId: new Map(), srcs: [] };
+  const groups = walkFields(e.allFields, structDefFields, 0, ctx, anon);
   const annotations = annotationList(e.annotations);
   const out: SourceInfo = {
     name: e.name,
@@ -316,6 +410,7 @@ function walkExplore(e: Explore, ctx: WalkContext): SourceInfo {
     const body = sliceSource(ctx.readSource(mLoc.url), mLoc);
     if (body) out.body = body;
   }
+  if (anon.srcs.length > 0) out.anon_srcs = anon.srcs;
   return out;
 }
 

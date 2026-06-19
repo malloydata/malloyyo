@@ -123,10 +123,13 @@ export interface ViewInfo {
 
 export interface JoinInfo {
   name: string;
-  relationship: 'one' | 'many' | 'cross';
-  source_ref?: string;           // named target → look up in `sources`
-  /** Inline groups when the target is anonymous (nested/repeated record),
-      or when expand:'inline' was forced. Invariant: source_ref ∪ fields. */
+  relationship: 'one_to_many' | 'many_to_one' | 'cross';
+  source_ref?: string;           // nameable target → look up in `sources`
+  anon_src_index?: number;       // un-nameable target (transitive import) →
+                                 // index into the owning source's `anon_srcs`
+  /** Inline groups when the target defines its own shape (nested/repeated
+      record, SQL/query/extended source), or when expand:'inline' was forced.
+      Invariant: source_ref ∪ anon_src_index ∪ fields. */
   fields?: FieldGroups;
   description: string | null;
   annotations?: Annotation[];
@@ -146,6 +149,7 @@ export interface SourceInfo extends FieldGroups {
   primary_key: string | null;
   annotations?: Annotation[];
   location?: Loc;                // develop only
+  anon_srcs?: SourceInfo[];      // un-nameable join targets (see JoinInfo.anon_src_index)
 }
 
 // ── model level (canonical walker output) ──────────────────────────

@@ -1,0 +1,12 @@
+import "tx_bottom.malloy"
+
+#" Flights (the "mid" layer); joins carriers from the bottom layer twice.
+source: tx_flights is duckdb.sql("""
+  SELECT 1 as id, 'AA' as carrier, 'WN' as alt_carrier
+  UNION ALL SELECT 2 as id, 'WN' as carrier, 'AA' as alt_carrier
+""") extend {
+  primary_key: id
+  join_one: carriers is tx_carriers with carrier
+  join_one: alt is tx_carriers on alt_carrier = alt.code
+  measure: tx_flight_count is count()
+}

@@ -10,7 +10,7 @@ Malloyyo is the thin layer that serves that model:
 
 - **Thin by design** — it sits between the AI and your data, nothing more.
 - **Develop, then publish** — build the model locally and `malloyyo publish` it (or point Malloyyo at a GitHub repo).
-- **Claude already knows Malloy** — the same way it knows Python — so authoring is fast and assisted.
+- **Claude already knows Malloy** — the same way it knows Python — so authoring is incredibly fast and assisted.
 - **Readable, full-featured queries** — Malloy is a complete query language (join, nest, aggregate, filter) that stays legible: you can read a query and see at a glance it's doing the right thing.
 - **DuckDB built in** — query Parquet over plain HTTP (S3, GCS, any web server) with **no warehouse required**, or attach your own (BigQuery, Snowflake, MotherDuck, Databricks, …).
 - **Tight control** — the AI can only query what's in the semantic model; nothing outside it is reachable.

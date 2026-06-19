@@ -185,6 +185,9 @@ export interface CompileResult {
 
 export interface QueryValidationResult {
   ok: boolean;
+  /** The generated SQL — execute:false validates AND returns it (the
+      confirmatory-inspect channel; SQL never rides an executed run). */
+  sql?: string;
   problems: Problem[];
   /**
    * Givens this query transitively references — FULL detail so the caller

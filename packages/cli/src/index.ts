@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { resolveTarget, resolveInstance } from "./config.js";
 import { gatherDirectory, gitInfo } from "./gather.js";
 import { getAccessToken, login } from "./oauth.js";
+import { serveMcp } from "./mcp.js";
 import { clearCreds } from "./store.js";
 import type { PublishRequest, ModelStatus } from "./protocol.js";
 
@@ -113,6 +114,17 @@ program
   .option("--token <token>", "bearer token (overrides login/env)")
   .description("show what's live on <target>: version, commit, compile state")
   .action(status);
+
+program
+  .command("mcp")
+  .option("-C, --root <dir>", "project root (default: current directory)")
+  .description(
+    "run a local stdio MCP server (the explore / test-window surface) over the " +
+      "Malloy model in the current directory",
+  )
+  .action(async (opts: { root?: string }) => {
+    await serveMcp({ root: opts.root, version: VERSION });
+  });
 
 program.parseAsync().catch((err: unknown) => {
   console.error(err instanceof Error ? err.message : String(err));

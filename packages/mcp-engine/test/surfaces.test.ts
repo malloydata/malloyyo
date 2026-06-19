@@ -116,6 +116,7 @@ test('explore: query execute:false validates and reports givens', async () => {
   })) as QueryValidationResult;
   assert.equal(result.ok, true);
   assert.equal(result.givens?.[0]?.name, 'TARGET');
+  assert.equal(typeof result.sql, 'string', 'execute:false returns the generated SQL');
 });
 
 test('explore: query executes restricted text with givens', async () => {
@@ -127,6 +128,7 @@ test('explore: query executes restricted text with givens', async () => {
   })) as RunResult;
   assert.equal(result.ok, true, JSON.stringify(result.problems));
   assert.deepEqual(result.rows, [{ v: 3 }]);
+  assert.equal(result.sql, undefined, 'execute:true does not carry SQL (output, not input)');
 });
 
 test('explore: query rejects forbidden constructs', async () => {

@@ -60,6 +60,9 @@ export async function validateRestricted(
     const ok = !hasError(problems);
     const out: QueryValidationResult = { ok, problems };
     if (ok) {
+      // execute:false returns the generated SQL (compile without running) plus
+      // the givens the query references — the confirmatory-inspect channel.
+      try { out.sql = (await q.getSQL()).trim(); } catch { /* keep sql absent on a late compile error */ }
       const givens = await queryGivens(q);
       if (givens) out.givens = givens;
     }

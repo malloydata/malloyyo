@@ -379,6 +379,8 @@ function exploreQueryTool(host: ExploreHost, opts: ExploreSurfaceOptions): ToolD
           }
           const full = await runRestricted(m.runtime, m.entry, malloy, { rowLimit, givens: givens as never });
           const budgeted = await applyResultBudget(full, opts.result, { toolName: 'query', args });
+          // Explore: SQL is output, not input — it rides execute:false, never the run.
+          delete (budgeted as { sql?: string }).sql;
           return { ...budgeted, problems: budgeted.problems.map(fix) };
         });
       } catch (e) {

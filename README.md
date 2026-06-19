@@ -4,37 +4,41 @@ An MCP server that gives AI a **semantic model** of your data — so it returns 
 
 Point an AI at a raw database and it build a query from scratch. The problem is that, tomorrow, when you ask the same question, it might write a different query with different results. Numbers aren't consistent. Sometimes it guesses: wrong joins, invented columns, aggregations double-counted on fan-out — and the answers *look* right. Malloyyo puts a [Malloy](https://malloydata.dev) semantic model — the measures, dimensions, and joins defined once and correctly — between the AI and your data. The AI composes queries against that model instead of writing SQL from scratch, so the numbers come back right by construction.
 
-You develop the model locally with the [Malloy CLI](https://github.com/malloydata/malloy-cli).  Claude (and other AIs) already know the Malloy Language, they same way they know python, so building your semantic model is easy and assisted.  You then publish your model with the [`malloyyo` CLI](packages/cli) (or point Malloyyo at a GitHub repo). Malloyyo compiles it against your Analytical database and serves it as a personal MCP endpoint for claude.ai, Claude Desktop, or any MCP client — running on Vercel or self-hosted in Docker.
+You develop the model locally with the [Malloy CLI](https://github.com/malloydata/malloy-cli). Claude (and other AIs) already know the Malloy language the same way they know Python, so building your semantic model is easy and assisted. You then publish it with the [`malloyyo` CLI](packages/cli) (or point Malloyyo at a GitHub repo). **Malloyyo runs on a built-in DuckDB engine** — so a model can query Parquet files over plain HTTP (S3, GCS, any web server) with **no warehouse required** — or compile against your own analytical database (BigQuery, Snowflake, MotherDuck, Databricks, and more). It serves the model as a personal MCP endpoint for claude.ai, Claude Desktop, or any MCP client — running on Vercel or self-hosted in Docker.
 
-The Malloyyo server collects the history of all queries and and lets you run/share and explore further.  Try [the Malloyyo demo server](https://malloyyo.vercel.app/ltool/main_7zfqmk7cv6) and 'Explore further with Claude'.  You can use any Google account to log in.
+The Malloyyo server keeps the history of every query and lets you run, share, and explore further. Try [the Malloyyo demo server](https://malloyyo.vercel.app/ltool/main_7zfqmk7cv6) and "Explore further with Claude" — sign in with any Google account.
 ## How it works
 
 ```
-      ┌─────────────────────────────────────────────┐
-      │           GitHub repo (index.malloy)        │
-      │   your semantic model, developed with CLI   │
-      └────────────────────┬────────────────────────┘
-                           │  malloyyo publish
-      ┌────────────────────▼────────────────────────┐
-      │                 Malloyyo                    │
-      │       compile → store → ready               │
-      └──────┬─────────────────────────┬────────────┘
-             │                         │
-      ┌──────▼──────┐           ┌──────▼──────┐
-      │   Cloud DB  │           │    Neon     │
-      │  or S3/GCS  │           │  Postgres   │
-      │             │           │  metadata   │
-      │             │           │             │
-      │  your data  │           │  datasets   │
-      │  + queries  │           │  malloy_    │
-      └─────────────┘           │    models   │
-             │                  │  users      │
-             └──────────────────┘
-                           │
-      ┌────────────────────▼────────────────────────┐
-      │              MCP server  /mcp               │
-      │         OAuth 2.1 · 4 analytical tools      │
-      └─────────────────────────────────────────────┘
+   MCP client (claude.ai)            Browser (you)
+           │ OAuth 2.1                     │ Google sign-in
+   ┌───────▼──────────┐          ┌─────────▼─────────┐
+   │  MCP server /mcp │          │      Web UI       │
+   │ analytical tools │          │  datasets · ltool │
+   └───────┬──────────┘          └─────────┬─────────┘
+           └──────────────┬────────────────┘
+                          │  compile · run             ┌────────────────────┐
+                          │                            │  Authoring Models  │
+                          │                            │   • Malloy CLI     │
+                          │                            │   • Malloyyo CLI   │
+                          │                            │   • Claude         │
+                          │                            └──┬──────────────┬──┘
+                          │                          push │              │ develop
+   ┌──────────────────────▼──────────────────────┐  (deploy)            │
+   │                   Malloyyo                   │◀────────┘            │
+   │        load · compile · store · serve        │                     │
+   └──────┬─────────────────────────────┬─────────┘                     │
+          │                             │                                │
+   ┌──────▼──────┐             ┌─────────▼───────┐                       │
+   │    Neon     │             │  Analytical DB  │◀──────────────────────┘
+   │  Postgres   │             │  • BigQuery     │  direct (dev)
+   │  metadata   │             │  • MotherDuck   │
+   │             │             │  • Snowflake    │
+   │  datasets   │             │  • Databricks   │
+   │  malloy_    │             │   (or S3/GCS)   │
+   │    models   │             │                 │
+   │  users      │             │  your data      │
+   └─────────────┘             └─────────────────┘
 ```
 
 ### Adding a dataset

@@ -7,10 +7,13 @@ import url from 'node:url';
 import { SingleConnectionRuntime, type Runtime, type URLReader } from '@malloydata/malloy';
 import { DuckDBConnection } from '@malloydata/db-duckdb';
 import {
+  compile,
+  modelCatalogEntry,
   prepareSource,
   type DevelopHost,
   type BoundModel,
   type ExploreHost,
+  type ModelEntry,
   type ModelList,
   type SourceInput,
 } from '../src/index';
@@ -98,11 +101,28 @@ export function testExploreHost(opts: { withList?: boolean } = {}): ExploreHost 
     },
   };
   if (opts.withList) {
-    host.list = async (): Promise<ModelList> => ({
-      entries: [...files.keys()].sort().map((href) => ({
-        model_ref: href.slice(FIXTURE_BASE.length),
-      })),
-    });
+    // Mirror a real host: compile each model (exportedOnly) and carry its
+    // exported sources with their annotations. Models that don't compile list
+    // as bare refs (graceful — matches a host that can't introspect one).
+    host.list = async (): Promise<ModelList> => {
+      const entries: ModelEntry[] = [];
+      for (const href of [...files.keys()].sort()) {
+        const model_ref = href.slice(FIXTURE_BASE.length);
+        try {
+          // Same catalog projection every real host uses (no per-host copy).
+          const entry = await host.withModel(model_ref, async (m) => {
+            const compiled = await compile(m.runtime, m.entry, { exportedOnly: true });
+            return compiled.ok && compiled.model
+              ? modelCatalogEntry(model_ref, compiled.model)
+              : { model_ref };
+          });
+          entries.push(entry);
+        } catch {
+          entries.push({ model_ref }); // non-compiling fixture → bare ref
+        }
+      }
+      return { entries };
+    };
   }
   return host;
 }

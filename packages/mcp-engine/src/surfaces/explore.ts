@@ -191,7 +191,7 @@ async function resolveModel(
     };
   }
   const entries: ModelEntry[] = (await host.list()).entries;
-  const hits = entries.filter((e) => e.sources?.includes(source));
+  const hits = entries.filter((e) => e.sources?.some((s) => s.source_ref === source));
   if (hits.length === 1) return { model_ref: hits[0]!.model_ref };
   if (hits.length === 0) {
     return {
@@ -250,8 +250,16 @@ function listSourcesTool(host: ExploreHost): ToolDef {
       const models = entries.map((e) => {
         const m: Record<string, unknown> = { model_ref: e.model_ref };
         if (e.description) m.description = e.description;
-        if (e.sources?.length) m.sources = e.sources.map((s) => ({ source_ref: s }));
-        if (e.queries?.length) m.queries = e.queries.map((q) => ({ query_ref: q }));
+        if (e.instructions) m.instructions = e.instructions;
+        if (e.sources?.length) {
+          m.sources = e.sources.map((s) => {
+            const o: Record<string, unknown> = { source_ref: s.source_ref };
+            if (s.description) o.description = s.description;
+            if (s.instructions) o.instructions = s.instructions;
+            if (s.mustQuote) o.mustQuote = true;
+            return o;
+          });
+        }
         return m;
       });
       return { ok: true, models };

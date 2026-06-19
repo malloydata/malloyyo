@@ -32,6 +32,7 @@ import {
   exploreSurface,
   gateConfigProblems,
   mapProblems,
+  modelCatalogEntry,
   prepareSource,
   type BoundModel,
   type ExploreHost,
@@ -179,14 +180,11 @@ function makeExploreHost(root: string, currentConfig: () => Promise<LoadedConfig
       if (!published(ENTRY)) return { entries: [] };
       const entry = await withRuntime({ url: ENTRY }, async (m): Promise<ModelEntry> => {
         const compiled = await compile(m.runtime, m.entry, { exportedOnly: true });
-        const e: ModelEntry = { model_ref: ENTRY };
-        if (compiled.ok && compiled.model) {
-          const sources = Object.keys(compiled.model.sources);
-          const queries = compiled.model.queries.map((q) => q.name);
-          if (sources.length) e.sources = sources;
-          if (queries.length) e.queries = queries;
-        }
-        return e;
+        // The catalog SHAPE is the engine's; the host only supplies a compiled
+        // model. Same projection the hosted host uses → no drift.
+        return compiled.ok && compiled.model
+          ? modelCatalogEntry(ENTRY, compiled.model)
+          : { model_ref: ENTRY };
       });
       return { entries: [entry] };
     },

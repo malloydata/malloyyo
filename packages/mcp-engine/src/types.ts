@@ -256,16 +256,29 @@ export interface DescribeResult {
 
 // ── catalog entries (advisory list) ────────────────────────────────
 
+/** A source as it appears in the catalog listing: enough to pick one and
+    address it (its `source_ref`), with the annotations that help choose. */
+export interface SourceEntry {
+  source_ref: string;
+  description?: string;
+  instructions?: string;
+  /** Present (true) only when `source_ref` must be backtick-quoted in Malloy. */
+  mustQuote?: boolean;
+}
+
 export interface ModelEntry {
   /** Host-defined: a dataset name for a registry host, a relative path for a
       directory host, … Resolution must be O(one lookup). */
   model_ref: string;
   description?: string;
   instructions?: string;
-  /** Advisory hints when the host knows them cheaply (e.g. stored at publish
-      time). Never required, never guaranteed complete. */
-  sources?: string[];
-  queries?: string[];
+  /** The model's EXPORTED sources, each with its annotations. Advisory — never
+      required, never guaranteed complete.
+      NOTE: named queries are intentionally NOT listed yet. A named query is
+      dual-natured (runnable AND usable as a source); surfacing that — and making
+      describe_source treat a named query as the source it is — needs more design,
+      so it is deferred out of the MVP listing. */
+  sources?: SourceEntry[];
 }
 
 export interface ModelList {

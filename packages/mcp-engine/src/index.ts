@@ -31,6 +31,7 @@ export type {
   RunStatementInfo,
   SourceDescribeResult,
   SourceDescription,
+  SourceEntry,
   SourceInfo,
   Surface,
   TruncationInfo,
@@ -41,6 +42,7 @@ export type {
 export { compile, listRuns, type CompileOptions, type RunListing } from './walker';
 export { selectSource, describeSource } from './select';
 export { projectModel, projectDescription } from './project';
+export { modelCatalogEntry } from './catalog';
 export { run, executeMaterialized, DEFAULT_ROW_LIMIT, type RunOptions } from './run';
 export { validateRestricted, runRestricted } from './restricted';
 export {

@@ -184,14 +184,27 @@ test('explore: field-not-found is nudged toward describe_source', async () => {
   assert.ok(p?.message.includes('describe_source'));
 });
 
-test('explore: list_sources returns the catalog hierarchy', async () => {
+test('explore: list_sources lists sources with their annotations (no queries)', async () => {
   const s = exploreSurface(testExploreHost({ withList: true }));
   const result = (await tool(s, 'list_sources').handler({})) as {
     ok: boolean;
-    models: Array<{ model_ref: string }>;
+    models: Array<{
+      model_ref: string;
+      sources?: Array<{ source_ref: string; description?: string; instructions?: string }>;
+      queries?: unknown;
+    }>;
   };
   assert.equal(result.ok, true);
-  assert.ok(result.models.some((m) => m.model_ref === 'flights.malloy'));
+  const flights = result.models.find((m) => m.model_ref === 'flights.malloy');
+  assert.ok(flights, 'flights model is listed');
+  const names = (flights.sources ?? []).map((s) => s.source_ref).sort();
+  assert.deepEqual(names, ['carriers', 'flights'], 'exported sources listed by ref');
+  const carriers = flights.sources!.find((s) => s.source_ref === 'carriers');
+  assert.equal(carriers?.description, 'Reference table of airline carriers.', 'source description carried');
+  const flightsSrc = flights.sources!.find((s) => s.source_ref === 'flights');
+  assert.match(flightsSrc?.instructions ?? '', /Grain is one row per flight/, 'agent instructions carried');
+  // Named queries are deferred out of the MVP listing.
+  assert.equal(flights.queries, undefined, 'no queries key in list_sources today');
 });
 
 test('yo_help: shared tool answers topics and lists them', async () => {

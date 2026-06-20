@@ -291,12 +291,6 @@ export interface TruncationInfo {
 
 export interface RunResult {
   ok: boolean;
-  /** The query's input source, named so it can be looked up in the model
-      namespace (via Malloy's experimental `Explore.referencedSource()`). Absent
-      when the FROM source isn't a referenceable namespace source (inline/
-      anonymous), or on a failed compile. The host records it; the agent does not
-      pass it (model-centric query) and does not need it. */
-  source?: string;
   sql?: string;
   rows?: unknown[];
   /** Rows the query produced (bounded by rowLimit). */

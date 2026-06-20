@@ -8,10 +8,8 @@
 // dep. No HTTP, no OAuth, no ingest pipeline: this isolates the host logic the
 // route is a thin wrapper over.
 //
-// Addressing: list_sources lists sources; describe_source resolves a bare source
-// against the catalog (model_ref optional). query is MODEL-centric — it takes a
-// required model_ref + Malloy (no source param); the engine derives the queried
-// source via Explore.referencedSource for the host to record.
+// Addressing is SOURCE-centric: list_sources lists sources; describe_source and
+// query resolve a bare source against the catalog (model_ref optional).
 //
 // Run via `npm run test:hosted` (scripts/hosted-test.sh stands up Postgres,
 // pushes the schema, and runs this with DATABASE_URL pointed at it).
@@ -129,14 +127,14 @@ test("describe_source on an unknown source fails cleanly (no throw)", async () =
 
 test("query execute:false validates; execute:true runs on DuckDB + records a share link", async () => {
   const v = await host().call("query", {
-    model_ref: "petshop",
+    source: "sales",
     malloy: "run: sales -> by_animal",
     execute: false,
   });
   assert.equal((JSON.parse(blockText(v, 0)) as { ok: boolean }).ok, true, "compiles");
 
   const run = await host().call("query", {
-    model_ref: "petshop",
+    source: "sales",
     malloy: "run: sales -> { aggregate: total_qty }",
     execute: true,
     question: "total units sold",
@@ -180,7 +178,7 @@ test("query execute:false validates; execute:true runs on DuckDB + records a sha
 
 test("query without a question is refused (host policy)", async () => {
   const r = await host().call("query", {
-    model_ref: "petshop",
+    source: "sales",
     malloy: "run: sales -> { aggregate: total_qty }",
     execute: true,
   });
@@ -200,7 +198,7 @@ test("multi-file model: compiles across the import; block 2 slices the entry sou
 
   // And it actually runs across the import boundary on DuckDB.
   const run = await host().call("query", {
-    model_ref: "multimod",
+    source: "pets",
     malloy: "run: pets -> by_animal",
     execute: true,
     question: "by animal",

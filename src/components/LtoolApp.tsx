@@ -196,7 +196,7 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
       .catch(() => {});
   }, []);
 
-  const runQuery = useCallback(async (src: string, malloy: string) => {
+  const runQuery = useCallback(async (src: string, malloy: string, datasetId?: string | null) => {
     if (!src || !malloy.trim()) return;
     setRunning(true);
     setResult(null);
@@ -205,7 +205,7 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
       const res = await fetch("/api/run", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ source: src, malloy }),
+        body: JSON.stringify({ source: src, malloy, datasetId }),
       });
       const json = await res.json();
       if (!res.ok) {
@@ -236,7 +236,7 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
         const authoredByMe: boolean = body.authoredByMe ?? false;
         const item: HistoryItem = {
           inquiryId: null, slug: initialSlug, question: body.question ?? null,
-          createdAt: new Date().toISOString(), source: body.source ?? null, datasetId: null,
+          createdAt: new Date().toISOString(), source: body.source ?? null, datasetId: body.datasetId ?? null,
           malloyQuery: body.malloy ?? null, rowCount: null, durationMs: null,
           authorName: null, isFavorited: favoritedByMe, favoriteCount,
         };
@@ -255,7 +255,7 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
           setView("history");
           setScope(authoredByMe ? "me" : "all");
         }
-        if (body.source && body.malloy) runQuery(body.source, body.malloy);
+        if (body.source && body.malloy) runQuery(body.source, body.malloy, body.datasetId);
       })
       .catch((e) => { if (!cancelled) setRunError(e instanceof Error ? e.message : String(e)); });
     return () => { cancelled = true; };
@@ -272,7 +272,7 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
     setRunError(null);
     mainRef.current?.scrollTo({ top: 0 });
     if (item.malloyQuery && item.source) {
-      runQuery(item.source, item.malloyQuery);
+      runQuery(item.source, item.malloyQuery, item.datasetId);
     }
   }
 
@@ -338,7 +338,7 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
   // new history entry (fresh slug) under the edited title; otherwise just run.
   async function handleRun() {
     if (!source || !query.trim()) return;
-    if (!isModified) { runQuery(source, query); return; }
+    if (!isModified) { runQuery(source, query, selected?.datasetId); return; }
     const title = (editedTitle ?? modifiedDefaultTitle).trim() || query.trim().slice(0, 80);
     setRunning(true);
     setResult(null);
@@ -347,7 +347,7 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
       const res = await fetch("/api/run", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ source, malloy: query, save: true, title }),
+        body: JSON.stringify({ source, malloy: query, save: true, title, datasetId: selected?.datasetId }),
       });
       const json = await res.json();
       if (!res.ok) { setRunError(json.error ?? "query failed"); return; }

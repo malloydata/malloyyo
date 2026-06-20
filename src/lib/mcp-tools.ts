@@ -52,6 +52,21 @@ export async function findBySource(userId: string, sourceName: string) {
   return null;
 }
 
+/** Resolve a dataset directly by id (with visibility). Unambiguous — used by the
+    ltool replay, where the recorded `dataset_id` already names the exact model,
+    so we don't re-guess from a (possibly ambiguous) source name. */
+export async function findByDatasetId(userId: string, datasetId: string) {
+  const [ds] = await db
+    .select()
+    .from(datasets)
+    .where(and(visibleDatasetWhere(userId), eq(datasets.id, datasetId)))
+    .limit(1);
+  if (!ds) return null;
+  const model = await latestModel(ds.id);
+  if (!model) return null;
+  return { ds, model, description: null as string | null };
+}
+
 export async function latestModel(datasetId: string) {
   const [row] = await db
     .select()
@@ -108,7 +123,7 @@ export async function ensureConversation(userId: string, conversationId: string 
 }
 
 export type SharedQuery =
-  | { ok: true; instance: string; source: string | null; question: string; malloy: string | null }
+  | { ok: true; instance: string; source: string | null; datasetId: string | null; question: string; malloy: string | null }
   | { ok: false; error: string; wrongInstance?: string };
 
 // Resolve a share slug into the query it points at: the inquiry's question
@@ -126,12 +141,12 @@ export async function loadSharedQuery(slug: string): Promise<SharedQuery> {
   const [inq] = await db.select({ id: inquiries.id, question: inquiries.question }).from(inquiries).where(eq(inquiries.slug, slug)).limit(1);
   if (!inq) return { ok: false, error: `query slug '${slug}' not found` };
   const [tc] = await db
-    .select({ source: toolCalls.source, malloy: toolCalls.malloyInput })
+    .select({ source: toolCalls.source, malloy: toolCalls.malloyInput, datasetId: toolCalls.datasetId })
     .from(toolCalls)
     .where(and(eq(toolCalls.inquiryId, inq.id), inArray(toolCalls.toolName, RUN_LABELS), isNull(toolCalls.error)))
     .orderBy(desc(toolCalls.createdAt))
     .limit(1);
-  return { ok: true, instance: env.INSTANCE_NAME, source: tc?.source ?? null, question: inq.question, malloy: tc?.malloy ?? null };
+  return { ok: true, instance: env.INSTANCE_NAME, source: tc?.source ?? null, datasetId: tc?.datasetId ?? null, question: inq.question, malloy: tc?.malloy ?? null };
 }
 
 export type SharedQueryListContext = {
@@ -171,8 +186,11 @@ export async function runQueryForWeb(
   source: string,
   malloyQuery: string,
   maxRows = 1000,
+  datasetId?: string | null,
 ): Promise<WebRunResult> {
-  const found = await findBySource(userId, source);
+  // When the caller knows the dataset (an ltool replay carries the recorded
+  // dataset_id), resolve by it — unambiguous. Else fall back to source name.
+  const found = datasetId ? await findByDatasetId(userId, datasetId) : await findBySource(userId, source);
   if (!found) return { ok: false, error: `source '${source}' not found` };
   const { ds, model } = found;
   if (ds.status !== "ready") return { ok: false, error: `source '${source}' is not ready` };
@@ -210,8 +228,9 @@ export async function saveWebQuery(
   malloyQuery: string,
   title: string,
   maxRows = 1000,
+  datasetId?: string | null,
 ): Promise<WebSaveResult> {
-  const found = await findBySource(userId, source);
+  const found = datasetId ? await findByDatasetId(userId, datasetId) : await findBySource(userId, source);
   if (!found) return { ok: false, error: `source '${source}' not found` };
   const { ds, model } = found;
   if (ds.status !== "ready") return { ok: false, error: `source '${source}' is not ready` };

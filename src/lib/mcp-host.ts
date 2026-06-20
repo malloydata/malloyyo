@@ -167,10 +167,7 @@ async function recordQuery(
   if (!found) return undefined;
   const question = String(args.question ?? "").trim();
   const malloyQ = String(args.malloy ?? "");
-  // Model-centric query takes no `source` arg; the engine derives the queried
-  // source (Explore.referencedSource) and reports it on the result. Fall back to
-  // the model_ref when it isn't a referenceable namespace source.
-  const source = String(result.source ?? modelRef);
+  const source = String(args.source ?? modelRef);
   // The explore surface withholds SQL from the agent but hands it to the host
   // via the host_only channel (see the engine's toContent) — record it, as the
   // old surface did.

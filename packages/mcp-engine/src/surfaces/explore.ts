@@ -200,7 +200,32 @@ async function resolveModel(
   source: string,
   modelRef: string | undefined,
 ): Promise<Resolved> {
-  if (modelRef) return { model_ref: modelRef };
+  if (modelRef) {
+    // Guard against querying a source through the WRONG model. If the catalog
+    // shows this source in OTHER models but not the one named, that's a mistake
+    // — refuse rather than compile a confusing failure. (A source absent from
+    // the catalog may be internal to this model — trust modelRef and let the
+    // query compile-check it.)
+    if (host.list) {
+      const entries: ModelEntry[] = (await host.list()).entries;
+      const inModel = entries
+        .find((e) => e.model_ref === modelRef)
+        ?.sources?.some((s) => s.source_ref === source) ?? false;
+      const elsewhere = entries
+        .filter((e) => e.model_ref !== modelRef && e.sources?.some((s) => s.source_ref === source))
+        .map((e) => e.model_ref);
+      if (!inModel && elsewhere.length > 0) {
+        return {
+          problem: codeProblem(
+            'source-not-in-model',
+            `Model '${modelRef}' has no exported source '${source}' — it exists in: ` +
+              `${elsewhere.join(', ')}. Use one of those as model_ref, or fix the source name.`,
+          ),
+        };
+      }
+    }
+    return { model_ref: modelRef };
+  }
   if (!host.list) {
     return {
       problem: codeProblem(
@@ -230,17 +255,16 @@ async function resolveModel(
   };
 }
 
-/** Field-not-found recovery for the model-centric query: the agent already
-    knows the source it queried (it's in its `run:`), so point it at
-    describe_source for that source, scoped to this model. */
-function modelNudge(modelRef: string): (p: Problem) => Problem {
+/** Field-not-found recovery for the source-centric surface: point at
+    describe_source for this exact (model_ref, source). */
+function srcNudge(modelRef: string, source: string): (p: Problem) => Problem {
   return (p) => {
     if (p.code !== 'field-not-found') return p;
     return {
       ...p,
       message:
-        `${p.message} — call describe_source for the source you queried` +
-        (modelRef ? ` (model_ref="${modelRef}")` : '') +
+        `${p.message} — call describe_source with source="${source}"` +
+        (modelRef ? ` model_ref="${modelRef}"` : '') +
         ' to see what fields, measures, views, and joins exist.',
       help_topic: p.help_topic ?? 'language/fields',
     };
@@ -371,11 +395,12 @@ function exploreQueryTool(host: ExploreHost, opts: ExploreSurfaceOptions): ToolD
     inputSchema: {
       type: 'object',
       properties: {
+        source: { type: 'string', description: 'The source the query runs against.' },
+        malloy: { type: 'string', description: 'Malloy query text, e.g. `run: orders -> { ... }`.' },
         model_ref: {
           type: 'string',
-          description: 'The model to query (the model_ref from list_sources / describe_source).',
+          description: 'The model the source lives in (optional when the source name is unique).',
         },
-        malloy: { type: 'string', description: 'Malloy query text, e.g. `run: source -> { ... }`.' },
         question: {
           type: 'string',
           description: 'Plain-English description of what this query answers; hosts may record or share it.',
@@ -390,20 +415,21 @@ function exploreQueryTool(host: ExploreHost, opts: ExploreSurfaceOptions): ToolD
         },
         max_rows: { type: 'integer', minimum: 1, maximum: 10000, description: `Row cap (default ${DEFAULT_ROW_LIMIT}).` },
       },
-      required: ['model_ref', 'malloy'],
+      required: ['source', 'malloy'],
       additionalProperties: false,
     },
     handler: async (args) => {
-      const modelRef = argString(args, 'model_ref');
-      if (!modelRef.trim()) {
-        return { ok: false, problems: [codeProblem('model-ref-required', prompts.shared.errors['no-model-ref'])] };
-      }
+      const source = argString(args, 'source');
+      const modelRefArg = argOptString(args, 'model_ref');
       const execute = argOptBool(args, 'execute') ?? true;
+      const r = await resolveModel(host, source, modelRefArg);
+      if ('problem' in r) return { ok: false, problems: [r.problem] };
+      const modelRef = r.model_ref;
       try {
         return await host.withModel(modelRef, async (m) => {
-          const res = await executeQuery(m, args, modelNudge(modelRef), opts.result);
+          const res = await executeQuery(m, args, srcNudge(modelRef, source), opts.result);
           // execute:false: SQL is the confirmatory-inspect channel — the agent
-          // SHOULD see it; just tag the model.
+          // SHOULD see it; just tag which model the source resolved to.
           if (!execute) return { ...res, model_ref: modelRef };
           // execute:true: withhold SQL from the agent (SQL rides execute:false),
           // but the run generated it — park it on the host_only channel toContent

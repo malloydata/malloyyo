@@ -19,6 +19,7 @@ import assert from "node:assert/strict";
 import { desc, eq } from "drizzle-orm";
 import { db, users, datasets, malloyModels, malloyModelFiles, queries, toolCalls, type User } from "@/db";
 import { buildHostedExploreSurface } from "@/lib/mcp-host";
+import { loadSharedQuery, runQueryForWeb } from "@/lib/mcp-tools";
 
 const MODEL = `#" Pet shop sales.
 source: sales is duckdb.sql("""
@@ -212,6 +213,58 @@ test("an explicit unknown model_ref refuses without leaking existence", async ()
   const out = JSON.parse(blockText(r, 0)) as { ok: boolean; problems: Array<{ code: string }> };
   assert.equal(out.ok, false);
   assert.ok(out.problems.some((p) => p.code === "model-not-found"));
+});
+
+test("ltool round-trip: a shared query resolves AND replays (regression: broken share links)", async () => {
+  // Execute a query → it mints a share link (inquiry + tool_call carrying source
+  // + dataset_id). This is the exact path that broke: a bad recorded source made
+  // the link replay fail with "source not found".
+  const run = await host().call("query", {
+    source: "sales",
+    malloy: "run: sales -> { aggregate: total_qty }",
+    execute: true,
+    question: "ltool round-trip",
+  });
+  const payload = JSON.parse(blockText(run, 1)) as { ltool_link?: { url: string } };
+  const slug = (payload.ltool_link?.url ?? "").replace(/^.*\/ltool\//, "");
+  assert.ok(slug, "a share slug was minted");
+
+  // Follow the link.
+  const shared = await loadSharedQuery(slug);
+  assert.ok(shared.ok, `share link resolves${shared.ok ? "" : ": " + shared.error}`);
+  if (!shared.ok) return;
+  // The recorded source must be the REAL source, not the dataset/model name —
+  // recording the model name (e.g. via a source-derivation that returns nothing)
+  // is exactly what broke share links.
+  assert.equal(shared.source, "sales", "recorded source is the real source, not the model name");
+  assert.ok(shared.datasetId, "share carries the recorded dataset_id (unambiguous replay)");
+  assert.ok(shared.malloy, "share carries the malloy");
+
+  // Replay BOTH ways the app does it — by dataset_id (the ltool page) and by
+  // source name (legacy). Each must actually RUN and return rows.
+  const byId = await runQueryForWeb(user.id, shared.source ?? "", shared.malloy ?? "", 1000, shared.datasetId);
+  assert.ok(byId.ok, `replay by dataset_id runs${byId.ok ? "" : ": " + byId.error}`);
+  assert.ok(byId.ok && byId.rows.length === 1, "replay by dataset_id returns the aggregate row");
+  assert.equal(byId.ok && (byId.rows[0] as { total_qty: number }).total_qty, 6, "ran against the right model");
+
+  const bySource = await runQueryForWeb(user.id, shared.source ?? "", shared.malloy ?? "", 1000);
+  assert.ok(bySource.ok, `replay by source name runs${bySource.ok ? "" : ": " + bySource.error}`);
+});
+
+test("query refuses a source from the WRONG model_ref (write-side guard)", async () => {
+  // `sales` lives in petshop, `pets` in multimod. Querying `sales` against
+  // multimod must refuse (source-not-in-model) — never silently run the wrong
+  // model or record a wrong (source, model) pair.
+  const r = await host().call("query", {
+    source: "sales",
+    model_ref: "multimod",
+    malloy: "run: sales -> { aggregate: total_qty }",
+    execute: true,
+    question: "wrong model",
+  });
+  const out = JSON.parse(blockText(r, 0)) as { ok?: boolean; problems?: Array<{ code: string }> };
+  assert.equal(out.ok, false);
+  assert.ok(out.problems?.some((p) => p.code === "source-not-in-model"), JSON.stringify(out));
 });
 
 after(async () => {

@@ -200,32 +200,7 @@ async function resolveModel(
   source: string,
   modelRef: string | undefined,
 ): Promise<Resolved> {
-  if (modelRef) {
-    // Guard against querying a source through the WRONG model. If the catalog
-    // shows this source in OTHER models but not the one named, that's a mistake
-    // — refuse rather than compile a confusing failure. (A source absent from
-    // the catalog may be internal to this model — trust modelRef and let the
-    // query compile-check it.)
-    if (host.list) {
-      const entries: ModelEntry[] = (await host.list()).entries;
-      const inModel = entries
-        .find((e) => e.model_ref === modelRef)
-        ?.sources?.some((s) => s.source_ref === source) ?? false;
-      const elsewhere = entries
-        .filter((e) => e.model_ref !== modelRef && e.sources?.some((s) => s.source_ref === source))
-        .map((e) => e.model_ref);
-      if (!inModel && elsewhere.length > 0) {
-        return {
-          problem: codeProblem(
-            'source-not-in-model',
-            `Model '${modelRef}' has no exported source '${source}' — it exists in: ` +
-              `${elsewhere.join(', ')}. Use one of those as model_ref, or fix the source name.`,
-          ),
-        };
-      }
-    }
-    return { model_ref: modelRef };
-  }
+  if (modelRef) return { model_ref: modelRef };
   if (!host.list) {
     return {
       problem: codeProblem(
@@ -425,6 +400,32 @@ function exploreQueryTool(host: ExploreHost, opts: ExploreSurfaceOptions): ToolD
       const r = await resolveModel(host, source, modelRefArg);
       if ('problem' in r) return { ok: false, problems: [r.problem] };
       const modelRef = r.model_ref;
+      // Write-side guard (query only): when an explicit model_ref is passed and
+      // the catalog shows that model EXISTS but doesn't export this source — while
+      // some OTHER model does — refuse, so a query never resolves a source through
+      // the wrong model (and never records a wrong (source, model) pair). Skips
+      // when the model isn't in the catalog, so a bogus model_ref fails in
+      // withModel (model-not-found) rather than leaking which model_refs exist.
+      if (modelRefArg && host.list) {
+        const entries = (await host.list()).entries;
+        const here = entries.find((e) => e.model_ref === modelRef);
+        const inModel = here?.sources?.some((s) => s.source_ref === source) ?? false;
+        const elsewhere = entries
+          .filter((e) => e.model_ref !== modelRef && e.sources?.some((s) => s.source_ref === source))
+          .map((e) => e.model_ref);
+        if (here && !inModel && elsewhere.length > 0) {
+          return {
+            ok: false,
+            problems: [
+              codeProblem(
+                'source-not-in-model',
+                `Model '${modelRef}' has no source '${source}' — it's in: ${elsewhere.join(', ')}. ` +
+                  'Pass that model_ref, or fix the source name.',
+              ),
+            ],
+          };
+        }
+      }
       try {
         return await host.withModel(modelRef, async (m) => {
           const res = await executeQuery(m, args, srcNudge(modelRef, source), opts.result);

@@ -8,6 +8,10 @@ records what implementation taught.
 Companion to
 [`describe-shape.md`](./describe-shape.md) — the types below are the normative
 TS rendering of the describe-shape, with extensions noted in §Decisions.
+The **explore `describe_source` tool output** is now a further projection with its
+own current spec, [`describe-source.md`](./describe-source.md) (v5):
+`described_source` + path-keyed `joins` + deduped `join_source_map`, the
+columns-vs-joins split, `fans_out`, and `quoted_path`.
 
 **Reference material for the implementer:**
 - `~/malloy-cli/src/mcp/{server,compile,run,restricted,loader,help,skills}.ts` —

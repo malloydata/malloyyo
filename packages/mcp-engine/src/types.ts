@@ -86,6 +86,12 @@ export interface JoinInfo {
    * Invariant: every join has source_ref, anon_src_index, and/or fields.
    */
   fields?: FieldGroups;
+  /** Set on a SYNTHETIC data-shape join — a column that Malloy models as an
+      explore field but is really part of the row, not a relationship to another
+      source. The explore surface renders 'record' as a nested-type dimension and
+      the two array shapes as `joins` entries + dimension stubs. Absent on real
+      source-joins (named refs, sql/query blocks, transitive-import targets). */
+  column_shape?: 'record' | 'scalar_array' | 'record_array';
   description?: string;
   instructions?: string;
   annotations?: Annotation[];
@@ -397,23 +403,118 @@ export interface ListSourcesResult {
   models: Record<string, ListedModel>;
 }
 
+// ── describe_source wire shape (explore) — see the v5 spec ─────────
+// Optimized for easy+correct LLM inference: read the answer, don't derive it.
+// COLUMNS (scalars, single records, arrays) live in a schema's `dimensions`;
+// JOINS (relationships to other sources) live in the flat `joins` list. Arrays
+// straddle: a column-stub in `dimensions` PLUS a detail entry in `joins` (they
+// fan, and fan info belongs in joins). `type` is ALWAYS a real type — a member
+// with no `type` is a navigable stub pointing at its `joins` entry by `path`.
+
+/** A field's type: a scalar type name, or a record (a map of its members). */
+export type CompactType = string | { [name: string]: CompactMember };
+
+/** A value column — a scalar or a single record. Always has a real `type`. */
+export interface CompactField {
+  type: CompactType;
+  must_quote?: boolean;
+  expression?: string;
+  description?: string;
+  instructions?: string;
+}
+
+/** An array column, as it appears INSIDE a schema's `dimensions` (or a record
+    `type`): a stub with no `type` — its detail is the `joins` entry at `path`.
+    `fans_out` is always present (an array always multiplies rows when traversed)
+    so the cardinality question has ONE answer everywhere. In a deduped
+    `join_source_map` entry the stub is relative (no `path`), since the source is
+    reached via possibly many handles; the absolute paths are in the flat `joins`
+    list. */
+export interface ArrayStub {
+  is_array: true;
+  fans_out: true;
+  path?: string;
+  must_quote?: boolean;
+}
+
+/** A member of a `dimensions` map (or a record `type`): a value column or an
+    array-column stub. Discriminate on `type` present (value) vs `is_array`
+    present (array stub). */
+export type CompactMember = CompactField | ArrayStub;
+
+/** A reached source's field surface: dimensions (columns) + measures. NO views
+    (a view is invoked `source -> view`, never through a join). */
+export interface CompactSchema {
+  primary_key?: string | null;
+  description?: string;
+  instructions?: string;
+  dimensions: Record<string, CompactMember>;
+  measures: Record<string, CompactField>;
+}
+
+/** The described source: a CompactSchema plus its name and views. The only block
+    that carries views. */
+export interface ExploreDescribedSource extends CompactSchema {
+  name: string;
+  /** View name → one-line description, or null when the view has no `#"` doc. */
+  views: Record<string, string | null>;
+}
+
+/** A `joins` entry — an ARRAY or a SOURCE-JOIN (never a scalar/record column).
+    Keyed in the `joins` map by its full dotted CLEAN path (bare segments, no
+    backticks — good for lookup/matching; a `dimensions` array-stub's `path`
+    points at this key). To WRITE a reference: use `quoted_path` if present, else
+    the key (clean paths are already paste-ready). One of three forms, by which
+    keys are present:
+      - array:           `{ is_array: true, fans_out: true, source_def }`
+                         (record array → source_def fields; scalar array →
+                          source_def has the single `each`; the key is usable bare)
+      - named join:      `{ source, code, fans_out? }`
+      - anonymous join:  `{ source_def, code, fans_out? }`
+    `fans_out` is the TOTAL cardinality signal: present (true) on EVERYTHING that
+    multiplies rows — arrays AND fanning source-joins (a join_many/cross, or a
+    join_one under a fanning ancestor) — and absent otherwise. So the consumer's
+    rule is one check: "fans iff `fans_out` present." `is_array` answers a
+    different question (what kind of thing), not cardinality. `cycle` marks a
+    re-entry onto a source already on the path. */
+export interface JoinEntry {
+  fans_out?: true;
+  cycle?: true;
+  /** The paste-ready form of this entry's path (the key), present ONLY when a
+      segment needs backtick-quoting (e.g. key `team.year` → `` team.`year` ``).
+      The key stays clean for lookup/matching; write the reference from this. */
+  quoted_path?: string;
+  is_array?: true;
+  source?: string;
+  source_def?: CompactSchema;
+  code?: string;
+}
+
+/** The assembled structured describe_source surface (sans envelope). `joins` is
+    keyed by path (built on a null-prototype object so a reserved path is safe). */
+export interface ExploreSourceDescribe {
+  described_source: ExploreDescribedSource;
+  joins: Record<string, JoinEntry>;
+  join_source_map: Record<string, CompactSchema>;
+}
+
 export interface SourceDescribeResult {
   ok: boolean;
   /** The model the source was resolved in. */
   model_ref: string;
   /** The source requested. */
   source: string;
+  /** The described source — every column, plus measures and views. */
+  described_source?: ExploreDescribedSource;
+  /** Arrays + source-joins, keyed by path (depth-first). Omitted when empty. */
+  joins?: Record<string, JoinEntry>;
+  /** Every reachable NAMED source, deduped by name (CompactSchema, no views).
+      Omitted when empty. */
+  join_source_map?: Record<string, CompactSchema>;
   /**
-   * The requested source plus the sources its joins transitively reach
-   * (the join closure). A source is the unit of describe — model-scope
-   * named queries are a source's `views`; model givens come from the
-   * `query`/`execute:false` loop, not from describe.
-   */
-  sources?: Record<string, ExploreSourceInfo>;
-  /**
-   * The requested source + closure as VERBATIM Malloy — delivered as its own
-   * clean content block (toContent lifts it out so code is never escaped in the
-   * JSON block). The structured `sources` above carry no raw `body` text.
+   * JUST the described source's verbatim Malloy declaration — delivered as its
+   * own clean content block (toContent lifts it out so code is never escaped in
+   * the JSON block). Joined sources are recovered via describe_source by name.
    */
   malloy_text?: string;
   problems: Problem[];

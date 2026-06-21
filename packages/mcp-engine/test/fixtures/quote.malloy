@@ -1,0 +1,6 @@
+#" Has columns/paths whose segments are reserved words (need quoting to write).
+source: quote_src is duckdb.sql("""
+  SELECT 1 as id,
+         ['a','b'] as "year",
+         {'n': 1, 'year': ['x','y']} as rec
+""") extend { primary_key: id }

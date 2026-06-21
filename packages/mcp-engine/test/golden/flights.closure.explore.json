@@ -42,6 +42,7 @@
       "joins": {
         "legs": {
           "relationship": "one_to_many",
+          "column_shape": "record_array",
           "fields": {
             "dimensions": {
               "tag": {
@@ -58,6 +59,7 @@
         },
         "tags": {
           "relationship": "one_to_many",
+          "column_shape": "scalar_array",
           "fields": {
             "dimensions": {
               "each": {

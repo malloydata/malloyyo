@@ -1,1 +1,1 @@
-Get a source's semantic surface — its dimensions, measures, views, and joins (with the joined sources it reaches). Read this before writing a query. Requires `model_ref` and `source`.
+Get a source's queryable surface before writing a query: `dimensions` (its columns — scalars, records, and arrays), `measures`, `views`, the `joins` it reaches (keyed by path; `fans_out` flags paths that multiply rows), and a deduped `join_source_map` of the named sources those joins resolve to. `source` is required; `model_ref` is optional when the source name is unique across the catalog.

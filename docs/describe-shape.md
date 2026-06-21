@@ -1,5 +1,16 @@
 # The canonical describe-shape
 
+> **Scope note.** This doc is the **canonical/develop walker shape** (`ModelInfo`
+> and its `Field`/`View`/`Join`/`Source` types) — the structured output every
+> surface is projected from. The **explore `describe_source` tool output** is a
+> *further* projection of this and has its own current spec:
+> **[describe-source.md](./describe-source.md) (v5)** — `described_source` +
+> `joins` (keyed by path) + `join_source_map`, columns-vs-joins split, `fans_out`,
+> `quoted_path`. The "Shape" section below still describes the older
+> `SourceDescribeResult { …, sources }` closure form for explore; treat
+> describe-source.md as authoritative for the explore tool, and this doc as the
+> walker types it builds on.
+
 The **one** shape for "what's in a model," used by every surface — local fox MCP,
 hosted explore endpoint `/mcp`, and any custom/per-customer server — projected per
 surface. It's the **contract that makes surfaces congruent**, and it's the
@@ -69,6 +80,9 @@ Join = {
   "relationship": "one_to_many | many_to_one | cross",  // descriptive vocab
   "source_ref": "customers",      // nameable target → look up in sources{} above
   "anon_src_index": 0,            // OR: un-nameable target → index into the owning source's anon_srcs
+  "column_shape": "record | scalar_array | record_array",  // set ONLY on synthetic
+                                  // data-shape "joins" (a column, not a source relationship);
+                                  // the explore surface renders these as dimensions/arrays
   "description": "…", "instructions": "…", "must_quote": true,  // each omitted when absent
   "body": "<verbatim `name is target on …` text>"   // when readSource was available
   // develop surface only: "location": [line, col]

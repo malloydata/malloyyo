@@ -149,6 +149,7 @@
             15,
             30
           ],
+          "column_shape": "record_array",
           "fields": {
             "dimensions": [
               {
@@ -172,6 +173,7 @@
             15,
             30
           ],
+          "column_shape": "scalar_array",
           "fields": {
             "dimensions": [
               {

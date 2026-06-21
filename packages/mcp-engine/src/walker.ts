@@ -327,6 +327,12 @@ function walkFields(
       // their location points at the parent source, so skip them.
       const synthetic =
         isScalarArray(ef) || isRepeatedRecord(ef) || isAnonymousRecord(ef);
+      // Tag the data shape so the explore surface can split columns (records,
+      // arrays) from real source-joins. Scalar arrays surface their element as
+      // an `each` field; record arrays/records surface the record's fields.
+      if (isScalarArray(ef)) join.column_shape = 'scalar_array';
+      else if (isRepeatedRecord(ef)) join.column_shape = 'record_array';
+      else if (isAnonymousRecord(ef)) join.column_shape = 'record';
       if (!synthetic && mLoc) {
         const body = sliceSource(ctx.readSource(mLoc.url), mLoc);
         if (body) join.body = body;

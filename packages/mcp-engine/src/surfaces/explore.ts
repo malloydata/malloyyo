@@ -13,8 +13,7 @@
 
 import type { Runtime } from '@malloydata/malloy';
 import { compile } from '../walker';
-import { selectSource } from '../select';
-import { projectDescription } from '../project';
+import { buildSourceDescribe } from '../project';
 import { runRestricted, validateRestricted } from '../restricted';
 import { applyResultBudget } from './budget';
 import { DEFAULT_ROW_LIMIT } from '../run';
@@ -32,7 +31,7 @@ import type {
   QueryValidationResult,
   RunResult,
   SourceDescribeResult,
-  SourceDescription,
+  SourceInfo,
   WithHostOnly,
 } from '../types';
 import {
@@ -246,14 +245,12 @@ function srcNudge(modelRef: string, source: string): (p: Problem) => Problem {
   };
 }
 
-/** Block 2 of describe_source: requested source + closure as verbatim Malloy,
-    sliced from each definition's body (prepend the `source:` keyword the slice
-    omits). Sources whose body could not be re-read are skipped. */
-function sourcesAsMalloy(sel: SourceDescription): string {
-  return Object.values(sel.sources)
-    .filter((s) => s.body)
-    .map((s) => `source: ${s.body}`)
-    .join('\n\n');
+/** describe_source's Malloy block: JUST the described source's verbatim
+    declaration (sliced from its body; prepend the `source:` keyword the slice
+    omits). Joined sources are recovered by describe_source-ing them by name —
+    they are not dumped here. Empty when the body could not be re-read. */
+function sourceAsMalloy(s: SourceInfo | undefined): string {
+  return s?.body ? `source: ${s.body}` : '';
 }
 
 // ── tools (explore experience) ────────────────────────────────────────
@@ -333,8 +330,8 @@ function describeSourceTool(host: ExploreHost): ToolDef {
           if (!compiled.ok || !compiled.model) {
             return { ok: false, model_ref: modelRef, source, problems: compiled.problems };
           }
-          const sel = selectSource(compiled.model, source);
-          if (!sel) {
+          const built = buildSourceDescribe(compiled.model, source);
+          if (!built) {
             const available = Object.keys(compiled.model.sources);
             return {
               ok: false, model_ref: modelRef, source,
@@ -347,12 +344,16 @@ function describeSourceTool(host: ExploreHost): ToolDef {
               ],
             };
           }
-          const malloy_text = sourcesAsMalloy(sel);
-          const projected = projectDescription(sel, 'explore');
+          // malloy_text is JUST the described source's own declaration; joined
+          // sources are recovered via describe_source by name.
+          const malloy_text = sourceAsMalloy(compiled.model.sources[source]);
           const base: SourceDescribeResult = {
             ok: true, model_ref: modelRef, source,
-            sources: projected.sources, problems: compiled.problems,
+            described_source: built.described_source,
+            problems: compiled.problems,
           };
+          if (Object.keys(built.joins).length) base.joins = built.joins;
+          if (Object.keys(built.join_source_map).length) base.join_source_map = built.join_source_map;
           return malloy_text ? { ...base, malloy_text } : base;
         });
       } catch (e) {

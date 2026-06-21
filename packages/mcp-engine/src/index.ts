@@ -13,15 +13,23 @@
 // Layer 1 — types
 export type {
   Annotation,
+  ArrayStub,
+  CompactField,
+  CompactMember,
+  CompactSchema,
+  CompactType,
   CompileResult,
   DescribeResult,
+  ExploreDescribedSource,
   ExploreDescription,
   ExploreField,
   ExploreFieldGroups,
   ExploreJoin,
   ExploreModelInfo,
+  ExploreSourceDescribe,
   ExploreSourceInfo,
   ExploreView,
+  JoinEntry,
   FieldGroups,
   FieldInfo,
   GivenInfo,
@@ -54,7 +62,7 @@ export { HOST_ONLY } from './types';
 // Layer 2 — helpers
 export { compile, listRuns, type CompileOptions, type RunListing } from './walker';
 export { selectSource, describeSource } from './select';
-export { projectModel, projectDescription } from './project';
+export { projectModel, projectDescription, buildSourceDescribe } from './project';
 export { modelCatalogEntry } from './catalog';
 export { run, executeMaterialized, DEFAULT_ROW_LIMIT, type RunOptions } from './run';
 export { validateRestricted, runRestricted } from './restricted';

@@ -400,6 +400,10 @@ export interface ListedModel {
     data key. */
 export interface ListSourcesResult {
   ok: boolean;
+  /** The workflow seed (describe → validate → run → present), inlined so a
+      conversation that never saw the server instructions — a second chat on a
+      pooled connection — still gets it on the tool it must call to start. */
+  guidance?: string;
   models: Record<string, ListedModel>;
 }
 
@@ -500,6 +504,10 @@ export interface ExploreSourceDescribe {
 
 export interface SourceDescribeResult {
   ok: boolean;
+  /** The workflow seed — same string list_sources carries, repeated here so the
+      skip-straight-to-describe path (and a second chat that never saw the server
+      instructions) still gets seeded. Present on a successful describe only. */
+  guidance?: string;
   /** The model the source was resolved in. */
   model_ref: string;
   /** The source requested. */

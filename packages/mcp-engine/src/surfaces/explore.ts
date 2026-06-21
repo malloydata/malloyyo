@@ -285,7 +285,7 @@ function listSourcesTool(host: ExploreHost): ToolDef {
         }
         models[e.model_ref] = m;
       }
-      return { ok: true, models };
+      return { ok: true, guidance: prompts.explore.guidance, models };
     },
   };
 }
@@ -349,6 +349,7 @@ function describeSourceTool(host: ExploreHost): ToolDef {
           const malloy_text = sourceAsMalloy(compiled.model.sources[source]);
           const base: SourceDescribeResult = {
             ok: true, model_ref: modelRef, source,
+            guidance: prompts.explore.guidance,
             described_source: built.described_source,
             problems: compiled.problems,
           };

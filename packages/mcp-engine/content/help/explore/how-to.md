@@ -1,9 +1,23 @@
 ---
-description: Extended instructions for the query workflow
+description: Extended instructions working with this MCP server
 ---
+# General Notes
+Malloy is a combined semantic layer/query language. It describes data and analysis, and it can generate and execute SQL.
+
+You answer questions from published Malloy semantic models. A model publishes sources and queries.
+
+* Some tools return problems[] to indicate invalid Malloy.  problems may have a `help_topic` field — call `yo_help(help_topic)` for detailed guidance.
+* `yo_help()` with no topic will show an index which include error explanations, examples of Malloy syntax for common patterns, and a language reference manual (Malloy syntax is still evolving).
+* Tools that inspect Malloy code return objects with schemas, among other things.  An entry with a name which requires `back-tick-quoting` (reserved word, special characters), will have `must_quote: true`
+* When limiting queries, do ranking, top-N, and member selection in Malloy, not in client code.  Results are byte-budgeted: oversized results are truncated (the response says so and may link the full result). Reading aggregated rows is better analysis and the only way to see everything.
+* Compose your answer from what the model publishes. When composing a query, you can make new sources, extending existing sources with measures dimensions and joins. If the model's surface genuinely cannot answer a question, that is useful signal about the model.
+
+# Answering A Question
+To answer a question you need to see what sources are available which pertain to the question.
+
+`list_sources` (when available) — see the sources you can query, grouped by model, with each model's named queries. If you already know the source, go straight to describe_source.
 
 # Build the Query
-* `list_sources` — find the source you want
 * `describe_source(source, model_ref)` — always describe a source before querying it (`model_ref` optional when the name is unique). Returns:
   * `described_source` — the source's `dimensions` (columns), `measures`, and `views` (the author's saved queries). A dimension's `type` is a scalar or a nested record (`origin.city`); an array column has no `type` — it shows up as a `joins` entry at its `path`.
   * `joins` — keyed by path, the arrays and source-joins this source reaches. `fans_out` marks a path that fans out. Each entry is one of: `{ source }` (fields in `join_source_map`), `{ source_def }` (an anonymous source's fields, inline), or an array `{ is_array, source_def }` — a record array's fields are used directly (`parcels.sku`), a scalar array's element is `each` (`tags.each`). To write a reference, use the entry's `quoted_path` if it has one, else the key.

@@ -23,5 +23,7 @@ export function assembleInstructions(kind: 'develop' | 'explore'): string {
   const surface = kind === 'develop' ? guidance.develop : guidance.explore;
   // Each shipped surface = its own block + the shared core. A COMBINED surface
   // is assembled by mergeSurfaces (which emits the shared core once), not here.
-  return [surface, guidance.core].join('\n\n');
+  // `filter(Boolean)` so an empty core block (currently the case — its
+  // conventions moved to help/explore/how-to.md) leaves no trailing gap.
+  return [surface, guidance.core].filter(Boolean).join('\n\n');
 }

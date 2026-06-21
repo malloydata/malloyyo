@@ -26,7 +26,7 @@ error**, not a silent empty string.
 path** (slug = path, each segment lowercased):
 
 ```
-help/explore/query-workflow.md → yo_help("explore/query-workflow")
+help/explore/how-to.md → yo_help("explore/how-to")
 help/language/joins.md         → yo_help("language/joins")
 help/writing-malloy-with-mcp.md → yo_help("writing-malloy-with-mcp")  (root = no namespace)
 ```

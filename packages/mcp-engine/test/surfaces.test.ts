@@ -241,16 +241,41 @@ test('explore: list_sources lists sources with their annotations (no queries)', 
   assert.equal(flights.queries, undefined, 'no queries key in list_sources today');
 });
 
+test('explore: the workflow seed rides both entry tools (so chat #2 gets it)', async () => {
+  // Server instructions reach only the connection's first chat; the seed is
+  // inlined onto the tools a conversation MUST call to start, so a later chat on
+  // the same pooled connection is seeded regardless.
+  const s = exploreSurface(testExploreHost({ withList: true }));
+
+  const listed = (await tool(s, 'list_sources').handler({})) as { ok: boolean; guidance?: string };
+  assert.match(listed.guidance ?? '', /describe_source/, 'list_sources carries the workflow seed');
+  assert.match(listed.guidance ?? '', /yo_help\("explore\/how-to"\)/, 'seed points at the full workflow');
+
+  // The skip-straight-to-describe path is seeded too.
+  const described = (await tool(s, 'describe_source').handler({
+    model_ref: 'flights.malloy',
+    source: 'flights',
+  })) as SourceDescribeResult & { guidance?: string };
+  assert.equal(described.guidance, listed.guidance, 'describe_source carries the same seed');
+
+  // A failed describe leans on problems[]/help, not the seed.
+  const missing = (await tool(s, 'describe_source').handler({
+    model_ref: 'flights.malloy',
+    source: 'nope',
+  })) as SourceDescribeResult & { guidance?: string };
+  assert.equal(missing.guidance, undefined, 'no seed on an error result');
+});
+
 test('yo_help: index is a flat list of names; a name returns { name, body }', async () => {
   const s = exploreSurface(testExploreHost());
   const list = (await tool(s, 'yo_help').handler({})) as { topics: string[] };
   assert.ok(list.topics.length > 5);
   assert.ok(list.topics.every((t) => typeof t === 'string'), 'one name per topic');
-  assert.ok(list.topics.includes('explore/query-workflow'));
+  assert.ok(list.topics.includes('explore/how-to'));
   const topic = (await tool(s, 'yo_help').handler({
-    topic: 'explore/query-workflow',
+    topic: 'explore/how-to',
   })) as { name: string; body: string };
-  assert.equal(topic.name, 'explore/query-workflow');
+  assert.equal(topic.name, 'explore/how-to');
   assert.ok(topic.body.length > 0);
 });
 

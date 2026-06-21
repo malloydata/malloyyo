@@ -15,7 +15,7 @@ const promptsDir = path.join(contentDir, 'prompts');
 const outFile = path.join(here, '..', 'src', 'content', 'generated.ts');
 
 // Help-topic content lives under content/help/**, namespaced by directory:
-// content/help/explore/query-workflow.md → key "explore/query-workflow.md".
+// content/help/explore/how-to.md → key "explore/how-to.md".
 // The directory layout IS the topic namespace; help.ts derives each topic's
 // name from the key (slug = the path). A new category is just a new directory
 // — it appears with no code change. README.md (author docs) lives in content/,

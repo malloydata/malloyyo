@@ -64,22 +64,26 @@ test('malloyyo mcp: explore surface over stdio, end to end', async () => {
   const tools = (res.get(2)!.result!.tools ?? []).map((t) => t.name).sort();
   assert.deepEqual(tools, ['describe_source', 'list_sources', 'query', 'yo_help']);
 
-  // list_sources — catalog hierarchy. `managers` is defined+exported in
+  // list_sources — catalog hierarchy. Models are keyed by model_ref, each
+  // model's sources keyed by source_ref. `managers` is defined+exported in
   // index.malloy; `people` is imported (not top-level) so it is NOT listed.
-  const list = json(res.get(3)!) as { ok: boolean; models: Array<{ model_ref: string; sources?: Array<{ source_ref: string }> }> };
+  const list = json(res.get(3)!) as { ok: boolean; models: Record<string, { sources?: Record<string, unknown> }> };
   assert.equal(list.ok, true);
-  const idx = list.models.find((m) => m.model_ref === 'index.malloy');
-  assert.ok(idx?.sources?.some((s) => s.source_ref === 'managers'), 'managers listed');
-  assert.ok(!idx?.sources?.some((s) => s.source_ref === 'people'), 'imported people not top-level');
+  const idx = list.models['index.malloy'];
+  assert.ok(idx?.sources && 'managers' in idx.sources, 'managers listed');
+  assert.ok(!(idx?.sources && 'people' in idx.sources), 'imported people not top-level');
 
   // describe_source — block 0 digest (resolved a BARE source) + block 1 source.
+  // The described source rides in `described_source`, with dimensions keyed by name.
   const desc = res.get(4)!;
   const digest = JSON.parse(desc.result!.content![0]!.text) as {
-    ok: boolean; source: string; sources: Record<string, { dimensions: Array<{ name: string }> }>;
+    ok: boolean; source: string;
+    described_source: { name: string; dimensions: Record<string, { type: string }> };
   };
   assert.equal(digest.ok, true);
   assert.equal(digest.source, 'managers');
-  assert.ok(digest.sources['managers']?.dimensions.some((d) => d.name === 'role'));
+  assert.equal(digest.described_source.name, 'managers');
+  assert.ok('role' in digest.described_source.dimensions, 'role dimension present');
   assert.match(desc.result!.content![1]!.text, /source: managers is/);
 
   // query execute:true → rows, NO sql.

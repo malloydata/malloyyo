@@ -118,8 +118,10 @@ test('skills: writing-malloy ships as data with a description', () => {
 });
 
 test('guidance: canon blocks exist and carry the load-bearing rules', () => {
-  assert.ok(guidance.core.includes('yo_help'));
-  assert.ok(guidance.core.includes('top-N'));
+  // Core is intentionally empty for now — its conventions (yo_help, top-N,
+  // byte-budget, must_quote) moved into help/explore/how-to.md, the one
+  // doc surfaced through the always-on channels. The seam stays for later reuse.
+  assert.equal(guidance.core, '', 'core canon is intentionally empty for now');
   assert.ok(guidance.develop.includes('compile_file'));
   assert.ok(guidance.develop.includes('yo_help'));
   // restricted-queries is DELIBERATELY absent from the instructions: a proactive
@@ -127,7 +129,10 @@ test('guidance: canon blocks exist and carry the load-bearing rules', () => {
   // surfaced REACTIVELY instead — the restricted-construct-forbidden error routes
   // to explore/restricted-queries (see the error-codes test). Do NOT add a
   // proactive mention back.
-  assert.ok(guidance.explore.includes('explore/query-workflow'));
+  // The explore stub is intentionally minimal: it orients toward the entry tools
+  // and defers the workflow to the tool results (the always-on channel), rather
+  // than naming the workflow topic itself.
+  assert.ok(guidance.explore.includes('describe_source'));
 });
 
 test("guidance: each surface's instructions fit the 2KB server-instructions cap", () => {

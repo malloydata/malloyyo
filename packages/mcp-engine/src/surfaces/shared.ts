@@ -189,7 +189,7 @@ export function yoHelpTool(): ToolDef {
         topic: {
           type: 'string',
           description:
-            'A topic name from the index, e.g. "explore/query-workflow" or ' +
+            'A topic name from the index, e.g. "explore/how-to" or ' +
             '"language/joins" (case-insensitive). Omit to list all topic names.',
         },
       },

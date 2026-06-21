@@ -8,6 +8,7 @@
     "build": "node scripts/gen-baseline.mjs && next build",
     "db:baseline": "node scripts/gen-baseline.mjs",
     "start": "next start",
+    "deploy": "bash scripts/deploy.sh",
     "lint": "eslint",
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",

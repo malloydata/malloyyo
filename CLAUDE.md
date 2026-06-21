@@ -79,32 +79,31 @@ Defaults are `Malloyyo`/`main`. Set both in the Vercel env (per environment)
   routes evaluate it). Build with the instance env, e.g.
   `npx dotenv-cli -e local/staging -- npm run build`.
 
-### Production deploys are MANUAL (the git auto-deploy hook was removed)
+### Production deploys: `npm run deploy`
 
-The GitHub auto-deploy integration has been **removed (2026-06-10)**, so
-**merging to `main` no longer deploys anything.** Each production deploy is now
-a manual `vercel --prod` per project from the local working tree:
+**To deploy: `npm run deploy`** (`scripts/deploy.sh`) from the working tree you
+want live. The script encodes the whole procedure — build the engine `dist/`
+(gitignored; the remote build won't make it, so it must be built locally and
+uploaded), `vercel --prod`, then a `/api/health` check. Don't re-derive the
+steps; run the one command.
+
+**Which project** is decided by the gitignored `.vercel` link
+(`vercel link --project <name>`), so each checkout/instance targets its own
+(e.g. `mtoyyo-worldcup`, `malloyyo`, `motherduckyo`) with nothing committed. To
+deploy a *different* project, relink first:
 
 ```bash
 export PATH="$HOME/.npm-global/bin:$PATH"   # the vercel CLI lives here
-git checkout main && git pull               # deploy whatever tree you want live
-
-# 1) malloyyo (the default-linked project)
-vercel --prod --yes
-
-# 2) motherduckyo — relink, deploy, relink back
-vercel link --project motherduckyo --yes
-vercel --prod --yes
-vercel link --project malloyyo --yes        # restore the default link
+vercel link --project motherduckyo --yes    # change target
+npm run deploy
+vercel link --project malloyyo --yes        # restore the usual link
 ```
 
-`vercel --prod` builds **remotely** using each project's own env vars, so you
-don't need a local env file for the build. It deploys the **current working
-tree**, not GitHub — check out the code you want live first. Verify after:
-`curl -s https://motherduckyo.vercel.app/ | grep -o '<title>[^<]*'`.
-
-> Pushing a branch / opening a PR no longer creates a Vercel preview either.
-> For a staging build, use the manual preview + alias flow below.
+`vercel --prod` builds **remotely** using the project's own env vars and deploys
+the **current working tree** (not GitHub) — check out the code you want live
+first. Merging to `main` deploys nothing (the git auto-deploy hook was removed
+2026-06-10); pushing a branch / opening a PR creates no preview either. For a
+staging build, use the manual preview + alias flow below.
 
 Historical env-var note (still true for any preview build you trigger): preview
 builds get only **Preview**-scoped env vars, so they fail at "Collecting page

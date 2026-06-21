@@ -105,7 +105,12 @@ single field name is trivial and a wrong guess is a *loud* compile error.)
   "join_source_map": { "<name>": { "primary_key"?, "description"?,
                                      "dimensions": {…}, "measures": {…} } },
 
-  // JUST the described source's verbatim Malloy.
+  // JUST the described source's verbatim Malloy. NOTE: on the wire this is NOT a
+  // field of this JSON object — the host lifts it into its OWN content block as
+  // real (unescaped) text, and drops it from both the JSON block and
+  // structuredContent (so code is never \n-escaped or double-sent). Shown here as
+  // a key only to name it; a consumer reads it from the second content block, not
+  // `result.malloy_text`. (See `toContent` in surfaces/shared.ts.)
   "malloy_text": "source: … is … extend { … }",
 
   "problems": []
@@ -182,7 +187,10 @@ Everything is recursive and obeys the same column/join split at every level:
 - **The anonymous wrinkle.** Inside a `source_def` subtree, an onward join to a
   **named** source is a `source` reference (added to `join_source_map`), not a
   re-dump.
-- **`malloy_text`** is just the described source's own declaration.
+- **`malloy_text`** is just the described source's own declaration — and it is
+  delivered as a **separate content block** (real, unescaped text), not as a field
+  of the JSON object or `structuredContent`. Read it from the second block, not
+  `result.malloy_text`.
 
 ## Locked decisions
 

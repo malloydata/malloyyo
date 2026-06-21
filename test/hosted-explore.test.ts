@@ -103,20 +103,22 @@ test("list_sources surfaces each model's sources with their annotations", async 
   assert.equal(sales!.description, "Pet shop sales.");
 });
 
-test("describe_source resolves a bare source: schema (block 1) + verbatim text (block 2)", async () => {
+test("describe_source resolves a bare source: schema (block 0) + verbatim text (block 1)", async () => {
+  // This is a HOST-seam test: it checks the host wiring (bare source resolves to
+  // its model, two content blocks, block 1 is the verbatim Malloy) and only that
+  // block 0 *looks like* a schema. The exact describe_source schema shape is the
+  // engine's contract, pinned by its golden tests (packages/mcp-engine/test) —
+  // don't re-pin it here, or every engine reshape breaks this test for nothing.
   const r = await host().call("describe_source", { source: "sales" });
   assert.equal(r.content.length, 2, "two content blocks: schema + source text");
-  const schema = JSON.parse(blockText(r, 0)) as {
-    ok: boolean;
-    model_ref: string;
-    sources: Record<string, { measures: Record<string, unknown>; views: Record<string, unknown> }>;
-  };
+  const schema = JSON.parse(blockText(r, 0)) as { ok: boolean; model_ref: string; source: string };
   assert.equal(schema.ok, true);
   assert.equal(schema.model_ref, "petshop", "bare source resolved to its model");
-  assert.ok(schema.sources.sales, "sales is described in block 1");
-  assert.ok(!blockText(r, 0).includes('"body"'), "block 1 carries no raw source text");
-  assert.match(blockText(r, 1), /^source: sales is/, "block 2 is verbatim, unescaped Malloy");
-  assert.match(blockText(r, 1), /view: by_animal is \{/, "block 2 carries the view definition");
+  assert.equal(schema.source, "sales", "the described source is echoed back");
+  assert.ok(blockText(r, 0).includes("total_qty"), "block 0 looks like a schema (carries the source's fields)");
+  assert.ok(!blockText(r, 0).includes('"body"'), "block 0 carries no raw source text");
+  assert.match(blockText(r, 1), /^source: sales is/, "block 1 is verbatim, unescaped Malloy");
+  assert.match(blockText(r, 1), /view: by_animal is \{/, "block 1 carries the view definition");
 });
 
 test("describe_source on an unknown source fails cleanly (no throw)", async () => {
@@ -140,8 +142,9 @@ test("query execute:false validates; execute:true runs on DuckDB + records a sha
     execute: true,
     question: "total units sold",
   });
-  // execute:true is decorated: block 0 = the summary reminder, block 1 = the JSON.
-  const payload = JSON.parse(blockText(run, 1)) as {
+  // execute:true is decorated: block 0 = the JSON payload. The summary-reminder
+  // text block that used to precede it has been disabled (see mcp-host.ts).
+  const payload = JSON.parse(blockText(run, 0)) as {
     rows: Array<{ total_qty: number }>;
     model_ref?: string;
     ltool_link?: { text: string; url: string };
@@ -156,7 +159,7 @@ test("query execute:false validates; execute:true runs on DuckDB + records a sha
   // The agent must NOT see SQL on an executed run, nor the host_only channel.
   assert.equal(payload.sql, undefined, "no SQL shown to the agent on execute:true");
   assert.equal(payload.host_only, undefined, "host_only channel never reaches the agent");
-  assert.ok(!blockText(run, 1).toLowerCase().includes("select "), "agent JSON carries no SQL text");
+  assert.ok(!blockText(run, 0).toLowerCase().includes("select "), "agent JSON carries no SQL text");
 
   // ...but the SQL WAS recorded (matching the old surface): the most recent
   // query row + tool-call row for this dataset carry compiledSql.
@@ -187,12 +190,14 @@ test("query without a question is refused (host policy)", async () => {
   assert.match(blockText(r, 0), /question.*is required/i);
 });
 
-test("multi-file model: compiles across the import; block 2 slices the entry source", async () => {
+test("multi-file model: compiles across the import; block 1 slices the entry source", async () => {
   const r = await host().call("describe_source", { source: "pets" });
   assert.equal(r.content.length, 2, "two blocks even for a multi-file model");
-  const schema = JSON.parse(blockText(r, 0)) as { ok: boolean; sources: Record<string, unknown> };
+  // Host-seam check only: the import resolved and `pets` was described. The exact
+  // schema shape is the engine's contract (see the describe_source test above).
+  const schema = JSON.parse(blockText(r, 0)) as { ok: boolean; source: string };
   assert.equal(schema.ok, true, "the import resolved and the model compiled");
-  assert.ok(schema.sources.pets, "the re-exported source is described");
+  assert.equal(schema.source, "pets", "the re-exported source is described");
   // `pets` is declared in index.malloy, so its verbatim body slices from there
   // via hostReadSource — and it references `base` from the imported file.
   assert.match(blockText(r, 1), /source: pets is base extend/, "entry-source text sliced");
@@ -204,7 +209,7 @@ test("multi-file model: compiles across the import; block 2 slices the entry sou
     execute: true,
     question: "by animal",
   });
-  const payload = JSON.parse(blockText(run, 1)) as { rows: Array<{ animal: string; total: number }> };
+  const payload = JSON.parse(blockText(run, 0)) as { rows: Array<{ animal: string; total: number }> };
   assert.equal(payload.rows[0]!.total, 2, "import-backed query computed on DuckDB");
 });
 
@@ -225,7 +230,7 @@ test("ltool round-trip: a shared query resolves AND replays (regression: broken 
     execute: true,
     question: "ltool round-trip",
   });
-  const payload = JSON.parse(blockText(run, 1)) as { ltool_link?: { url: string } };
+  const payload = JSON.parse(blockText(run, 0)) as { ltool_link?: { url: string } };
   const slug = (payload.ltool_link?.url ?? "").replace(/^.*\/ltool\//, "");
   assert.ok(slug, "a share slug was minted");
 

@@ -6,7 +6,8 @@
 // replaced has been deleted. This file is the HOST: it supplies the engine an
 // `ExploreHost` (resolve + lease a model) and layers back the policy the engine
 // deliberately leaves out — instance tagging, the mandatory `question`, the
-// inquiry/share-slug/ltool_url recording + "Query summary" nudge, and the
+// inquiry/share-slug/ltool_url recording (the "Query summary" nudge is
+// currently disabled — see buildHostedExploreSurface), and the
 // open_share_link tool.
 //
 // Addressing is SOURCE-centric (matching main): list_sources lists the sources
@@ -273,9 +274,9 @@ export function buildHostedExploreSurface(user: User, baseUrl: string): HostedSu
 
     const result = (await tool.handler(args)) as Record<string, unknown>;
 
-    // Decorate a successful executed query with the share link + Query-summary
-    // echo — the reliable place to make the client write the summary and append
-    // the link (clients read the tool result every turn before summarizing).
+    // Decorate a successful executed query with the share link as the structured
+    // `ltool_link` field (the Query-summary nudge that used to prepend here is
+    // disabled — see below).
     if (executing && result.ok) {
       // One cast at the untyped wire boundary (the tool handler returns the
       // generic object) to the explore query shape; everything downstream
@@ -286,14 +287,22 @@ export function buildHostedExploreSurface(user: User, baseUrl: string): HostedSu
       // agent — strip it from the payload the agent sees.
       const { [HOST_ONLY]: _hostOnly, ...rest } = runResult;
       const withLink = { ...rest, ltool_link: link };
-      const reminder =
-        `End your reply with a "Query summary": (1) the question in plain English, ` +
-        `(2) the Malloy logic (filters, grouping, aggregation, ordering), ` +
-        `(3) post-processing outside Malloy or "none".` +
-        (link ? ` Then append \`ltool_link\` as a markdown link using its \`text\` and \`url\`.` : "");
+      // DISABLED (rescuable): the per-query "Query summary" nudge was shipped as
+      // a bare text block prepended to the JSON payload. Two problems flagged
+      // repeatedly by consuming models: (1) it breaks any consumer that
+      // JSON.parses the result (leading prose before the {...}); (2) an
+      // imperative aimed at the model inside a tool result is exactly the shape
+      // hosts/models distrust as injection, so it was unreliable anyway. The
+      // share link already rides as the structured `ltool_link` field — let the
+      // client render it. Restore by re-adding the reminder text block below.
+      //   const reminder =
+      //     `End your reply with a "Query summary": (1) the question in plain English, ` +
+      //     `(2) the Malloy logic (filters, grouping, aggregation, ordering), ` +
+      //     `(3) post-processing outside Malloy or "none".` +
+      //     (link ? ` Then append \`ltool_link\` as a markdown link using its \`text\` and \`url\`.` : "");
       return {
         content: [
-          { type: "text", text: reminder },
+          // { type: "text", text: reminder },
           { type: "text", text: JSON.stringify(withLink, null, 2) },
         ],
         structuredContent: withLink,

@@ -1,0 +1,12 @@
+##! experimental.givens
+given:
+  TARGET :: number is 0
+
+source: nums is duckdb.sql("""
+  SELECT 1 as v UNION ALL SELECT 2 as v UNION ALL SELECT 3 as v
+""")
+
+#" Numbers at or above the target.
+query: above_target is nums -> { select: v; where: v >= $TARGET }
+
+run: nums -> { select: v; where: v = $TARGET }

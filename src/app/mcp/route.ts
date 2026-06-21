@@ -3,7 +3,7 @@
 
 import { db, users } from "@/db";
 import { eq } from "drizzle-orm";
-import { TOOL_DESCRIPTORS, SERVER_INSTRUCTIONS, callTool } from "@/lib/mcp-tools";
+import { buildHostedExploreSurface } from "@/lib/mcp-host";
 import { recordAccessTokenUse, validateAccessToken } from "@/lib/oauth/tokens";
 import { isEmailAllowed } from "@/lib/user";
 import { corsPreflight, withCors } from "@/lib/oauth/cors";
@@ -46,7 +46,7 @@ function unauthorized(description: string, request: Request): Response {
 }
 
 const PROTOCOL_VERSION = "2025-03-26";
-const SERVER_INFO = { name: env.INSTANCE_NAME, version: "0.1.0" };
+const SERVER_INFO = { name: env.INSTANCE_NAME, version: "0.2.0" };
 
 export async function POST(req: Request) {
   const authHeader = req.headers.get("authorization");
@@ -75,20 +75,24 @@ export async function POST(req: Request) {
   }
   if (body.jsonrpc !== "2.0" || !body.method) return err(body.id, -32600, "invalid JSON-RPC envelope");
 
+  // The deployed /mcp IS the engine's exploreSurface. The host wraps it with
+  // instance tagging, the mandatory question, recording, and open_share_link.
+  const hosted = buildHostedExploreSurface(user, originFromRequest(req));
+
   switch (body.method) {
     case "initialize":
       return ok(body.id, {
         protocolVersion: PROTOCOL_VERSION,
         capabilities: { tools: { listChanged: false } },
         serverInfo: SERVER_INFO,
-        instructions: SERVER_INSTRUCTIONS,
+        instructions: hosted.instructions,
       });
 
     case "notifications/initialized":
       return withCors(new Response(null, { status: 202 }));
 
     case "tools/list":
-      return ok(body.id, { tools: TOOL_DESCRIPTORS });
+      return ok(body.id, { tools: hosted.descriptors });
 
     case "tools/call": {
       const params = body.params ?? {};
@@ -97,7 +101,7 @@ export async function POST(req: Request) {
       const start = Date.now();
       logger.info("mcp tool call", { tool: name, userId: user.id });
       try {
-        const result = await callTool(user, name, args, { origin: originFromRequest(req) });
+        const result = await hosted.call(name, args);
         logger.info("mcp tool ok", { tool: name, userId: user.id, durationMs: Date.now() - start });
         return ok(body.id, result);
       } catch (e) {

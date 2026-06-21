@@ -1,0 +1,48 @@
+{
+  "name": "@malloyyo/mcp-engine",
+  "version": "0.2.0",
+  "private": true,
+  "description": "Vendor-neutral Malloy MCP engine: wire types, Runtime-injected helpers, turnkey author/consumer tool surfaces",
+  "license": "MIT",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./mcp-sdk": {
+      "types": "./dist/mcp-sdk.d.ts",
+      "default": "./dist/mcp-sdk.js"
+    }
+  },
+  "files": [
+    "dist/**"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "gen": "tsx scripts/embed-content.ts",
+    "build": "npm run gen && node scripts/build.mjs && tsc -p tsconfig.build.json",
+    "typecheck": "npm run gen && tsc --noEmit",
+    "test": "npm run gen && tsx --test test/*.test.ts"
+  },
+  "peerDependencies": {
+    "@malloydata/malloy": ">=0.0.414",
+    "@modelcontextprotocol/sdk": ">=1.10.0"
+  },
+  "peerDependenciesMeta": {
+    "@modelcontextprotocol/sdk": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@malloydata/db-duckdb": "0.0.414",
+    "@malloydata/malloy": "0.0.414",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@types/node": "^20",
+    "esbuild": "^0.24.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5"
+  }
+}

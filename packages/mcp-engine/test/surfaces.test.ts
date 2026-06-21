@@ -1,0 +1,324 @@
+// Turnkey surfaces over miniature hosts — the congruence layer.
+// This PR ships and tests only the EXPLORE surface; developSurface stays in the
+// engine as a dormant, general example (not exercised here).
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import {
+  exploreSurface,
+  HOST_ONLY,
+  mergeSurfaces,
+  toContent,
+  type SourceDescribeResult,
+  type QueryValidationResult,
+  type RunResult,
+  type ToolSurface,
+} from '../src/index';
+import { testExploreHost } from './helpers';
+
+function tool(surface: ToolSurface, name: string) {
+  const t = surface.tools.find((x) => x.name === name);
+  assert.ok(t, `tool ${name} exists`);
+  return t;
+}
+
+test('surface construction does zero I/O', () => {
+  // A host that explodes on any use — construction must still succeed.
+  const explore = exploreSurface({ withModel: async () => { throw new Error('io!'); } });
+  assert.ok(explore.tools.length > 0);
+});
+
+test('explore: list_sources registers only when host.list exists', () => {
+  const without = exploreSurface(testExploreHost());
+  assert.equal(without.tools.some((t) => t.name === 'list_sources'), false);
+  const with_ = exploreSurface(testExploreHost({ withList: true }));
+  assert.equal(with_.tools.some((t) => t.name === 'list_sources'), true);
+});
+
+test('explore: canonical tool set', () => {
+  const s = exploreSurface(testExploreHost({ withList: true }));
+  assert.deepEqual(
+    s.tools.map((t) => t.name).sort(),
+    ['describe_source', 'list_sources', 'query', 'yo_help'],
+  );
+});
+
+test('explore: describe_source front-loads depth-1, defers the tail, keeps full-closure Malloy', async () => {
+  const s = exploreSurface(testExploreHost());
+  const result = (await tool(s, 'describe_source').handler({
+    model_ref: 'flights.malloy',
+    source: 'flights',
+  })) as SourceDescribeResult;
+  assert.equal(result.ok, true);
+  assert.equal(result.source, 'flights');
+  // The described source carries its own field surface, including views.
+  assert.equal(result.described_source?.name, 'flights');
+  assert.ok('by_carrier' in (result.described_source?.views ?? {}), 'views ride on the described source');
+  // Named target's fields are deduped into join_source_map.
+  assert.ok(result.join_source_map?.['carriers'], 'named target has its fields');
+  // No develop-only coords / raw body in the structured blocks.
+  const structured = JSON.stringify({
+    d: result.described_source, j: result.joins, m: result.join_source_map,
+  });
+  assert.ok(!structured.includes('"location"'), 'no develop-only location coords');
+  assert.ok(!structured.includes('"body"'), 'no raw source text in the structured blocks');
+  // The Malloy appendix is JUST the described source (joined sources are
+  // recovered via describe_source by name, not dumped here).
+  const malloy = result.malloy_text ?? '';
+  assert.match(malloy, /source: flights is/, 'appendix carries the requested source verbatim');
+  assert.match(malloy, /join_one: carriers is carriers with carrier/, 'the source\'s own join keys ride in its text');
+  assert.ok(!/source: carriers is/.test(malloy), 'the joined (closure) source is NOT dumped');
+});
+
+test('explore: two-channel annotations + direct-join relation', async () => {
+  const s = exploreSurface(testExploreHost());
+  const result = (await tool(s, 'describe_source').handler({
+    model_ref: 'flights.malloy',
+    source: 'flights',
+  })) as SourceDescribeResult;
+  assert.equal(result.ok, true);
+  const flights = result.described_source!;
+  // `#"` → description, `#(agent)` → instructions: two distinct channels.
+  assert.equal(flights.description, 'Flight facts, with nested route legs and free-form tags.');
+  assert.equal(flights.instructions, 'Grain is one row per flight; join carriers for airline names.');
+  // Child collections are keyed by member name (name lifted to the key).
+  const total = flights.measures['total_distance'];
+  assert.equal(total?.instructions, 'Sum across flights; do not average a pre-summed value.');
+  // promoted routes (doc + agent) are stripped from annotations[] (not double-sent).
+  assert.equal(flights.annotations, undefined);
+  // carriers is a named source-join, keyed by path; join_one → no fans_out.
+  const carriers = result.joins!['carriers'];
+  assert.ok(carriers && carriers.source === 'carriers');
+  assert.equal(carriers.fans_out, undefined, 'join_one does not fan');
+  assert.match(carriers.code ?? '', /^join_one:/);
+});
+
+test('explore: describe_source on unknown source lists what exists', async () => {
+  const s = exploreSurface(testExploreHost());
+  const result = (await tool(s, 'describe_source').handler({
+    model_ref: 'flights.malloy',
+    source: 'nope',
+  })) as SourceDescribeResult;
+  assert.equal(result.ok, false);
+  const p = result.problems.find((x) => x.code === 'source-not-found');
+  assert.ok(p?.message.includes('flights'));
+});
+
+test('explore: describe_source without a source is a clean problem', async () => {
+  const s = exploreSurface(testExploreHost());
+  const result = (await tool(s, 'describe_source').handler({
+    model_ref: 'flights.malloy',
+  })) as SourceDescribeResult;
+  assert.equal(result.ok, false);
+  assert.equal(result.problems[0]?.code, 'source-required');
+});
+
+test('explore: unknown ref refuses with model-not-found, not a throw', async () => {
+  const s = exploreSurface(testExploreHost());
+  const result = (await tool(s, 'describe_source').handler({
+    model_ref: 'nope.malloy',
+    source: 'flights',
+  })) as SourceDescribeResult;
+  assert.equal(result.ok, false);
+  assert.equal(result.problems[0]?.code, 'model-not-found');
+});
+
+test('explore: a bare reference with no catalog is a clean problem', async () => {
+  // No host.list → a bare source cannot be resolved; guide toward list_sources
+  // rather than falling through to the host (an empty path would EISDIR).
+  const s = exploreSurface(testExploreHost());
+  const q = (await tool(s, 'query').handler({ malloy: 'run: x' })) as RunResult;
+  assert.equal(q.ok, false);
+  assert.equal(q.problems[0]?.code, 'model-ref-required');
+  assert.match(q.problems[0]?.message ?? '', /list_sources/);
+
+  const d = (await tool(s, 'describe_source').handler({})) as SourceDescribeResult;
+  assert.equal(d.ok, false);
+  assert.equal(d.problems[0]?.code, 'source-required');
+});
+
+test('explore: query execute:false validates and reports givens', async () => {
+  const s = exploreSurface(testExploreHost());
+  const result = (await tool(s, 'query').handler({
+    model_ref: 'givens_model.malloy',
+    malloy: 'run: above_target',
+    execute: false,
+  })) as QueryValidationResult;
+  assert.equal(result.ok, true);
+  assert.equal(result.givens?.[0]?.name, 'TARGET');
+  assert.equal(typeof result.sql, 'string', 'execute:false returns the generated SQL');
+});
+
+test('explore: query executes restricted text with givens', async () => {
+  const s = exploreSurface(testExploreHost());
+  const result = (await tool(s, 'query').handler({
+    model_ref: 'givens_model.malloy',
+    malloy: 'run: above_target',
+    givens: { TARGET: 3 },
+  })) as RunResult;
+  assert.equal(result.ok, true, JSON.stringify(result.problems));
+  assert.deepEqual(result.rows, [{ v: 3 }]);
+  assert.equal(result.sql, undefined, 'execute:true does not carry SQL (output, not input)');
+});
+
+test('explore: executed query withholds SQL from the agent but keeps it on host_only', async () => {
+  // The safety invariant: an executed run must never serialize SQL to the agent,
+  // yet a host must still be able to record it. SQL rides the host_only channel,
+  // which toContent drops entirely.
+  const s = exploreSurface(testExploreHost());
+  const result = (await tool(s, 'query').handler({
+    model_ref: 'flights.malloy',
+    malloy: 'run: flights -> { aggregate: flight_count }',
+  })) as Record<string, unknown>;
+  assert.equal(result['ok'], true, JSON.stringify(result['problems']));
+  // The run DID generate SQL — it's on the typed host_only channel for the host.
+  const hostOnly = result[HOST_ONLY] as { sql?: string } | undefined;
+  assert.match(hostOnly?.sql ?? '', /select/i, 'host_only carries the generated SQL');
+  assert.equal(result['sql'], undefined, 'no top-level sql on an executed run');
+
+  // After serialization, the agent sees neither sql nor the host_only channel.
+  const wire = toContent(result);
+  const jsonText = wire.content[0]?.text ?? '';
+  assert.ok(!jsonText.toLowerCase().includes('select'), 'agent JSON carries no SQL text');
+  assert.ok(!('sql' in wire.structuredContent), 'structuredContent has no sql');
+  assert.ok(!(HOST_ONLY in wire.structuredContent), 'structuredContent has no host_only');
+});
+
+test('explore: query rejects forbidden constructs', async () => {
+  const s = exploreSurface(testExploreHost());
+  const result = (await tool(s, 'query').handler({
+    model_ref: 'flights.malloy',
+    malloy: 'run: duckdb.sql("SELECT 1 as x") -> { select: x }',
+  })) as RunResult;
+  assert.equal(result.ok, false);
+  assert.ok(result.problems.some((p) => p.code === 'restricted-construct-forbidden'));
+});
+
+test('explore: an error result carries inline help (help-on-error)', async () => {
+  const s = exploreSurface(testExploreHost());
+  const result = (await tool(s, 'query').handler({
+    model_ref: 'flights.malloy',
+    malloy: 'run: duckdb.sql("SELECT 1 as x") -> { select: x }',
+  })) as RunResult & { help?: Array<{ slug: string; title: string; body: string }> };
+  assert.equal(result.ok, false);
+  assert.ok(result.help && result.help.length > 0, 'help bodies attached to the error');
+  assert.ok(result.help!.every((h) => h.body.length > 0), 'each help entry carries content');
+});
+
+test('explore: field-not-found is nudged toward describe_source', async () => {
+  const s = exploreSurface(testExploreHost());
+  const result = (await tool(s, 'query').handler({
+    model_ref: 'flights.malloy',
+    malloy: 'run: flights -> { aggregate: not_real }',
+  })) as RunResult;
+  assert.equal(result.ok, false);
+  const p = result.problems.find((x) => x.code === 'field-not-found');
+  assert.ok(p?.message.includes('describe_source'));
+});
+
+test('explore: list_sources lists sources with their annotations (no queries)', async () => {
+  const s = exploreSurface(testExploreHost({ withList: true }));
+  const result = (await tool(s, 'list_sources').handler({})) as {
+    ok: boolean;
+    // models keyed by model_ref; each model's sources keyed by source_ref.
+    models: Record<
+      string,
+      {
+        sources?: Record<string, { description?: string; instructions?: string }>;
+        queries?: unknown;
+      }
+    >;
+  };
+  assert.equal(result.ok, true);
+  const flights = result.models['flights.malloy'];
+  assert.ok(flights, 'flights model is listed');
+  const names = Object.keys(flights.sources ?? {}).sort();
+  assert.deepEqual(names, ['carriers', 'flights'], 'exported sources listed by ref');
+  const carriers = flights.sources!['carriers'];
+  assert.equal(carriers?.description, 'Reference table of airline carriers.', 'source description carried');
+  const flightsSrc = flights.sources!['flights'];
+  assert.match(flightsSrc?.instructions ?? '', /Grain is one row per flight/, 'agent instructions carried');
+  // Named queries are deferred out of the MVP listing.
+  assert.equal(flights.queries, undefined, 'no queries key in list_sources today');
+});
+
+test('explore: the workflow seed rides both entry tools (so chat #2 gets it)', async () => {
+  // Server instructions reach only the connection's first chat; the seed is
+  // inlined onto the tools a conversation MUST call to start, so a later chat on
+  // the same pooled connection is seeded regardless.
+  const s = exploreSurface(testExploreHost({ withList: true }));
+
+  const listed = (await tool(s, 'list_sources').handler({})) as { ok: boolean; guidance?: string };
+  assert.match(listed.guidance ?? '', /describe_source/, 'list_sources carries the workflow seed');
+  assert.match(listed.guidance ?? '', /yo_help\("explore\/how-to"\)/, 'seed points at the full workflow');
+
+  // The skip-straight-to-describe path is seeded too.
+  const described = (await tool(s, 'describe_source').handler({
+    model_ref: 'flights.malloy',
+    source: 'flights',
+  })) as SourceDescribeResult & { guidance?: string };
+  assert.equal(described.guidance, listed.guidance, 'describe_source carries the same seed');
+
+  // A failed describe leans on problems[]/help, not the seed.
+  const missing = (await tool(s, 'describe_source').handler({
+    model_ref: 'flights.malloy',
+    source: 'nope',
+  })) as SourceDescribeResult & { guidance?: string };
+  assert.equal(missing.guidance, undefined, 'no seed on an error result');
+});
+
+test('yo_help: index is a flat list of names; a name returns { name, body }', async () => {
+  const s = exploreSurface(testExploreHost());
+  const list = (await tool(s, 'yo_help').handler({})) as { topics: string[] };
+  assert.ok(list.topics.length > 5);
+  assert.ok(list.topics.every((t) => typeof t === 'string'), 'one name per topic');
+  assert.ok(list.topics.includes('explore/how-to'));
+  const topic = (await tool(s, 'yo_help').handler({
+    topic: 'explore/how-to',
+  })) as { name: string; body: string };
+  assert.equal(topic.name, 'explore/how-to');
+  assert.ok(topic.body.length > 0);
+});
+
+test('mergeSurfaces: dedupes identical tools across surfaces', () => {
+  // Two explore surfaces share identical query + yo_help definitions → dedupe.
+  const merged = mergeSurfaces(
+    exploreSurface(testExploreHost({ withList: true })),
+    exploreSurface(testExploreHost({ withList: true })),
+  );
+  const names = merged.tools.map((t) => t.name);
+  assert.equal(new Set(names).size, names.length, 'no duplicate tool names');
+  assert.equal(names.filter((n) => n === 'query').length, 1);
+  assert.equal(names.filter((n) => n === 'yo_help').length, 1);
+});
+
+test('mergeSurfaces: the shared canon (core) is emitted once, not per surface', () => {
+  // Each surface appends the same core guidance to its own lead blocks. A naive
+  // concat would repeat core (and blow the instruction cap); the merge must
+  // collapse the shared trailing blocks to one copy, keeping each unique lead.
+  const core = 'CORE ONE\n\nCORE TWO';
+  const s1: ToolSurface = { tools: [], skills: [], instructions: `LEAD A\n\n${core}` };
+  const s2: ToolSurface = { tools: [], skills: [], instructions: `LEAD B\n\n${core}` };
+  const merged = mergeSurfaces(s1, s2);
+  assert.equal(
+    merged.instructions,
+    'LEAD A\n\nLEAD B\n\nCORE ONE\n\nCORE TWO',
+    'unique leads kept, shared core emitted once',
+  );
+});
+
+test('mergeSurfaces: a real name collision throws at construction', () => {
+  const a = exploreSurface(testExploreHost());
+  const clash: ToolSurface = {
+    tools: [{ ...a.tools[0]!, description: 'something different' }],
+    instructions: '',
+    skills: [],
+  };
+  assert.throws(() => mergeSurfaces(a, clash), /collision/);
+});
+
+test('toContent: serializes typed results to MCP content + structuredContent', () => {
+  const out = toContent({ ok: true, rows: [1] });
+  assert.equal(out.content[0]?.type, 'text');
+  assert.deepEqual(JSON.parse(out.content[0]!.text), { ok: true, rows: [1] });
+  assert.deepEqual(out.structuredContent, { ok: true, rows: [1] });
+});

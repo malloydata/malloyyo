@@ -1,0 +1,7 @@
+// Top layer. Imports mid (→ wflights) and regions DIRECTLY. wcarriers is defined
+// in bottom and is NOT re-exported through mid, so it is un-nameable here — the
+// wflights→carriers join is anonymous. But wcarriers→region targets `regions`,
+// which IS in this namespace, so that onward join compresses to a source
+// reference (the "anonymous joins a named thing" wrinkle).
+import "wrinkle_mid.malloy"
+import "wrinkle_regions.malloy"

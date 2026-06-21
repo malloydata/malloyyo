@@ -385,6 +385,23 @@ async function withRuntime<T>(
   }
 }
 
+// Lease a pooled Runtime for the mcp-engine host. The engine is pure logic over
+// an injected Runtime; this hands it one (leased from the per-model-version pool
+// with a cacheKey, throwaway without) plus a `readSource` for location-slicing,
+// keyed exactly as the runtime's URLReader keys files (file:///<path>) — so the
+// host never re-derives that map. Deliberately NO dataDir overlay — hosted
+// local-data loading (MALLOY_DATA_DIR) is out of scope; models attach their own
+// sources (http/parquet/attached DBs/warehouses).
+export async function withModelRuntime<T>(
+  files: Map<string, string>,
+  cacheKey: string | undefined,
+  fn: (runtime: malloy.Runtime, readSource: (href: string) => string | undefined) => Promise<T>,
+): Promise<T> {
+  const { urlMap } = splitFiles(files);
+  const readSource = (href: string): string | undefined => urlMap.get(href);
+  return withRuntime(files, cacheKey, (runtime) => fn(runtime as malloy.Runtime, readSource));
+}
+
 // Compile a file map and return the full hierarchical field tree for a named source.
 export async function describeSourceFields(
   files: Map<string, string>,

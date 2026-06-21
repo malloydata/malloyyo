@@ -1,0 +1,117 @@
+{
+  "described_source": {
+    "name": "tapp",
+    "primary_key": "tid",
+    "description": "One row per team per match. Joins teams twice (team / opponent) and carries\na nested array of goal events.",
+    "dimensions": {
+      "tid": {
+        "type": "string"
+      },
+      "oid": {
+        "type": "string"
+      },
+      "gf": {
+        "type": "number"
+      },
+      "goals": {
+        "is_array": true,
+        "fans_out": true,
+        "path": "goals"
+      }
+    },
+    "measures": {
+      "appearance_count": {
+        "type": "number",
+        "expression": "count()"
+      }
+    },
+    "views": {
+      "by_team": "Appearances by team name."
+    }
+  },
+  "joins": {
+    "goals": {
+      "is_array": true,
+      "fans_out": true,
+      "source_def": {
+        "dimensions": {
+          "minute": {
+            "type": "number",
+            "must_quote": true
+          },
+          "scorer": {
+            "type": "string"
+          }
+        },
+        "measures": {}
+      }
+    },
+    "team": {
+      "source": "tteams",
+      "code": "join_one: team is tteams with tid"
+    },
+    "team.confederation": {
+      "source": "tconf",
+      "code": "join_one: confederation is tconf with cid"
+    },
+    "opponent": {
+      "source": "tteams",
+      "code": "join_one: opponent is tteams on oid = opponent.tid"
+    },
+    "opponent.confederation": {
+      "source": "tconf",
+      "code": "join_one: confederation is tconf with cid"
+    }
+  },
+  "join_source_map": {
+    "tteams": {
+      "primary_key": "tid",
+      "description": "National teams; each belongs to one confederation.",
+      "dimensions": {
+        "tid": {
+          "type": "string"
+        },
+        "tname": {
+          "type": "string"
+        },
+        "cid": {
+          "type": "string"
+        },
+        "team_name": {
+          "type": "string",
+          "expression": "tname",
+          "description": "Team display name."
+        }
+      },
+      "measures": {
+        "team_count": {
+          "type": "number",
+          "expression": "count()"
+        }
+      }
+    },
+    "tconf": {
+      "primary_key": "cid",
+      "description": "Confederation lookup (the deepest named hop).",
+      "dimensions": {
+        "cid": {
+          "type": "string"
+        },
+        "cname": {
+          "type": "string"
+        },
+        "conf_name": {
+          "type": "string",
+          "expression": "cname",
+          "description": "Human-readable confederation name."
+        }
+      },
+      "measures": {
+        "conf_count": {
+          "type": "number",
+          "expression": "count()"
+        }
+      }
+    }
+  }
+}

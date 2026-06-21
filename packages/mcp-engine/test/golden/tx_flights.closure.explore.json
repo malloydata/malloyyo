@@ -1,0 +1,68 @@
+{
+  "requested": "tx_flights",
+  "sources": {
+    "tx_flights": {
+      "name": "tx_flights",
+      "primary_key": "id",
+      "description": "Flights (the \"mid\" layer); joins carriers from the bottom layer twice.",
+      "dimensions": {
+        "id": {
+          "type": "number"
+        },
+        "carrier": {
+          "type": "string"
+        },
+        "alt_carrier": {
+          "type": "string"
+        }
+      },
+      "measures": {
+        "tx_flight_count": {
+          "type": "number",
+          "expression": "count()"
+        }
+      },
+      "views": {},
+      "joins": {
+        "carriers": {
+          "relationship": "many_to_one",
+          "description": "Carrier reference, defined two imports deep (the \"bottom\" layer).",
+          "anon_src_index": 0
+        },
+        "alt": {
+          "relationship": "many_to_one",
+          "description": "Carrier reference, defined two imports deep (the \"bottom\" layer).",
+          "anon_src_index": 0
+        }
+      },
+      "anon_srcs": [
+        {
+          "name": "tx_carriers",
+          "primary_key": "code",
+          "description": "Carrier reference, defined two imports deep (the \"bottom\" layer).",
+          "dimensions": {
+            "code": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "tx_lower": {
+              "type": "string",
+              "description": "Lowercased carrier name.",
+              "expression": "lower(name)"
+            }
+          },
+          "measures": {
+            "tx_carrier_count": {
+              "type": "number",
+              "expression": "count()"
+            }
+          },
+          "views": {},
+          "joins": {}
+        }
+      ]
+    }
+  }
+}

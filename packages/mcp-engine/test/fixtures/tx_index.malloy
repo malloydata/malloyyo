@@ -1,0 +1,4 @@
+// The "top" layer: imports mid only. tx_carriers (defined in bottom) is NOT in
+// this model's namespace — it is reachable only through tx_flights' joins — so
+// those joins are un-nameable here (anon_srcs), not source_refs.
+import "tx_mid.malloy"

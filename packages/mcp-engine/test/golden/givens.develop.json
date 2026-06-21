@@ -1,0 +1,77 @@
+{
+  "entry": "file:///fixture/givens_model.malloy",
+  "sources": {
+    "nums": {
+      "name": "nums",
+      "primary_key": null,
+      "dimensions": [
+        {
+          "name": "v",
+          "type": "number",
+          "location": [
+            4,
+            27
+          ]
+        }
+      ],
+      "measures": [],
+      "views": [],
+      "joins": [],
+      "location": [
+        4,
+        8
+      ],
+      "body": "nums is duckdb.sql(\"\"\"\n  SELECT 1 as v UNION ALL SELECT 2 as v UNION ALL SELECT 3 as v\n\"\"\")"
+    }
+  },
+  "queries": [
+    {
+      "name": "above_target",
+      "description": "Numbers at or above the target.",
+      "annotations": [
+        {
+          "route": "\"",
+          "text": "Numbers at or above the target.\n"
+        }
+      ],
+      "location": [
+        9,
+        7
+      ],
+      "body": "above_target is nums -> { select: v; where: v >= $TARGET }",
+      "givens": [
+        "TARGET"
+      ]
+    }
+  ],
+  "runs": [
+    {
+      "index": 0,
+      "location": [
+        11,
+        5
+      ],
+      "givens": [
+        "TARGET"
+      ]
+    }
+  ],
+  "annotations": [
+    {
+      "route": "!",
+      "text": "experimental.givens\n"
+    }
+  ],
+  "givens": [
+    {
+      "name": "TARGET",
+      "type": "number",
+      "has_default": true,
+      "location": [
+        2,
+        2
+      ],
+      "body": "TARGET :: number is 0"
+    }
+  ]
+}

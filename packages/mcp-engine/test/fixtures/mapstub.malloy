@@ -1,0 +1,15 @@
+#" A reference source that itself has a scalar-array column.
+source: labeled is duckdb.sql("""
+  SELECT 1 as id, ['x', 'y'] as labels
+""") extend {
+  primary_key: id
+  measure: labeled_count is count()
+}
+
+#" Joins the labeled source by name; reaches its array column through the join.
+source: holder is duckdb.sql("""
+  SELECT 10 as hid, 1 as label_id
+""") extend {
+  primary_key: hid
+  join_one: lab is labeled on label_id = lab.id
+}

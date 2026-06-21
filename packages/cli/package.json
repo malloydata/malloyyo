@@ -1,6 +1,6 @@
 {
   "name": "malloyyo",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Publish Malloy models to a Malloyyo instance",
   "license": "MIT",
   "type": "module",
@@ -18,15 +18,22 @@
     "provenance": true
   },
   "scripts": {
-    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --packages=external --outfile=dist/index.js",
+    "prebuild": "npm --prefix ../mcp-engine run build",
+    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --external:commander --external:@malloydata/* --external:@modelcontextprotocol/* --outfile=dist/index.js",
     "dev": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
+    "pretest": "npm run build",
+    "test": "tsx --test test/*.test.ts",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
+    "@malloydata/malloy": "0.0.414",
+    "@malloydata/malloy-connections": "0.0.414",
+    "@modelcontextprotocol/sdk": "^1.29.0",
     "commander": "^12.1.0"
   },
   "devDependencies": {
+    "@malloyyo/mcp-engine": "workspace:*",
     "@types/node": "^20",
     "esbuild": "^0.24.0",
     "tsx": "^4.21.0",

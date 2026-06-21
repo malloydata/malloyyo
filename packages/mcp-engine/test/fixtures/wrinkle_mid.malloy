@@ -1,0 +1,11 @@
+import "wrinkle_bottom.malloy"
+
+#" Flights (mid layer); joins carriers, which themselves join regions.
+source: wflights is duckdb.sql("""
+  SELECT 1 as id, 'AA' as carrier
+  UNION ALL SELECT 2 as id, 'BA' as carrier
+""") extend {
+  primary_key: id
+  join_one: carriers is wcarriers with carrier
+  measure: wflight_count is count()
+}

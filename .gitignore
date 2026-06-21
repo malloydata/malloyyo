@@ -4,6 +4,9 @@
 /node_modules
 packages/*/node_modules
 packages/*/dist
+
+# generated at build time by scripts/embed-content.ts (content/ is the source of truth)
+packages/*/src/content/generated.ts
 /.pnp
 .pnp.*
 .yarn/*

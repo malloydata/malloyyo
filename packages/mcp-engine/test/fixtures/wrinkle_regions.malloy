@@ -1,0 +1,10 @@
+#" Geographic regions — named at the top level (imported directly by the top).
+source: regions is duckdb.sql("""
+  SELECT 'NA' as region_id, 'North America' as region_name
+  UNION ALL SELECT 'EU' as region_id, 'Europe' as region_name
+""") extend {
+  primary_key: region_id
+  #" Display name of the region.
+  dimension: region_label is region_name
+  measure: region_count is count()
+}

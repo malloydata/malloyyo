@@ -1,0 +1,11 @@
+import "wrinkle_regions.malloy"
+
+#" Carriers, defined two imports deep; each sits in a region.
+source: wcarriers is duckdb.sql("""
+  SELECT 'AA' as code, 'NA' as region_id
+  UNION ALL SELECT 'BA' as code, 'EU' as region_id
+""") extend {
+  primary_key: code
+  measure: wcarrier_count is count()
+  join_one: region is regions with region_id
+}

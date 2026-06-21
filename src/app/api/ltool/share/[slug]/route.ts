@@ -31,6 +31,7 @@ export async function GET(
   return NextResponse.json({
     instance: res.instance,
     source: res.source,
+    datasetId: res.datasetId,
     question: res.question,
     malloy: res.malloy,
     favoritedByMe: ctxFlags?.favoritedByMe ?? false,

@@ -1,0 +1,10 @@
+#" Carrier reference, defined two imports deep (the "bottom" layer).
+source: tx_carriers is duckdb.sql("""
+  SELECT 'AA' as code, 'American' as name
+  UNION ALL SELECT 'WN' as code, 'Southwest' as name
+""") extend {
+  primary_key: code
+  #" Lowercased carrier name.
+  dimension: tx_lower is lower(name)
+  measure: tx_carrier_count is count()
+}

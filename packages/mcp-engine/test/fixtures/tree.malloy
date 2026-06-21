@@ -1,0 +1,42 @@
+##" Join-tree fixture: depth-2 named chain, a source joined twice, and a
+##" nested-record (anonymous) join — exercises the describe_source tree shape.
+
+#" Confederation lookup (the deepest named hop).
+source: tconf is duckdb.sql("""
+  SELECT 'UEFA' as cid, 'Europe' as cname
+  UNION ALL SELECT 'CONMEBOL' as cid, 'South America' as cname
+""") extend {
+  primary_key: cid
+  #" Human-readable confederation name.
+  dimension: conf_name is cname
+  measure: conf_count is count()
+}
+
+#" National teams; each belongs to one confederation.
+source: tteams is duckdb.sql("""
+  SELECT 'ENG' as tid, 'England' as tname, 'UEFA' as cid
+  UNION ALL SELECT 'BRA' as tid, 'Brazil' as tname, 'CONMEBOL' as cid
+""") extend {
+  primary_key: tid
+  #" Team display name.
+  dimension: team_name is tname
+  measure: team_count is count()
+  join_one: confederation is tconf with cid
+}
+
+#" One row per team per match. Joins teams twice (team / opponent) and carries
+#" a nested array of goal events.
+source: tapp is duckdb.sql("""
+  SELECT 'ENG' as tid, 'BRA' as oid, 2 as gf,
+         [{'minute': 12, 'scorer': 'Kane'}, {'minute': 77, 'scorer': 'Bellingham'}] as goals
+  UNION ALL
+  SELECT 'BRA' as tid, 'ENG' as oid, 1 as gf,
+         [{'minute': 45, 'scorer': 'Richarlison'}] as goals
+""") extend {
+  primary_key: tid
+  join_one: team is tteams with tid
+  join_one: opponent is tteams on oid = opponent.tid
+  measure: appearance_count is count()
+  #" Appearances by team name.
+  view: by_team is { group_by: team.team_name; aggregate: appearance_count }
+}

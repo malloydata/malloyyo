@@ -1,0 +1,74 @@
+{
+  "described_source": {
+    "name": "wflights",
+    "primary_key": "id",
+    "description": "Flights (mid layer); joins carriers, which themselves join regions.",
+    "dimensions": {
+      "id": {
+        "type": "number"
+      },
+      "carrier": {
+        "type": "string"
+      }
+    },
+    "measures": {
+      "wflight_count": {
+        "type": "number",
+        "expression": "count()"
+      }
+    },
+    "views": {}
+  },
+  "joins": {
+    "carriers": {
+      "source_def": {
+        "primary_key": "code",
+        "description": "Carriers, defined two imports deep; each sits in a region.",
+        "dimensions": {
+          "code": {
+            "type": "string"
+          },
+          "region_id": {
+            "type": "string"
+          }
+        },
+        "measures": {
+          "wcarrier_count": {
+            "type": "number",
+            "expression": "count()"
+          }
+        }
+      },
+      "code": "join_one: carriers is wcarriers with carrier"
+    },
+    "carriers.region": {
+      "source": "regions",
+      "code": "join_one: region is regions with region_id"
+    }
+  },
+  "join_source_map": {
+    "regions": {
+      "primary_key": "region_id",
+      "description": "Geographic regions — named at the top level (imported directly by the top).",
+      "dimensions": {
+        "region_id": {
+          "type": "string"
+        },
+        "region_name": {
+          "type": "string"
+        },
+        "region_label": {
+          "type": "string",
+          "expression": "region_name",
+          "description": "Display name of the region."
+        }
+      },
+      "measures": {
+        "region_count": {
+          "type": "number",
+          "expression": "count()"
+        }
+      }
+    }
+  }
+}

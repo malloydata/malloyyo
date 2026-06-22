@@ -6,6 +6,7 @@
   "packageManager": "pnpm@11.8.0",
   "scripts": {
     "dev": "next dev",
+    "malloy-update": "node scripts/malloy-update.mjs",
     "build": "node scripts/gen-baseline.mjs && next build",
     "db:baseline": "node scripts/gen-baseline.mjs",
     "start": "next start",

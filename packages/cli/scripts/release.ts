@@ -148,7 +148,8 @@ ${bold('SAFE TO RE-RUN')}
 // main
 // ---------------------------------------------------------------------------
 async function main(): Promise<void> {
-  const argv = process.argv.slice(2);
+  // Drop a bare `--` separator (pnpm forwards it through `pnpm release -- …`).
+  const argv = process.argv.slice(2).filter((a) => a !== "--");
 
   if (argv.includes('-h') || argv.includes('--help')) {
     help();

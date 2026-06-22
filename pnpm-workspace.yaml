@@ -5,23 +5,25 @@ packages:
 # "Unknown project config" it doesn't recognize.
 nodeLinker: hoisted
 
-onlyBuiltDependencies:
-  - "@swc/core"
-  - "@duckdb/node-bindings"
-  - esbuild
-  - cbor-extract
-
-ignoredBuiltDependencies:
-  - sharp
-  - unrs-resolver
-  - "@nestjs/core"
-
+# pnpm 11 decides which dependencies may run install/build scripts from this
+# boolean map (it rewrites the block on install). An UNdecided entry — or the
+# "set this to true or false" placeholder pnpm scaffolds for a new one — makes
+# `pnpm install --frozen-lockfile` fail with ERR_PNPM_IGNORED_BUILDS. So every
+# package that has an install script must have an explicit true/false here.
+# (onlyBuiltDependencies / ignoredBuiltDependencies are NOT consulted in v11.)
 allowBuilds:
-  esbuild: set this to true or false
-  lz4: set this to true or false
-  sharp: set this to true or false
-  unrs-resolver: set this to true or false
+  "@duckdb/node-bindings": true
+  "@swc/core": true
+  cbor-extract: true
+  esbuild: true
+  "@nestjs/core": false
+  lz4: false
+  sharp: false
+  unrs-resolver: false
 
+# Supply-chain guard: pnpm refuses dependencies younger than the configured
+# minimum release age, except these (the @malloydata packages we pull as soon
+# as they ship). `npm run malloy-update` regenerates this list.
 minimumReleaseAgeExclude:
   - '@malloydata/db-bigquery@0.0.414'
   - '@malloydata/db-databricks@0.0.414'

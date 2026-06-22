@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "license": "MIT",
+  "packageManager": "pnpm@11.8.0",
   "scripts": {
     "dev": "next dev",
     "build": "node scripts/gen-baseline.mjs && next build",

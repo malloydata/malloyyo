@@ -43,12 +43,14 @@ jobs:
         with:
           fetch-depth: 0 # need history to rebase before pushing the bump
 
-      - uses: pnpm/action-setup@v4
-
       - uses: actions/setup-node@v6
         with:
           node-version: "24"
-          cache: pnpm
+
+      # pnpm via corepack (reads the `packageManager` field in package.json).
+      # Avoids pnpm/action-setup, which still runs on the deprecated Node 20.
+      - name: Enable pnpm
+        run: corepack enable
 
       # Trusted publishing needs a recent npm.
       - name: Upgrade npm (OIDC trusted publishing)

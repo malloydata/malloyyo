@@ -8,6 +8,7 @@ import { runMalloyFiles } from "./malloy";
 import { env } from "./env";
 import { parseSlug } from "./slug";
 import { RUN_LABELS } from "./tool-names";
+import { logger, serializeErr } from "./logger";
 
 // NOTE: the MCP tool surface (tool descriptors, server instructions, and the
 // callTool dispatcher) USED to live here. It has been deleted — the deployed
@@ -108,8 +109,19 @@ export async function logCall(fields: {
   durationMs?: number;
   error?: string;
 }) {
-  const seq = fields.inquiryId ? await nextSequence(fields.inquiryId) : 0;
-  await db.insert(toolCalls).values({ ...fields, sequence: seq }).catch(() => {});
+  // Never throw: a failed audit insert must not break the tool call it records.
+  // But DO surface it — a silently-swallowed insert is exactly how "not all tool
+  // calls are logged" goes unnoticed.
+  try {
+    const seq = fields.inquiryId ? await nextSequence(fields.inquiryId) : 0;
+    await db.insert(toolCalls).values({ ...fields, sequence: seq });
+  } catch (e) {
+    logger.error("tool_calls insert failed", {
+      toolName: fields.toolName,
+      userId: fields.userId,
+      error: serializeErr(e).message,
+    });
+  }
 }
 
 // Find or create a conversation for auto-inquiry creation.

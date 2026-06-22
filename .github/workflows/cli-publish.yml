@@ -6,10 +6,10 @@ name: Publish malloyyo CLI
 # PR carried its own semver bump. The bump commit carries [skip ci] so it does
 # not re-trigger this workflow.
 #
-# Auth is npm Trusted Publishing (OIDC) — no NPM_TOKEN. Register `malloyyo` on
-# npmjs.com with a trusted publisher pointing at this repo + this workflow, and
-# leave token publishing enabled so an authorized person can run the same
-# `pnpm release` from the command line.
+# Auth is npm Trusted Publishing (OIDC) — no NPM_TOKEN. Register
+# `@malloydata/malloyyo` on npmjs.com with a trusted publisher pointing at this
+# repo + this workflow, and leave token publishing enabled so an authorized
+# person can run the same `pnpm release` from the command line.
 
 on:
   push:

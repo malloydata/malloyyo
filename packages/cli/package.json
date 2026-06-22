@@ -3,6 +3,11 @@
   "version": "0.2.0",
   "description": "Publish Malloy models to a Malloyyo instance",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/malloydata/malloyyo.git",
+    "directory": "packages/cli"
+  },
   "type": "module",
   "bin": {
     "malloyyo": "dist/index.js"
@@ -14,8 +19,7 @@
     "node": ">=20"
   },
   "publishConfig": {
-    "access": "public",
-    "provenance": true
+    "access": "public"
   },
   "scripts": {
     "prebuild": "npm --prefix ../mcp-engine run build",
@@ -24,6 +28,7 @@
     "typecheck": "tsc --noEmit",
     "pretest": "npm run build",
     "test": "tsx --test test/*.test.ts",
+    "release": "tsx scripts/release.ts",
     "prepublishOnly": "npm run build"
   },
   "dependencies": {

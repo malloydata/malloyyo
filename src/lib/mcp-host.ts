@@ -162,10 +162,12 @@ async function recordQuery(
   args: Record<string, unknown>,
   result: QueryRunResult,
   baseUrl: string,
-): Promise<LtoolLink | undefined> {
+): Promise<{ link?: LtoolLink; logged: boolean }> {
   const modelRef = String(result.model_ref ?? args.model_ref ?? "");
   const found = modelRef ? await findModelByRef(user.id, modelRef) : null;
-  if (!found) return undefined;
+  // Couldn't resolve the dataset: the query still ran, so the caller logs a
+  // bare audit row instead — `logged: false` tells it to.
+  if (!found) return { logged: false };
   const question = String(args.question ?? "").trim();
   const malloyQ = String(args.malloy ?? "");
   const source = String(args.source ?? modelRef);
@@ -197,7 +199,25 @@ async function recordQuery(
     rowCount: result.row_count,
     durationMs: result.total_time_ms,
   });
-  return ltoolLink(baseUrl, inq.slug);
+  return { link: ltoolLink(baseUrl, inq.slug), logged: true };
+}
+
+/** Pull a human error string off an engine result (`{ ok:false, problems }`) or
+    a host ToolResult (`{ isError, content }`), for the audit `error` column. */
+function resultError(result: Record<string, unknown>): string | undefined {
+  const problems = result.problems;
+  if (Array.isArray(problems) && problems.length > 0) {
+    const msgs = problems
+      .map((p) => (p && typeof p === "object" ? (p as { message?: unknown }).message : p))
+      .filter((m): m is string => typeof m === "string" && m.length > 0);
+    if (msgs.length > 0) return msgs.join("; ");
+  }
+  if (typeof result.error === "string") return result.error;
+  if (result.isError) {
+    const first = (result.content as Array<{ text?: unknown }> | undefined)?.[0]?.text;
+    if (typeof first === "string") return first;
+  }
+  return undefined;
 }
 
 async function openShareLink(args: Record<string, unknown>, baseUrl: string): Promise<ToolResult> {
@@ -262,53 +282,94 @@ export function buildHostedExploreSurface(user: User, baseUrl: string): HostedSu
   ];
 
   async function call(name: string, args: Record<string, unknown>): Promise<ToolResult> {
-    if (name === "open_share_link") return openShareLink(args, baseUrl);
-    const tool = byName.get(name);
-    if (!tool) return errText(`unknown tool: ${name}`);
+    // Audit EVERY tool call (every tool, success or failure) to tool_calls. The
+    // rich query record is minted by recordQuery on the success path; this is the
+    // catch-all for every other path so nothing completes unlogged. Non-RUN_LABELS
+    // tool names and errored rows are filtered out of the history/share views, so
+    // these rows are audit-only and don't surface to users.
+    const start = Date.now();
+    const audit = (error?: string) =>
+      logCall({
+        userId: user.id,
+        toolName: name,
+        source: typeof args.source === "string" ? args.source : undefined,
+        malloyInput: name === "query" && typeof args.malloy === "string" ? args.malloy : undefined,
+        durationMs: Date.now() - start,
+        error,
+      });
 
-    const executing = name === "query" && args.execute !== false;
-    // Host policy: an executing query must carry a question (its share label).
-    if (executing && !String(args.question ?? "").trim()) {
-      return errText("'question' is required: a plain-English description of what this query answers.");
+    try {
+      if (name === "open_share_link") {
+        const result = await openShareLink(args, baseUrl);
+        await audit(resultError(result as unknown as Record<string, unknown>));
+        return result;
+      }
+      const tool = byName.get(name);
+      if (!tool) {
+        await audit(`unknown tool: ${name}`);
+        return errText(`unknown tool: ${name}`);
+      }
+
+      const executing = name === "query" && args.execute !== false;
+      // Host policy: an executing query must carry a question (its share label).
+      if (executing && !String(args.question ?? "").trim()) {
+        const msg = "'question' is required: a plain-English description of what this query answers.";
+        await audit(msg);
+        return errText(msg);
+      }
+
+      const result = (await tool.handler(args)) as Record<string, unknown>;
+
+      // Decorate a successful executed query with the share link as the structured
+      // `ltool_link` field (the Query-summary nudge that used to prepend here is
+      // disabled — see below).
+      if (executing && result.ok) {
+        // One cast at the untyped wire boundary (the tool handler returns the
+        // generic object) to the explore query shape; everything downstream
+        // (recording, the host_only strip) is then typed.
+        const runResult = result as unknown as QueryRunResult;
+        const recorded = await recordQuery(user, args, runResult, baseUrl);
+        // recordQuery mints the full row on success; if the dataset couldn't be
+        // resolved it logged nothing, so fall back to a bare audit row.
+        if (!recorded.logged) await audit();
+        const link = recorded.link;
+        // host_only carried the SQL for recording (above); it must NOT reach the
+        // agent — strip it from the payload the agent sees.
+        const { [HOST_ONLY]: _hostOnly, ...rest } = runResult;
+        const withLink = { ...rest, ltool_link: link };
+        // DISABLED (rescuable): the per-query "Query summary" nudge was shipped as
+        // a bare text block prepended to the JSON payload. Two problems flagged
+        // repeatedly by consuming models: (1) it breaks any consumer that
+        // JSON.parses the result (leading prose before the {...}); (2) an
+        // imperative aimed at the model inside a tool result is exactly the shape
+        // hosts/models distrust as injection, so it was unreliable anyway. The
+        // share link already rides as the structured `ltool_link` field — let the
+        // client render it. Restore by re-adding the reminder text block below.
+        //   const reminder =
+        //     `End your reply with a "Query summary": (1) the question in plain English, ` +
+        //     `(2) the Malloy logic (filters, grouping, aggregation, ordering), ` +
+        //     `(3) post-processing outside Malloy or "none".` +
+        //     (link ? ` Then append \`ltool_link\` as a markdown link using its \`text\` and \`url\`.` : "");
+        return {
+          content: [
+            // { type: "text", text: reminder },
+            { type: "text", text: JSON.stringify(withLink, null, 2) },
+          ],
+          structuredContent: withLink,
+        };
+      }
+      // Everything else — non-query tools, execute:false (compile-only), and
+      // FAILED queries — gets a bare audit row (with the error string when the
+      // result reports one). This is the A+B fix: nothing returns unlogged.
+      await audit(result.ok === false ? resultError(result) : undefined);
+      return toContent(result) as ToolResult;
+    } catch (e) {
+      // A thrown handler (the engine throws only on programmer misuse, but the
+      // host's resolution/lease can also throw) — record the failure, then let it
+      // propagate to the route handler's error response as before.
+      await audit(e instanceof Error ? e.message : String(e));
+      throw e;
     }
-
-    const result = (await tool.handler(args)) as Record<string, unknown>;
-
-    // Decorate a successful executed query with the share link as the structured
-    // `ltool_link` field (the Query-summary nudge that used to prepend here is
-    // disabled — see below).
-    if (executing && result.ok) {
-      // One cast at the untyped wire boundary (the tool handler returns the
-      // generic object) to the explore query shape; everything downstream
-      // (recording, the host_only strip) is then typed.
-      const runResult = result as unknown as QueryRunResult;
-      const link = await recordQuery(user, args, runResult, baseUrl);
-      // host_only carried the SQL for recording (above); it must NOT reach the
-      // agent — strip it from the payload the agent sees.
-      const { [HOST_ONLY]: _hostOnly, ...rest } = runResult;
-      const withLink = { ...rest, ltool_link: link };
-      // DISABLED (rescuable): the per-query "Query summary" nudge was shipped as
-      // a bare text block prepended to the JSON payload. Two problems flagged
-      // repeatedly by consuming models: (1) it breaks any consumer that
-      // JSON.parses the result (leading prose before the {...}); (2) an
-      // imperative aimed at the model inside a tool result is exactly the shape
-      // hosts/models distrust as injection, so it was unreliable anyway. The
-      // share link already rides as the structured `ltool_link` field — let the
-      // client render it. Restore by re-adding the reminder text block below.
-      //   const reminder =
-      //     `End your reply with a "Query summary": (1) the question in plain English, ` +
-      //     `(2) the Malloy logic (filters, grouping, aggregation, ordering), ` +
-      //     `(3) post-processing outside Malloy or "none".` +
-      //     (link ? ` Then append \`ltool_link\` as a markdown link using its \`text\` and \`url\`.` : "");
-      return {
-        content: [
-          // { type: "text", text: reminder },
-          { type: "text", text: JSON.stringify(withLink, null, 2) },
-        ],
-        structuredContent: withLink,
-      };
-    }
-    return toContent(result) as ToolResult;
   }
 
   // Render the instance name into the engine's instructions ({{INSTANCE_NAME}}

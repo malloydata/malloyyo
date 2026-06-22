@@ -16,7 +16,7 @@
 
 import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, and, isNotNull } from "drizzle-orm";
 import { db, users, datasets, malloyModels, malloyModelFiles, queries, toolCalls, type User } from "@/db";
 import { buildHostedExploreSurface } from "@/lib/mcp-host";
 import { loadSharedQuery, runQueryForWeb } from "@/lib/mcp-tools";
@@ -270,6 +270,78 @@ test("query refuses a source from the WRONG model_ref (write-side guard)", async
   const out = JSON.parse(blockText(r, 0)) as { ok?: boolean; problems?: Array<{ code: string }> };
   assert.equal(out.ok, false);
   assert.ok(out.problems?.some((p) => p.code === "source-not-in-model"), JSON.stringify(out));
+});
+
+test("every tool call is audited to tool_calls — non-query tools and failures included", async () => {
+  const h = host();
+
+  // B: a non-query tool logs a clean (error-null) audit row — previously these
+  // never reached tool_calls at all.
+  await h.call("list_sources", {});
+  const [ls] = await db
+    .select({ error: toolCalls.error })
+    .from(toolCalls)
+    .where(eq(toolCalls.toolName, "list_sources"))
+    .orderBy(desc(toolCalls.createdAt))
+    .limit(1);
+  assert.ok(ls, "list_sources produced an audit row");
+  assert.equal(ls!.error, null, "a successful non-query tool logs no error");
+
+  // B: a non-query tool FAILURE records its error string.
+  await h.call("describe_source", { source: "no-such-source" });
+  const [dsRow] = await db
+    .select({ error: toolCalls.error })
+    .from(toolCalls)
+    .where(eq(toolCalls.toolName, "describe_source"))
+    .orderBy(desc(toolCalls.createdAt))
+    .limit(1);
+  assert.ok(dsRow, "describe_source produced an audit row");
+  assert.ok((dsRow!.error ?? "").length > 0, "a failed describe_source records its error");
+
+  // A: a FAILED execute:true query records an error row. The old code only
+  // recorded successful queries, so a failing query vanished from tool_calls.
+  const bad = await h.call("query", {
+    source: "sales",
+    malloy: "run: sales -> { aggregate: not_a_real_measure }",
+    execute: true,
+    question: "audit: a deliberately failing query",
+  });
+  assert.equal((JSON.parse(blockText(bad, 0)) as { ok: boolean }).ok, false, "the query failed");
+  const [failRow] = await db
+    .select({ error: toolCalls.error, malloy: toolCalls.malloyInput })
+    .from(toolCalls)
+    .where(and(eq(toolCalls.toolName, "query"), isNotNull(toolCalls.error)))
+    .orderBy(desc(toolCalls.createdAt))
+    .limit(1);
+  assert.ok(failRow, "a failed query produced an audit row (previously dropped)");
+  assert.ok((failRow!.error ?? "").length > 0, "the failure's error string was recorded");
+  assert.match(failRow!.malloy ?? "", /not_a_real_measure/, "the failing Malloy was recorded for debugging");
+});
+
+test("a compile-only (execute:false) query is audited but records no run artifacts", async () => {
+  // execute:false validates without running, so it never reached recordQuery and
+  // thus never hit tool_calls. It now logs a bare audit row: the Malloy is there
+  // (for debugging), but there's no error, no compiled SQL, and no row count —
+  // nothing actually ran. Marker string makes the row unambiguous to find.
+  const marker = "run: sales -> { aggregate: total_qty } // compile-only-audit-marker";
+  const v = await host().call("query", { source: "sales", malloy: marker, execute: false });
+  assert.equal((JSON.parse(blockText(v, 0)) as { ok: boolean }).ok, true, "compiles");
+
+  const [row] = await db
+    .select({
+      error: toolCalls.error,
+      compiledSql: toolCalls.compiledSql,
+      rowCount: toolCalls.rowCount,
+      source: toolCalls.source,
+    })
+    .from(toolCalls)
+    .where(eq(toolCalls.malloyInput, marker))
+    .limit(1);
+  assert.ok(row, "the compile-only query produced an audit row");
+  assert.equal(row!.error, null, "a successful compile logs no error");
+  assert.equal(row!.compiledSql, null, "nothing ran, so no SQL was recorded");
+  assert.equal(row!.rowCount, null, "nothing ran, so no row count was recorded");
+  assert.equal(row!.source, "sales", "the queried source is recorded");
 });
 
 after(async () => {

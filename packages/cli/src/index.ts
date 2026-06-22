@@ -7,8 +7,10 @@ import { getAccessToken, login } from "./oauth.js";
 import { serveMcp } from "./mcp.js";
 import { clearCreds } from "./store.js";
 import type { PublishRequest, ModelStatus } from "./protocol.js";
-
-const VERSION = "0.2.0";
+// Single source of truth: the build runs after the release bump, so esbuild
+// inlines the current package.json version (tree-shaken to just the string).
+// Feeds both `malloyyo --version` and the MCP server's serverInfo.version.
+import { version as VERSION } from "../package.json";
 
 function shortSha(sha?: string): string {
   return sha ? sha.slice(0, 7) : "";

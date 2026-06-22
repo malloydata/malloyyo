@@ -1,6 +1,10 @@
 packages:
   - "packages/*"
 
+# Linker layout. Lives here (not .npmrc) so the npm CLI doesn't warn about an
+# "Unknown project config" it doesn't recognize.
+nodeLinker: hoisted
+
 onlyBuiltDependencies:
   - "@swc/core"
   - "@duckdb/node-bindings"

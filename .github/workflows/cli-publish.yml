@@ -1,41 +1,47 @@
 name: Publish malloyyo CLI
 
-# Two paths:
-#   - push to main touching packages/cli  -> auto-publish a dated prerelease to @next
-#   - manual workflow_dispatch             -> semver bump, publish @latest, commit + tag
+# A merge to main is the signal to release. scripts/release.ts reconciles the
+# version in packages/cli/package.json against the npm registry: it patch-bumps
+# (and commits back) an already-published version, or publishes as-is when the
+# PR carried its own semver bump. The bump commit carries [skip ci] so it does
+# not re-trigger this workflow.
 #
-# Auth is npm Trusted Publishing (OIDC) — no NPM_TOKEN. Register `malloyyo` on
-# npmjs.com with a trusted publisher pointing at this repo + this workflow.
+# Auth is npm Trusted Publishing (OIDC) — no NPM_TOKEN. Register
+# `@malloydata/malloyyo` on npmjs.com with a trusted publisher pointing at this
+# repo + this workflow, and leave token publishing enabled so an authorized
+# person can run the same `pnpm release` from the command line.
 
 on:
   push:
     branches: [main]
     paths:
+      # Anything that changes the published CLI bytes is a release signal. The
+      # CLI bundles the engine into dist/index.js, so engine changes ship as a
+      # CLI patch — even though the engine is private and never published alone.
       - "packages/cli/**"
+      - "packages/mcp-engine/**"
       - ".github/workflows/cli-publish.yml"
   workflow_dispatch:
     inputs:
-      bump:
-        description: "semver bump for @latest"
-        type: choice
-        options: [patch, minor, major]
-        default: patch
       dry_run:
-        description: "test without publishing"
+        description: "build + npm publish --dry-run, no registry or git writes"
         type: boolean
         default: false
 
+concurrency:
+  group: cli-release
+  cancel-in-progress: false
+
 jobs:
-  publish:
+  release:
     runs-on: ubuntu-latest
     permissions:
-      contents: write # tag + commit on @latest
+      contents: write # commit the version bump + push the tag
       id-token: write # npm trusted publishing (OIDC)
-    defaults:
-      run:
-        working-directory: packages/cli
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0 # need history to rebase before pushing the bump
 
       - uses: pnpm/action-setup@v4
 
@@ -49,40 +55,13 @@ jobs:
         run: npm install -g npm@latest
 
       - name: Install
-        working-directory: .
         run: pnpm install --frozen-lockfile
 
-      - name: Build
-        run: pnpm build
-
-      - name: Typecheck
-        run: pnpm typecheck
-
-      # --- auto @next on push to main ---
-      - name: Publish @next
-        if: github.event_name == 'push'
+      - name: Configure git
         run: |
-          base=$(node -p "require('./package.json').version")
-          next="${base}-next.$(date +%Y.%m.%d).$(git rev-parse --short=7 HEAD)"
-          npm version --no-git-tag-version "$next"
-          npm publish --tag next
-          echo "Published malloyyo@$next" >> "$GITHUB_STEP_SUMMARY"
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      # --- manual @latest via dispatch ---
-      - name: Publish @latest
-        if: github.event_name == 'workflow_dispatch'
-        run: |
-          npm version --no-git-tag-version "${{ inputs.bump }}"
-          new=$(node -p "require('./package.json').version")
-          if [ "${{ inputs.dry_run }}" = "true" ]; then
-            npm publish --dry-run
-            echo "Dry run: malloyyo@$new (not published)" >> "$GITHUB_STEP_SUMMARY"
-          else
-            npm publish
-            git config user.name  "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git commit -am "malloyyo cli v$new"
-            git tag "malloyyo-v$new"
-            git push --follow-tags
-            echo "Published malloyyo@$new" >> "$GITHUB_STEP_SUMMARY"
-          fi
+      - name: Release
+        working-directory: packages/cli
+        run: pnpm release ${{ inputs.dry_run && '-- --dry-run' || '' }}

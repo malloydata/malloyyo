@@ -211,6 +211,8 @@ export function SchemaPanel({ source, onClose, sources, onSourceChange }: Props)
   }, []);
 
   useEffect(() => {
+    // Clear the panel when the source clears; otherwise fetch (sets state in its callback).
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (!source) { setSchema(null); return; }
     fetchSchema(source);
   }, [source, fetchSchema]);

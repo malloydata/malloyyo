@@ -369,7 +369,7 @@ async function main(): Promise<void> {
     console.log(`  npm      https://www.npmjs.com/package/${name}/v/${version}`);
     console.log(`  install  ${cyan(`npm i -g ${name}@${version}`)}`);
     console.log(`  tag      ${tag}`);
-  } catch (err) {
+  } catch {
     restoreVersion();
     die(
       'Release failed.',

@@ -62,6 +62,8 @@ export default function HomePage() {
       {!me ? (
         <section className="border border-gray-200 dark:border-gray-800 rounded p-6 text-center space-y-3">
           <p className="text-gray-700 dark:text-gray-300">Sign in with Google to view datasets.</p>
+          {/* NextAuth API endpoint, not a page route — a full-page nav is intended, so <Link> doesn't apply. */}
+          {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
           <a href="/api/auth/signin" className="inline-block rounded bg-black text-white dark:bg-white dark:text-black px-4 py-2">
             Sign in with Google
           </a>
@@ -167,6 +169,9 @@ function Copyable({ value, multiline }: { value: string; multiline?: boolean }) 
 
 function McpSetup({ instanceName }: { instanceName: string }) {
   const [origin, setOrigin] = useState("");
+  // window.location is browser-only; read it after mount so SSR and the first
+  // client render agree (no hydration mismatch).
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { setOrigin(window.location.origin); }, []);
   const mcpUrl = `${origin || "https://malloyyo.vercel.app"}/mcp`;
 
@@ -227,6 +232,8 @@ function McpSetup({ instanceName }: { instanceName: string }) {
 function SignInOut({ me }: { me: Me | null }) {
   if (!me) {
     return (
+      // NextAuth API endpoint, not a page route — full-page nav intended.
+      // eslint-disable-next-line @next/next/no-html-link-for-pages
       <a href="/api/auth/signin"
         className="rounded bg-black text-white dark:bg-white dark:text-black text-xs px-3 py-1.5 whitespace-nowrap">
         Sign in
@@ -241,6 +248,8 @@ function SignInOut({ me }: { me: Me | null }) {
       )}
       <div className="flex flex-col items-end">
         <span className="text-gray-700 dark:text-gray-300">{me.name ?? me.email}</span>
+        {/* NextAuth API endpoint, not a page route — full-page nav intended. */}
+        {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
         <a href="/api/auth/signout" className="text-gray-500 dark:text-gray-400 hover:underline">sign out</a>
       </div>
     </div>

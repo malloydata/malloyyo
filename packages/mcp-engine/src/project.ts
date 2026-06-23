@@ -14,7 +14,6 @@ import type {
   CompactSchema,
   ExploreDescribedSource,
   ExploreDescription,
-  ExploreField,
   ExploreFieldGroups,
   ExploreModelInfo,
   ExploreSourceDescribe,

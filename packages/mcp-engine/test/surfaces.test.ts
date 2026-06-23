@@ -83,8 +83,8 @@ test('explore: two-channel annotations + direct-join relation', async () => {
   // Child collections are keyed by member name (name lifted to the key).
   const total = flights.measures['total_distance'];
   assert.equal(total?.instructions, 'Sum across flights; do not average a pre-summed value.');
-  // promoted routes (doc + agent) are stripped from annotations[] (not double-sent).
-  assert.equal(flights.annotations, undefined);
+  // (Source-level annotations are parsed into description/instructions above;
+  // there is no raw annotations[] bucket on the source to double-send.)
   // carriers is a named source-join, keyed by path; join_one → no fans_out.
   const carriers = result.joins!['carriers'];
   assert.ok(carriers && carriers.source === 'carriers');

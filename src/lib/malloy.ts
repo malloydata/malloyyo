@@ -125,7 +125,9 @@ export async function introspectModelWithReader(
   try {
     handle = await buildRuntimeWithReader(reader as malloy.URLReader, configJson);
     const compiled = await handle.runtime.getModel(fileUrl(entryPath));
-    const sources = compiled.explores.map((e) => ({
+    // Only the model's public surface — exported sources. Unexported intermediates
+    // (e.g. `_base`) stay private.
+    const sources = compiled.exportedExplores.map((e) => ({
       name: e.name,
       description: e.annotations.forRoute('"')[0]?.content.trim() ?? null,
     }));
@@ -152,7 +154,8 @@ export async function introspectModelFiles(
   try {
     handle = await buildRuntime(files);
     const compiled = await handle.runtime.getModel(fileUrl(entryPath));
-    const sources = compiled.explores.map((e) => ({
+    // Public surface only (exported sources); unexported `_base`-style sources stay private.
+    const sources = compiled.exportedExplores.map((e) => ({
       name: e.name,
       description: e.annotations.forRoute('"')[0]?.content.trim() ?? null,
     }));

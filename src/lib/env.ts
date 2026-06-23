@@ -45,4 +45,39 @@ export const env = {
   get GITHUB_TOKEN() {
     return process.env.GITHUB_TOKEN ?? "";
   },
+  // When enabled, the sign-in screen offers a "Continue anonymously" button
+  // that mints a throwaway slug-only user (no email) with a Heroku-style name.
+  // Gates CREATION of anonymous sessions only — once a session exists it's a
+  // valid user everywhere (web + MCP).
+  //
+  // DELIBERATELY NON-PORTABLE. The value must NAME this instance — i.e. equal
+  // its INSTANCE_CODE (e.g. ALLOW_ANONYMOUS=worldcup), not a generic "true".
+  // This way the flag can't ride along on a copied env: pasted onto another
+  // instance (different INSTANCE_CODE) it is inert, so anonymous access never
+  // turns on by accident. Defense in depth:
+  //   - a truthy-but-mismatched value is IGNORED and warned about (the
+  //     copy-paste signal), and
+  //   - an instance with an EMAIL_ALLOW_LIST is invite-only and can NEVER be
+  //     anonymous (fail closed).
+  get ALLOW_ANONYMOUS(): boolean {
+    const raw = (process.env.ALLOW_ANONYMOUS ?? "").trim().toLowerCase();
+    if (!raw) return false;
+    if (raw !== this.INSTANCE_CODE) {
+      console.warn(
+        `[security] ALLOW_ANONYMOUS=${raw} ignored: it must equal INSTANCE_CODE=` +
+          `${this.INSTANCE_CODE} to enable anonymous access on this instance. ` +
+          `A non-matching value usually means a copied env — anonymous stays OFF.`,
+      );
+      return false;
+    }
+    if ((process.env.EMAIL_ALLOW_LIST ?? "").trim()) {
+      console.warn(
+        "[security] ALLOW_ANONYMOUS ignored: EMAIL_ALLOW_LIST is set, so this " +
+          "instance is invite-only and cannot also be anonymous. Remove the " +
+          "allow-list to enable anonymous access.",
+      );
+      return false;
+    }
+    return true;
+  },
 };

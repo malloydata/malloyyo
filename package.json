@@ -16,6 +16,7 @@
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "e2e": "tsx scripts/e2e.ts",
+    "test:unit": "tsx --test test/env-anonymous.test.ts",
     "test:hosted": "bash scripts/hosted-test.sh"
   },
   "dependencies": {

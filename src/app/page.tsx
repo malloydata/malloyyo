@@ -61,12 +61,10 @@ export default function HomePage() {
 
       {!me ? (
         <section className="border border-gray-200 dark:border-gray-800 rounded p-6 text-center space-y-3">
-          <p className="text-gray-700 dark:text-gray-300">Sign in with Google to view datasets.</p>
-          {/* NextAuth API endpoint, not a page route — a full-page nav is intended, so <Link> doesn't apply. */}
-          {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
-          <a href="/api/auth/signin" className="inline-block rounded bg-black text-white dark:bg-white dark:text-black px-4 py-2">
-            Sign in with Google
-          </a>
+          <p className="text-gray-700 dark:text-gray-300">Sign in to view datasets.</p>
+          <Link href="/signin" className="inline-block rounded bg-black text-white dark:bg-white dark:text-black px-4 py-2">
+            Sign in
+          </Link>
         </section>
       ) : (
         <>
@@ -232,12 +230,10 @@ function McpSetup({ instanceName }: { instanceName: string }) {
 function SignInOut({ me }: { me: Me | null }) {
   if (!me) {
     return (
-      // NextAuth API endpoint, not a page route — full-page nav intended.
-      // eslint-disable-next-line @next/next/no-html-link-for-pages
-      <a href="/api/auth/signin"
+      <Link href="/signin"
         className="rounded bg-black text-white dark:bg-white dark:text-black text-xs px-3 py-1.5 whitespace-nowrap">
         Sign in
-      </a>
+      </Link>
     );
   }
   return (

@@ -50,7 +50,7 @@ export async function GET(request: Request): Promise<Response> {
   if (!session?.user?.id) {
     const callbackUrl = url.pathname + url.search;
     const origin = originFromRequest(request);
-    const signInUrl = new URL("/api/auth/signin", origin);
+    const signInUrl = new URL("/signin", origin);
     signInUrl.searchParams.set("callbackUrl", callbackUrl);
     return Response.redirect(signInUrl.toString(), 302);
   }

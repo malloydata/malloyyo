@@ -33,7 +33,9 @@ export async function getSessionUser(): Promise<User> {
   if (!session?.user?.id) {
     throw new UnauthorizedError("not signed in");
   }
-  if (!isEmailAllowed(session.user.email)) {
+  // The allow-list applies only to email (Google) users; anonymous users have
+  // no email and are always allowed once they hold a valid session.
+  if (session.user.email && !isEmailAllowed(session.user.email)) {
     throw new UnauthorizedError("not authorized");
   }
   const [u] = await db

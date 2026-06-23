@@ -6,8 +6,9 @@ import type { NextRequest } from "next/server";
 import { auth } from "@/auth";
 import { logger } from "@/lib/logger";
 
-// Routes that must never be blocked — OAuth discovery, MCP, and auth itself.
-const ALWAYS_ALLOW = /^\/(api\/auth|api\/oauth|\.well-known|mcp|oauth\/consent)/;
+// Routes that must never be blocked — OAuth discovery, MCP, auth itself, and
+// the sign-in screen (gating it would redirect-loop it onto itself).
+const ALWAYS_ALLOW = /^\/(api\/auth|api\/oauth|\.well-known|mcp|oauth\/consent|signin)/;
 
 export async function proxy(req: NextRequest) {
   const { pathname } = req.nextUrl;
@@ -31,21 +32,24 @@ export async function proxy(req: NextRequest) {
   const session = await auth();
 
   // Authentication: every page except the public landing requires a signed-in
-  // user. Bounce anonymous visitors to Google sign-in and return them here
+  // user — which includes anonymous (slug-only, no-email) users. Bounce
+  // visitors with no session to the sign-in screen and return them here
   // afterward (so e.g. a shared /ltool/<slug> link survives the round-trip).
-  if (!session?.user?.email) {
+  if (!session?.user?.id) {
     if (pathname === "/") return next(); // landing renders its own sign-in prompt
-    const signInUrl = new URL("/api/auth/signin", req.url);
+    const signInUrl = new URL("/signin", req.url);
     signInUrl.searchParams.set("callbackUrl", req.nextUrl.pathname + req.nextUrl.search);
     return NextResponse.redirect(signInUrl);
   }
 
-  // Authorization: the email allow-list. Fail-open by design — an unset list
-  // means any authenticated user is allowed.
+  // Authorization: the email allow-list applies only to email-bearing (Google)
+  // users. Anonymous users have no email and bypass it. Fail-open by design —
+  // an unset list means any authenticated user is allowed.
+  const email = session.user.email;
   const allowList = process.env.EMAIL_ALLOW_LIST;
-  if (allowList) {
+  if (email && allowList) {
     const allowed = allowList.split(",").map((e) => e.trim().toLowerCase());
-    if (!allowed.includes(session.user.email.toLowerCase())) {
+    if (!allowed.includes(email.toLowerCase())) {
       // Signed in but not allowed — sign them out and redirect to home.
       logger.warn("access denied", { requestId, userId: session.user.id });
       const signOutUrl = new URL("/api/auth/signout", req.url);

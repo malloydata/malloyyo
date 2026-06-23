@@ -15,7 +15,19 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Generated build output (gitignored bundles) — never our source to lint.
+    "**/dist/**",
   ]),
+  {
+    // Honor the `_`-prefix convention for deliberately-unused bindings
+    // (e.g. `const { [HOST_ONLY]: _hostOnly, ...rest } = x` to omit a key).
+    rules: {
+      "@typescript-eslint/no-unused-vars": [
+        "warn",
+        { argsIgnorePattern: "^_", varsIgnorePattern: "^_", caughtErrorsIgnorePattern: "^_" },
+      ],
+    },
+  },
 ]);
 
 export default eslintConfig;

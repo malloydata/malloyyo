@@ -10,6 +10,7 @@ import { corsPreflight, withCors } from "@/lib/oauth/cors";
 import { originFromRequest } from "@/lib/oauth/base-url";
 import { logger } from "@/lib/logger";
 import { env } from "@/lib/env";
+import { VERSION } from "@/lib/version";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -46,7 +47,7 @@ function unauthorized(description: string, request: Request): Response {
 }
 
 const PROTOCOL_VERSION = "2025-03-26";
-const SERVER_INFO = { name: env.INSTANCE_NAME, version: "0.2.0" };
+const SERVER_INFO = { name: env.INSTANCE_NAME, version: VERSION };
 
 export async function POST(req: Request) {
   const authHeader = req.headers.get("authorization");

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { NextResponse } from "next/server";
-import { eq, desc, or, and, ne } from "drizzle-orm";
+import { eq, desc, and, ne } from "drizzle-orm";
 import { db, datasets, malloyModels, users } from "@/db";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";

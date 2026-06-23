@@ -168,6 +168,8 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
       .finally(() => setLoading(false));
   }, [scope, view]);
 
+  // Fetch-on-mount/refetch-on-change; loadHistory sets loading/items in its async callback.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { loadHistory(); }, [loadHistory]);
 
   useEffect(() => {

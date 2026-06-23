@@ -533,6 +533,9 @@ function RefreshModal({
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [origin, setOrigin] = useState("");
+  // window.location is browser-only; read it after mount so SSR and the first
+  // client render agree (no hydration mismatch).
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { setOrigin(window.location.origin); }, []);
 
   const webhookUrl = `${origin}/api/datasets/${datasetId}/webhook/github`;

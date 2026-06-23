@@ -52,6 +52,8 @@ export function MalloyCodeEditor({
 
   useEffect(() => {
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    // Initial read of a browser-only media query; the subscription below keeps it current.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setIsDark(mq.matches);
     const handler = (e: MediaQueryListEvent) => setIsDark(e.matches);
     mq.addEventListener("change", handler);

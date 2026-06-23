@@ -1,0 +1,41 @@
+name: preflight
+
+# The CI half of `bash scripts/preflight.sh` — the same paranoid gate, run on
+# every PR (and on pushes to main). It runs the whole thing: mcp-engine
+# typecheck + unit tests, cli typecheck + build + tests, and server lint +
+# next build + the hosted-explore integration test (which stands up an ephemeral
+# Docker Postgres). e2e is intentionally excluded — see scripts/preflight.sh for
+# why (needs a live, authenticated server + real Neon + a network download).
+#
+# No secrets needed: the script builds with a placeholder DATABASE_URL (db init
+# is lazy and never connects), and the integration test brings its own Postgres.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: preflight-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest # GitHub-hosted runners ship a running Docker daemon
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      # pnpm via corepack (reads the `packageManager` field), matching cli-publish.
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      - name: Preflight
+        run: bash scripts/preflight.sh

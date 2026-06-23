@@ -22,7 +22,7 @@ export default async function ConsentPage({ searchParams }: PageProps) {
 
   const session = await auth();
   if (!session?.user?.id) {
-    redirect(`/api/auth/signin?callbackUrl=${encodeURIComponent(`/oauth/consent?t=${t}`)}`);
+    redirect(`/signin?callbackUrl=${encodeURIComponent(`/oauth/consent?t=${t}`)}`);
   }
 
   const client = await getOAuthClient(authz.clientId);
@@ -31,7 +31,7 @@ export default async function ConsentPage({ searchParams }: PageProps) {
   let redirectHost = "";
   try { redirectHost = new URL(authz.redirectUri).host; } catch { redirectHost = authz.redirectUri; }
 
-  const switchUrl = `/api/auth/signout?callbackUrl=${encodeURIComponent(`/api/auth/signin?callbackUrl=${encodeURIComponent(`/oauth/consent?t=${t}`)}`)}`;
+  const switchUrl = `/api/auth/signout?callbackUrl=${encodeURIComponent(`/signin?callbackUrl=${encodeURIComponent(`/oauth/consent?t=${t}`)}`)}`;
 
   return (
     <main className="mx-auto max-w-md px-6 py-16 font-mono text-sm space-y-6">

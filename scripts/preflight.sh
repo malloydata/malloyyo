@@ -73,6 +73,11 @@ printf '%s🔎 preflight — paranoid full check%s\n' "$BOLD" "$RESET"
 # --- 1. engine -------------------------------------------------------------
 run "mcp-engine: typecheck"        npm --prefix packages/mcp-engine run typecheck
 run "mcp-engine: unit tests"       npm --prefix packages/mcp-engine test
+# The engine's dist/ is gitignored; cli typecheck, cli build, AND the server's
+# next build all import @malloyyo/mcp-engine and need its compiled .d.ts/.js. A
+# dev machine usually has dist lingering from a prior build — a clean checkout
+# (CI) does not — so build it explicitly before anything consumes it.
+run "mcp-engine: build (dist)"     npm --prefix packages/mcp-engine run build
 
 # --- 2. cli (pretest builds the bundle + engine) ---------------------------
 run "cli: typecheck"               npm --prefix packages/cli run typecheck

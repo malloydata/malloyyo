@@ -196,10 +196,10 @@ function McpSetup({ instanceName }: { instanceName: string }) {
       </div>
 
       <div className="space-y-2 text-xs text-gray-700 dark:text-gray-300">
-        <p className="font-medium">claude.ai (web)</p>
+        <p className="font-medium">claude.ai (web &amp; desktop app)</p>
         <ol className="list-decimal list-inside space-y-1 text-gray-600 dark:text-gray-400">
-          <li>Go to <strong>claude.ai</strong> → Settings → Integrations</li>
-          <li>Click <strong>Add MCP server</strong></li>
+          <li>Go to <strong>Settings</strong> → <strong>Connectors</strong> → <strong>Customize</strong></li>
+          <li>Click the <strong>+</strong> icon → <strong>Add custom connector</strong></li>
           <li>Set the name to <strong>{instanceName}</strong> (copy above) and paste the URL above</li>
           <li>claude.ai will open a Google sign-in → grant access on the consent page</li>
           <li>Done — {instanceName} tools appear in every new conversation</li>

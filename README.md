@@ -33,7 +33,6 @@ Try [the demo server](https://malloyyo.vercel.app/ltool/main_7zfqmk7cv6) and "Ex
            └──────────────┬────────────────┘
                           │  compile · run             ┌────────────────────┐
                           │                            │  Authoring Models  │
-                          │                            │   • Malloy CLI     │
                           │                            │   • Malloyyo CLI   │
                           │                            │   • Claude         │
                           │                            └─────┬───────────┬──┘
@@ -88,70 +87,41 @@ The MCP endpoint speaks OAuth 2.1, so claude.ai's remote MCP integration can con
 
 ## Developing Malloy models
 
-Use the [Malloy CLI](https://github.com/malloydata/malloy-cli) (`@malloydata/cli`) to write and test semantic models locally, then publish them to Malloyyo with the separate [`malloyyo` CLI](packages/cli). (Two tools: `malloy-cli` authors and compiles; `malloyyo` publishes.)
+**You don't have to know Malloy — or wire up the database by hand.** Install the [`malloyyo` CLI](packages/cli), register it with Claude, then ask Claude to do the rest: connect to your data, turn your existing SQL / dbt / Looker definitions into a Malloy model, and test it against real data before you publish. One tool for the whole loop.
+
+**1. Install and register the local test window.**
 
 ```bash
-npm install -g @malloydata/cli
+npm install -g @malloydata/malloyyo        # one tool for the whole loop
+claude mcp add malloyyo -- malloyyo mcp    # register it with Claude Code
 ```
 
-**1. Configure your database connection** in `malloy-config.json` at the root of your model repo — see the [Malloy connection config docs](https://docs.malloydata.dev/documentation/setup/config). Supported databases: BigQuery, DuckDB (incl. MotherDuck), MySQL, Postgres, Snowflake, Databricks, Trino, Presto. Malloyyo reads this same file when it builds your model — the `malloyyo` CLI uploads it on publish, and the GitHub path reads it from the repo root — so one config works everywhere.
+`malloyyo mcp` runs a local stdio MCP server over the Malloy model in the current directory — the **same explore surface** (`list_sources`, `describe_source`, `query`) the hosted instance serves, so what you test locally is exactly what consumers get. It also registers the **`writing-malloy-with-mcp` skill** and `yo_help`, which teach Claude how to author Malloy, set up connections, and recover from compiler errors. (For Claude Desktop or another client, add the same `malloyyo mcp` command to its MCP config instead.)
 
-The secret never lives in the committed file — reference it from an env var with `{"env": "VAR_NAME"}`. Name it whatever you like (e.g. `ANALYTICAL_DATABASE_SECRET`) and set that var locally (in `local/<instance>`) and on the Malloyyo server.
+**2. Build your model with Claude.** Start `claude` in your model directory and just describe what you have:
 
-<table>
-<tr><th>BigQuery</th><th>MotherDuck</th></tr>
-<tr>
-<td>
+```
+claude
 
-```json
-{
-  "connections": {
-    "analytics": {
-      "is": "bigquery",
-      "projectId": "my-project",
-      "serviceAccountKey": { "env": "ANALYTICAL_DATABASE_SECRET" }
-    }
-  }
-}
+> connect to my Postgres warehouse and build a Malloy model from these dbt sources
+> add a "net revenue" measure and verify it against last quarter's numbers
 ```
 
-</td>
-<td>
+Claude sets up the connection and writes the `.malloy` for you. It follows a compiler-in-the-loop discipline — validate against the compiler, run real queries through the test window, confirm the numbers — and you steer from the results. You rarely write Malloy by hand.
 
-```json
-{
-  "connections": {
-    "analytics": {
-      "is": "duckdb",
-      "databasePath": "md:my_database",
-      "motherDuckToken": { "env": "ANALYTICAL_DATABASE_SECRET" }
-    }
-  }
-}
+The connection lives in `malloy-config.json` at the model root, and Claude knows how to write it (`yo_help("connection-setup")`, or the [connection config docs](https://docs.malloydata.dev/documentation/setup/config)). Two things worth knowing:
+
+- **DuckDB needs no config at all** — with no `malloy-config.json`, an in-memory `duckdb` connection just works, so Claude can read your local CSV / Parquet files immediately. Other backends (BigQuery, Postgres, MotherDuck, Snowflake, Databricks, MySQL, Trino, Presto) get a small `malloy-config.json` entry.
+- **Secrets stay out of the committed file** — any value can be `{ "env": "VAR_NAME" }` (e.g. `ANALYTICAL_DATABASE_SECRET`), resolved from the environment when the connection opens. The same `malloy-config.json` ships to production on publish, so put anything environment-specific behind `{ "env": … }` and set that var locally and on the Malloyyo server.
+
+**3. Publish.** Once the model queries cleanly, sign in once and push:
+
+```bash
+malloyyo login <your-instance>     # one-time browser sign-in
+malloyyo publish <your-instance>   # bundle *.malloy + malloy-config.json and push
 ```
 
-</td>
-</tr>
-</table>
-
-**2. Add `.mcp.json`** to your model repo so your AI assistant can compile and test Malloy directly:
-
-```json
-{
-  "mcpServers": {
-    "malloy": {
-      "command": "malloy-cli",
-      "args": ["mcp"]
-    }
-  }
-}
-```
-
-`malloy-cli mcp` runs an MCP server over stdio exposing a `compile_malloy` tool and bundled Malloy language-reference prompts. Claude Code, Claude Desktop, and other MCP clients will pick this up automatically.
-
-**3. Develop your model** — ask your AI to generate and test a Malloy semantic model against your database, or write it yourself and use `malloy-cli compile` / `malloy-cli run` to verify it.
-
-Once the model compiles cleanly, publish it with `malloyyo publish <target>` (or push to GitHub and point Malloyyo at the repo). See [`packages/cli/README.md`](packages/cli/README.md) for the CLI.
+The server compiles and introspects the model and stores a new version; a compile failure rejects the push and leaves the live model unchanged. (Or push to GitHub and point Malloyyo at the repo.) See [`packages/cli/README.md`](packages/cli/README.md) for the CLI.
 
 ## Stack
 

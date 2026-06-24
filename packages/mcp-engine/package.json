@@ -37,8 +37,8 @@
     }
   },
   "devDependencies": {
-    "@malloydata/db-duckdb": "0.0.416",
-    "@malloydata/malloy": "^0.0.416",
+    "@malloydata/db-duckdb": "0.0.417",
+    "@malloydata/malloy": "^0.0.417",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@types/node": "^20",
     "esbuild": "^0.24.0",

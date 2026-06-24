@@ -12,18 +12,32 @@ This is a long, mostly-unattended pipeline with real stop conditions. Work the
 steps in order, **stop the moment a stop condition fires**, and report what
 happened. Don't invent fallbacks — if something is red, surface it and halt.
 
+## The two versions in play
+
+- **`primary`** — the `@malloydata/malloy` version being pulled in. It names the
+  branch, the PR, and the "in" side of the report. Call it `$V`.
+- **`self`** — this repo's own `@malloydata/malloyyo` (the CLI) version. The
+  release patch-bumps and publishes it; it's the "out" side of the report.
+
+The update script reports **both** in its JSON, so you never have to read a
+manifest or guess a version — capture them from the tool.
+
 ## Tools you'll lean on
 
-- `npm run --silent malloy-update -- --json` — machine-readable bump result on
-  stdout: `{ "primary": "<@malloydata/malloy version>", "changed": bool,
-  "packages": [{name, from, to}] }`. Human chatter and pnpm output go to stderr.
-  Add `--dry-run` to peek without writing anything.
+- `npm run --silent malloy-update -- --json` — drive the bump; emits, on stdout,
+  `{ "primary", "self", "changed": bool, "packages": [{name, from, to}] }`.
+  Add `--dry-run` to peek (network, no write) or `--current` to read just what's
+  installed now (offline, instant: `{ "primary", "self", packages:[{name,version}] }`).
+  Human chatter and pnpm output always go to stderr.
 - `npm run preflight` → `bash scripts/preflight.sh` — the offline gate
   (typecheck + unit + cli build + server lint + `next build` + hosted-explore
   integration test). **Needs a running Docker daemon**; if Docker is down the
   hosted test fails — tell the user rather than papering over it.
 - `gh` for the PR (`gh pr create`, `gh pr checks --watch`, `gh pr merge`) and the
   release run (`gh run list/watch --workflow=cli-publish.yml`). Assume it's authed.
+
+Long blocking steps (preflight, `gh ... --watch`, `gh run watch`) are best run as
+background commands so you get a completion notification instead of polling.
 
 ## Steps
 
@@ -39,7 +53,7 @@ git -C ~/yo pull --ff-only origin main
 STOP and report if: not on `main`, the tree is dirty, or the pull isn't a clean
 fast-forward. Don't stash or force anything.
 
-### 2. Peek the target version — STOP if not new
+### 2. Peek the target — STOP if not new
 
 ```bash
 npm run --silent malloy-update -- --dry-run --json > /tmp/malloy-update.json
@@ -47,10 +61,12 @@ cat /tmp/malloy-update.json
 ```
 
 (stdout → file is the clean JSON; stderr stays on screen so you still see the
-per-package report and any error.) Parse `changed` and `primary`. **If `changed` is false, STOP**: report
-"`@malloydata/*` already at the latest (`<primary>`) — nothing to do." No
-worktree, no PR. Otherwise capture `V=<primary>` (e.g. `0.0.417`) — that's the
-version that names the branch, the PR, and the report.
+per-package report and any error.) From the JSON, record:
+
+- `changed` — **if false, STOP**: report "`@malloydata/*` already at the latest
+  (`primary`) — nothing to do." No worktree, no PR.
+- `$V` = `primary` — the Malloy version; names the branch, PR, and report.
+- `$SELF_BEFORE` = `self` — the `@malloydata/malloyyo` version before release.
 
 ### 3. Worktree off fresh main
 
@@ -65,8 +81,8 @@ git -C ~/yo worktree add -b malloy-update-$V ~/yo-malloy-update-$V main
 
 ```bash
 cd ~/yo-malloy-update-$V
-npm run --silent malloy-update -- --json > /tmp/malloy-update.json
-cat /tmp/malloy-update.json
+npm run --silent malloy-update -- --json > /tmp/malloy-update-real.json
+cat /tmp/malloy-update-real.json
 ```
 
 `pnpm update` here also populates this worktree's `node_modules`. Confirm
@@ -80,8 +96,9 @@ missing deps, run `pnpm install` in the worktree and retry.
 npm run preflight        # i.e. bash scripts/preflight.sh, in the worktree
 ```
 
-Green → continue. Red → STOP, show the failing step's output, leave the worktree
-in place so the user can inspect. Do not open a PR on a red preflight.
+Green ("ALL CLEAR — Safe to push") → continue. Red → STOP, show the failing
+step's output, leave the worktree in place so the user can inspect. Do not open
+a PR on a red preflight.
 
 ### 6. Commit + PR
 
@@ -94,17 +111,18 @@ gh pr create --repo malloydata/malloyyo --base main --head malloy-update-$V \
   --body "Update to Malloy npm package $V"
 ```
 
-Title and body are exactly `Update to Malloy npm package $V` — no changelog, the
-diff speaks for itself.
+The diff should be exactly the three `package.json`s + `pnpm-lock.yaml`. Title
+and body are exactly `Update to Malloy npm package $V` — no changelog, the diff
+speaks for itself.
 
 ### 7. Wait for PR CI green — STOP if red
 
 ```bash
-gh pr checks malloy-update-$V --watch
+gh pr checks malloy-update-$V --repo malloydata/malloyyo --watch
 ```
 
-This blocks until the `preflight` workflow finishes. Green → continue. Failed →
-STOP and report which check failed (don't merge a red PR).
+Blocks until the `preflight` workflow (and `DCO`) finish. Green → continue.
+Failed → STOP and report which check failed (don't merge a red PR).
 
 ### 8. Merge + wait for the release action
 
@@ -114,9 +132,11 @@ which patch-bumps and publishes `@malloydata/malloyyo` (committing a `[skip ci]`
 bump back).
 
 ```bash
-gh pr merge malloy-update-$V --merge --delete-branch
-gh run list --repo malloydata/malloyyo --workflow=cli-publish.yml --limit 1   # find the run
-gh run watch <run-id> --repo malloydata/malloyyo --exit-status                # block until done
+gh pr merge malloy-update-$V --repo malloydata/malloyyo --merge --delete-branch
+# find the release run that the merge just kicked off (headBranch: main), then watch it:
+gh run list --repo malloydata/malloyyo --workflow=cli-publish.yml --limit 1 \
+  --json databaseId,status,headBranch -q '.[0].databaseId'
+gh run watch <run-id> --repo malloydata/malloyyo --exit-status
 ```
 
 STOP and report if the release run fails.
@@ -124,11 +144,11 @@ STOP and report if the release run fails.
 ### 9. Report the new published version
 
 ```bash
-npm view @malloydata/malloyyo version
+npm view @malloydata/malloyyo version      # $SELF_AFTER
 ```
 
-Report: the Malloy package the PR pulled in (`$V`) **and** the new published
-`@malloydata/malloyyo` version produced by the release.
+Report both edges, using the versions captured from the tool (no guessing):
+Malloy **`$V`** in, `@malloydata/malloyyo` **`$SELF_BEFORE` → `$SELF_AFTER`** out.
 
 ### 10. Clean up
 
@@ -138,5 +158,5 @@ git -C ~/yo branch -D malloy-update-$V 2>/dev/null || true   # local branch (rem
 git -C ~/yo pull --ff-only origin main                   # pick up the release's [skip ci] bump
 ```
 
-Then a short final summary: Malloy `$V` in, `@malloydata/malloyyo <new>` out,
-worktree gone, `main` up to date.
+Then a short final summary: Malloy `$V` in, `@malloydata/malloyyo $SELF_AFTER`
+out, worktree gone, `main` up to date.

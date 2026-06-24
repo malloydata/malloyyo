@@ -11,20 +11,35 @@
 // with the guard ACTIVE; nothing here needs to touch the exclude list.
 //
 //   npm run malloy-update                 # do it
-//   npm run malloy-update -- --dry-run    # show latest versions, touch nothing
+//   npm run malloy-update -- --dry-run    # show latest available, touch nothing
+//   npm run malloy-update -- --current    # report what's installed now (offline)
 //   npm run --silent malloy-update -- --json   # machine-readable result on stdout
 //
 // --json: human chatter (and pnpm's output) is routed to stderr; the only thing
-// written to stdout is a single JSON object describing what changed:
-//   { "primary": "0.0.417",        // @malloydata/malloy target version
-//     "changed": true,             // did any pin move?
-//     "packages": [ { "name", "from", "to" }, … ] }
-// Pair it with `npm run --silent …` so npm's own run banner stays off stdout.
+// written to stdout is a single JSON object. The shape depends on the mode:
+//
+//   default / --dry-run:
+//     { "primary": "0.0.417",        // @malloydata/malloy target version
+//       "self":    "0.2.3",          // this repo's @malloydata/malloyyo version
+//       "changed": true,             // did any @malloydata/* pin move?
+//       "packages": [ { "name", "from", "to" }, … ] }
+//
+//   --current (no network, no write — just reads the manifests on disk):
+//     { "primary": "0.0.416",        // @malloydata/malloy as pinned right now
+//       "self":    "0.2.3",          // this repo's @malloydata/malloyyo version
+//       "packages": [ { "name", "version" }, … ] }
+//
+// `self` is this repo's own published package — the CLI in packages/cli, whose
+// version the release mirrors into the root. It's reported so callers can record
+// the before/after malloyyo version without guessing.
+//
+// Pair --json with `npm run --silent …` so npm's own run banner stays off stdout.
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 
 const ARGS = process.argv.slice(2);
 const DRY = ARGS.includes("--dry-run");
+const CURRENT = ARGS.includes("--current");
 const JSON_OUT = ARGS.includes("--json");
 
 // In --json mode stdout is reserved for the result object, so every human-facing
@@ -36,6 +51,9 @@ const PKG_FILES = [
   "packages/cli/package.json",
   "packages/mcp-engine/package.json",
 ];
+// This repo's own published package (the CLI). Its version is the malloyyo
+// release version, mirrored into the root package.json by scripts/release.ts.
+const SELF_PKG = "packages/cli/package.json";
 const SECTIONS = [
   "dependencies",
   "devDependencies",
@@ -75,6 +93,9 @@ function readPins() {
   return pins;
 }
 
+// This repo's own version (the malloyyo CLI).
+const readSelf = () => JSON.parse(readFileSync(SELF_PKG, "utf8")).version;
+
 // 1. discover the direct @malloydata/* deps and their current pins
 const before = readPins();
 if (before.size === 0) {
@@ -82,9 +103,23 @@ if (before.size === 0) {
   process.exit(1);
 }
 const names = [...before.keys()].sort();
+const self = readSelf();
+
+// --current: report only what's installed right now. No registry calls, no
+// writes — instant and offline. Useful for "what malloy am I on?" before/after.
+if (CURRENT) {
+  const primary = before.get("@malloydata/malloy") ?? before.get(names[0]);
+  say(`Currently pinned (this repo is @malloydata/malloyyo ${self}):`);
+  for (const name of names) say(`  ${name}  ${before.get(name)}`);
+  if (JSON_OUT) {
+    const packages = names.map((name) => ({ name, version: before.get(name) }));
+    process.stdout.write(JSON.stringify({ primary, self, packages }) + "\n");
+  }
+  process.exit(0);
+}
 
 // 2. report the latest published version of each
-say(`Latest published versions for ${names.size} @malloydata/* packages:`);
+say(`Latest published versions for ${names.length} @malloydata/* packages:`);
 const latest = new Map();
 for (const name of names) {
   const v = npmView(name);
@@ -105,7 +140,9 @@ function emit(after) {
   }));
   const changed = packages.some((p) => p.from !== p.to);
   if (JSON_OUT)
-    process.stdout.write(JSON.stringify({ primary, changed, packages }) + "\n");
+    process.stdout.write(
+      JSON.stringify({ primary, self, changed, packages }) + "\n",
+    );
   return changed;
 }
 

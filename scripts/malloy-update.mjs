@@ -78,8 +78,7 @@ console.log("\nUpdating @malloydata/* to latest (age guard active; scope exempt)
 pnpm(["update", "--recursive", "--latest", ...[...names]]);
 
 console.log(
-  "\n✓ Updated @malloydata/* to latest. The age guard kept every other dep" +
-    "\n  aged, so the only churn should be malloydata (and any of its deps that" +
-    "\n  have themselves aged ≥24h). Review the diff, then commit:" +
+  "\n✓ Updated @malloydata/* to latest. Expect the diff to be malloydata plus" +
+    "\n  any transitive deps the new versions pulled in. Review, then commit:" +
     "\n  package.json(s) and pnpm-lock.yaml.",
 );

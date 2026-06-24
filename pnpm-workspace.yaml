@@ -21,20 +21,16 @@ allowBuilds:
   sharp: false
   unrs-resolver: false
 
-# Supply-chain guard: pnpm refuses dependencies younger than the configured
-# minimum release age, except these (the @malloydata packages we pull as soon
-# as they ship). `npm run malloy-update` regenerates this list.
+# Supply-chain guard: pnpm 11 refuses any dependency published within the last
+# 24h (its built-in `minimum-release-age` default = 24*60 min). We exempt ONLY
+# the @malloydata scope — the packages we deliberately pull the moment they
+# ship. pnpm matches the name part of each entry as a glob, and a bare name
+# (no @version) means "any version", so this one line covers every @malloydata
+# package, direct or transitive, at whatever version the lockfile resolves.
+#
+# Crucially this is the WHOLE list: every OTHER package still has to age 24h,
+# so a malloydata bump can't silently drag fresh, unvetted transitive deps
+# (aws-sdk, azure, codemirror, …) into the lockfile. Version pinning is the
+# lockfile's job, not this list's. `npm run malloy-update` relies on this.
 minimumReleaseAgeExclude:
-  - '@malloydata/db-bigquery@0.0.414'
-  - '@malloydata/db-databricks@0.0.414'
-  - '@malloydata/db-duckdb@0.0.414'
-  - '@malloydata/db-mysql@0.0.414'
-  - '@malloydata/db-postgres@0.0.414'
-  - '@malloydata/db-snowflake@0.0.414'
-  - '@malloydata/db-trino@0.0.414'
-  - '@malloydata/malloy-connections@0.0.414'
-  - '@malloydata/malloy-filter@0.0.414'
-  - '@malloydata/malloy-interfaces@0.0.414'
-  - '@malloydata/malloy-tag@0.0.414'
-  - '@malloydata/malloy@0.0.414'
-  - '@malloydata/render@0.0.414'
+  - '@malloydata/*'

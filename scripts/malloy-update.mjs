@@ -1,13 +1,19 @@
 #!/usr/bin/env node
-// Update every @malloydata/* dependency to its latest published version,
-// regardless of pnpm's minimum-release-age guard, then regenerate the
-// age-exclude allowlist from the full resolved lockfile (direct + transitive)
-// so later installs don't re-block the fresh versions.
+// Update every @malloydata/* dependency to its latest published version.
+//
+// pnpm 11 refuses any package published within the last 24h (its built-in
+// `minimum-release-age` default). We do NOT disable that guard globally — doing
+// so would let pnpm drag fresh, unvetted transitive deps (aws-sdk, azure, …)
+// into the lockfile, which a later `--frozen-lockfile` install (CI) then
+// rejects. Instead pnpm-workspace.yaml exempts the whole `@malloydata/*` scope
+// from the guard (a glob, any version), so only those packages may be young —
+// every other dep still has to age 24h and stays put. The update therefore runs
+// with the guard ACTIVE; nothing here needs to touch the exclude list.
 //
 //   npm run malloy-update                 # do it
 //   npm run malloy-update -- --dry-run    # show latest versions, touch nothing
 import { execFileSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 
 const DRY = process.argv.slice(2).includes("--dry-run");
 
@@ -63,40 +69,16 @@ if (DRY) {
 
 // 3. let pnpm edit the manifests + lockfile — it handles dependency types,
 //    range operators, and duplicate entries correctly (a hand-rolled regex
-//    does not). The release-age guard is disabled just for this run.
-console.log("\nUpdating to latest (minimum-release-age disabled for this run)…");
-pnpm([
-  "update",
-  "--recursive",
-  "--latest",
-  "--config.minimumReleaseAge=0",
-  ...[...names],
-]);
-
-// 4. regenerate the age-exclude list from EVERY @malloydata package now in the
-//    lockfile (direct + transitive), so age-gated installs accept the fresh set
-const lock = readFileSync("pnpm-lock.yaml", "utf8");
-const specs = new Set();
-const re = /(@malloydata\/[^@\s'"()]+)@(\d+\.\d+\.\d+(?:-[\w.]+)?)/g;
-for (let m; (m = re.exec(lock)); ) specs.add(`${m[1]}@${m[2]}`);
-
-const block =
-  "minimumReleaseAgeExclude:\n" +
-  [...specs].sort().map((s) => `  - '${s}'`).join("\n") +
-  "\n";
-
-let ws = readFileSync("pnpm-workspace.yaml", "utf8");
-if (/^minimumReleaseAgeExclude:/m.test(ws)) {
-  // replace only the header + its indented list items; leave other keys intact
-  ws = ws.replace(/^minimumReleaseAgeExclude:\n(?:[ \t]+-.*\n?)*/m, block);
-} else {
-  ws = ws.replace(/\n*$/, "\n\n") + block;
-}
-writeFileSync("pnpm-workspace.yaml", ws);
+//    does not). The age guard stays ON: `@malloydata/*` is exempt via
+//    pnpm-workspace.yaml, so malloydata floats to latest while every other dep
+//    stays aged. We DON'T pass --config.minimumReleaseAge=0 — that global
+//    bypass is exactly what used to pull fresh transitive deps into the lockfile
+//    and break CI's --frozen-lockfile install.
+console.log("\nUpdating @malloydata/* to latest (age guard active; scope exempt)…");
+pnpm(["update", "--recursive", "--latest", ...[...names]]);
 
 console.log(
-  `\n✓ Updated @malloydata/* to latest; age-exclude now lists ${specs.size} packages.`,
-);
-console.log(
-  "  Review the diff, then commit: package.json(s), pnpm-lock.yaml, pnpm-workspace.yaml",
+  "\n✓ Updated @malloydata/* to latest. Expect the diff to be malloydata plus" +
+    "\n  any transitive deps the new versions pulled in. Review, then commit:" +
+    "\n  package.json(s) and pnpm-lock.yaml.",
 );

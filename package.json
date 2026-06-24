@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "next dev",
     "malloy-update": "node scripts/malloy-update.mjs",
+    "preflight": "bash scripts/preflight.sh",
     "build": "node scripts/gen-baseline.mjs && next build",
     "db:baseline": "node scripts/gen-baseline.mjs",
     "start": "next start",

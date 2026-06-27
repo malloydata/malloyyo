@@ -65,9 +65,7 @@ export async function POST(req: Request) {
   // Re-check the email allow-list on every call. The token alone proves the
   // user once authenticated; this ensures a user removed from EMAIL_ALLOW_LIST
   // loses MCP access immediately rather than at token expiry (up to 90 days).
-  // Anonymous users have no email and bypass the allow-list (the token itself
-  // is their credential).
-  if (user.email && !isEmailAllowed(user.email)) return unauthorized("Access revoked for this account", req);
+  if (!isEmailAllowed(user.email)) return unauthorized("Access revoked for this account", req);
 
   // Fire-and-forget last_used_at update.
   void recordAccessTokenUse(validated.tokenHash);

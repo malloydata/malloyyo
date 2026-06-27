@@ -69,20 +69,6 @@ connected to the same Claude client at once. Two env vars disambiguate them:
 Defaults are `Malloyyo`/`main`. Set both in the Vercel env (per environment)
 **and** mirror them into the matching `local/<instance>` file.
 
-### Anonymous access (`ALLOW_ANONYMOUS`)
-
-Optional. Adds a "Continue anonymously" button to the sign-in screen (web **and**
-the MCP OAuth flow), minting a throwaway no-email user with a Heroku-style name.
-**Deliberately non-portable** so it can't be turned on by accident (e.g. a copied
-env): the value must **equal this instance's `INSTANCE_CODE`** — `ALLOW_ANONYMOUS=worldcup`,
-not `ALLOW_ANONYMOUS=true`. Pasted onto another instance (different code) it's
-inert and logs a `[security]` warning. It is also **ignored when `EMAIL_ALLOW_LIST`
-is set** (an invite-only instance can never also be anonymous — fail closed).
-`/api/health` reports the live posture as `"anonymous": true|false`. Regression
-tests: `npm run test:unit`. Anonymous users can only run queries against **public**
-datasets (enforced by `visibleDatasetWhere`); they can never be admins or reach
-private data.
-
 ## Vercel deployment notes
 
 - `outputFileTracingIncludes` keys must NOT have `/route` suffix

@@ -30,9 +30,6 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     ] : []),
   ],
   session: { strategy: "database" },
-  // Custom sign-in screen (Google + optional "Continue anonymously"). Used by
-  // both the web page bounce and the MCP OAuth bounce.
-  pages: { signIn: "/signin" },
   // Vercel preview deploys use dynamic hostnames; trust the request host.
   trustHost: true,
   callbacks: {

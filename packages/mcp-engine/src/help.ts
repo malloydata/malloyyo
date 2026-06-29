@@ -135,6 +135,7 @@ export function getHelpTopic(query: string): HelpTopic | undefined {
  * errors tell the caller which doc to pull. Targets are full topic names.
  */
 const ERROR_TOPIC_MAP: Record<string, string> = {
+  'syntax-error': 'explore/query-examples',
   'field-not-found': 'language/fields',
   'aggregate-in-calculate': 'language/expressions',
   'not-an-aggregate': 'language/fields',

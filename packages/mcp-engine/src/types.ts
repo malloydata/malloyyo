@@ -514,6 +514,11 @@ export interface SourceDescribeResult {
   source: string;
   /** The described source — every column, plus measures and views. */
   described_source?: ExploreDescribedSource;
+  /** A couple of runnable example queries built from this source's REAL fields.
+      They model reuse — invoke a published view, aggregate a published measure —
+      so a model copies the right pattern instead of re-deriving aggregates.
+      Omitted when the source has nothing aggregable. */
+  examples?: string[];
   /** Arrays + source-joins, keyed by path (depth-first). Omitted when empty. */
   joins?: Record<string, JoinEntry>;
   /** Every reachable NAMED source, deduped by name (CompactSchema, no views).

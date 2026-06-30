@@ -28,8 +28,10 @@ run: flights -> by_carrier + { where: state = 'CA' }
 ## The workhorse query
 
 When no view fits, write a stage. The vast majority of queries are this shape —
-`group_by` the dimensions, `aggregate` the measures, `where` to filter, `order_by`
-to rank:
+`group_by` the dimensions, `aggregate` the **measures the source already
+declares**, `where` to filter, `order_by` to rank. Reuse the measures
+`describe_source` lists (here `flight_count`); don't re-derive an aggregate the
+source already defines (`count()`):
 
 ```malloy
 run: flights -> {
@@ -58,7 +60,8 @@ run: flights -> {
 }
 ```
 
-**Aggregates from scratch** — define your own with `is`:
+**Aggregates from scratch** — *only when the source has no measure for what you
+need*, define your own with `is`:
 
 ```malloy
 run: flights -> {
@@ -101,6 +104,28 @@ run: flights -> {
     small_plane_distance is total_distance { where: is_small_plane }
 }
 ```
+
+**Composing aggregates.** You can't reference one aggregate from another in the
+same stage (`aggregate: a is …, b is a/2` fails — *"'a' is not defined"*). To
+build a value *from* other aggregates — a ratio, a share — define the parts as
+measures in `extend:` (measures **can** reference each other), then use them:
+
+```malloy
+run: flights -> {
+  extend: {
+    measure:
+      late_flights is flight_count { where: dep_delay > 15 }
+      pct_late is late_flights / flight_count
+  }
+  group_by: carrier
+  aggregate: late_flights, pct_late
+  order_by: pct_late desc
+}
+```
+
+To rank by a computed value, name it (in `aggregate:` or `extend:`) and
+`order_by:` that name — `order_by:` takes an output field name, never a raw
+expression, and there is no `derive:` step.
 
 ## Flat detail rows — `select:`
 

@@ -22,6 +22,8 @@ import { prompts } from '../prompts';
 import { codeProblem } from '../problems';
 import { HOST_ONLY } from '../types';
 import type {
+  CompactField,
+  ExploreDescribedSource,
   ListedModel,
   ListedSource,
   ListSourcesResult,
@@ -253,6 +255,45 @@ function sourceAsMalloy(s: SourceInfo | undefined): string {
   return s?.body ? `source: ${s.body}` : '';
 }
 
+/** Synthesize a couple of runnable, copy-paste-correct example queries from the
+    source's REAL declared fields. The point is to model REUSE — a model should
+    invoke a published view and aggregate a published measure (`total_babies`)
+    rather than re-deriving it (`num_births.sum()`). Built only from names the
+    schema actually exposes, so each example compiles. Empty when there is
+    nothing aggregable to build from. */
+function buildQueryExamples(ds: ExploreDescribedSource): string[] {
+  const ref = (name: string, mustQuote?: boolean): string =>
+    mustQuote ? `\`${name}\`` : name;
+  const out: string[] = [];
+
+  // A published view is the strongest seed: one token, guaranteed valid.
+  const view = Object.keys(ds.views)[0];
+  if (view) out.push(`run: ${ds.name} -> ${view}`);
+
+  // The workhorse, using a DECLARED measure + a scalar dimension (prefer a
+  // string column to group by; fall back to any scalar).
+  const dims = Object.entries(ds.dimensions).filter(([, m]) => 'type' in m) as [
+    string,
+    CompactField,
+  ][];
+  const dim = dims.find(([, m]) => m.type === 'string') ?? dims[0];
+  const measure = Object.entries(ds.measures)[0];
+  if (dim && measure) {
+    const [dName, dField] = dim;
+    const [mName, mField] = measure;
+    const m = ref(mName, mField.must_quote);
+    out.push(
+      `run: ${ds.name} -> {\n` +
+        `  group_by: ${ref(dName, dField.must_quote)}\n` +
+        `  aggregate: ${m}\n` +
+        `  order_by: ${m} desc\n` +
+        `  limit: 10\n` +
+        `}`,
+    );
+  }
+  return out;
+}
+
 // ── tools (explore experience) ────────────────────────────────────────
 
 function listSourcesTool(host: ExploreHost): ToolDef {
@@ -353,6 +394,8 @@ function describeSourceTool(host: ExploreHost): ToolDef {
             described_source: built.described_source,
             problems: compiled.problems,
           };
+          const examples = buildQueryExamples(built.described_source);
+          if (examples.length) base.examples = examples;
           if (Object.keys(built.joins).length) base.joins = built.joins;
           if (Object.keys(built.join_source_map).length) base.join_source_map = built.join_source_map;
           return malloy_text ? { ...base, malloy_text } : base;

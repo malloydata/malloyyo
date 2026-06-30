@@ -18,6 +18,7 @@ To answer a question you need to see what sources are available which pertain to
 `list_sources` (when available) — see the sources you can query, grouped by model, with each model's named queries. If you already know the source, go straight to describe_source.
 
 # Build the Query
+* New to a pattern? `yo_help("explore/query-examples")` — the handful of Malloy query shapes (views, the workhorse group_by/aggregate, filtered aggregates, `all()`, `extend:`, `select:`, `nest:`) that cover almost every question, with the SQL habits that are wrong in Malloy.
 * `describe_source(source, model_ref)` — always describe a source before querying it (`model_ref` optional when the name is unique). Returns:
   * `described_source` — the source's `dimensions` (columns), `measures`, and `views` (the author's saved queries). A dimension's `type` is a scalar or a nested record (`origin.city`); an array column has no `type` — it shows up as a `joins` entry at its `path`.
   * `joins` — keyed by path, the arrays and source-joins this source reaches. `fans_out` marks a path that fans out. Each entry is one of: `{ source }` (fields in `join_source_map`), `{ source_def }` (an anonymous source's fields, inline), or an array `{ is_array, source_def }` — a record array's fields are used directly (`parcels.sku`), a scalar array's element is `each` (`tags.each`). To write a reference, use the entry's `quoted_path` if it has one, else the key.

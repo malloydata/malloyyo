@@ -1,6 +1,14 @@
 packages:
   - "packages/*"
 
+# Force a SINGLE @codemirror/state. @uiw/react-codemirror resolves 6.6.0 while
+# @codemirror/lang-sql resolves 6.7.0; two copies break CodeMirror's instanceof
+# checks ("Unrecognized extension value in extension set"), crashing the ltool
+# Malloy editor the moment it's expanded. All @codemirror/* must share one
+# @codemirror/state, so pin it.
+overrides:
+  "@codemirror/state": "6.7.0"
+
 # Linker layout. Lives here (not .npmrc) so the npm CLI doesn't warn about an
 # "Unknown project config" it doesn't recognize.
 nodeLinker: hoisted

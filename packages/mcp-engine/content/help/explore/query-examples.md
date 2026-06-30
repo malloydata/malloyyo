@@ -162,6 +162,44 @@ run: flights -> {
 }
 ```
 
+**Listing top-N detail rows in a nest — `group_by:`, not `select:`.** A nest is a
+reduction, so to nest raw rows (not an aggregate) list the columns with
+`group_by:` (`select:` is not allowed inside a nest):
+
+```malloy
+run: flights -> {
+  group_by: carrier
+  aggregate: flight_count
+  nest: longest_flights is {
+    group_by: origin, destination, distance
+    order_by: distance desc
+    limit: 5
+  }
+}
+```
+
+## Multi-stage — aggregate, then aggregate again (`->`)
+
+A second `->` runs another stage over the **output** of the first. Reach for it
+when you need to aggregate an aggregate — e.g. the **peak** of a per-period
+total. You can't write `flight_count.max()` (that's an aggregate of an aggregate
+— it errors); compute the per-period total in one stage, then take the max in the
+next:
+
+```malloy
+run: flights -> {
+  group_by: carrier, dep_year
+  aggregate: flights_that_year is flight_count
+} -> {
+  group_by: carrier
+  aggregate: peak_year is flights_that_year.max()
+}
+```
+
+In the second stage `flights_that_year` is an ordinary column (the first stage's
+output), so `.max()` is valid. The same shape filters or re-ranks already-
+aggregated rows.
+
 ## SQL habits that are WRONG in Malloy
 
 | You'd write in SQL | Malloy |

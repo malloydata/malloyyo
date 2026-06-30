@@ -136,6 +136,7 @@ export function getHelpTopic(query: string): HelpTopic | undefined {
  */
 const ERROR_TOPIC_MAP: Record<string, string> = {
   'syntax-error': 'explore/query-examples',
+  'aggregate-of-aggregate': 'explore/query-examples',
   'field-not-found': 'language/fields',
   'aggregate-in-calculate': 'language/expressions',
   'not-an-aggregate': 'language/fields',

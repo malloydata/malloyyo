@@ -247,6 +247,43 @@ function srcNudge(modelRef: string, source: string): (p: Problem) => Problem {
   };
 }
 
+/** Names DEFINED in a query body — the LHS of `<name> is …` (aggregates,
+    dimensions, measures, select). Used to spot a sibling-field reference. */
+function definedNamesIn(malloy: string): Set<string> {
+  const names = new Set<string>();
+  const re = /\b([A-Za-z_]\w*)\s+is\b/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(malloy)) !== null) names.add(m[1]!);
+  return names;
+}
+
+/** Field-not-found recovery for a query. If the "not defined" name is one this
+    query DEFINES (`foo is …` exists, yet `foo` is reported not-defined), the
+    agent referenced a sibling field from another field in the SAME stage — which
+    Malloy doesn't allow. The raw error ("'foo' is not defined → describe_source")
+    misleads it into hunting for a missing field; point at the `extend:`
+    composition fix instead. Otherwise fall back to the describe_source nudge. */
+function queryFieldFix(modelRef: string, source: string, malloy: string): (p: Problem) => Problem {
+  const defined = definedNamesIn(malloy);
+  const nudge = srcNudge(modelRef, source);
+  return (p) => {
+    if (p.code !== 'field-not-found') return p;
+    const name = /'([^']+)'/.exec(p.message)?.[1];
+    if (name && defined.has(name)) {
+      return {
+        ...p,
+        message:
+          `'${name}' is defined in this query, but one field can't reference ` +
+          'another in the same stage. To build a value from other aggregates ' +
+          '(a ratio, a share), declare the parts in an `extend:` block ' +
+          '(measures can reference each other), then use them.',
+        help_topic: 'explore/query-examples',
+      };
+    }
+    return nudge(p);
+  };
+}
+
 /** describe_source's Malloy block: JUST the described source's verbatim
     declaration (sliced from its body; prepend the `source:` keyword the slice
     omits). Joined sources are recovered by describe_source-ing them by name —
@@ -473,7 +510,9 @@ function exploreQueryTool(host: ExploreHost, opts: ExploreSurfaceOptions): ToolD
       }
       try {
         return await host.withModel(modelRef, async (m) => {
-          const res = await executeQuery(m, args, srcNudge(modelRef, source), opts.result);
+          const res = await executeQuery(
+            m, args, queryFieldFix(modelRef, source, argString(args, 'malloy')), opts.result,
+          );
           // execute:false: SQL is the confirmatory-inspect channel — the agent
           // SHOULD see it; just tag which model the source resolved to.
           if (!execute) return { ...res, model_ref: modelRef };

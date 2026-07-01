@@ -2,6 +2,59 @@
 
 Steps an operator runs when pulling a new version of Malloyyo. Newest first.
 
+## History + saved_queries redesign (2026-07-01)
+
+Flattens the `conversations` / `inquiries` / `tool_calls` / `queries` tables into
+two:
+
+- **`history`** — one row per MCP tool call **and** ltool run, grouped into
+  30-minute `(user, dataset)` sessions with a `sequence`. Records the
+  `question`, `user_agent`, `author_model`, `executed` (validate vs run),
+  `error`, and a per-run share `slug`. Validate-only and failed attempts are kept
+  here for syntax-error analytics. Designed to be **trimmable**.
+- **`saved_queries`** — durable, favoritable copies (question + Malloy + SQL +
+  slug), promoted from a run when it is favorited or saved from ltool.
+  `favorites` now points here, so favorites survive history trimming.
+
+`question` is now **required on every `query` call** — validate (`execute:false`)
+as well as run. `author_model` comes from the optional **`x-author-model`**
+request header (ground truth when a client / test harness sets it) or defaults to
+`assistant`; ltool runs resolve `human` vs an inherited author server-side.
+
+> ⚠️ **This is a destructive migration**, unlike the additive ones below. It
+> DROPS `conversations`, `inquiries`, `tool_calls`, `queries`, and the old
+> `favorites`. **Share slugs minted before this release stop resolving.** The
+> dropped tables are copied to `*_bak` first, and favorited queries are restored
+> into `saved_queries` by the backport step.
+
+### Run the migrations (once, in order)
+
+Both are idempotent — safe to re-run; the backport is a clean no-op on a fresh
+install:
+
+```bash
+psql "$DATABASE_URL" -f drizzle/manual/0003_history_redesign.sql
+psql "$DATABASE_URL" -f drizzle/manual/0004_backport_favorites.sql
+```
+
+- `0003` backs up the old tables to `*_bak`, then builds `history` +
+  `saved_queries` + the re-pointed `favorites`.
+- `0004` restores favorited queries from the backups into `saved_queries` (+
+  `favorites`). History itself is disposable and is **not** backported.
+
+Once you've verified the new schema, drop the `*_bak` tables to reclaim space.
+
+No new env vars. `x-author-model` is an **optional** request header for model
+attribution — clients that don't send it (e.g. claude.ai) record `assistant`.
+
+### After deploy
+
+- The tool surface is unchanged (`query`, `list_sources`, `describe_source`,
+  `open_share_link`), so **no reconnect is required** — but note that `query`
+  now rejects any call (validate or run) that omits `question`.
+- If you use the internal **malloyyo_analytics** model, re-publish it: its
+  sources moved from `inquiries` / `tool_calls` to `history` / `saved_queries`.
+
 ## malloyyo CLI model publishing (2026-06-11)
 
 Adds the `malloyyo` CLI publish path: admins push a directory of Malloy files to a

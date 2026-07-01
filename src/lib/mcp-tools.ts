@@ -1,7 +1,7 @@
 // Copyright (c) The Malloy Foundation
 // SPDX-License-Identifier: MIT
 
-import { eq, and, desc, or, count, isNull } from "drizzle-orm";
+import { eq, and, desc, or, count } from "drizzle-orm";
 import { db, datasets, malloyModels, malloyModelFiles, savedQueries, history, favorites } from "@/db";
 import type { SourceInfo } from "./malloy";
 import { runMalloyFiles } from "./malloy";
@@ -88,17 +88,20 @@ export async function modelFileMap(model: { id: string; source: string }): Promi
   return new Map([["index.malloy", model.source]]);
 }
 
-// Time-window sessionization: consecutive activity by one user on one dataset
-// rolls into a session; a gap longer than this starts a new one. MCP is
-// stateless per request, so we derive the session from the last recorded row
-// rather than threading a session id through the agent (which is unreliable).
+// Time-window sessionization: consecutive activity by one user rolls into a
+// session; a gap longer than this starts a new one. Keyed on the USER only (not
+// user+dataset) so a single exploration groups together — list_sources and
+// describe_source carry no dataset_id, so keying on dataset would split them off
+// from the queries they set up. MCP is stateless per request, so we derive the
+// session from the user's last recorded row rather than threading a session id
+// through the agent (which is unreliable).
 const SESSION_WINDOW_MS = 30 * 60 * 1000;
 
-async function resolveSession(userId: string, datasetId: string | null): Promise<{ sessionId: string; sequence: number }> {
+async function resolveSession(userId: string): Promise<{ sessionId: string; sequence: number }> {
   const [last] = await db
     .select({ sessionId: history.sessionId, createdAt: history.createdAt })
     .from(history)
-    .where(and(eq(history.userId, userId), datasetId ? eq(history.datasetId, datasetId) : isNull(history.datasetId)))
+    .where(eq(history.userId, userId))
     .orderBy(desc(history.createdAt))
     .limit(1);
   if (last?.sessionId && Date.now() - new Date(last.createdAt).getTime() < SESSION_WINDOW_MS) {
@@ -134,7 +137,7 @@ export type RecordHistoryFields = {
 export async function recordHistory(fields: RecordHistoryFields): Promise<{ slug: string | null }> {
   try {
     const datasetId = fields.datasetId ?? null;
-    const { sessionId, sequence } = await resolveSession(fields.userId, datasetId);
+    const { sessionId, sequence } = await resolveSession(fields.userId);
     const slug = fields.mintSlug ? instanceSlug() : null;
     await db.insert(history).values({
       sessionId,

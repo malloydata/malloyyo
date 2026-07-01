@@ -2,28 +2,27 @@
 // SPDX-License-Identifier: MIT
 
 import { NextResponse } from "next/server";
-import { eq, desc, and, isNull, inArray, sql } from "drizzle-orm";
-import { db, inquiries, toolCalls, users } from "@/db";
+import { eq, desc, and, isNull, isNotNull, inArray, sql } from "drizzle-orm";
+import { db, history, savedQueries, users } from "@/db";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { RUN_LABELS } from "@/lib/tool-names";
 
-export const runtime = "nodejs";
-
-// Correlated EXISTS checking if the current user has favorited this inquiry.
-// Uses toolCalls.inquiryId as a column reference (drizzle resolves to tool_calls.inquiry_id).
-function favExists(userId: string) {
-  return sql<boolean>`EXISTS (
-    SELECT 1 FROM favorites
-    WHERE favorites.inquiry_id = ${toolCalls.inquiryId}
-    AND favorites.user_id = ${userId}::uuid
-  )`;
+// --- favorites view: sourced from the DURABLE saved_queries, so favorites keep
+// showing even after their history rows are trimmed (history is disposable). ---
+function sqFavByMe(userId: string) {
+  return sql<boolean>`EXISTS (SELECT 1 FROM favorites f WHERE f.saved_query_id = ${savedQueries.id} AND f.user_id = ${userId}::uuid)`;
 }
+function sqAnyFav() {
+  return sql<boolean>`EXISTS (SELECT 1 FROM favorites f WHERE f.saved_query_id = ${savedQueries.id})`;
+}
+const sqFavCount = sql<number>`(SELECT count(*)::int FROM favorites f WHERE f.saved_query_id = ${savedQueries.id})`;
 
-// Any user (including the current one) has favorited this inquiry.
-function anyFavExists() {
+// --- history view: sourced from the activity log; a run is "favorited" when a
+// saved_query with the same slug (promoted on favorite) is favorited by me. ---
+function histFavByMe(userId: string) {
   return sql<boolean>`EXISTS (
-    SELECT 1 FROM favorites
-    WHERE favorites.inquiry_id = ${toolCalls.inquiryId}
+    SELECT 1 FROM favorites f JOIN saved_queries sq ON sq.id = f.saved_query_id
+    WHERE sq.slug = ${history.slug} AND f.user_id = ${userId}::uuid
   )`;
 }
 
@@ -38,49 +37,67 @@ export async function GET(req: Request) {
   const scope = url.searchParams.get("scope") ?? "me";     // "me" | "all"
   const view  = url.searchParams.get("view")  ?? "history"; // "history" | "favorites"
 
+  if (view === "favorites") {
+    const rows = await db
+      .select({
+        id: savedQueries.id,
+        slug: savedQueries.slug,
+        question: savedQueries.question,
+        createdAt: savedQueries.createdAt,
+        source: savedQueries.source,
+        datasetId: savedQueries.datasetId,
+        malloyQuery: savedQueries.malloySource,
+        rowCount: sql<number | null>`null`,
+        durationMs: sql<number | null>`null`,
+        authorName: users.name,
+        authorModel: savedQueries.authorModel,
+        isFavorited: sqFavByMe(user.id),
+        favoriteCount: sqFavCount,
+      })
+      .from(savedQueries)
+      .leftJoin(users, eq(users.id, savedQueries.userId))
+      // scope filters WHOSE favorites — mine vs anyone's.
+      .where(scope === "me" ? sqFavByMe(user.id) : sqAnyFav())
+      .orderBy(desc(savedQueries.createdAt))
+      .limit(100);
+    return NextResponse.json(rows);
+  }
+
+  // history view: recent successful, shareable runs (validate-only and failed
+  // attempts are kept for analytics, not shown here).
   const rows = await db
     .select({
-      inquiryId: toolCalls.inquiryId,
-      slug: inquiries.slug,
-      question: inquiries.question,
-      createdAt: toolCalls.createdAt,
-      source: toolCalls.source,
-      datasetId: toolCalls.datasetId,
-      malloyQuery: toolCalls.malloyInput,
-      rowCount: toolCalls.rowCount,
-      durationMs: toolCalls.durationMs,
-      toolSeq: toolCalls.sequence,
+      id: history.id,
+      slug: history.slug,
+      question: history.question,
+      createdAt: history.createdAt,
+      source: history.source,
+      datasetId: history.datasetId,
+      malloyQuery: history.malloyInput,
+      rowCount: history.rowCount,
+      durationMs: history.durationMs,
       authorName: users.name,
-      isFavorited: favExists(user.id),
-      favoriteCount: sql<number>`(SELECT count(*)::int FROM favorites WHERE favorites.inquiry_id = ${toolCalls.inquiryId})`,
+      authorModel: history.authorModel,
+      isFavorited: histFavByMe(user.id),
+      favoriteCount: sql<number>`(
+        SELECT count(*)::int FROM favorites f
+        JOIN saved_queries sq ON sq.id = f.saved_query_id
+        WHERE sq.slug = ${history.slug}
+      )`,
     })
-    .from(toolCalls)
-    .leftJoin(inquiries, eq(inquiries.id, toolCalls.inquiryId))
-    .leftJoin(users, eq(users.id, toolCalls.userId))
+    .from(history)
+    .leftJoin(users, eq(users.id, history.userId))
     .where(
       and(
-        inArray(toolCalls.toolName, RUN_LABELS),
-        isNull(toolCalls.error),
-        // History view: scope filters the query author.
-        view !== "favorites" && scope === "me" ? eq(toolCalls.userId, user.id) : undefined,
-        // Favorites view: scope filters WHOSE favorites — mine vs anyone's —
-        // regardless of who authored the query.
-        view === "favorites" ? (scope === "me" ? favExists(user.id) : anyFavExists()) : undefined,
+        inArray(history.toolName, RUN_LABELS),
+        eq(history.executed, true),
+        isNull(history.error),
+        isNotNull(history.slug),
+        scope === "me" ? eq(history.userId, user.id) : undefined,
       )
     )
-    .orderBy(desc(toolCalls.createdAt))
-    .limit(500);
+    .orderBy(desc(history.createdAt))
+    .limit(100);
 
-  // Keep the latest successful tool call per inquiry (dedup by inquiryId).
-  const seen = new Set<string>();
-  const history = rows
-    .filter((row) => {
-      const key = row.inquiryId ?? `tc-${row.source}-${row.createdAt}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    })
-    .slice(0, 100);
-
-  return NextResponse.json(history);
+  return NextResponse.json(rows);
 }

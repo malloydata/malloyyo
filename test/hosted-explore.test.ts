@@ -17,7 +17,7 @@
 import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
 import { desc, eq, and, isNotNull } from "drizzle-orm";
-import { db, users, datasets, malloyModels, malloyModelFiles, queries, toolCalls, type User } from "@/db";
+import { db, users, datasets, malloyModels, malloyModelFiles, history, type User } from "@/db";
 import { buildHostedExploreSurface } from "@/lib/mcp-host";
 import { loadSharedQuery, runQueryForWeb } from "@/lib/mcp-tools";
 
@@ -133,6 +133,7 @@ test("query execute:false validates; execute:true runs on DuckDB + records a sha
     source: "sales",
     malloy: "run: sales -> by_animal",
     execute: false,
+    question: "validate by_animal",
   });
   assert.equal((JSON.parse(blockText(v, 0)) as { ok: boolean }).ok, true, "compiles");
 
@@ -161,23 +162,17 @@ test("query execute:false validates; execute:true runs on DuckDB + records a sha
   assert.equal(payload.host_only, undefined, "host_only channel never reaches the agent");
   assert.ok(!blockText(run, 0).toLowerCase().includes("select "), "agent JSON carries no SQL text");
 
-  // ...but the SQL WAS recorded (matching the old surface): the most recent
-  // query row + tool-call row for this dataset carry compiledSql.
+  // ...but the SQL WAS recorded on the run's history row (the run and its audit
+  // are now the SAME row): compiledSql + the query text are both there.
   const [petshop] = await db.select().from(datasets).where(eq(datasets.name, "petshop"));
-  const [qrow] = await db
-    .select({ compiledSql: queries.compiledSql, malloySource: queries.malloySource })
-    .from(queries)
-    .where(eq(queries.datasetId, petshop!.id))
-    .orderBy(desc(queries.createdAt))
+  const [hrow] = await db
+    .select({ compiledSql: history.compiledSql, malloy: history.malloyInput })
+    .from(history)
+    .where(and(eq(history.datasetId, petshop!.id), isNotNull(history.compiledSql)))
+    .orderBy(desc(history.createdAt))
     .limit(1);
-  assert.match(qrow!.compiledSql ?? "", /select/i, "queries.compiledSql recorded the generated SQL");
-  const [tc] = await db
-    .select({ compiledSql: toolCalls.compiledSql })
-    .from(toolCalls)
-    .where(eq(toolCalls.datasetId, petshop!.id))
-    .orderBy(desc(toolCalls.createdAt))
-    .limit(1);
-  assert.match(tc!.compiledSql ?? "", /select/i, "toolCalls.compiledSql recorded the generated SQL");
+  assert.match(hrow!.compiledSql ?? "", /select/i, "history.compiledSql recorded the generated SQL for the run");
+  assert.match(hrow!.malloy ?? "", /total_qty/, "history.malloyInput recorded the query text");
 });
 
 test("query without a question is refused (host policy)", async () => {
@@ -279,10 +274,10 @@ test("every tool call is audited to tool_calls — non-query tools and failures 
   // never reached tool_calls at all.
   await h.call("list_sources", {});
   const [ls] = await db
-    .select({ error: toolCalls.error })
-    .from(toolCalls)
-    .where(eq(toolCalls.toolName, "list_sources"))
-    .orderBy(desc(toolCalls.createdAt))
+    .select({ error: history.error })
+    .from(history)
+    .where(eq(history.toolName, "list_sources"))
+    .orderBy(desc(history.createdAt))
     .limit(1);
   assert.ok(ls, "list_sources produced an audit row");
   assert.equal(ls!.error, null, "a successful non-query tool logs no error");
@@ -290,10 +285,10 @@ test("every tool call is audited to tool_calls — non-query tools and failures 
   // B: a non-query tool FAILURE records its error string.
   await h.call("describe_source", { source: "no-such-source" });
   const [dsRow] = await db
-    .select({ error: toolCalls.error })
-    .from(toolCalls)
-    .where(eq(toolCalls.toolName, "describe_source"))
-    .orderBy(desc(toolCalls.createdAt))
+    .select({ error: history.error })
+    .from(history)
+    .where(eq(history.toolName, "describe_source"))
+    .orderBy(desc(history.createdAt))
     .limit(1);
   assert.ok(dsRow, "describe_source produced an audit row");
   assert.ok((dsRow!.error ?? "").length > 0, "a failed describe_source records its error");
@@ -308,10 +303,10 @@ test("every tool call is audited to tool_calls — non-query tools and failures 
   });
   assert.equal((JSON.parse(blockText(bad, 0)) as { ok: boolean }).ok, false, "the query failed");
   const [failRow] = await db
-    .select({ error: toolCalls.error, malloy: toolCalls.malloyInput })
-    .from(toolCalls)
-    .where(and(eq(toolCalls.toolName, "query"), isNotNull(toolCalls.error)))
-    .orderBy(desc(toolCalls.createdAt))
+    .select({ error: history.error, malloy: history.malloyInput })
+    .from(history)
+    .where(and(eq(history.toolName, "query"), isNotNull(history.error)))
+    .orderBy(desc(history.createdAt))
     .limit(1);
   assert.ok(failRow, "a failed query produced an audit row (previously dropped)");
   assert.ok((failRow!.error ?? "").length > 0, "the failure's error string was recorded");
@@ -324,18 +319,18 @@ test("a compile-only (execute:false) query is audited but records no run artifac
   // (for debugging), but there's no error, no compiled SQL, and no row count —
   // nothing actually ran. Marker string makes the row unambiguous to find.
   const marker = "run: sales -> { aggregate: total_qty } // compile-only-audit-marker";
-  const v = await host().call("query", { source: "sales", malloy: marker, execute: false });
+  const v = await host().call("query", { source: "sales", malloy: marker, execute: false, question: "compile-only marker" });
   assert.equal((JSON.parse(blockText(v, 0)) as { ok: boolean }).ok, true, "compiles");
 
   const [row] = await db
     .select({
-      error: toolCalls.error,
-      compiledSql: toolCalls.compiledSql,
-      rowCount: toolCalls.rowCount,
-      source: toolCalls.source,
+      error: history.error,
+      compiledSql: history.compiledSql,
+      rowCount: history.rowCount,
+      source: history.source,
     })
-    .from(toolCalls)
-    .where(eq(toolCalls.malloyInput, marker))
+    .from(history)
+    .where(eq(history.malloyInput, marker))
     .limit(1);
   assert.ok(row, "the compile-only query produced an audit row");
   assert.equal(row!.error, null, "a successful compile logs no error");

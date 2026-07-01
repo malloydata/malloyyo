@@ -78,7 +78,12 @@ export async function POST(req: Request) {
 
   // The deployed /mcp IS the engine's exploreSurface. The host wraps it with
   // instance tagging, the mandatory question, recording, and open_share_link.
-  const hosted = buildHostedExploreSurface(user, originFromRequest(req));
+  // user_agent identifies the client; x-author-model (set by our LLM test
+  // harness) is ground-truth model attribution — absent for organic traffic.
+  const hosted = buildHostedExploreSurface(user, originFromRequest(req), {
+    userAgent: req.headers.get("user-agent"),
+    authorModel: req.headers.get("x-author-model"),
+  });
 
   switch (body.method) {
     case "initialize":

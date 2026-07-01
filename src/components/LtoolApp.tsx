@@ -21,7 +21,7 @@ type View = "history" | "favorites";
 type Scope = "me" | "all";
 
 type HistoryItem = {
-  inquiryId: string | null;
+  id: string | null;
   slug: string | null;
   question: string | null;
   createdAt: string;
@@ -34,6 +34,12 @@ type HistoryItem = {
   isFavorited: boolean;
   favoriteCount: number;
 };
+
+// Stable identity for a row: the history id, else the share slug, else a
+// synthetic key from source+time (deep-linked/just-saved rows have no id yet).
+function itemKey(i: HistoryItem): string {
+  return i.id ?? i.slug ?? `${i.source}-${i.createdAt}`;
+}
 
 type RunResult = {
   rows: Record<string, unknown>[];
@@ -92,7 +98,7 @@ function StarButton({
   item: HistoryItem;
   onToggle: (e: React.MouseEvent, item: HistoryItem) => void;
 }) {
-  if (!item.inquiryId) return null;
+  if (!item.slug) return null;
   const others = Math.max(0, item.favoriteCount - (item.isFavorited ? 1 : 0));
   const cls = item.isFavorited
     ? "text-amber-400 hover:text-amber-500"
@@ -198,7 +204,7 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
       .catch(() => {});
   }, []);
 
-  const runQuery = useCallback(async (src: string, malloy: string, datasetId?: string | null) => {
+  const runQuery = useCallback(async (src: string, malloy: string, datasetId?: string | null, baseSlug?: string | null, question?: string | null) => {
     if (!src || !malloy.trim()) return;
     setRunning(true);
     setResult(null);
@@ -207,7 +213,8 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
       const res = await fetch("/api/run", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ source: src, malloy, datasetId }),
+        // baseSlug lets the server decide author_model (inherit vs 'human').
+        body: JSON.stringify({ source: src, malloy, datasetId, baseSlug, question }),
       });
       const json = await res.json();
       if (!res.ok) {
@@ -237,7 +244,7 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
         const favoritedByMe: boolean = body.favoritedByMe ?? false;
         const authoredByMe: boolean = body.authoredByMe ?? false;
         const item: HistoryItem = {
-          inquiryId: null, slug: initialSlug, question: body.question ?? null,
+          id: null, slug: initialSlug, question: body.question ?? null,
           createdAt: new Date().toISOString(), source: body.source ?? null, datasetId: body.datasetId ?? null,
           malloyQuery: body.malloy ?? null, rowCount: null, durationMs: null,
           authorName: null, isFavorited: favoritedByMe, favoriteCount,
@@ -257,7 +264,7 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
           setView("history");
           setScope(authoredByMe ? "me" : "all");
         }
-        if (body.source && body.malloy) runQuery(body.source, body.malloy, body.datasetId);
+        if (body.source && body.malloy) runQuery(body.source, body.malloy, body.datasetId, initialSlug, body.question ?? null);
       })
       .catch((e) => { if (!cancelled) setRunError(e instanceof Error ? e.message : String(e)); });
     return () => { cancelled = true; };
@@ -274,7 +281,7 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
     setRunError(null);
     mainRef.current?.scrollTo({ top: 0 });
     if (item.malloyQuery && item.source) {
-      runQuery(item.source, item.malloyQuery, item.datasetId);
+      runQuery(item.source, item.malloyQuery, item.datasetId, item.slug, item.question);
     }
   }
 
@@ -282,10 +289,10 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
   // is fixed by clicking again); the list re-filters on the next refresh.
   const toggleFavorite = useCallback(async (e: React.MouseEvent, item: HistoryItem) => {
     e.stopPropagation();
-    if (!item.inquiryId) return;
+    if (!item.slug) return;
     const nextFav = !item.isFavorited;
     const apply = (fav: boolean, count: number) =>
-      setItems((prev) => prev.map((i) => i.inquiryId === item.inquiryId ? { ...i, isFavorited: fav, favoriteCount: count } : i));
+      setItems((prev) => prev.map((i) => i.slug === item.slug ? { ...i, isFavorited: fav, favoriteCount: count } : i));
 
     // Optimistic update
     apply(nextFav, Math.max(0, item.favoriteCount + (nextFav ? 1 : -1)));
@@ -294,7 +301,7 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
       const res = await fetch("/api/favorites", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ inquiryId: item.inquiryId }),
+        body: JSON.stringify({ slug: item.slug }),
       });
       const json = await res.json() as { isFavorited: boolean };
       if (json.isFavorited !== nextFav) {
@@ -340,7 +347,7 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
   // new history entry (fresh slug) under the edited title; otherwise just run.
   async function handleRun() {
     if (!source || !query.trim()) return;
-    if (!isModified) { runQuery(source, query, selected?.datasetId); return; }
+    if (!isModified) { runQuery(source, query, selected?.datasetId, selected?.slug, selected?.question); return; }
     const title = (editedTitle ?? modifiedDefaultTitle).trim() || query.trim().slice(0, 80);
     setRunning(true);
     setResult(null);
@@ -349,13 +356,13 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
       const res = await fetch("/api/run", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ source, malloy: query, save: true, title, datasetId: selected?.datasetId }),
+        body: JSON.stringify({ source, malloy: query, save: true, title, datasetId: selected?.datasetId, baseSlug: selected?.slug ?? null }),
       });
       const json = await res.json();
       if (!res.ok) { setRunError(json.error ?? "query failed"); return; }
       setResult(json);
       const newItem: HistoryItem = {
-        inquiryId: json.inquiryId ?? null,
+        id: null,
         slug: json.slug ?? null,
         question: title,
         createdAt: new Date().toISOString(),
@@ -430,9 +437,9 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
           ) : (
             <ul className="divide-y divide-gray-100 dark:divide-gray-900">
               {visibleItems.map((item) => (
-                <li key={item.inquiryId ?? `${item.source}-${item.createdAt}`}>
+                <li key={itemKey(item)}>
                   <div className={`flex items-start hover:bg-gray-50 dark:hover:bg-gray-900/50 transition-colors ${
-                    selected?.inquiryId === item.inquiryId && selected?.createdAt === item.createdAt
+                    selected && itemKey(selected) === itemKey(item)
                       ? "bg-blue-50 dark:bg-blue-950/30 border-l-2 border-blue-500"
                       : ""
                   }`}>

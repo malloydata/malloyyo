@@ -17,7 +17,7 @@
 // the model_ref a query resolved to, recording is a direct dataset lookup.
 
 import { desc } from "drizzle-orm";
-import { db, datasets, inquiries, queries, type User } from "@/db";
+import { db, datasets, type User } from "@/db";
 import {
   compile,
   exploreSurface,
@@ -37,12 +37,12 @@ import {
 type QueryRunResult = WithHostOnly<RunResult & { model_ref?: string }>;
 import { withModelRuntime } from "./malloy";
 import {
-  ensureConversation,
   latestModel,
   loadSharedQuery,
-  logCall,
   modelFileMap,
+  recordHistory,
   visibleDatasetWhere,
+  type RecordHistoryFields,
 } from "./mcp-tools";
 import { env } from "./env";
 
@@ -152,56 +152,6 @@ function makeExploreHost(userId: string): ExploreHost {
   };
 }
 
-// Host policy: mint an inquiry (→ share slug), persist the query, log the call.
-// Keyed off the model_ref the ENGINE resolved to (dataset is 1:1 with it), so
-// the host never re-runs source→model resolution. Note: the explore surface
-// does not return SQL on an executed run, so compiledSql is not recorded — the
-// Malloy text (the shareable artifact) is.
-async function recordQuery(
-  user: User,
-  args: Record<string, unknown>,
-  result: QueryRunResult,
-  baseUrl: string,
-): Promise<{ link?: LtoolLink; logged: boolean }> {
-  const modelRef = String(result.model_ref ?? args.model_ref ?? "");
-  const found = modelRef ? await findModelByRef(user.id, modelRef) : null;
-  // Couldn't resolve the dataset: the query still ran, so the caller logs a
-  // bare audit row instead — `logged: false` tells it to.
-  if (!found) return { logged: false };
-  const question = String(args.question ?? "").trim();
-  const malloyQ = String(args.malloy ?? "");
-  const source = String(args.source ?? modelRef);
-  // The explore surface withholds SQL from the agent but hands it to the host
-  // via the host_only channel (see the engine's toContent) — record it, as the
-  // old surface did.
-  const compiledSql = result[HOST_ONLY]?.sql;
-  const convId = await ensureConversation(user.id, undefined, source, found.ds.id);
-  const [inq] = await db
-    .insert(inquiries)
-    .values({ conversationId: convId, question: question || source, sequence: 0 })
-    .returning({ id: inquiries.id, slug: inquiries.slug });
-  await db.insert(queries).values({
-    datasetId: found.ds.id,
-    userId: user.id,
-    malloySource: malloyQ,
-    compiledSql,
-    rowCount: result.row_count,
-    durationMs: result.total_time_ms,
-  });
-  await logCall({
-    inquiryId: inq.id,
-    userId: user.id,
-    datasetId: found.ds.id,
-    toolName: "query",
-    source,
-    malloyInput: malloyQ,
-    compiledSql,
-    rowCount: result.row_count,
-    durationMs: result.total_time_ms,
-  });
-  return { link: ltoolLink(baseUrl, inq.slug), logged: true };
-}
-
 /** Pull a human error string off an engine result (`{ ok:false, problems }`) or
     a host ToolResult (`{ isError, content }`), for the audit `error` column. */
 function resultError(result: Record<string, unknown>): string | undefined {
@@ -263,11 +213,23 @@ export interface HostedSurface {
 }
 
 // Build the per-user hosted explore surface: the engine's tools (instance-
-// tagged) + open_share_link, with the executed query decorated for recording +
-// sharing. route.ts wires this into initialize / tools/list / tools/call.
-export function buildHostedExploreSurface(user: User, baseUrl: string): HostedSurface {
+// tagged) + open_share_link. Every call is recorded to `history` (with the
+// client user_agent and the request's author_model), and a successful run is
+// decorated with its freshly-minted share link. route.ts wires this into
+// initialize / tools/list / tools/call.
+export function buildHostedExploreSurface(
+  user: User,
+  baseUrl: string,
+  ctx: { userAgent?: string | null; authorModel?: string | null } = {},
+): HostedSurface {
   const surface = exploreSurface(makeExploreHost(user.id));
   const byName = new Map(surface.tools.map((t) => [t.name, t]));
+  // The client that ran the call, and who authored the Malloy. author_model is
+  // ground truth when the client sets x-author-model (our LLM test harness
+  // does); otherwise 'assistant' — we deliberately do NOT trust a model to
+  // self-report its own identity (it's unreliable at that).
+  const userAgent = ctx.userAgent ?? null;
+  const authorModel = ctx.authorModel ?? "assistant";
 
   const descriptors = [
     ...surface.tools.map((t) => ({
@@ -281,93 +243,98 @@ export function buildHostedExploreSurface(user: User, baseUrl: string): HostedSu
     { ...OPEN_SHARE_LINK, description: `${TAG} ${OPEN_SHARE_LINK.description}` },
   ];
 
+  const strArg = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
+
   async function call(name: string, args: Record<string, unknown>): Promise<ToolResult> {
-    // Audit EVERY tool call (every tool, success or failure) to tool_calls. The
-    // rich query record is minted by recordQuery on the success path; this is the
-    // catch-all for every other path so nothing completes unlogged. Non-RUN_LABELS
-    // tool names and errored rows are filtered out of the history/share views, so
-    // these rows are audit-only and don't surface to users.
+    // Record EVERY tool call to `history` — success, validate-only, or failure —
+    // so nothing completes unrecorded (syntax-error attempts included). A
+    // successful run additionally mints a share slug (returned as ltool_link).
     const start = Date.now();
-    const audit = (error?: string) =>
-      logCall({
+    const isQuery = name === "query";
+    const record = (extra: Partial<RecordHistoryFields>) =>
+      recordHistory({
         userId: user.id,
         toolName: name,
-        source: typeof args.source === "string" ? args.source : undefined,
-        malloyInput: name === "query" && typeof args.malloy === "string" ? args.malloy : undefined,
+        source: strArg(args.source),
         durationMs: Date.now() - start,
-        error,
+        userAgent,
+        authorModel,
+        ...extra,
       });
 
     try {
       if (name === "open_share_link") {
         const result = await openShareLink(args, baseUrl);
-        await audit(resultError(result as unknown as Record<string, unknown>));
+        await record({ error: resultError(result as unknown as Record<string, unknown>) });
         return result;
       }
       const tool = byName.get(name);
       if (!tool) {
-        await audit(`unknown tool: ${name}`);
+        await record({ error: `unknown tool: ${name}` });
         return errText(`unknown tool: ${name}`);
       }
 
-      const executing = name === "query" && args.execute !== false;
-      // Host policy: an executing query must carry a question (its share label).
-      if (executing && !String(args.question ?? "").trim()) {
+      const executing = isQuery && args.execute !== false;
+      // Host policy: EVERY query call (run AND validate) must carry a question —
+      // the synopsis is the analytics grouping key and the share label.
+      if (isQuery && !String(args.question ?? "").trim()) {
         const msg = "'question' is required: a plain-English description of what this query answers.";
-        await audit(msg);
+        await record({ malloyInput: strArg(args.malloy), question: null, executed: executing, error: msg });
         return errText(msg);
       }
 
       const result = (await tool.handler(args)) as Record<string, unknown>;
+      const succeeded = result.ok !== false;
+      const qr = result as unknown as QueryRunResult;
 
-      // Decorate a successful executed query with the share link as the structured
-      // `ltool_link` field (the Query-summary nudge that used to prepend here is
-      // disabled — see below).
-      if (executing && result.ok) {
-        // One cast at the untyped wire boundary (the tool handler returns the
-        // generic object) to the explore query shape; everything downstream
-        // (recording, the host_only strip) is then typed.
-        const runResult = result as unknown as QueryRunResult;
-        const recorded = await recordQuery(user, args, runResult, baseUrl);
-        // recordQuery mints the full row on success; if the dataset couldn't be
-        // resolved it logged nothing, so fall back to a bare audit row.
-        if (!recorded.logged) await audit();
-        const link = recorded.link;
-        // host_only carried the SQL for recording (above); it must NOT reach the
-        // agent — strip it from the payload the agent sees.
-        const { [HOST_ONLY]: _hostOnly, ...rest } = runResult;
-        const withLink = { ...rest, ltool_link: link };
-        // DISABLED (rescuable): the per-query "Query summary" nudge was shipped as
-        // a bare text block prepended to the JSON payload. Two problems flagged
-        // repeatedly by consuming models: (1) it breaks any consumer that
-        // JSON.parses the result (leading prose before the {...}); (2) an
-        // imperative aimed at the model inside a tool result is exactly the shape
-        // hosts/models distrust as injection, so it was unreliable anyway. The
-        // share link already rides as the structured `ltool_link` field — let the
-        // client render it. Restore by re-adding the reminder text block below.
-        //   const reminder =
-        //     `End your reply with a "Query summary": (1) the question in plain English, ` +
-        //     `(2) the Malloy logic (filters, grouping, aggregation, ordering), ` +
-        //     `(3) post-processing outside Malloy or "none".` +
-        //     (link ? ` Then append \`ltool_link\` as a markdown link using its \`text\` and \`url\`.` : "");
+      // For query calls, resolve the dataset (1:1 with the model_ref the engine
+      // reported) — needed on the history row for every query call, run or not.
+      let datasetId: string | null = null;
+      if (isQuery) {
+        const modelRef = String(qr.model_ref ?? args.model_ref ?? "");
+        const found = modelRef ? await findModelByRef(user.id, modelRef) : null;
+        datasetId = found?.ds.id ?? null;
+      }
+
+      const runOk = isQuery && executing && succeeded;
+      const rec = await record({
+        datasetId,
+        question: isQuery ? String(args.question ?? "") : null,
+        malloyInput: isQuery ? strArg(args.malloy) : undefined,
+        // Run artifacts (compiled SQL, row count) only for an executed run — a
+        // validate compiles but nothing actually runs.
+        compiledSql: runOk ? qr[HOST_ONLY]?.sql : undefined,
+        rowCount: runOk ? qr.row_count : undefined,
+        durationMs: runOk ? qr.total_time_ms : Date.now() - start,
+        executed: isQuery ? executing : null,
+        error: succeeded ? undefined : resultError(result),
+        mintSlug: runOk,
+      });
+
+      // Decorate a successful executed query with the share link as the
+      // structured `ltool_link` field. (The "Query summary" nudge that used to
+      // prepend here is disabled: prose before the JSON broke parsers, and an
+      // imperative aimed at the model inside a tool result reads as injection.
+      // The link rides as structured data instead.)
+      if (runOk) {
+        // host_only carried the SQL for recording; it must NOT reach the agent.
+        const { [HOST_ONLY]: _hostOnly, ...rest } = qr;
+        const withLink = { ...rest, ltool_link: ltoolLink(baseUrl, rec.slug) };
         return {
-          content: [
-            // { type: "text", text: reminder },
-            { type: "text", text: JSON.stringify(withLink, null, 2) },
-          ],
+          content: [{ type: "text", text: JSON.stringify(withLink, null, 2) }],
           structuredContent: withLink,
         };
       }
-      // Everything else — non-query tools, execute:false (compile-only), and
-      // FAILED queries — gets a bare audit row (with the error string when the
-      // result reports one). This is the A+B fix: nothing returns unlogged.
-      await audit(result.ok === false ? resultError(result) : undefined);
       return toContent(result) as ToolResult;
     } catch (e) {
-      // A thrown handler (the engine throws only on programmer misuse, but the
-      // host's resolution/lease can also throw) — record the failure, then let it
-      // propagate to the route handler's error response as before.
-      await audit(e instanceof Error ? e.message : String(e));
+      // A thrown handler (the engine throws only on programmer misuse; the
+      // host's resolution/lease can also throw) — record the failure, then let
+      // it propagate to the route handler's error response.
+      await record({
+        malloyInput: isQuery ? strArg(args.malloy) : undefined,
+        executed: isQuery ? args.execute !== false : null,
+        error: e instanceof Error ? e.message : String(e),
+      });
       throw e;
     }
   }

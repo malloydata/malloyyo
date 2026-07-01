@@ -63,7 +63,8 @@ const TAG = `[${env.INSTANCE_NAME}]`;
 // already interpolated (no token).
 const HOST_POLICY =
   `Tools are tagged ${TAG} — if several instances are connected, ` +
-  `route to the one the user means.`;
+  `route to the one the user means. On every tool call, set \`model\` to your own ` +
+  `model identifier (e.g. "claude-opus-4-8") so runs can be attributed by model.`;
 
 function text(value: unknown): ToolResult {
   return { content: [{ type: "text", text: typeof value === "string" ? value : JSON.stringify(value, null, 2) }] };
@@ -206,6 +207,31 @@ function withRequiredQuestion(name: string, inputSchema: Record<string, unknown>
   return { ...schema, required: Array.from(new Set([...(schema.required ?? []), "question"])) };
 }
 
+// Host policy: ask EVERY tool for the calling model, so runs can be attributed
+// by model. The engine schemas don't carry it, so the host injects it. Kept
+// OPTIONAL on purpose: a REQUIRED field the model doesn't reliably emit makes
+// clients like claude.ai fail their own tool-call validation and never send the
+// request at all (calls silently vanish). Optional means the call always goes
+// through and carries `model` when the assistant fills it. Self-reported and
+// therefore UNTRUSTED — the x-author-model header still wins; absent, we fall
+// back to 'assistant'. This is the only model signal from clients that never
+// send the header.
+function withModelParam(inputSchema: Record<string, unknown>): Record<string, unknown> {
+  const schema = inputSchema as { properties?: Record<string, unknown>; [k: string]: unknown };
+  return {
+    ...schema,
+    properties: {
+      ...(schema.properties ?? {}),
+      model: {
+        type: "string",
+        description:
+          'The model identifier you (the calling assistant) are running as, e.g. "claude-opus-4-8". ' +
+          "Set this to your own model on every call so the run can be attributed.",
+      },
+    },
+  };
+}
+
 export interface HostedSurface {
   instructions: string;
   descriptors: Array<{ name: string; title?: string; description: string; inputSchema: Record<string, unknown> }>;
@@ -224,12 +250,10 @@ export function buildHostedExploreSurface(
 ): HostedSurface {
   const surface = exploreSurface(makeExploreHost(user.id));
   const byName = new Map(surface.tools.map((t) => [t.name, t]));
-  // The client that ran the call, and who authored the Malloy. author_model is
-  // ground truth when the client sets x-author-model (our LLM test harness
-  // does); otherwise 'assistant' — we deliberately do NOT trust a model to
-  // self-report its own identity (it's unreliable at that).
   const userAgent = ctx.userAgent ?? null;
-  const authorModel = ctx.authorModel ?? "assistant";
+  // Trusted model attribution from the x-author-model header (a harness sets it);
+  // falls back per-call to the self-reported `model` arg, then 'assistant'.
+  const headerModel = ctx.authorModel ?? null;
 
   const descriptors = [
     ...surface.tools.map((t) => ({
@@ -238,9 +262,13 @@ export function buildHostedExploreSurface(
       // Instance tag prepended as HOST policy — the engine keeps descriptions
       // instance-agnostic; multi-instance routing is the host's concern.
       description: `${TAG} ${t.description}`,
-      inputSchema: withRequiredQuestion(t.name, t.inputSchema),
+      inputSchema: withModelParam(withRequiredQuestion(t.name, t.inputSchema)),
     })),
-    { ...OPEN_SHARE_LINK, description: `${TAG} ${OPEN_SHARE_LINK.description}` },
+    {
+      ...OPEN_SHARE_LINK,
+      description: `${TAG} ${OPEN_SHARE_LINK.description}`,
+      inputSchema: withModelParam(OPEN_SHARE_LINK.inputSchema as Record<string, unknown>),
+    },
   ];
 
   const strArg = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
@@ -251,6 +279,13 @@ export function buildHostedExploreSurface(
     // successful run additionally mints a share slug (returned as ltool_link).
     const start = Date.now();
     const isQuery = name === "query";
+    // Self-reported model from the host-injected `model` arg; the trusted header
+    // wins if present.
+    const declaredModel = strArg(args.model)?.trim() || undefined;
+    const authorModel = headerModel ?? declaredModel ?? "assistant";
+    // `model` is host-injected — strip it before the engine handler, which
+    // validates args against its own schema (additionalProperties: false).
+    const { model: _model, ...toolArgs } = args;
     const record = (extra: Partial<RecordHistoryFields>) =>
       recordHistory({
         userId: user.id,
@@ -264,7 +299,7 @@ export function buildHostedExploreSurface(
 
     try {
       if (name === "open_share_link") {
-        const result = await openShareLink(args, baseUrl);
+        const result = await openShareLink(toolArgs, baseUrl);
         await record({ error: resultError(result as unknown as Record<string, unknown>) });
         return result;
       }
@@ -283,7 +318,7 @@ export function buildHostedExploreSurface(
         return errText(msg);
       }
 
-      const result = (await tool.handler(args)) as Record<string, unknown>;
+      const result = (await tool.handler(toolArgs)) as Record<string, unknown>;
       const succeeded = result.ok !== false;
       const qr = result as unknown as QueryRunResult;
 

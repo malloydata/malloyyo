@@ -208,12 +208,16 @@ function withRequiredQuestion(name: string, inputSchema: Record<string, unknown>
 }
 
 // Host policy: ask EVERY tool for the calling model, so runs can be attributed
-// by model. The engine schemas don't carry it, so the host injects it (required).
-// Self-reported and therefore UNTRUSTED — the x-author-model header still wins.
-// This is the only model signal available from clients (e.g. claude.ai web) that
-// never send that header.
+// by model. The engine schemas don't carry it, so the host injects it. Kept
+// OPTIONAL on purpose: a REQUIRED field the model doesn't reliably emit makes
+// clients like claude.ai fail their own tool-call validation and never send the
+// request at all (calls silently vanish). Optional means the call always goes
+// through and carries `model` when the assistant fills it. Self-reported and
+// therefore UNTRUSTED — the x-author-model header still wins; absent, we fall
+// back to 'assistant'. This is the only model signal from clients that never
+// send the header.
 function withModelParam(inputSchema: Record<string, unknown>): Record<string, unknown> {
-  const schema = inputSchema as { properties?: Record<string, unknown>; required?: string[]; [k: string]: unknown };
+  const schema = inputSchema as { properties?: Record<string, unknown>; [k: string]: unknown };
   return {
     ...schema,
     properties: {
@@ -222,10 +226,9 @@ function withModelParam(inputSchema: Record<string, unknown>): Record<string, un
         type: "string",
         description:
           'The model identifier you (the calling assistant) are running as, e.g. "claude-opus-4-8". ' +
-          "Report your own model so this run can be attributed.",
+          "Set this to your own model on every call so the run can be attributed.",
       },
     },
-    required: Array.from(new Set([...(schema.required ?? []), "model"])),
   };
 }
 

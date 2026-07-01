@@ -16,6 +16,32 @@ type SourceSummary = {
   ownerName?: string | null;
 };
 
+// The front page is organized BY DATASET: the flat /api/sources list is grouped
+// under its dataset (model = dataset name), so each dataset is a section with
+// its exported sources listed beneath.
+type DatasetGroup = {
+  datasetId: string;
+  name: string;
+  isPublic: boolean;
+  status: string;
+  ownerEmail?: string | null;
+  ownerName?: string | null;
+  sources: SourceSummary[];
+};
+
+function groupByDataset(list: SourceSummary[]): DatasetGroup[] {
+  const map = new Map<string, DatasetGroup>();
+  for (const s of list) {
+    let g = map.get(s.datasetId);
+    if (!g) {
+      g = { datasetId: s.datasetId, name: s.model, isPublic: s.isPublic, status: s.status, ownerEmail: s.ownerEmail, ownerName: s.ownerName, sources: [] };
+      map.set(s.datasetId, g);
+    }
+    g.sources.push(s);
+  }
+  return [...map.values()];
+}
+
 type Me = {
   id: string;
   name: string | null;
@@ -25,10 +51,25 @@ type Me = {
   isAdmin: boolean;
 };
 
+type FavQuery = {
+  datasetId: string;
+  source: string;
+  slug: string | null;
+  question: string;
+  favoriteCount: number;
+};
+
 export default function HomePage() {
   const [me, setMe] = useState<Me | null | undefined>(undefined);
   const [instanceName, setInstanceName] = useState("malloyyo");
+  const [claudeConnected, setClaudeConnected] = useState(false);
   const [sources, setSources] = useState<SourceSummary[] | null>(null);
+  const [favQueries, setFavQueries] = useState<FavQuery[]>([]);
+  // Claude connect-instructions modal — shown when clicking a source's Claude
+  // button before the connector is linked. claudeTargetUrl is the explore chat
+  // to continue to after setup.
+  const [showClaudeSetup, setShowClaudeSetup] = useState(false);
+  const [claudeTargetUrl, setClaudeTargetUrl] = useState<string | null>(null);
 
   useEffect(() => { void load(); }, []);
 
@@ -37,11 +78,27 @@ export default function HomePage() {
     const meJson = await meRes.json();
     setMe(meJson.user);
     if (meJson.instanceName) setInstanceName(meJson.instanceName);
+    if (typeof meJson.claudeConnected === "boolean") setClaudeConnected(meJson.claudeConnected);
     if (meJson.user) {
-      const r = await fetch("/api/sources");
-      if (r.ok) setSources(await r.json());
+      const [srcRes, favRes] = await Promise.all([fetch("/api/sources"), fetch("/api/favorited-queries")]);
+      if (srcRes.ok) setSources(await srcRes.json());
+      if (favRes.ok) setFavQueries(await favRes.json());
     }
   }
+
+  // Favorited saved queries keyed by dataset+source, so we can list them under
+  // each source. Capped when rendered.
+  const favBySource = new Map<string, FavQuery[]>();
+  for (const q of favQueries) {
+    const key = `${q.datasetId}::${q.source}`;
+    (favBySource.get(key) ?? favBySource.set(key, []).get(key)!).push(q);
+  }
+
+  // A claude.ai chat seeded to explore a source via this instance's MCP tools.
+  const claudeExploreUrl = (source: string) =>
+    `https://claude.ai/new?q=${encodeURIComponent(
+      `Using the ${instanceName} Malloy tools, describe_source "${source}" on ${instanceName}, then help me explore it.`,
+    )}`;
 
   if (me === undefined) return <main className="p-8 font-mono text-sm">loading…</main>;
 
@@ -95,12 +152,10 @@ export default function HomePage() {
             )}
           </section>
 
-          <McpSetup instanceName={instanceName} />
-
           <section>
             <div className="flex items-baseline justify-between mb-3">
               <h2 className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">
-                {me.isAdmin ? "All sources" : "Public sources"}
+                {me.isAdmin ? "All datasets" : "Public datasets"}
               </h2>
               <button onClick={load} className="text-xs text-gray-500 dark:text-gray-400 hover:underline">refresh</button>
             </div>
@@ -109,42 +164,113 @@ export default function HomePage() {
             ) : sources.length === 0 ? (
               <p className="text-gray-500 dark:text-gray-400 text-xs">No sources yet.</p>
             ) : (
-              <ul className="border border-gray-200 dark:border-gray-800 rounded divide-y divide-gray-200 dark:divide-gray-800">
-                {sources.map((s, i) => (
-                  <li key={`${s.datasetId}-${s.source}-${i}`}>
-                    <Link href={`/datasets/${s.datasetId}`}
-                      className="block px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-900/50">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex-1 min-w-0">
-                          <span className="font-medium truncate block">{s.source}</span>
-                          {s.description && (
-                            <span className="text-gray-500 dark:text-gray-400 text-xs mt-0.5 block leading-relaxed">{s.description}</span>
-                          )}
-                          {!s.description && s.source !== s.model && (
-                            <span className="text-gray-400 dark:text-gray-500 text-xs mt-0.5 block">in {s.model}</span>
-                          )}
-                        </div>
-                        <div className="flex items-center gap-2 flex-shrink-0 mt-0.5">
-                          {me.isAdmin && (s.ownerEmail || s.ownerName) && (
-                            <span className="text-gray-400 dark:text-gray-500 text-xs">
-                              {s.ownerEmail ?? s.ownerName}
-                            </span>
-                          )}
-                          {!s.isPublic && (
-                            <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400">
-                              private
-                            </span>
-                          )}
-                          {s.status !== "ready" && <StatusBadge status={s.status} />}
-                        </div>
+              <div className="space-y-4">
+                {groupByDataset(sources).map((g) => (
+                  <div key={g.datasetId} className="border border-gray-200 dark:border-gray-800 rounded overflow-hidden">
+                    {/* Dataset header */}
+                    <Link href={`/datasets/${g.datasetId}`}
+                      className="flex items-center justify-between gap-3 px-3 py-2 bg-gray-50 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-800 hover:bg-gray-100 dark:hover:bg-gray-900/70">
+                      <span className="font-semibold truncate flex-1">{g.name}</span>
+                      <div className="flex items-center gap-2 flex-shrink-0">
+                        {me.isAdmin && (g.ownerEmail || g.ownerName) && (
+                          <span className="text-gray-400 dark:text-gray-500 text-xs truncate max-w-[160px]">
+                            {g.ownerEmail ?? g.ownerName}
+                          </span>
+                        )}
+                        <span className={`text-xs px-1.5 py-0.5 rounded ${g.isPublic ? "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300" : "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400"}`}>
+                          {g.isPublic ? "public" : "private"}
+                        </span>
+                        {g.status !== "ready" && <StatusBadge status={g.status} />}
                       </div>
                     </Link>
-                  </li>
+                    {/* Sources within the dataset */}
+                    <ul className="divide-y divide-gray-100 dark:divide-gray-900">
+                      {g.sources.map((s, i) => {
+                        const favs = favBySource.get(`${s.datasetId}::${s.source}`) ?? [];
+                        return (
+                          <li key={`${s.datasetId}-${s.source}-${i}`} className="px-4 py-3">
+                            <Link href={`/datasets/${s.datasetId}`} className="font-medium truncate block hover:underline">
+                              {s.source}
+                            </Link>
+                            {s.description && (
+                              <span className="text-gray-500 dark:text-gray-400 text-xs mt-0.5 block leading-relaxed">{s.description}</span>
+                            )}
+
+                            {/* Favorited saved queries for this source (top 10) */}
+                            {favs.length > 0 && (
+                              <ul className="mt-2 space-y-1">
+                                {favs.slice(0, 10).map((q) => (
+                                  <li key={q.slug ?? q.question}>
+                                    <Link href={q.slug ? `/ltool/${q.slug}` : "#"}
+                                      className="text-xs text-gray-600 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400 flex items-start gap-1.5">
+                                      <span className="text-amber-400 flex-shrink-0 leading-relaxed">★</span>
+                                      <span className="flex-1 leading-relaxed">{q.question}</span>
+                                      {q.favoriteCount > 1 && <span className="text-gray-400 dark:text-gray-500 flex-shrink-0 leading-relaxed">({q.favoriteCount})</span>}
+                                    </Link>
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+
+                            {/* Explore with */}
+                            <div className="flex items-center gap-2 mt-2 text-xs">
+                              <span className="text-gray-400 dark:text-gray-500">Explore with:</span>
+                              <button
+                                onClick={() => {
+                                  const url = claudeExploreUrl(s.source);
+                                  if (claudeConnected) window.open(url, "_blank", "noopener,noreferrer");
+                                  else { setClaudeTargetUrl(url); setShowClaudeSetup(true); }
+                                }}
+                                title={claudeConnected ? `Open a Claude chat on ${instanceName}` : `Connect ${instanceName} to Claude first`}
+                                className="px-2 py-0.5 rounded border border-gray-300 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-900">
+                                Claude
+                              </button>
+                              <Link href={`/ltool?source=${encodeURIComponent(s.source)}&dataset=${s.datasetId}`}
+                                className="px-2 py-0.5 rounded border border-gray-300 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-900">
+                                ltool
+                              </Link>
+                            </div>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                  </div>
                 ))}
-              </ul>
+              </div>
             )}
           </section>
         </>
+      )}
+
+      {/* Connect-to-Claude instructions, shown when a Claude button is clicked
+          before the connector is linked. Reuses the full McpSetup instructions. */}
+      {showClaudeSetup && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => setShowClaudeSetup(false)}>
+          <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-lg shadow-xl max-w-lg w-full max-h-[85vh] overflow-y-auto p-5 space-y-4"
+            onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-start justify-between gap-3">
+              <h2 className="text-sm font-semibold">Connect {instanceName} to Claude first</h2>
+              <button onClick={() => setShowClaudeSetup(false)}
+                className="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 leading-none" title="Close">×</button>
+            </div>
+            <p className="text-xs text-gray-600 dark:text-gray-400">
+              You haven&apos;t connected {instanceName} to Claude yet. One-time setup:
+            </p>
+            <McpSetup instanceName={instanceName} />
+            <div className="flex items-center gap-3 pt-1">
+              <button
+                onClick={() => { if (claudeTargetUrl) window.open(claudeTargetUrl, "_blank", "noopener,noreferrer"); setShowClaudeSetup(false); }}
+                className="text-xs px-3 py-1.5 rounded bg-black text-white dark:bg-white dark:text-black hover:opacity-80">
+                Continue on to Claude.ai →
+              </button>
+              <button onClick={() => setShowClaudeSetup(false)}
+                className="text-xs px-3 py-1.5 rounded border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-900">
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </main>
   );

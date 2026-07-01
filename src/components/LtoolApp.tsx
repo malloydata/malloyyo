@@ -31,6 +31,7 @@ type HistoryItem = {
   rowCount: number | null;
   durationMs: number | null;
   authorName: string | null;
+  mine?: boolean;
   isFavorited: boolean;
   favoriteCount: number;
 };
@@ -124,7 +125,7 @@ function StarButton({
   );
 }
 
-export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
+export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { initialSlug?: string; initialSource?: string; initialDatasetId?: string }) {
   const [items, setItems] = useState<HistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<HistoryItem | null>(null);
@@ -148,9 +149,13 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
   const [sources, setSources] = useState<SourceOption[]>([]);
   const [instanceName, setInstanceName] = useState("Malloyyo");
   const [claudeConnected, setClaudeConnected] = useState(false);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [showClaudeSetup, setShowClaudeSetup] = useState(false);
   const [shareCopied, setShareCopied] = useState(false);
   const [editedTitle, setEditedTitle] = useState<string | null>(null);
+  // Click-to-rename a saved (unmodified) query's title, persisted on blur.
+  const [titleEditing, setTitleEditing] = useState(false);
+  const [titleDraft, setTitleDraft] = useState("");
   const mainRef = useRef<HTMLDivElement>(null);
 
   const loadHistory = useCallback(() => {
@@ -182,6 +187,7 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
     fetch("/api/me").then((r) => r.json()).then((d) => {
       if (d?.instanceName) setInstanceName(d.instanceName);
       if (typeof d?.claudeConnected === "boolean") setClaudeConnected(d.claudeConnected);
+      if (d?.user?.isAdmin) setIsAdmin(true);
     }).catch(() => {});
   }, []);
 
@@ -247,7 +253,7 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
           id: null, slug: initialSlug, question: body.question ?? null,
           createdAt: new Date().toISOString(), source: body.source ?? null, datasetId: body.datasetId ?? null,
           malloyQuery: body.malloy ?? null, rowCount: null, durationMs: null,
-          authorName: null, isFavorited: favoritedByMe, favoriteCount,
+          authorName: null, mine: authoredByMe, isFavorited: favoritedByMe, favoriteCount,
         };
         setSelected(item);
         setQuery(body.malloy ?? "");
@@ -270,6 +276,30 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
     return () => { cancelled = true; };
   }, [initialSlug, runQuery]);
 
+  // Deep-link to a SOURCE (the front page "ltool" button): open the editor on
+  // that source with a starter query, expanded so its schema/fields show. No
+  // auto-run — the starter is incomplete.
+  useEffect(() => {
+    if (initialSlug || !initialSource) return;
+    autoFallback.current = false;
+    const starter = `run: ${initialSource} -> `;
+    // Intentional one-time init of the editor from the source prop on mount.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setSelected({
+      id: null, slug: null, question: `Explore ${initialSource}`,
+      createdAt: new Date().toISOString(), source: initialSource, datasetId: initialDatasetId ?? null,
+      malloyQuery: starter, rowCount: null, durationMs: null,
+      authorName: null, isFavorited: false, favoriteCount: 0,
+    });
+    setQuery(starter);
+    setSource(initialSource);
+    setSchemaSource(initialSource);
+    setExpanded(true);
+    setEditedTitle(null);
+    setResult(null);
+    setRunError(null);
+  }, [initialSlug, initialSource, initialDatasetId]);
+
   function selectItem(item: HistoryItem) {
     setSelected(item);
     setQuery(item.malloyQuery ?? "");
@@ -277,11 +307,36 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
     setSchemaSource(item.source ?? "");
     setExpanded(false);
     setEditedTitle(null);
+    setTitleEditing(false);
     setResult(null);
     setRunError(null);
     mainRef.current?.scrollTo({ top: 0 });
     if (item.malloyQuery && item.source) {
       runQuery(item.source, item.malloyQuery, item.datasetId, item.slug, item.question);
+    }
+  }
+
+  // Persist a renamed title (blur/Enter) for the selected saved query, without
+  // re-running. Optimistic: updates the header + the sidebar row immediately.
+  async function commitTitle() {
+    setTitleEditing(false);
+    const t = titleDraft.trim();
+    const slug = selected?.slug;
+    const prev = selected?.question ?? "";
+    if (!slug || !canRename || !t || t === prev) return;
+    setSelected((s) => (s ? { ...s, question: t } : s));
+    setItems((items) => items.map((i) => (i.slug === slug ? { ...i, question: t } : i)));
+    try {
+      const res = await fetch("/api/saved-queries/rename", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ slug, title: t }),
+      });
+      if (!res.ok) throw new Error("rename rejected");
+    } catch {
+      // revert the optimistic rename
+      setSelected((s) => (s ? { ...s, question: prev } : s));
+      setItems((items) => items.map((i) => (i.slug === slug ? { ...i, question: prev } : i)));
     }
   }
 
@@ -329,6 +384,8 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
   // The loaded query has been edited away from what its slug points at.
   const isModified = !!selected && query.trim() !== (selected.malloyQuery ?? "").trim();
   const modifiedDefaultTitle = `(Modified) ${selected?.question ?? ""}`;
+  // You can rename a saved query's title only if it's yours — or you're an admin.
+  const canRename = !!selected?.slug && (isAdmin || !!selected?.mine);
   // Clear the slug while modified — it no longer matches the editor contents.
   const activeSlug = isModified ? null : selected?.slug ?? null;
 
@@ -372,12 +429,19 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
         rowCount: json.rowCount ?? null,
         durationMs: json.durationMs ?? null,
         authorName: null,
+        mine: true,
         isFavorited: false,
         favoriteCount: 0,
       };
       setSelected(newItem);
       setEditedTitle(null);
-      loadHistory();
+      // Flip to History (mine) so the query just saved is at the top. Optimistic
+      // prepend covers the case where we're already on that tab (no refetch);
+      // otherwise changing view/scope triggers loadHistory via its effect.
+      autoFallback.current = false;
+      setItems((prev) => [newItem, ...prev]);
+      setView("history");
+      setScope("me");
     } catch (e) {
       setRunError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -500,8 +564,26 @@ export function LtoolApp({ initialSlug }: { initialSlug?: string }) {
                     placeholder="Title for this query"
                     className="flex-1 text-base font-semibold text-gray-900 dark:text-gray-100 bg-amber-50 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-800 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-amber-400"
                   />
+                ) : titleEditing && canRename ? (
+                  <input
+                    autoFocus
+                    value={titleDraft}
+                    onChange={(e) => setTitleDraft(e.target.value)}
+                    onBlur={commitTitle}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") { e.preventDefault(); e.currentTarget.blur(); }
+                      else if (e.key === "Escape") { setTitleDraft(selected.question ?? ""); setTitleEditing(false); }
+                    }}
+                    className="flex-1 text-base font-semibold text-gray-900 dark:text-gray-100 bg-white dark:bg-gray-950 border border-gray-300 dark:border-gray-700 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-400"
+                  />
                 ) : (
-                  <p className="text-base font-semibold text-gray-900 dark:text-gray-100 flex-1">{selected.question}</p>
+                  <p
+                    onClick={() => { if (canRename) { setTitleDraft(selected.question ?? ""); setTitleEditing(true); } }}
+                    title={canRename ? "Click to rename" : undefined}
+                    className={`text-base font-semibold text-gray-900 dark:text-gray-100 flex-1 ${canRename ? "cursor-text rounded px-1 -mx-1 hover:bg-gray-50 dark:hover:bg-gray-900/50" : ""}`}
+                  >
+                    {selected.question}
+                  </p>
                 )}
                 <button
                   onClick={() => setExpanded((o) => !o)}

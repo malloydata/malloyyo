@@ -51,6 +51,7 @@ export async function GET(req: Request) {
         durationMs: sql<number | null>`null`,
         authorName: users.name,
         authorModel: savedQueries.authorModel,
+        mine: sql<boolean>`${savedQueries.userId} = ${user.id}::uuid`,
         isFavorited: sqFavByMe(user.id),
         favoriteCount: sqFavCount,
       })
@@ -78,6 +79,7 @@ export async function GET(req: Request) {
       durationMs: history.durationMs,
       authorName: users.name,
       authorModel: history.authorModel,
+      mine: sql<boolean>`${history.userId} = ${user.id}::uuid`,
       isFavorited: histFavByMe(user.id),
       favoriteCount: sql<number>`(
         SELECT count(*)::int FROM favorites f

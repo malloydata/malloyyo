@@ -1,13 +1,12 @@
 // Copyright (c) The Malloy Foundation
 // SPDX-License-Identifier: MIT
 
-import { eq, and, desc, or, count, isNull, inArray } from "drizzle-orm";
-import { db, datasets, malloyModels, malloyModelFiles, queries, conversations, inquiries, toolCalls, favorites } from "@/db";
+import { eq, and, desc, or, count, isNull } from "drizzle-orm";
+import { db, datasets, malloyModels, malloyModelFiles, savedQueries, history, favorites } from "@/db";
 import type { SourceInfo } from "./malloy";
 import { runMalloyFiles } from "./malloy";
 import { env } from "./env";
-import { parseSlug } from "./slug";
-import { RUN_LABELS } from "./tool-names";
+import { parseSlug, instanceSlug } from "./slug";
 import { logger, serializeErr } from "./logger";
 
 // NOTE: the MCP tool surface (tool descriptors, server instructions, and the
@@ -89,57 +88,134 @@ export async function modelFileMap(model: { id: string; source: string }): Promi
   return new Map([["index.malloy", model.source]]);
 }
 
-async function nextSequence(inquiryId: string): Promise<number> {
-  const [row] = await db
-    .select({ n: count() })
-    .from(toolCalls)
-    .where(eq(toolCalls.inquiryId, inquiryId));
-  return Number(row?.n ?? 0);
+// Time-window sessionization: consecutive activity by one user on one dataset
+// rolls into a session; a gap longer than this starts a new one. MCP is
+// stateless per request, so we derive the session from the last recorded row
+// rather than threading a session id through the agent (which is unreliable).
+const SESSION_WINDOW_MS = 30 * 60 * 1000;
+
+async function resolveSession(userId: string, datasetId: string | null): Promise<{ sessionId: string; sequence: number }> {
+  const [last] = await db
+    .select({ sessionId: history.sessionId, createdAt: history.createdAt })
+    .from(history)
+    .where(and(eq(history.userId, userId), datasetId ? eq(history.datasetId, datasetId) : isNull(history.datasetId)))
+    .orderBy(desc(history.createdAt))
+    .limit(1);
+  if (last?.sessionId && Date.now() - new Date(last.createdAt).getTime() < SESSION_WINDOW_MS) {
+    const [seq] = await db.select({ n: count() }).from(history).where(eq(history.sessionId, last.sessionId));
+    return { sessionId: last.sessionId, sequence: Number(seq?.n ?? 0) };
+  }
+  return { sessionId: crypto.randomUUID(), sequence: 0 };
 }
 
-export async function logCall(fields: {
-  inquiryId?: string;
+export type RecordHistoryFields = {
   userId: string;
-  datasetId?: string;
+  datasetId?: string | null;
   toolName: string;
-  source?: string;
-  malloyInput?: string;
-  compiledSql?: string;
-  rowCount?: number;
-  durationMs?: number;
-  error?: string;
-}) {
-  // Never throw: a failed audit insert must not break the tool call it records.
-  // But DO surface it — a silently-swallowed insert is exactly how "not all tool
-  // calls are logged" goes unnoticed.
+  question?: string | null;
+  source?: string | null;
+  malloyInput?: string | null;
+  compiledSql?: string | null;
+  rowCount?: number | null;
+  durationMs?: number | null;
+  executed?: boolean | null;
+  error?: string | null;
+  userAgent?: string | null;
+  authorModel?: string | null;
+  // Mint a shareable slug (successful runs only). Returned so the caller can
+  // build the ltool link.
+  mintSlug?: boolean;
+};
+
+// The single writer for the activity log. Every MCP tool call and every ltool
+// run funnels through here, so nothing completes unrecorded — validate-only and
+// failed attempts included. Never throws: a failed audit insert must not break
+// the call it records (but it IS surfaced to the logger).
+export async function recordHistory(fields: RecordHistoryFields): Promise<{ slug: string | null }> {
   try {
-    const seq = fields.inquiryId ? await nextSequence(fields.inquiryId) : 0;
-    await db.insert(toolCalls).values({ ...fields, sequence: seq });
+    const datasetId = fields.datasetId ?? null;
+    const { sessionId, sequence } = await resolveSession(fields.userId, datasetId);
+    const slug = fields.mintSlug ? instanceSlug() : null;
+    await db.insert(history).values({
+      sessionId,
+      sequence,
+      userId: fields.userId,
+      datasetId,
+      toolName: fields.toolName,
+      question: fields.question ?? null,
+      source: fields.source ?? null,
+      malloyInput: fields.malloyInput ?? null,
+      compiledSql: fields.compiledSql ?? null,
+      rowCount: fields.rowCount ?? null,
+      durationMs: fields.durationMs ?? null,
+      executed: fields.executed ?? null,
+      error: fields.error ?? null,
+      userAgent: fields.userAgent ?? null,
+      authorModel: fields.authorModel ?? null,
+      slug,
+    });
+    return { slug };
   } catch (e) {
-    logger.error("tool_calls insert failed", {
+    logger.error("history insert failed", {
       toolName: fields.toolName,
       userId: fields.userId,
       error: serializeErr(e).message,
     });
+    return { slug: null };
   }
 }
 
-// Find or create a conversation for auto-inquiry creation.
-export async function ensureConversation(userId: string, conversationId: string | undefined, sourceName: string, datasetId: string | undefined): Promise<string> {
-  if (conversationId) return conversationId;
-  const [conv] = await db
-    .insert(conversations)
-    .values({ userId, datasetId, source: sourceName || undefined })
-    .returning({ id: conversations.id });
-  return conv.id;
+// Promote a shareable run (by its history slug) into a durable saved_query, or
+// return the existing one. Idempotent by slug — used when a run is favorited or
+// explicitly saved.
+export async function promoteToSaved(slug: string): Promise<{ id: string } | null> {
+  const [existing] = await db.select({ id: savedQueries.id }).from(savedQueries).where(eq(savedQueries.slug, slug)).limit(1);
+  if (existing) return existing;
+  const [h] = await db.select().from(history).where(eq(history.slug, slug)).limit(1);
+  if (!h || !h.datasetId || !h.malloyInput) return null;
+  const [row] = await db
+    .insert(savedQueries)
+    .values({
+      slug,
+      datasetId: h.datasetId,
+      userId: h.userId,
+      source: h.source,
+      question: h.question ?? h.source ?? "query",
+      malloySource: h.malloyInput,
+      compiledSql: h.compiledSql,
+      authorModel: h.authorModel,
+    })
+    .returning({ id: savedQueries.id });
+  return row ?? null;
+}
+
+// ltool authorship: 'human' unless the editor ran a query loaded from a slug and
+// left it byte-for-byte (whitespace-normalized) unmodified, in which case the
+// original author is inherited. Server-side diff so the label is trustworthy.
+export async function resolveLtoolAuthor(baseSlug: string | null | undefined, malloy: string): Promise<string> {
+  if (!baseSlug) return "human";
+  const norm = (s: string) => s.replace(/\s+/g, " ").trim();
+  const [sq] = await db
+    .select({ malloy: savedQueries.malloySource, authorModel: savedQueries.authorModel })
+    .from(savedQueries)
+    .where(eq(savedQueries.slug, baseSlug))
+    .limit(1);
+  if (sq) return norm(sq.malloy) === norm(malloy) ? (sq.authorModel ?? "human") : "human";
+  const [h] = await db
+    .select({ malloy: history.malloyInput, authorModel: history.authorModel })
+    .from(history)
+    .where(eq(history.slug, baseSlug))
+    .limit(1);
+  if (h?.malloy != null && norm(h.malloy) === norm(malloy)) return h.authorModel ?? "human";
+  return "human";
 }
 
 export type SharedQuery =
   | { ok: true; instance: string; source: string | null; datasetId: string | null; question: string; malloy: string | null }
   | { ok: false; error: string; wrongInstance?: string };
 
-// Resolve a share slug into the query it points at: the inquiry's question
-// plus the source/Malloy from its most recent successful run. Shared by the
+// Resolve a share slug into the query it points at. Durable saved_queries win;
+// otherwise the ephemeral history run that minted the slug. Shared by the
 // open_share_link tool and the /api/ltool/share web endpoint.
 export async function loadSharedQuery(slug: string): Promise<SharedQuery> {
   const parsed = parseSlug(slug);
@@ -150,15 +226,21 @@ export async function loadSharedQuery(slug: string): Promise<SharedQuery> {
       error: `Slug '${slug}' belongs to the '${parsed.code}' Malloyyo instance, not '${env.INSTANCE_CODE}' (${env.INSTANCE_NAME}). Use that instance's tools instead.`,
     };
   }
-  const [inq] = await db.select({ id: inquiries.id, question: inquiries.question }).from(inquiries).where(eq(inquiries.slug, slug)).limit(1);
-  if (!inq) return { ok: false, error: `query slug '${slug}' not found` };
-  const [tc] = await db
-    .select({ source: toolCalls.source, malloy: toolCalls.malloyInput, datasetId: toolCalls.datasetId })
-    .from(toolCalls)
-    .where(and(eq(toolCalls.inquiryId, inq.id), inArray(toolCalls.toolName, RUN_LABELS), isNull(toolCalls.error)))
-    .orderBy(desc(toolCalls.createdAt))
+  const [sq] = await db
+    .select({ source: savedQueries.source, malloy: savedQueries.malloySource, datasetId: savedQueries.datasetId, question: savedQueries.question })
+    .from(savedQueries)
+    .where(eq(savedQueries.slug, slug))
     .limit(1);
-  return { ok: true, instance: env.INSTANCE_NAME, source: tc?.source ?? null, datasetId: tc?.datasetId ?? null, question: inq.question, malloy: tc?.malloy ?? null };
+  if (sq) {
+    return { ok: true, instance: env.INSTANCE_NAME, source: sq.source, datasetId: sq.datasetId, question: sq.question, malloy: sq.malloy };
+  }
+  const [h] = await db
+    .select({ source: history.source, malloy: history.malloyInput, datasetId: history.datasetId, question: history.question })
+    .from(history)
+    .where(eq(history.slug, slug))
+    .limit(1);
+  if (!h) return { ok: false, error: `query slug '${slug}' not found` };
+  return { ok: true, instance: env.INSTANCE_NAME, source: h.source, datasetId: h.datasetId, question: h.question ?? "", malloy: h.malloy };
 }
 
 export type SharedQueryListContext = {
@@ -172,33 +254,46 @@ export type SharedQueryListContext = {
 // `authoredByMe` mirrors the history "me" filter (a successful run logged by
 // this user). Returns null if the slug isn't found.
 export async function sharedQueryListContext(slug: string, userId: string): Promise<SharedQueryListContext | null> {
-  const [inq] = await db.select({ id: inquiries.id }).from(inquiries).where(eq(inquiries.slug, slug)).limit(1);
-  if (!inq) return null;
-  const [total] = await db.select({ n: count() }).from(favorites).where(eq(favorites.inquiryId, inq.id));
-  const [mine] = await db.select({ n: count() }).from(favorites).where(and(eq(favorites.inquiryId, inq.id), eq(favorites.userId, userId)));
+  const [sq] = await db.select({ id: savedQueries.id }).from(savedQueries).where(eq(savedQueries.slug, slug)).limit(1);
+  let favoriteCount = 0;
+  let favoritedByMe = false;
+  if (sq) {
+    const [total] = await db.select({ n: count() }).from(favorites).where(eq(favorites.savedQueryId, sq.id));
+    const [mine] = await db.select({ n: count() }).from(favorites).where(and(eq(favorites.savedQueryId, sq.id), eq(favorites.userId, userId)));
+    favoriteCount = Number(total?.n ?? 0);
+    favoritedByMe = Number(mine?.n ?? 0) > 0;
+  }
+  // Authored = this user has a run of this slug in their history.
   const [authored] = await db
     .select({ n: count() })
-    .from(toolCalls)
-    .where(and(eq(toolCalls.inquiryId, inq.id), eq(toolCalls.userId, userId), inArray(toolCalls.toolName, RUN_LABELS), isNull(toolCalls.error)));
+    .from(history)
+    .where(and(eq(history.slug, slug), eq(history.userId, userId)));
   return {
-    favoriteCount: Number(total?.n ?? 0),
-    favoritedByMe: Number(mine?.n ?? 0) > 0,
+    favoriteCount,
+    favoritedByMe,
     authoredByMe: Number(authored?.n ?? 0) > 0,
   };
 }
 
 export type WebRunResult =
-  | { ok: true; rows: Record<string, unknown>[]; sql: string; rowCount: number; truncated: boolean; durationMs: number; stableResult: unknown }
+  | { ok: true; slug: string | null; rows: Record<string, unknown>[]; sql: string; rowCount: number; truncated: boolean; durationMs: number; stableResult: unknown }
   | { ok: false; error: string };
 
-// Run a Malloy query for the web UI. Returns the full result including the
-// stable (interfaces-format) result for client-side Malloy rendering.
+// Context for a web run: the client (User-Agent), the resolved author_model
+// ('human' or an inherited model), and the loaded query's question, if any.
+export type WebRunOpts = { userAgent?: string | null; authorModel?: string | null; question?: string | null };
+
+// Run a Malloy query for the web UI, recording it to history (a browser run —
+// user_agent is the browser, author_model resolved by the caller). Every run is
+// tracked, including re-runs and failures. Returns the full result plus the
+// minted share slug so the UI row is shareable/favoritable.
 export async function runQueryForWeb(
   userId: string,
   source: string,
   malloyQuery: string,
   maxRows = 1000,
   datasetId?: string | null,
+  opts: WebRunOpts = {},
 ): Promise<WebRunResult> {
   // When the caller knows the dataset (an ltool replay carries the recorded
   // dataset_id), resolve by it — unambiguous. Else fall back to source name.
@@ -210,30 +305,43 @@ export async function runQueryForWeb(
   const t0 = Date.now();
   try {
     const res = await runMalloyFiles(files, "index.malloy", malloyQuery, { rowLimit: maxRows, cacheKey: model.id });
+    const durationMs = Date.now() - t0;
     const capped = res.rows.slice(0, maxRows);
+    const { slug } = await recordHistory({
+      userId, datasetId: ds.id, toolName: "query", question: opts.question ?? null,
+      source, malloyInput: malloyQuery, compiledSql: res.sql, rowCount: res.rowCount, durationMs,
+      executed: true, userAgent: opts.userAgent, authorModel: opts.authorModel, mintSlug: true,
+    });
     return {
       ok: true,
+      slug,
       rows: capped,
       sql: res.sql,
       rowCount: res.rowCount,
       truncated: res.rowCount > capped.length,
-      durationMs: Date.now() - t0,
+      durationMs,
       stableResult: res.stableResult,
     };
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    const durationMs = Date.now() - t0;
+    const msg = err instanceof Error ? err.message : String(err);
+    await recordHistory({
+      userId, datasetId: ds.id, toolName: "query", question: opts.question ?? null,
+      source, malloyInput: malloyQuery, durationMs, executed: true, error: msg,
+      userAgent: opts.userAgent, authorModel: opts.authorModel,
+    });
+    return { ok: false, error: msg };
   }
 }
 
 export type WebSaveResult =
-  | { ok: true; slug: string | null; inquiryId: string; rows: Record<string, unknown>[]; sql: string; rowCount: number; truncated: boolean; durationMs: number; stableResult: unknown }
+  | { ok: true; slug: string | null; rows: Record<string, unknown>[]; sql: string; rowCount: number; truncated: boolean; durationMs: number; stableResult: unknown }
   | { ok: false; error: string };
 
-// Run a Malloy query from the web UI AND persist it as a new history entry:
-// creates a conversation + inquiry (which mints a fresh slug) and logs a
-// query tool call so it shows up in /ltool history and is shareable. Used
-// when the user edits a loaded query and runs it (the slug no longer matches
-// the original, so it becomes a new saved query).
+// Run a Malloy query from the web UI AND persist it as a durable saved_query:
+// records the run to history (minting a slug), then promotes that slug into
+// saved_queries so it survives history trimming and is shareable/favoritable.
+// Used when the user edits a loaded query and runs it (author_model = 'human').
 export async function saveWebQuery(
   userId: string,
   source: string,
@@ -241,6 +349,7 @@ export async function saveWebQuery(
   title: string,
   maxRows = 1000,
   datasetId?: string | null,
+  opts: WebRunOpts = {},
 ): Promise<WebSaveResult> {
   const found = datasetId ? await findByDatasetId(userId, datasetId) : await findBySource(userId, source);
   if (!found) return { ok: false, error: `source '${source}' not found` };
@@ -248,26 +357,26 @@ export async function saveWebQuery(
   if (ds.status !== "ready") return { ok: false, error: `source '${source}' is not ready` };
   const files = await modelFileMap(model);
 
-  const convId = await ensureConversation(userId, undefined, source, ds.id);
-  const [seq] = await db.select({ n: count() }).from(inquiries).where(eq(inquiries.conversationId, convId));
-  const [inq] = await db
-    .insert(inquiries)
-    .values({ conversationId: convId, question: title, sequence: Number(seq?.n ?? 0) })
-    .returning({ id: inquiries.id, slug: inquiries.slug });
-
   const t0 = Date.now();
   try {
     const res = await runMalloyFiles(files, "index.malloy", malloyQuery, { rowLimit: maxRows, cacheKey: model.id });
     const durationMs = Date.now() - t0;
     const capped = res.rows.slice(0, maxRows);
-    await db.insert(queries).values({ datasetId: ds.id, userId, malloySource: malloyQuery, compiledSql: res.sql, rowCount: res.rowCount, durationMs });
-    await logCall({ inquiryId: inq.id, userId, datasetId: ds.id, toolName: "query", source, malloyInput: malloyQuery, compiledSql: res.sql, rowCount: res.rowCount, durationMs });
-    return { ok: true, slug: inq.slug, inquiryId: inq.id, rows: capped, sql: res.sql, rowCount: res.rowCount, truncated: res.rowCount > capped.length, durationMs, stableResult: res.stableResult };
+    const { slug } = await recordHistory({
+      userId, datasetId: ds.id, toolName: "query", question: title,
+      source, malloyInput: malloyQuery, compiledSql: res.sql, rowCount: res.rowCount, durationMs,
+      executed: true, userAgent: opts.userAgent, authorModel: opts.authorModel ?? "human", mintSlug: true,
+    });
+    if (slug) await promoteToSaved(slug);
+    return { ok: true, slug, rows: capped, sql: res.sql, rowCount: res.rowCount, truncated: res.rowCount > capped.length, durationMs, stableResult: res.stableResult };
   } catch (err) {
     const durationMs = Date.now() - t0;
     const msg = err instanceof Error ? err.message : String(err);
-    await db.insert(queries).values({ datasetId: ds.id, userId, malloySource: malloyQuery, error: msg });
-    await logCall({ inquiryId: inq.id, userId, datasetId: ds.id, toolName: "query", source, malloyInput: malloyQuery, error: msg, durationMs });
+    await recordHistory({
+      userId, datasetId: ds.id, toolName: "query", question: title,
+      source, malloyInput: malloyQuery, durationMs, executed: true, error: msg,
+      userAgent: opts.userAgent, authorModel: opts.authorModel ?? "human",
+    });
     return { ok: false, error: msg };
   }
 }

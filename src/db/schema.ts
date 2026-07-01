@@ -174,89 +174,76 @@ export const malloyModelFiles = pgTable(
   ],
 );
 
-export const queries = pgTable(
-  "queries",
+// Durable, favoritable queries — the ones we deliberately keep. Created when a
+// user saves an edited query in ltool or favorites a run (which promotes the
+// run's history row into here). Holds a full COPY of the query so `history` can
+// be trimmed without losing saved/shared queries. `slug` is the shareable
+// deep-link id, carried over from the history row it was promoted from so
+// existing share links keep resolving.
+export const savedQueries = pgTable(
+  "saved_queries",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    slug: text("slug").unique().$defaultFn(() => instanceSlug()),
     datasetId: uuid("dataset_id")
       .notNull()
       .references(() => datasets.id, { onDelete: "cascade" }),
     userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
+    source: text("source"),
+    question: text("question").notNull(),
     malloySource: text("malloy_source").notNull(),
     compiledSql: text("compiled_sql"),
-    rowCount: integer("row_count"),
-    durationMs: integer("duration_ms"),
-    error: text("error"),
+    authorModel: text("author_model"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .default(sql`now()`),
   },
-  (t) => [index("queries_dataset_id_idx").on(t.datasetId)],
+  (t) => [index("saved_queries_dataset_id_idx").on(t.datasetId)],
 );
 
-// A conversation is a session with a data source, created automatically on the
-// first `query` against a source (optionally with a `context` goal). Contains
-// one or more inquiries.
-export const conversations = pgTable(
-  "conversations",
+// Every event — MCP tool calls AND human ltool runs — one row each, ordered
+// within time-window sessions. The trimmable activity log the /ltool history
+// view and analytics read from. A successful run mints a `slug` so it's
+// immediately shareable; favoriting/saving promotes it into saved_queries
+// (which is what survives a trim). Validate-only and failed attempts are kept
+// here too (with `error` / `executed=false`) for syntax-error analytics.
+export const history = pgTable(
+  "history",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    // Time-window session: consecutive activity by one user on one dataset.
+    sessionId: uuid("session_id"),
     userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
     datasetId: uuid("dataset_id").references(() => datasets.id, { onDelete: "set null" }),
-    source: text("source"),
-    context: text("context"),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .notNull()
-      .default(sql`now()`),
-  },
-  (t) => [index("conversations_user_id_idx").on(t.userId)],
-);
-
-// An inquiry is a single question within a conversation. Claude starts a new
-// inquiry when the user's question is unrelated to the previous results.
-export const inquiries = pgTable(
-  "inquiries",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    conversationId: uuid("conversation_id")
-      .notNull()
-      .references(() => conversations.id, { onDelete: "cascade" }),
-    sequence: integer("sequence").notNull().default(0),
-    question: text("question").notNull(),
-    // Shareable slug (<instance-code>_<random>) for the ltool deep-link.
-    // App-generated on insert; backfilled for legacy rows by the 0001 migration.
-    slug: text("slug").unique().$defaultFn(() => instanceSlug()),
-    createdAt: timestamp("created_at", { withTimezone: true })
-      .notNull()
-      .default(sql`now()`),
-  },
-  (t) => [index("inquiries_conversation_id_idx").on(t.conversationId)],
-);
-
-// One row per MCP tool call. Always linked to an inquiry (and through it, a conversation).
-// Sequence tracks call order within the inquiry.
-export const toolCalls = pgTable(
-  "tool_calls",
-  {
-    id: uuid("id").primaryKey().defaultRandom(),
-    inquiryId: uuid("inquiry_id").references(() => inquiries.id, { onDelete: "set null" }),
-    userId: uuid("user_id").references(() => users.id, { onDelete: "set null" }),
-    datasetId: uuid("dataset_id").references(() => datasets.id, { onDelete: "set null" }),
+    // Order within the session.
     sequence: integer("sequence").notNull().default(0),
     toolName: text("tool_name").notNull(),
+    // Plain-English synopsis of what this query answers. Required on `query`
+    // (run AND validate); null on discovery tools.
+    question: text("question"),
     source: text("source"),
     malloyInput: text("malloy_input"),
     compiledSql: text("compiled_sql"),
     rowCount: integer("row_count"),
     durationMs: integer("duration_ms"),
+    // true = executed run, false = validate-only (dry run), null = non-query tool.
+    executed: boolean("executed"),
     error: text("error"),
+    // The client that ran it (MCP client / browser), from the User-Agent header.
+    userAgent: text("user_agent"),
+    // Who authored the Malloy: a model id, 'human' (ltool edits), or 'assistant'
+    // when an MCP client didn't declare one via x-author-model.
+    authorModel: text("author_model"),
+    // Shareable deep-link id, minted for successful runs (else null).
+    slug: text("slug").unique(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .default(sql`now()`),
   },
   (t) => [
-    index("tool_calls_inquiry_id_idx").on(t.inquiryId),
-    index("tool_calls_user_id_idx").on(t.userId),
+    index("history_user_id_idx").on(t.userId),
+    index("history_session_id_idx").on(t.sessionId),
+    index("history_user_dataset_created_idx").on(t.userId, t.datasetId, t.createdAt),
   ],
 );
 
@@ -264,10 +251,10 @@ export const favorites = pgTable(
   "favorites",
   {
     userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
-    inquiryId: uuid("inquiry_id").notNull().references(() => inquiries.id, { onDelete: "cascade" }),
+    savedQueryId: uuid("saved_query_id").notNull().references(() => savedQueries.id, { onDelete: "cascade" }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
   },
-  (t) => [primaryKey({ columns: [t.userId, t.inquiryId] })],
+  (t) => [primaryKey({ columns: [t.userId, t.savedQueryId] })],
 );
 
 // OAuth 2.1 client registry (RFC 7591). One row per MCP client.
@@ -371,9 +358,8 @@ export type NewDataset = typeof datasets.$inferInsert;
 export type DatasetStatus = (typeof datasetStatus.enumValues)[number];
 export type MalloyModel = typeof malloyModels.$inferSelect;
 export type MalloyModelFile = typeof malloyModelFiles.$inferSelect;
-export type Query = typeof queries.$inferSelect;
-export type Conversation = typeof conversations.$inferSelect;
-export type Inquiry = typeof inquiries.$inferSelect;
+export type SavedQuery = typeof savedQueries.$inferSelect;
+export type HistoryRow = typeof history.$inferSelect;
 export type User = typeof users.$inferSelect;
 export type OAuthClient = typeof oauthClients.$inferSelect;
 export type OAuthAccessToken = typeof oauthAccessTokens.$inferSelect;

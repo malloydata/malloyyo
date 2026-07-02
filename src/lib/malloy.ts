@@ -4,8 +4,8 @@
 import * as malloy from "@malloydata/malloy";
 import { API } from "@malloydata/malloy";
 import { DuckDBConnection as MalloyDuckDBConnection } from "@malloydata/db-duckdb";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { hostname, networkInterfaces } from "node:os";
+import { randomBytes } from "node:crypto";
 import { env } from "./env";
 import type { GitHubURLReader } from "./github";
 import { logger, serializeErr } from "./logger";
@@ -14,65 +14,29 @@ import { logger, serializeErr } from "./logger";
 // functions may have HOME unset or empty — default to /tmp which is always writable.
 if (!process.env["HOME"]) process.env["HOME"] = "/tmp";
 
-// Pre-bundled DuckDB extension directory. scripts/fetch-duckdb-extensions.mjs
-// populates ./duckdb-extensions at build time and next.config traces it into the
-// function bundle. Pointing DuckDB's extension_directory here makes the
-// connector's baseline `LOAD httpfs` resolve locally (~30ms) instead of
-// autoinstalling the ~22 MB binary from extensions.duckdb.org on every cold
-// serverless instance — the cause of the 15–47s cold-query tail (warm instances
-// that already have httpfs are ~200ms). json/icu/parquet are statically linked,
-// so a read-only bundle dir is sufficient — nothing needs to be installed. Falls
-// back to normal autoload when the bundle is absent or built for another arch.
-const BUNDLED_EXTENSION_DIR: string | undefined = resolveBundledExtensionDir();
-
-function runtimeDuckDBPlatform(): string | undefined {
-  const { platform, arch } = process;
-  if (platform === "linux" && arch === "x64") return "linux_amd64";
-  if (platform === "linux" && arch === "arm64") return "linux_arm64";
-  if (platform === "darwin" && arch === "arm64") return "osx_arm64";
-  if (platform === "darwin" && arch === "x64") return "osx_amd64";
-  if (platform === "win32" && arch === "x64") return "windows_amd64";
-  return undefined;
-}
-
-function resolveBundledExtensionDir(): string | undefined {
-  if (process.env["DUCKDB_SKIP_BUNDLED_EXTENSIONS"]) return undefined;
+// Per-serverless-instance identity, for cold-start vs warm-reuse diagnostics.
+// INSTANCE_ID is minted once per instance (a fresh cold instance => a new id),
+// so grouping query timings by it tells us whether slow queries are always an
+// instance's FIRST request (cold start) or also land on already-warm instances
+// (pointing at something other than cold start — pool contention, GC, network,
+// MotherDuck server-side, etc.). instanceReqN is that instance's request count.
+function firstLocalIPv4(): string {
   try {
-    const dir = join(process.cwd(), "duckdb-extensions");
-    const manifestPath = join(dir, "manifest.json");
-    if (!existsSync(manifestPath)) return undefined;
-    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
-      version: string;
-      platform: string;
-      extensions: string[];
-    };
-    // Only trust the bundle when it was built for the arch we're running on;
-    // a mismatched binary would fail to LOAD and defeat the purpose.
-    const runtime = runtimeDuckDBPlatform();
-    if (runtime && runtime !== manifest.platform) {
-      logger.warn("bundled duckdb extensions arch mismatch; using autoload", {
-        bundled: manifest.platform,
-        runtime,
-      });
-      return undefined;
+    for (const nis of Object.values(networkInterfaces())) {
+      for (const ni of nis ?? []) {
+        if (ni.family === "IPv4" && !ni.internal) return ni.address;
+      }
     }
-    // Confirm the httpfs binary is actually where DuckDB will look for it
-    // (<extensionDirectory>/<version>/<platform>/httpfs.duckdb_extension).
-    const httpfs = join(dir, manifest.version, manifest.platform, "httpfs.duckdb_extension");
-    if (!existsSync(httpfs)) return undefined;
-    logger.info("using bundled duckdb extension directory", {
-      dir,
-      platform: manifest.platform,
-      extensions: manifest.extensions,
-    });
-    return dir;
-  } catch (err) {
-    logger.warn("failed to resolve bundled duckdb extensions; using autoload", {
-      ...serializeErr(err),
-    });
-    return undefined;
+  } catch {
+    /* ignore */
   }
+  return "unknown";
 }
+const INSTANCE_ID = randomBytes(4).toString("hex");
+const INSTANCE_HOST = hostname();
+const INSTANCE_IP = firstLocalIPv4();
+const INSTANCE_BOOT_MS = Date.now();
+let instanceReqN = 0;
 
 // DB backends are registered lazily (on first malloy-config.json use) so a broken
 // native dependency (e.g. lz4 for Databricks) cannot crash the module at load time.
@@ -107,7 +71,6 @@ function makeConnection(): MalloyDuckDBConnection {
   return new MalloyDuckDBConnection({
     name: "duckdb",
     ...(token ? { databasePath: "md:", motherDuckToken: token } : {}),
-    ...(BUNDLED_EXTENSION_DIR ? { extensionDirectory: BUNDLED_EXTENSION_DIR } : {}),
     setupSQL: `SET home_directory='/tmp';`,
     enableExternalAccess: true,
   });
@@ -510,6 +473,11 @@ export async function runMalloyFiles(
       compileMs: tCompile - tBuild,
       runMs: tRun - tCompile,
       serializeMs: Date.now() - tRun,
+      instanceId: INSTANCE_ID,
+      instanceReqN: (instanceReqN += 1),
+      instanceUptimeMs: tRun - INSTANCE_BOOT_MS,
+      host: INSTANCE_HOST,
+      ip: INSTANCE_IP,
     });
     return { sql, rows, rowCount: rows.length, stableResult };
   });

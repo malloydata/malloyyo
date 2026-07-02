@@ -83,6 +83,9 @@ before(async () => {
 function host() {
   return buildHostedExploreSurface(user, "http://localhost:3000");
 }
+function hostAs(userAgent: string) {
+  return buildHostedExploreSurface(user, "http://localhost:3000", { userAgent });
+}
 function blockText(r: { content: Array<{ text: string }> }, i: number): string {
   return r.content[i]?.text ?? "";
 }
@@ -173,6 +176,29 @@ test("query execute:false validates; execute:true runs on DuckDB + records a sha
     .limit(1);
   assert.match(hrow!.compiledSql ?? "", /select/i, "history.compiledSql recorded the generated SQL for the run");
   assert.match(hrow!.malloy ?? "", /total_qty/, "history.malloyInput recorded the query text");
+});
+
+test("ChatGPT client (openai-mcp UA) gets a table in content and NO structuredContent", async () => {
+  const args = { source: "sales", malloy: "run: sales -> by_animal", execute: true, question: "by animal, per client" };
+  const forChatgpt = await hostAs("openai-mcp/1.0.0").call("query", args);
+  const forDefault = await host().call("query", args);
+
+  // ChatGPT's content is a rendered table carrying the actual rows + the link.
+  const gptText = blockText(forChatgpt, 0);
+  assert.match(gptText, /\| animal \| total_qty \|/, "content is a markdown table for ChatGPT");
+  assert.match(gptText, /\| dog \| 3 \|/, "the rows themselves are in the table");
+  assert.match(gptText, /\[↗/, "table footer carries the share link");
+
+  // CRITICAL: ChatGPT reads structuredContent and files it away, hiding the rows
+  // behind a citation. So we must NOT send it — the table in content is the only
+  // channel, and it can't be hidden.
+  assert.equal(forChatgpt.structuredContent, undefined, "ChatGPT gets no structuredContent");
+
+  // The default client is unchanged: pretty-printed JSON in content AND the
+  // machine-readable structuredContent.
+  assert.match(blockText(forDefault, 0), /"rows":/, "default client still gets JSON content");
+  const defSc = forDefault.structuredContent as { rows: unknown[]; row_count: number } | undefined;
+  assert.ok(defSc?.rows, "default client keeps structuredContent");
 });
 
 test("query without a question is refused (host policy)", async () => {

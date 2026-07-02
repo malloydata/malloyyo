@@ -8,7 +8,7 @@
     "dev": "next dev",
     "malloy-update": "node scripts/malloy-update.mjs",
     "preflight": "bash scripts/preflight.sh",
-    "build": "node scripts/gen-baseline.mjs && next build",
+    "build": "node scripts/fetch-duckdb-extensions.mjs && node scripts/gen-baseline.mjs && next build",
     "db:baseline": "node scripts/gen-baseline.mjs",
     "start": "next start",
     "deploy": "bash scripts/deploy.sh",

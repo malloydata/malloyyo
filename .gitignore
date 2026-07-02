@@ -22,9 +22,6 @@ packages/*/src/content/generated.ts
 /.next/
 /out/
 
-# pre-fetched DuckDB extensions (scripts/fetch-duckdb-extensions.mjs, build-time)
-/duckdb-extensions/
-
 # production
 /build
 

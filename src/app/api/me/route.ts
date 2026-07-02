@@ -6,6 +6,7 @@ import { auth } from "@/auth";
 import { db, users, oauthAccessTokens, oauthRefreshTokens } from "@/db";
 import { eq, and, isNull, gt } from "drizzle-orm";
 import { isAdmin } from "@/lib/admin";
+import { getSettings } from "@/lib/settings";
 import { env } from "@/lib/env";
 
 export const runtime = "nodejs";
@@ -31,11 +32,14 @@ async function hasActiveClaudeConnection(userId: string): Promise<boolean> {
 
 export async function GET() {
   const session = await auth();
-  if (!session?.user?.id) return NextResponse.json({ user: null, instanceName: env.INSTANCE_NAME });
+  const { tagline, signinNotice } = await getSettings();
+  if (!session?.user?.id) return NextResponse.json({ user: null, instanceName: env.INSTANCE_NAME, tagline, signinNotice });
   const [u] = await db.select().from(users).where(eq(users.id, session.user.id));
   const claudeConnected = u ? await hasActiveClaudeConnection(u.id) : false;
   return NextResponse.json({
     instanceName: env.INSTANCE_NAME,
+    tagline,
+    signinNotice,
     claudeConnected,
     user: u
       ? { id: u.id, name: u.name, email: u.email, image: u.image, slug: u.slug, isAdmin: isAdmin(u) }

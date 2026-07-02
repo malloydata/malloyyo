@@ -57,7 +57,9 @@ export async function GET() {
     .from(savedQueries)
     .innerJoin(datasets, eq(datasets.id, savedQueries.datasetId))
     .where(and(visible, inArray(savedQueries.id, qualifyingIds)))
-    .orderBy(desc(favCount), desc(savedQueries.createdAt))
+    // Most recently used (saved) first — the front page groups these by dataset
+    // and preserves this order within each group.
+    .orderBy(desc(savedQueries.createdAt), desc(favCount))
     .limit(500);
 
   return NextResponse.json(rows);

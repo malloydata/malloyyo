@@ -353,6 +353,18 @@ export const oauthRefreshTokens = pgTable(
   ],
 );
 
+// Per-instance, editable presentation settings. Keyed by INSTANCE_CODE so
+// several instances sharing one DB stay distinct. Currently just the front-page
+// tagline; a null/absent row means "use the built-in default".
+export const instanceSettings = pgTable("instance_settings", {
+  instanceCode: text("instance_code").primaryKey(),
+  tagline: text("tagline"),
+  signinNotice: text("signin_notice"),
+  updatedAt: timestamp("updated_at", { withTimezone: true })
+    .notNull()
+    .default(sql`now()`),
+});
+
 export type Dataset = typeof datasets.$inferSelect;
 export type NewDataset = typeof datasets.$inferInsert;
 export type DatasetStatus = (typeof datasetStatus.enumValues)[number];
@@ -364,3 +376,4 @@ export type User = typeof users.$inferSelect;
 export type OAuthClient = typeof oauthClients.$inferSelect;
 export type OAuthAccessToken = typeof oauthAccessTokens.$inferSelect;
 export type Favorite = typeof favorites.$inferSelect;
+export type InstanceSettings = typeof instanceSettings.$inferSelect;

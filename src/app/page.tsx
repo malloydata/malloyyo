@@ -42,6 +42,21 @@ function groupByDataset(list: SourceSummary[]): DatasetGroup[] {
   return [...map.values()];
 }
 
+// Group a dataset's questions by their source, preserving the input's
+// most-recently-used order (both the source order and the questions within
+// each source). A null source buckets under "".
+function groupBySource(list: FavQuery[]): { bySource: Map<string, FavQuery[]>; order: string[] } {
+  const bySource = new Map<string, FavQuery[]>();
+  const order: string[] = [];
+  for (const q of list) {
+    const key = q.source ?? "";
+    let arr = bySource.get(key);
+    if (!arr) { arr = []; bySource.set(key, arr); order.push(key); }
+    arr.push(q);
+  }
+  return { bySource, order };
+}
+
 type Me = {
   id: string;
   name: string | null;
@@ -62,6 +77,8 @@ type FavQuery = {
 export default function HomePage() {
   const [me, setMe] = useState<Me | null | undefined>(undefined);
   const [instanceName, setInstanceName] = useState("malloyyo");
+  const [tagline, setTagline] = useState("");
+  const [signinNotice, setSigninNotice] = useState("");
   const [claudeConnected, setClaudeConnected] = useState(false);
   const [sources, setSources] = useState<SourceSummary[] | null>(null);
   const [favQueries, setFavQueries] = useState<FavQuery[]>([]);
@@ -78,6 +95,8 @@ export default function HomePage() {
     const meJson = await meRes.json();
     setMe(meJson.user);
     if (meJson.instanceName) setInstanceName(meJson.instanceName);
+    if (typeof meJson.tagline === "string") setTagline(meJson.tagline);
+    if (typeof meJson.signinNotice === "string") setSigninNotice(meJson.signinNotice);
     if (typeof meJson.claudeConnected === "boolean") setClaudeConnected(meJson.claudeConnected);
     if (meJson.user) {
       const [srcRes, favRes] = await Promise.all([fetch("/api/sources"), fetch("/api/favorited-queries")]);
@@ -86,19 +105,45 @@ export default function HomePage() {
     }
   }
 
-  // Favorited saved queries keyed by dataset+source, so we can list them under
-  // each source. Capped when rendered.
-  const favBySource = new Map<string, FavQuery[]>();
+  // Favorited saved queries grouped by DATASET (merged across the dataset's
+  // sources), preserving the API's most-recently-used ordering. The dataset
+  // display order follows the first (most recent) question seen for each.
+  const favByDataset = new Map<string, FavQuery[]>();
+  const datasetOrder: string[] = [];
   for (const q of favQueries) {
-    const key = `${q.datasetId}::${q.source}`;
-    (favBySource.get(key) ?? favBySource.set(key, []).get(key)!).push(q);
+    let list = favByDataset.get(q.datasetId);
+    if (!list) { list = []; favByDataset.set(q.datasetId, list); datasetOrder.push(q.datasetId); }
+    list.push(q);
   }
 
-  // A claude.ai chat seeded to explore a source via this instance's MCP tools.
+  // Every source grouped by dataset, plus a lookup for dataset metadata.
+  const datasetGroups = sources ? groupByDataset(sources) : [];
+  const datasetById = new Map(datasetGroups.map((g) => [g.datasetId, g]));
+
+  // Datasets to render: those with questions first (recency order), then any
+  // remaining datasets (their sources still show, just with no questions).
+  const orderedDatasetIds = [
+    ...datasetOrder,
+    ...datasetGroups.map((g) => g.datasetId).filter((id) => !favByDataset.has(id)),
+  ];
+
+  // claude.ai chats seeded via this instance's MCP tools — one per source, one
+  // for a whole dataset.
   const claudeExploreUrl = (source: string) =>
     `https://claude.ai/new?q=${encodeURIComponent(
       `Using the ${instanceName} Malloy tools, describe_source "${source}" on ${instanceName}, then help me explore it.`,
     )}`;
+  const claudeExploreDatasetUrl = (dataset: string) =>
+    `https://claude.ai/new?q=${encodeURIComponent(
+      `Using the ${instanceName} Malloy tools, explore the "${dataset}" dataset on ${instanceName} — list its sources and help me analyze it.`,
+    )}`;
+
+  // Open a seeded Claude chat, or the connect-setup modal if not yet linked.
+  function openClaude(url: string) {
+    if (claudeConnected) window.open(url, "_blank", "noopener,noreferrer");
+    else { setClaudeTargetUrl(url); setShowClaudeSetup(true); }
+  }
+  const exploreWithClaude = (source: string) => openClaude(claudeExploreUrl(source));
 
   if (me === undefined) return <main className="p-8 font-mono text-sm">loading…</main>;
 
@@ -107,11 +152,11 @@ export default function HomePage() {
       <header className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold mb-2">{instanceName}</h1>
-          <p className="text-gray-500 dark:text-gray-400 leading-relaxed">
-            A simple MCP server for Malloy semantic models. All you need is a
-            database connection (or S3 bucket) and a GitHub repository for the
-            semantic model. Use the MCP endpoint to ask analytical questions.
-          </p>
+          {tagline && (
+            <p className="text-gray-500 dark:text-gray-400 leading-relaxed">
+              {tagline}
+            </p>
+          )}
         </div>
         <SignInOut me={me} />
       </header>
@@ -119,6 +164,9 @@ export default function HomePage() {
       {!me ? (
         <section className="border border-gray-200 dark:border-gray-800 rounded p-6 text-center space-y-3">
           <p className="text-gray-700 dark:text-gray-300">Sign in with Google to view datasets.</p>
+          {signinNotice && (
+            <p className="text-gray-500 dark:text-gray-400 text-xs leading-relaxed">{signinNotice}</p>
+          )}
           {/* NextAuth API endpoint, not a page route — a full-page nav is intended, so <Link> doesn't apply. */}
           {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
           <a href="/api/auth/signin" className="inline-block rounded bg-black text-white dark:bg-white dark:text-black px-4 py-2">
@@ -127,115 +175,139 @@ export default function HomePage() {
         </section>
       ) : (
         <>
-          <section className="flex gap-3">
-            {me.isAdmin && (
+          {me.isAdmin && (
+            <section className="flex gap-3">
               <Link
-                href="/datasets/new/github"
-                className="inline-block rounded bg-black text-white dark:bg-white dark:text-black px-4 py-2 text-xs"
-              >
-                + Add Malloy model from GitHub
-              </Link>
-            )}
-            <Link
-              href="/ltool"
-              className="inline-block rounded border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 px-4 py-2 text-xs hover:bg-gray-50 dark:hover:bg-gray-900"
-            >
-              ltool
-            </Link>
-            {me.isAdmin && (
-              <Link
-                href="/admin/users"
+                href="/admin"
                 className="inline-block rounded border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 px-4 py-2 text-xs hover:bg-gray-50 dark:hover:bg-gray-900 ml-auto"
               >
-                users
+                admin
               </Link>
-            )}
-          </section>
+            </section>
+          )}
 
+          {/* Datasets → sources → questions. Within each dataset, questions are
+              grouped under their source (most recently used first). Each source
+              name opens a menu to explore it with Claude or ltool. Sources with
+              no questions are listed at the bottom of the dataset. */}
           <section>
             <div className="flex items-baseline justify-between mb-3">
-              <h2 className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">
-                {me.isAdmin ? "All datasets" : "Public datasets"}
-              </h2>
+              <h2 className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Questions</h2>
               <button onClick={load} className="text-xs text-gray-500 dark:text-gray-400 hover:underline">refresh</button>
             </div>
             {sources === null ? (
               <p className="text-gray-500 dark:text-gray-400 text-xs">loading…</p>
-            ) : sources.length === 0 ? (
+            ) : orderedDatasetIds.length === 0 ? (
               <p className="text-gray-500 dark:text-gray-400 text-xs">No sources yet.</p>
             ) : (
               <div className="space-y-4">
-                {groupByDataset(sources).map((g) => (
-                  <div key={g.datasetId} className="border border-gray-200 dark:border-gray-800 rounded overflow-hidden">
-                    {/* Dataset header */}
-                    <Link href={`/datasets/${g.datasetId}`}
-                      className="flex items-center justify-between gap-3 px-3 py-2 bg-gray-50 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-800 hover:bg-gray-100 dark:hover:bg-gray-900/70">
-                      <span className="font-semibold truncate flex-1">{g.name}</span>
-                      <div className="flex items-center gap-2 flex-shrink-0">
-                        {me.isAdmin && (g.ownerEmail || g.ownerName) && (
-                          <span className="text-gray-400 dark:text-gray-500 text-xs truncate max-w-[160px]">
-                            {g.ownerEmail ?? g.ownerName}
-                          </span>
-                        )}
-                        <span className={`text-xs px-1.5 py-0.5 rounded ${g.isPublic ? "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300" : "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400"}`}>
-                          {g.isPublic ? "public" : "private"}
-                        </span>
-                        {g.status !== "ready" && <StatusBadge status={g.status} />}
+                {orderedDatasetIds.map((dsId) => {
+                  const g = datasetById.get(dsId);
+                  const { bySource, order } = groupBySource(favByDataset.get(dsId) ?? []);
+                  const withQuestions = new Set(order.filter((k) => k !== ""));
+                  const additional = (g?.sources ?? []).filter((s) => !withQuestions.has(s.source));
+                  return (
+                    <div key={dsId} className="border border-gray-200 dark:border-gray-800 rounded overflow-hidden">
+                      <div className="flex items-center justify-between gap-3 px-3 py-2 bg-gray-50 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-800">
+                        <span className="font-semibold truncate flex-1">{g?.name ?? "dataset"}</span>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          {g && g.status !== "ready" && <StatusBadge status={g.status} />}
+                          {g && (
+                            <span className={`text-xs px-1.5 py-0.5 rounded ${g.isPublic ? "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300" : "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400"}`}>
+                              {g.isPublic ? "public" : "private"}
+                            </span>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => openClaude(claudeExploreDatasetUrl(g?.name ?? "dataset"))}
+                            title={claudeConnected ? `Open a Claude chat on ${instanceName}` : `Connect ${instanceName} to Claude first`}
+                            className="text-[11px] px-2 py-0.5 rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950 hover:bg-gray-100 dark:hover:bg-gray-900"
+                          >
+                            Explore in Claude
+                          </button>
+                          <Link
+                            href={`/datasets/${dsId}`}
+                            title="Configure dataset"
+                            aria-label="Configure dataset"
+                            className="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                          >
+                            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                              <circle cx="12" cy="12" r="3" />
+                              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                            </svg>
+                          </Link>
+                        </div>
                       </div>
-                    </Link>
-                    {/* Sources within the dataset */}
-                    <ul className="divide-y divide-gray-100 dark:divide-gray-900">
-                      {g.sources.map((s, i) => {
-                        const favs = favBySource.get(`${s.datasetId}::${s.source}`) ?? [];
-                        return (
-                          <li key={`${s.datasetId}-${s.source}-${i}`} className="px-4 py-3">
-                            <Link href={`/datasets/${s.datasetId}`} className="font-medium truncate block hover:underline">
-                              {s.source}
-                            </Link>
-                            {s.description && (
-                              <span className="text-gray-500 dark:text-gray-400 text-xs mt-0.5 block leading-relaxed">{s.description}</span>
-                            )}
 
-                            {/* Favorited saved queries for this source (top 10) */}
-                            {favs.length > 0 && (
-                              <ul className="mt-2 space-y-1">
-                                {favs.slice(0, 10).map((q) => (
-                                  <li key={q.slug ?? q.question}>
+                      <div className="divide-y divide-gray-100 dark:divide-gray-900">
+                        {order.map((srcKey) => {
+                          const qs = bySource.get(srcKey) ?? [];
+                          return (
+                            <div key={srcKey || "(unspecified)"} className="px-3 py-2">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="font-semibold text-xs truncate">
+                                  {srcKey || <span className="text-gray-500 dark:text-gray-400">{g?.name}</span>}
+                                </span>
+                                {srcKey && (
+                                  <div className="flex items-center gap-1.5 flex-shrink-0 text-[10px] text-gray-400 dark:text-gray-500">
+                                    <span>explore with:</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => exploreWithClaude(srcKey)}
+                                      title={claudeConnected ? `Open a Claude chat on ${instanceName}` : `Connect ${instanceName} to Claude first`}
+                                      className="px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-900"
+                                    >
+                                      claude
+                                    </button>
+                                    <Link
+                                      href={`/ltool?source=${encodeURIComponent(srcKey)}&dataset=${dsId}`}
+                                      className="px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-900"
+                                    >
+                                      ltool
+                                    </Link>
+                                  </div>
+                                )}
+                              </div>
+                              <ul className="mt-1.5 space-y-1">
+                                {qs.slice(0, 8).map((q) => (
+                                  <li key={q.slug ?? q.question} className="flex items-start gap-2">
+                                    <span className="text-gray-300 dark:text-gray-600 select-none leading-relaxed flex-shrink-0" aria-hidden>•</span>
                                     <Link href={q.slug ? `/ltool/${q.slug}` : "#"}
-                                      className="text-xs text-gray-600 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400 flex items-start gap-1.5">
-                                      <span className="text-amber-400 flex-shrink-0 leading-relaxed">★</span>
-                                      <span className="flex-1 leading-relaxed">{q.question}</span>
-                                      {q.favoriteCount > 1 && <span className="text-gray-400 dark:text-gray-500 flex-shrink-0 leading-relaxed">({q.favoriteCount})</span>}
+                                      className="flex-1 text-xs text-gray-700 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400 leading-relaxed">
+                                      {q.question}
                                     </Link>
                                   </li>
                                 ))}
+                                {qs.length > 8 && (
+                                  <li className="flex items-start gap-2">
+                                    <span className="flex-shrink-0 w-[1ch]" aria-hidden />
+                                    <Link href={`/datasets/${dsId}`} className="text-[11px] text-gray-400 dark:text-gray-500 hover:underline">
+                                      +{qs.length - 8} more →
+                                    </Link>
+                                  </li>
+                                )}
                               </ul>
-                            )}
-
-                            {/* Explore with */}
-                            <div className="flex items-center gap-2 mt-2 text-xs">
-                              <span className="text-gray-400 dark:text-gray-500">Explore with:</span>
-                              <button
-                                onClick={() => {
-                                  const url = claudeExploreUrl(s.source);
-                                  if (claudeConnected) window.open(url, "_blank", "noopener,noreferrer");
-                                  else { setClaudeTargetUrl(url); setShowClaudeSetup(true); }
-                                }}
-                                title={claudeConnected ? `Open a Claude chat on ${instanceName}` : `Connect ${instanceName} to Claude first`}
-                                className="px-2 py-0.5 rounded border border-gray-300 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-900">
-                                Claude
-                              </button>
-                              <Link href={`/ltool?source=${encodeURIComponent(s.source)}&dataset=${s.datasetId}`}
-                                className="px-2 py-0.5 rounded border border-gray-300 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-900">
-                                ltool
-                              </Link>
                             </div>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  </div>
-                ))}
+                          );
+                        })}
+
+                        {additional.length > 0 && (
+                          <div className="px-3 py-2">
+                            {order.some((k) => k !== "") && (
+                              <p className="text-[10px] uppercase tracking-wide text-gray-400 dark:text-gray-500 mb-1">More sources</p>
+                            )}
+                            <div className="flex flex-wrap gap-x-3 gap-y-1">
+                              {additional.map((s, i) => (
+                                <SourceMenu key={`${s.source}-${i}`} source={s.source} datasetId={dsId} instanceName={instanceName}
+                                  claudeConnected={claudeConnected} onClaude={exploreWithClaude} className="text-xs" />
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </section>
@@ -273,6 +345,59 @@ export default function HomePage() {
         </div>
       )}
     </main>
+  );
+}
+
+// A source name rendered as a link that opens a small menu to explore the
+// source with Claude or ltool.
+function SourceMenu({
+  source,
+  datasetId,
+  instanceName,
+  claudeConnected,
+  onClaude,
+  className,
+}: {
+  source: string;
+  datasetId: string;
+  instanceName: string;
+  claudeConnected: boolean;
+  onClaude: (source: string) => void;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <span className="relative inline-block">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className={`text-blue-600 dark:text-blue-400 hover:underline ${className ?? ""}`}
+      >
+        {source}
+      </button>
+      {open && (
+        <>
+          {/* click-away backdrop */}
+          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
+          <div className="absolute left-0 top-full mt-1 z-20 min-w-[170px] rounded border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950 shadow-lg overflow-hidden">
+            <button
+              type="button"
+              onClick={() => { setOpen(false); onClaude(source); }}
+              title={claudeConnected ? `Open a Claude chat on ${instanceName}` : `Connect ${instanceName} to Claude first`}
+              className="block w-full text-left text-xs px-3 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-900"
+            >
+              Explore with Claude
+            </button>
+            <Link
+              href={`/ltool?source=${encodeURIComponent(source)}&dataset=${datasetId}`}
+              className="block w-full text-left text-xs px-3 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-900 border-t border-gray-100 dark:border-gray-900"
+            >
+              Explore with ltool
+            </Link>
+          </div>
+        </>
+      )}
+    </span>
   );
 }
 

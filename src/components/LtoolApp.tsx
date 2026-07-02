@@ -42,6 +42,23 @@ function itemKey(i: HistoryItem): string {
   return i.id ?? i.slug ?? `${i.source}-${i.createdAt}`;
 }
 
+// A compact, time-aware stamp for the sidebar. The list is ordered newest-first;
+// same-day rows show the TIME so a burst of runs from one session reads in
+// chronological order at a glance — showing only the date collapses a whole
+// day's runs to an identical string and the list looks unordered. Older rows
+// show the date instead.
+function formatWhen(iso: string): string {
+  const d = new Date(iso);
+  const now = new Date();
+  const sameDay =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate();
+  return sameDay
+    ? d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
+    : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
 type RunResult = {
   rows: Record<string, unknown>[];
   sql: string;
@@ -532,7 +549,7 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
                       <div className="flex items-center gap-2 mt-1 text-[10px] text-gray-400 dark:text-gray-600">
                         {item.rowCount != null && <span>{item.rowCount.toLocaleString()} rows</span>}
                         {item.durationMs != null && <span>{(item.durationMs / 1000).toFixed(1)}s</span>}
-                        <span>{new Date(item.createdAt).toLocaleDateString()}</span>
+                        <span title={new Date(item.createdAt).toLocaleString()}>{formatWhen(item.createdAt)}</span>
                       </div>
                     </button>
                     <div className="pr-3 pt-3 flex-shrink-0">

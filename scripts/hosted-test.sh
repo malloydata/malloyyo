@@ -39,5 +39,8 @@ echo "→ applying schema (drizzle-kit export | psql)"
 # straight into the fresh DB.
 npx drizzle-kit export 2>/dev/null | docker exec -i "$CONTAINER" psql -U postgres -d postgres -q -v ON_ERROR_STOP=1
 
+echo "→ running client-profile unit test (no DB)"
+npx tsx --test test/client-profile.test.ts
+
 echo "→ running hosted-explore test"
 npx tsx --test test/hosted-explore.test.ts

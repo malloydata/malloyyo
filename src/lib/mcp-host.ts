@@ -45,6 +45,7 @@ import {
   type RecordHistoryFields,
 } from "./mcp-tools";
 import { env } from "./env";
+import { clientProfile, renderRowsMarkdown } from "./client-profile";
 
 export type ToolResult = {
   content: Array<{ type: "text"; text: string }>;
@@ -251,6 +252,9 @@ export function buildHostedExploreSurface(
   const surface = exploreSurface(makeExploreHost(user.id));
   const byName = new Map(surface.tools.map((t) => [t.name, t]));
   const userAgent = ctx.userAgent ?? null;
+  // Presentation policy for THIS client (default = unchanged JSON). Only the
+  // human-facing `content` text is shaped by it; structuredContent is invariant.
+  const profile = clientProfile(userAgent);
   // Trusted model attribution from the x-author-model header (a harness sets it);
   // falls back per-call to the self-reported `model` arg, then 'assistant'.
   const headerModel = ctx.authorModel ?? null;
@@ -355,10 +359,17 @@ export function buildHostedExploreSurface(
         // host_only carried the SQL for recording; it must NOT reach the agent.
         const { [HOST_ONLY]: _hostOnly, ...rest } = qr;
         const withLink = { ...rest, ltool_link: ltoolLink(baseUrl, rec.slug) };
-        return {
-          content: [{ type: "text", text: JSON.stringify(withLink, null, 2) }],
-          structuredContent: withLink,
-        };
+        // Two channels: `content` (human-facing text) and `structuredContent`
+        // (machine-readable JSON). Clients that file structuredContent away and
+        // cite only a snippet (ChatGPT) get a compact markdown TABLE in content
+        // and NO structuredContent — so the rows can't be hidden behind a
+        // citation. Everyone else keeps pretty-printed JSON + structuredContent.
+        const text = profile.renderRowsInline
+          ? renderRowsMarkdown(withLink)
+          : JSON.stringify(withLink, null, 2);
+        const out: ToolResult = { content: [{ type: "text", text }] };
+        if (profile.sendStructuredContent) out.structuredContent = withLink;
+        return out;
       }
       return toContent(result) as ToolResult;
     } catch (e) {

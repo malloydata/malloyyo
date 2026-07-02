@@ -3,6 +3,25 @@
 
 import type { NextConfig } from "next";
 
+// Files every DuckDB-using route needs traced into its function bundle: the
+// native bindings, plus the pre-fetched extensions (scripts/fetch-duckdb-
+// extensions.mjs) so cold instances LOAD httpfs locally instead of downloading
+// ~22 MB from extensions.duckdb.org. See src/lib/malloy.ts (BUNDLED_EXTENSION_DIR).
+const DUCKDB_TRACE_INCLUDES = [
+  "./node_modules/@duckdb/node-bindings*/**/*",
+  "./duckdb-extensions/**/*",
+];
+
+const DUCKDB_ROUTES = [
+  "/mcp",
+  "/api/datasets",
+  "/api/datasets/[id]/model",
+  "/api/datasets/[id]/model/compile",
+  "/api/datasets/[id]/model/github",
+  "/api/datasets/[id]/webhook/github",
+  "/api/run",
+];
+
 const nextConfig: NextConfig = {
   async rewrites() {
     return [
@@ -14,29 +33,9 @@ const nextConfig: NextConfig = {
     "@duckdb/node-api",
     "@duckdb/node-bindings",
   ],
-  outputFileTracingIncludes: {
-    "/mcp": [
-      "./node_modules/@duckdb/node-bindings*/**/*",
-    ],
-    "/api/datasets": [
-      "./node_modules/@duckdb/node-bindings*/**/*",
-    ],
-    "/api/datasets/[id]/model": [
-      "./node_modules/@duckdb/node-bindings*/**/*",
-    ],
-    "/api/datasets/[id]/model/compile": [
-      "./node_modules/@duckdb/node-bindings*/**/*",
-    ],
-    "/api/datasets/[id]/model/github": [
-      "./node_modules/@duckdb/node-bindings*/**/*",
-    ],
-    "/api/datasets/[id]/webhook/github": [
-      "./node_modules/@duckdb/node-bindings*/**/*",
-    ],
-    "/api/run": [
-      "./node_modules/@duckdb/node-bindings*/**/*",
-    ],
-  },
+  outputFileTracingIncludes: Object.fromEntries(
+    DUCKDB_ROUTES.map((route) => [route, DUCKDB_TRACE_INCLUDES]),
+  ),
 };
 
 export default nextConfig;

@@ -4,6 +4,7 @@
 import { sql } from "drizzle-orm";
 import {
   boolean,
+  customType,
   index,
   jsonb,
   pgEnum,
@@ -14,6 +15,13 @@ import {
   uuid,
   integer,
 } from "drizzle-orm/pg-core";
+
+// Postgres bytea (binary blob). Used for the gzip-compressed compiled ModelDef.
+const bytea = customType<{ data: Buffer; driverData: Buffer }>({
+  dataType() {
+    return "bytea";
+  },
+});
 import type { AdapterAccountType } from "next-auth/adapters";
 import { instanceSlug } from "../lib/slug";
 
@@ -150,6 +158,13 @@ export const malloyModels = pgTable(
     gitBranch: text("git_branch"),
     gitSha: text("git_sha"),
     gitDirty: boolean("git_dirty"),
+    // gzip(JSON(Model._modelDef)) — the fully-compiled model. Lets a cold
+    // instance rehydrate via Runtime._loadModelFromModelDef instead of paying the
+    // per-source schema-fetch compile (worldcup: ~8s → ~0ms). Nullable; null =>
+    // compile on the request path, which write-through-backfills this column.
+    // Keyed implicitly by the immutable model.id (a repo edit is a new row), so it
+    // never needs invalidation. Read lazily (only on a cold-instance miss).
+    compiledModelDef: bytea("compiled_model_def"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .default(sql`now()`),

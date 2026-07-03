@@ -3,6 +3,7 @@
 
 "use client";
 import { useEffect, useState, useCallback, useRef } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { SchemaPanel, type SourceOption } from "@/components/SchemaPanel";
@@ -94,6 +95,77 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
   );
 }
 
+// Full-width dropdown for filtering the sidebar list by Malloy source. Value ""
+// means "all sources". Rendered in a portal on document.body so the menu escapes
+// the sidebar's overflow-hidden clip.
+function SourceFilterPicker({
+  value,
+  sources,
+  onChange,
+}: {
+  value: string;
+  sources: SourceOption[];
+  onChange: (source: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number; width: number } | null>(null);
+
+  const toggle = () => {
+    if (open) { setOpen(false); return; }
+    const r = btnRef.current?.getBoundingClientRect();
+    if (r) setPos({ top: r.bottom + 4, left: r.left, width: r.width });
+    setOpen(true);
+  };
+
+  return (
+    <div className="min-w-0">
+      <button
+        ref={btnRef}
+        onClick={toggle}
+        className="flex items-center justify-between gap-1 w-full text-xs px-2 py-1 rounded border border-gray-200 dark:border-gray-800 bg-transparent hover:border-gray-400 dark:hover:border-gray-600 focus:outline-none"
+        title="Filter by source"
+      >
+        {/* Show the selected source name directly — the `sources` list loads
+            async, so a lookup would briefly fall back to "All sources". */}
+        <span className={`truncate ${value ? "text-gray-800 dark:text-gray-200 font-semibold" : "text-gray-500 dark:text-gray-400"}`}>
+          {value || "All sources"}
+        </span>
+        <span className="text-[9px] text-gray-400 dark:text-gray-600 flex-shrink-0">▾</span>
+      </button>
+      {open && pos && createPortal(
+        <>
+          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div
+            className="fixed z-50 max-h-80 overflow-y-auto rounded-md border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950 shadow-lg py-1"
+            style={{ top: pos.top, left: pos.left, width: Math.max(pos.width, 224) }}
+          >
+            <button
+              onClick={() => { onChange(""); setOpen(false); }}
+              className={`block w-full text-left px-2 py-1.5 hover:bg-gray-100 dark:hover:bg-gray-800/60 ${value === "" ? "bg-gray-50 dark:bg-gray-900" : ""}`}
+            >
+              <span className="block text-[11px] text-gray-600 dark:text-gray-400">All sources</span>
+            </button>
+            {sources.map((s) => (
+              <button
+                key={s.source}
+                onClick={() => { onChange(s.source); setOpen(false); }}
+                className={`block w-full text-left px-2 py-1.5 hover:bg-gray-100 dark:hover:bg-gray-800/60 ${s.source === value ? "bg-gray-50 dark:bg-gray-900" : ""}`}
+              >
+                <span className="block font-mono text-[11px] text-gray-800 dark:text-gray-200 truncate">{s.source}</span>
+                {s.description && (
+                  <span className="block text-[10px] text-gray-400 dark:text-gray-500 leading-snug line-clamp-2">{s.description}</span>
+                )}
+              </button>
+            ))}
+          </div>
+        </>,
+        document.body,
+      )}
+    </div>
+  );
+}
+
 function CopyChip({ value }: { value: string }) {
   const [copied, setCopied] = useState(false);
   return (
@@ -150,6 +222,9 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
   const [view, setView] = useState<View>("favorites");
   const [scope, setScope] = useState<Scope>("me");
   const [filter, setFilter] = useState("");
+  // Sidebar list filter by Malloy source; "" = all sources. Seeded from the
+  // page's ?source= so the list opens focused on the source in context.
+  const [sourceFilter, setSourceFilter] = useState(initialSource ?? "");
   const autoFallback = useRef(true);
   const [query, setQuery] = useState("");
   const [source, setSource] = useState("");
@@ -276,6 +351,7 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
         setQuery(body.malloy ?? "");
         setSource(body.source ?? "");
         setSchemaSource(body.source ?? "");
+        if (body.source) setSourceFilter(body.source);
         setExpanded(false);
         setEditedTitle(null);
         // Open on a tab+scope that actually contains this query.
@@ -322,6 +398,8 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
     setQuery(item.malloyQuery ?? "");
     setSource(item.source ?? "");
     setSchemaSource(item.source ?? "");
+    // Navigating to a query narrows the list to its source by default.
+    if (item.source) setSourceFilter(item.source);
     setExpanded(false);
     setEditedTitle(null);
     setTitleEditing(false);
@@ -386,17 +464,17 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
     }
   }, []);
 
-  // Client-side text filter over the loaded list.
-  const visibleItems = filter.trim()
-    ? items.filter((i) => {
-        const q = filter.trim().toLowerCase();
-        return (
-          (i.question ?? "").toLowerCase().includes(q) ||
-          (i.source ?? "").toLowerCase().includes(q) ||
-          (i.authorName ?? "").toLowerCase().includes(q)
-        );
-      })
-    : items;
+  // Client-side filters over the loaded list: source dropdown, then free text.
+  const q = filter.trim().toLowerCase();
+  const visibleItems = items.filter((i) => {
+    if (sourceFilter && i.source !== sourceFilter) return false;
+    if (!q) return true;
+    return (
+      (i.question ?? "").toLowerCase().includes(q) ||
+      (i.source ?? "").toLowerCase().includes(q) ||
+      (i.authorName ?? "").toLowerCase().includes(q)
+    );
+  });
 
   // The loaded query has been edited away from what its slug points at.
   const isModified = !!selected && query.trim() !== (selected.malloyQuery ?? "").trim();
@@ -489,6 +567,8 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
               ↻
             </button>
           </div>
+          {/* Source filter — narrows the list to one Malloy source */}
+          <SourceFilterPicker value={sourceFilter} sources={sources} onChange={setSourceFilter} />
           {/* Tabs + scope toggle */}
           <div className="flex items-center gap-1">
             <TabButton active={view === "history"} onClick={() => { autoFallback.current = false; setView("history"); }}>History</TabButton>

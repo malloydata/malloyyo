@@ -9,6 +9,7 @@ import { randomBytes } from "node:crypto";
 import { env } from "./env";
 import type { GitHubURLReader } from "./github";
 import { logger, serializeErr } from "./logger";
+import { readModelDef, writeModelDef, packModelDef, unpackModelDef, extractModelDef, rehydrateModel } from "./model-cache";
 
 // DuckDB extension autoloading requires a writable home directory. Vercel/Lambda
 // functions may have HOME unset or empty — default to /tmp which is always writable.
@@ -428,7 +429,130 @@ export async function withModelRuntime<T>(
 ): Promise<T> {
   const { urlMap } = splitFiles(files);
   const readSource = (href: string): string | undefined => urlMap.get(href);
-  return withRuntime(files, cacheKey, (runtime) => fn(runtime as malloy.Runtime, readSource));
+  const entry = fileUrl("index.malloy"); // the engine loads via runtime.loadModel(ENTRY)
+  return withRuntime(files, cacheKey, async (runtime) => {
+    // The mcp-engine calls runtime.loadModel(ENTRY) itself, so we can't route it
+    // through acquireModel. Instead: when a durable ModelDef exists, override
+    // loadModel(ENTRY) on this leased runtime so the engine rehydrates (no schema
+    // fetch) instead of compiling. Restored on release so the pooled runtime isn't
+    // contaminated. On a cold miss, write-through after the engine has compiled.
+    let rehydrated = false;
+    const rt = runtime as malloy.Runtime;
+    if (MODEL_DEF_CACHE && cacheKey) {
+      const def = await loadDef(cacheKey);
+      if (def !== undefined) {
+        rehydrated = true;
+        const original = rt.loadModel.bind(rt); // capture the real method before shadowing
+        Object.defineProperty(rt, "loadModel", {
+          configurable: true,
+          writable: true,
+          value: (url: URL) => (url.href === entry.href ? rehydrateModel(rt, def) : original(url)),
+        });
+      }
+    }
+    try {
+      const result = await fn(rt, readSource);
+      // Cold miss: the engine compiled into the pool cache; extract + persist
+      // (awaited — a background write would be killed by Vercel's post-response
+      // freeze). persistModelDef is bulletproof, so this can't break the query.
+      if (MODEL_DEF_CACHE && cacheKey && !rehydrated) {
+        await persistModelDef(cacheKey, () => rt.getModel(entry));
+      }
+      return result;
+    } finally {
+      if (rehydrated) delete (rt as unknown as Record<string, unknown>).loadModel; // restore prototype method
+    }
+  });
+}
+
+// ── Durable compiled-ModelDef cache ──────────────────────────────────────────
+// When MODEL_DEF_CACHE is on, a cold instance rehydrates a fully-compiled model
+// from Postgres (no schema fetch) instead of the per-source compile (worldcup:
+// ~8s → ~0ms). Write-through: a cold miss compiles as before, then persists the
+// ModelDef so future cold instances skip it. Keyed by model.id (= the pool
+// cacheKey), immutable per version, so no invalidation. Off => exact prior behavior.
+const MODEL_DEF_CACHE = process.env.MODEL_DEF_CACHE === "1" || process.env.MODEL_DEF_CACHE === "true";
+
+type ModelMat = ReturnType<malloy.Runtime["loadModel"]>;
+type CompiledModel = Awaited<ReturnType<ModelMat["getModel"]>>;
+
+// L1: per-instance parsed-ModelDef cache keyed by model.id, LRU-bounded. Bounds
+// memory (a large model's ModelDef can be several MB) and resets on cold start.
+const L1_MAX = 16;
+const l1 = new Map<string, unknown>();
+function l1Get(key: string): unknown | undefined {
+  const v = l1.get(key);
+  if (v !== undefined) {
+    l1.delete(key);
+    l1.set(key, v); // mark most-recently-used
+  }
+  return v;
+}
+function l1Set(key: string, val: unknown): void {
+  l1.delete(key);
+  l1.set(key, val);
+  while (l1.size > L1_MAX) {
+    const oldest = l1.keys().next().value;
+    if (oldest === undefined) break;
+    l1.delete(oldest);
+  }
+}
+
+// L1 then L2 (Postgres). Returns undefined when there's nothing durable to
+// rehydrate: never persisted, or stored under a different malloy version/format
+// (unpackModelDef => undefined) so it recompiles and overwrites. On a persistent
+// miss it re-reads L2 each query, but write-through makes that a handful of small
+// SELECTs at most, and L1 absorbs everything after.
+async function loadDef(cacheKey: string): Promise<unknown | undefined> {
+  const hit = l1Get(cacheKey);
+  if (hit !== undefined) return hit;
+  let packed: Buffer | null;
+  try {
+    packed = await readModelDef(cacheKey);
+  } catch (err) {
+    logger.warn("modelDef read failed", { cacheKey, ...serializeErr(err) });
+    return undefined;
+  }
+  if (!packed) return undefined;
+  const def = unpackModelDef(packed);
+  if (def === undefined) return undefined; // corrupt, or a different malloy version
+  l1Set(cacheKey, def);
+  logger.info("modelDef rehydrated from db", { cacheKey, bytes: packed.length, instanceId: INSTANCE_ID });
+  return def;
+}
+
+// Return a ModelMaterializer for the entry model, rehydrating from the durable
+// cache when available. `persist` is true only on a cold compile whose ModelDef
+// should be written back (persistModelDef) after the caller has compiled it.
+async function acquireModel(
+  runtime: malloy.Runtime | malloy.SingleConnectionRuntime,
+  cacheKey: string | undefined,
+  entryPath: string,
+): Promise<{ mm: ModelMat; persist: boolean }> {
+  const url = fileUrl(entryPath);
+  if (MODEL_DEF_CACHE && cacheKey) {
+    const def = await loadDef(cacheKey);
+    if (def !== undefined) return { mm: rehydrateModel(runtime, def), persist: false };
+  }
+  return { mm: runtime.loadModel(url), persist: MODEL_DEF_CACHE && !!cacheKey };
+}
+
+// Extract and durably persist a freshly-compiled model's ModelDef. AWAITED by
+// callers (not fire-and-forget): Vercel freezes the instance once the response is
+// sent, which would kill a background write. Cold-path only, and the model is
+// already compiled, so it adds ~gzip + one UPDATE to a query that just paid a full
+// cold compile — negligible. BULLETPROOF: never throws (a cache-write failure or
+// a malloy API change must not break an otherwise-successful query).
+async function persistModelDef(cacheKey: string, getModel: () => Promise<CompiledModel>): Promise<void> {
+  try {
+    const def = extractModelDef(await getModel());
+    l1Set(cacheKey, def);
+    const packed = packModelDef(def);
+    await writeModelDef(cacheKey, packed);
+    logger.info("modelDef persisted", { cacheKey, bytes: packed.length });
+  } catch (err) {
+    logger.warn("modelDef persist failed", { cacheKey, ...serializeErr(err) });
+  }
 }
 
 // Compile a file map and return the full hierarchical field tree for a named source.
@@ -440,7 +564,9 @@ export async function describeSourceFields(
 ): Promise<SourceDescription | null> {
   return withRuntime(files, opts.cacheKey, async (runtime) => {
     try {
-      const compiled = await runtime.getModel(fileUrl(entryPath));
+      const { mm, persist } = await acquireModel(runtime, opts.cacheKey, entryPath);
+      const compiled = await mm.getModel();
+      if (persist && opts.cacheKey) await persistModelDef(opts.cacheKey, () => Promise.resolve(compiled));
       const explore = compiled.explores.find((e) => e.name === sourceName);
       if (!explore) return null;
       return { primary_key: explore.primaryKey ?? null, fields: serializeFields(explore) };
@@ -460,13 +586,15 @@ export async function runMalloyFiles(
   const t0 = Date.now();
   return withRuntime(files, opts.cacheKey, async (runtime) => {
     const tBuild = Date.now();
-    const runner = runtime.loadModel(fileUrl(entryPath)).loadQuery(query);
+    const { mm, persist } = await acquireModel(runtime, opts.cacheKey, entryPath);
+    const runner = mm.loadQuery(query);
     const sql = await runner.getSQL();
     const tCompile = Date.now();
     const result = await runner.run({ rowLimit: opts.rowLimit ?? DEFAULT_ROW_LIMIT });
     const tRun = Date.now();
     const rows = result.data.toJSON() as Record<string, unknown>[];
     const stableResult = API.util.wrapResult(result);
+    if (persist && opts.cacheKey) await persistModelDef(opts.cacheKey, () => mm.getModel());
     logger.info("runMalloyFiles timing", {
       entryPath,
       acquireRuntimeMs: tBuild - t0,

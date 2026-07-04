@@ -17,6 +17,7 @@ const manifest = window.__MANIFEST__;
 let seq = 0;
 const pending = new Map();
 window.addEventListener("message", (e) => {
+  if (e.source !== window.parent) return; // only the trusted shell
   const m = e.data;
   if (m && m.type === "result" && pending.has(m.id)) {
     pending.get(m.id)(m);

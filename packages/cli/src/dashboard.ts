@@ -116,18 +116,23 @@ const html = (body: string, title: string) =>
   `<meta name="viewport" content="width=device-width,initial-scale=1"></head>` +
   `<body style="margin:0">${body}</body></html>`;
 
-function parentShell(dash: Dashboard): string {
-  // Trusted broker: forwards a run request from the sandboxed frame to /api/run,
-  // then posts the result back into the frame. Only messages from OUR frame are
-  // honored; the server re-validates the query against the manifest.
+function parentShell(dash: Dashboard, frameBase: string): string {
+  // Trusted broker: forwards a run request from the sandboxed frame to /api/run
+  // (same-origin to THIS page), then posts the result back into the frame. The
+  // frame is served from `frameBase` (a DIFFERENT port = different origin), so
+  // `allow-same-origin` gives it a real origin — its worker/wasm/font loads
+  // succeed — while it stays cross-origin to this shell: it can't read us or
+  // call /api/run directly, only postMessage. See docs/repo-artifacts.md §7/§8.
   const d = JSON.stringify(dash.name);
+  const fb = JSON.stringify(frameBase);
   return html(
-    `<iframe id="f" sandbox="allow-scripts" src="/frame?d=${encodeURIComponent(dash.name)}"` +
+    `<iframe id="f" sandbox="allow-scripts allow-same-origin"` +
+      ` src="${frameBase}/frame?d=${encodeURIComponent(dash.name)}"` +
       ` style="border:0;position:fixed;inset:0;width:100%;height:100%"></iframe>` +
       `<script>
 const f=document.getElementById('f');
 window.addEventListener('message',async(e)=>{
-  if(e.source!==f.contentWindow)return;
+  if(e.source!==f.contentWindow||e.origin!==${fb})return;
   const m=e.data; if(!m||m.type!=='run')return;
   let out;
   try{
@@ -135,7 +140,7 @@ window.addEventListener('message',async(e)=>{
       body:JSON.stringify({d:${d},query:m.query,givens:m.givens})});
     out=await res.json();
   }catch(err){ out={ok:false,problems:[{message:String(err)}]}; }
-  f.contentWindow.postMessage({type:'result',id:m.id,...out},'*');
+  f.contentWindow.postMessage({type:'result',id:m.id,...out},${fb});
 });
 </script>`,
     dash.manifest.title,
@@ -167,6 +172,12 @@ export async function serveDashboard(opts: {
   await import("@malloydata/malloy-connections");
   const root = path.resolve(opts.root ?? process.cwd());
   const port = opts.port ?? 4173;
+  // The untrusted artifact is served from a SECOND origin (port+1). That lets
+  // its iframe use `allow-same-origin` (so Malloy's renderer can load workers/
+  // wasm) while staying cross-origin to the trusted shell — the frame still
+  // can't read the shell or reach /api/run except via postMessage.
+  const framePort = port + 1;
+  const frameBase = `http://localhost:${framePort}`;
 
   const dashboards = discoverDashboards(root);
   if (dashboards.length === 0) {
@@ -182,26 +193,29 @@ export async function serveDashboard(opts: {
   const pick = (url: URL): Dashboard =>
     byName.get(url.searchParams.get("d") ?? dashboards[0].name) ?? dashboards[0];
 
-  const server = http.createServer(async (req, res) => {
-    const url = new URL(req.url ?? "/", `http://localhost:${port}`);
+  const handler = async (req: http.IncomingMessage, res: http.ServerResponse) => {
+    const onFramePort = (req.socket.localPort ?? port) === framePort;
+    const url = new URL(req.url ?? "/", `http://localhost:${onFramePort ? framePort : port}`);
     const send = (code: number, type: string, body: string, extra: Record<string, string> = {}) => {
       res.writeHead(code, { "content-type": type, ...extra });
       res.end(body);
     };
     try {
-      if (url.pathname === "/" ) {
-        return send(200, "text/html; charset=utf-8", parentShell(pick(url)));
+      // Frame origin (port+1): ONLY the untrusted artifact document + its bundle.
+      // Never /api/run — so the frame (same-origin only to THIS port) can't reach
+      // the runner on its own origin.
+      if (onFramePort) {
+        if (url.pathname === "/frame") {
+          return send(200, "text/html; charset=utf-8", frameDoc(pick(url)));
+        }
+        if (url.pathname === "/bundle.js") {
+          return send(200, "application/javascript; charset=utf-8", await bundle(pick(url)));
+        }
+        return send(404, "text/plain", "not found");
       }
-      if (url.pathname === "/frame") {
-        return send(200, "text/html; charset=utf-8", frameDoc(pick(url)));
-      }
-      if (url.pathname === "/bundle.js") {
-        const js = await bundle(pick(url));
-        // Classic script; served cross-origin to the opaque-origin frame, so
-        // allow the read explicitly.
-        return send(200, "application/javascript; charset=utf-8", js, {
-          "access-control-allow-origin": "*",
-        });
+      // Parent origin: the trusted shell + the runner.
+      if (url.pathname === "/") {
+        return send(200, "text/html; charset=utf-8", parentShell(pick(url), frameBase));
       }
       if (url.pathname === "/api/run" && req.method === "POST") {
         const { d, query, givens } = JSON.parse(await readBody(req));
@@ -218,11 +232,14 @@ export async function serveDashboard(opts: {
     } catch (e) {
       send(500, "application/json", JSON.stringify({ ok: false, problems: [{ message: (e as Error).message }] }));
     }
-  });
+  };
 
-  await new Promise<void>((r) => server.listen(port, r));
+  const shellServer = http.createServer(handler);
+  const frameServer = http.createServer(handler);
+  await new Promise<void>((r) => shellServer.listen(port, r));
+  await new Promise<void>((r) => frameServer.listen(framePort, r));
   console.error(`\n  malloyyo dashboard dev — model: ${root}`);
-  console.error(`  http://localhost:${port}/`);
+  console.error(`  http://localhost:${port}/   (artifact origin: ${frameBase})`);
   for (const d of dashboards) {
     console.error(`    • ${d.name}  →  http://localhost:${port}/?d=${d.name}`);
   }

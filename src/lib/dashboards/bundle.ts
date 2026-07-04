@@ -10,9 +10,14 @@
 import * as esbuild from "esbuild";
 import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
+import { resolve } from "node:path";
 import { FRAME_SOURCE } from "./frame-source";
 
-const require = createRequire(import.meta.url);
+// Anchor resolution at the app root's real package.json, NOT import.meta.url —
+// inside a Next route, import.meta.url resolves `react` to Next's vendored RSC
+// build (a virtual [project]/… path, and the wrong React for a browser bundle).
+// A cwd-anchored require does plain node resolution against the real node_modules.
+const require = createRequire(resolve("package.json"));
 const HOST_LIBS = [
   "react",
   "react-dom",
@@ -33,7 +38,8 @@ for (const spec of HOST_LIBS) {
 const cache = new Map<string, string>();
 
 export async function bundleDashboard(source: string): Promise<string> {
-  const key = createHash("sha256").update(source).digest("hex");
+  // Key on the frame runtime too, so a frame-source change rebuilds cached bundles.
+  const key = createHash("sha256").update(FRAME_SOURCE).update("\0").update(source).digest("hex");
   const hit = cache.get(key);
   if (hit) return hit;
 

@@ -51,7 +51,7 @@ export default function DashboardViewPage({
   }, [id, name]);
 
   return (
-    <main className="mx-auto max-w-6xl px-6 py-5">
+    <main className="w-full px-6 py-5">
       <nav className="mb-3 flex items-center gap-2 font-mono text-xs text-gray-500 dark:text-gray-400">
         <Link href="/" className="hover:underline">home</Link>
         <span>/</span>

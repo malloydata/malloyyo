@@ -27,8 +27,9 @@ function showFatal(msg) {
   pre.textContent = "Dashboard error:\n" + msg;
   root.prepend(pre);
 }
-window.addEventListener("error", function (e) { showFatal((e.error && e.error.stack) || e.message); });
-window.addEventListener("unhandledrejection", function (e) { showFatal(String((e.reason && (e.reason.stack || e.reason.message)) || e.reason)); });
+function isBenign(msg) { return typeof msg === "string" && msg.indexOf("ResizeObserver loop") !== -1; }
+window.addEventListener("error", function (e) { if (isBenign(e && e.message)) return; showFatal((e.error && e.error.stack) || e.message); });
+window.addEventListener("unhandledrejection", function (e) { const r = e.reason; if (isBenign(r && r.message)) return; showFatal(String((r && (r.stack || r.message)) || r)); });
 
 class ErrorBoundary extends React.Component {
   constructor(p) { super(p); this.state = { err: null }; }

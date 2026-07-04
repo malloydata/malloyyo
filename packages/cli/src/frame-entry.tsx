@@ -24,10 +24,18 @@ function showFatal(msg) {
   pre.textContent = "⚠ Dashboard error:\n" + msg;
   root.prepend(pre);
 }
-window.addEventListener("error", (e) => showFatal((e.error && e.error.stack) || e.message));
-window.addEventListener("unhandledrejection", (e) =>
-  showFatal(String((e.reason && (e.reason.stack || e.reason.message)) || e.reason)),
-);
+// "ResizeObserver loop completed…" is a benign warning the Vega/Malloy renderer
+// emits — not a real error, so don't surface it.
+const isBenign = (msg) => typeof msg === "string" && msg.indexOf("ResizeObserver loop") !== -1;
+window.addEventListener("error", (e) => {
+  if (isBenign(e && e.message)) return;
+  showFatal((e.error && e.error.stack) || e.message);
+});
+window.addEventListener("unhandledrejection", (e) => {
+  const r = e.reason;
+  if (isBenign(r && r.message)) return;
+  showFatal(String((r && (r.stack || r.message)) || r));
+});
 
 class ErrorBoundary extends React.Component {
   constructor(p) {

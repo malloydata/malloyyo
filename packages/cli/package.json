@@ -34,16 +34,13 @@
   "dependencies": {
     "@malloydata/malloy": "0.0.420",
     "@malloydata/malloy-connections": "0.0.420",
-    "@malloydata/render": "0.0.420",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "commander": "^12.1.0",
-    "esbuild": "^0.24.0",
-    "react": "19.2.4",
-    "react-dom": "19.2.4"
+    "commander": "^12.1.0"
   },
   "devDependencies": {
     "@malloyyo/mcp-engine": "workspace:*",
     "@types/node": "^20",
+    "esbuild": "^0.24.0",
     "tsx": "^4.21.0",
     "typescript": "^5"
   }

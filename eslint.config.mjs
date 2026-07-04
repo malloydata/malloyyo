@@ -17,6 +17,11 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
     // Generated build output (gitignored bundles) — never our source to lint.
     "**/dist/**",
+    // Browser runtime for dashboard artifacts: bundled at runtime by esbuild,
+    // not part of the app/CLI TS build (needs @ts-nocheck, different React
+    // constraints). Includes the CLI frame runtime and example dashboards.
+    "packages/cli/src/frame-entry.tsx",
+    "examples/**",
   ]),
   {
     // Honor the `_`-prefix convention for deliberately-unused bindings

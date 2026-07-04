@@ -13,6 +13,42 @@ import Dashboard from "virtual:dashboard";
 
 const manifest = window.__MANIFEST__;
 
+// Dev preview: surface errors on the page instead of blanking. A throw in the
+// Malloy renderer (or anywhere) would otherwise crash the React tree silently.
+function showFatal(msg) {
+  const root = document.getElementById("root");
+  if (!root) return;
+  const pre = document.createElement("pre");
+  pre.style.cssText =
+    "color:crimson;white-space:pre-wrap;padding:16px;margin:0;font:12px ui-monospace,monospace;border-bottom:2px solid crimson";
+  pre.textContent = "⚠ Dashboard error:\n" + msg;
+  root.prepend(pre);
+}
+window.addEventListener("error", (e) => showFatal((e.error && e.error.stack) || e.message));
+window.addEventListener("unhandledrejection", (e) =>
+  showFatal(String((e.reason && (e.reason.stack || e.reason.message)) || e.reason)),
+);
+
+class ErrorBoundary extends React.Component {
+  constructor(p) {
+    super(p);
+    this.state = { err: null };
+  }
+  static getDerivedStateFromError(err) {
+    return { err };
+  }
+  render() {
+    if (this.state.err) {
+      return (
+        <pre style={{ color: "crimson", whiteSpace: "pre-wrap", padding: 16 }}>
+          {"⚠ Render error:\n" + (this.state.err.stack || String(this.state.err))}
+        </pre>
+      );
+    }
+    return this.props.children;
+  }
+}
+
 // --- bridge: ask the trusted parent to run a declared query with given values.
 let seq = 0;
 const pending = new Map();
@@ -54,11 +90,27 @@ function Panel({ query, givens }) {
   useEffect(() => {
     if (!ref.current || !state.result) return;
     const container = ref.current;
-    const renderer = new MalloyRenderer({});
-    const viz = renderer.createViz({ tableConfig: { enableDrill: false }, scrollEl: container });
-    viz.setResult(state.result);
-    viz.render(container);
-    return () => viz.remove();
+    let viz;
+    try {
+      const renderer = new MalloyRenderer({});
+      viz = renderer.createViz({ tableConfig: { enableDrill: false }, scrollEl: container });
+      viz.setResult(state.result);
+      viz.render(container);
+    } catch (err) {
+      container.innerHTML = "";
+      const pre = document.createElement("pre");
+      pre.style.cssText = "color:crimson;white-space:pre-wrap;font:12px ui-monospace,monospace";
+      pre.textContent = "⚠ Malloy render error:\n" + ((err && err.stack) || String(err));
+      container.appendChild(pre);
+      return;
+    }
+    return () => {
+      try {
+        viz && viz.remove();
+      } catch {
+        /* ignore */
+      }
+    };
   }, [state.result]);
   if (state.error) return <pre style={{ color: "crimson", whiteSpace: "pre-wrap" }}>{state.error}</pre>;
   return <div ref={ref} style={{ minHeight: 320, opacity: state.loading ? 0.4 : 1, transition: "opacity .15s" }} />;
@@ -76,4 +128,8 @@ function Root() {
   return <Dashboard manifest={manifest} givens={givens} setGiven={setGiven} Panel={Panel} />;
 }
 
-createRoot(document.getElementById("root")).render(<Root />);
+createRoot(document.getElementById("root")).render(
+  <ErrorBoundary>
+    <Root />
+  </ErrorBoundary>,
+);

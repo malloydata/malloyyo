@@ -40,7 +40,23 @@ interface Dashboard {
   manifest: Manifest;
 }
 
-const FRAME_ENTRY = fileURLToPath(new URL("./frame-entry.tsx", import.meta.url));
+/** frame-entry.tsx is a source file bundled at runtime by esbuild (never part of
+    the node build). Resolve it whether we're running from src/ (tsx dev) or from
+    the built dist/ next to a sibling src/ (local checkout). */
+function resolveFrameEntry(): string {
+  const candidates = [
+    new URL("./frame-entry.tsx", import.meta.url), // dev: src/dashboard.ts
+    new URL("../src/frame-entry.tsx", import.meta.url), // built: dist/index.js
+  ].map((u) => fileURLToPath(u));
+  const found = candidates.find((c) => fs.existsSync(c));
+  if (!found) {
+    throw new Error(
+      "frame-entry.tsx not found — `dashboard dev` currently needs the CLI source " +
+        "checkout (looked in ./ and ../src). See docs/repo-artifacts.md packaging note.",
+    );
+  }
+  return found;
+}
 
 /** Discover ./dashboards/<name>/{manifest.json,Dashboard.tsx} under the root. */
 function discoverDashboards(root: string): Dashboard[] {
@@ -64,13 +80,14 @@ function discoverDashboards(root: string): Dashboard[] {
     Dashboard.tsx mtime so an edit rebuilds (basic hot reload on next load). */
 function makeBundler() {
   const cache = new Map<string, { mtimeMs: number; js: string }>();
+  const frameEntry = resolveFrameEntry();
   return async function bundle(dash: Dashboard): Promise<string> {
     const dashboardFile = path.join(dash.dir, "Dashboard.tsx");
     const mtimeMs = fs.statSync(dashboardFile).mtimeMs;
     const hit = cache.get(dash.name);
     if (hit && hit.mtimeMs === mtimeMs) return hit.js;
     const result = await esbuild.build({
-      entryPoints: [FRAME_ENTRY],
+      entryPoints: [frameEntry],
       bundle: true,
       format: "iife",
       platform: "browser",

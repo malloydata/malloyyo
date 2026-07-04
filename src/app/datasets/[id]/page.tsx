@@ -168,6 +168,8 @@ export default function DatasetPage({
         <span>{data.readyAt ? new Date(data.readyAt).toLocaleString() : "—"}</span>
       </section>
 
+      <DashboardsSection datasetId={data.id} />
+
       {data.statusError && (
         <section>
           <h2 className="text-sm font-semibold mb-1">error</h2>
@@ -194,6 +196,35 @@ export default function DatasetPage({
           : <ModelReadOnly source={data.malloyModel.source} generatedBy={data.malloyModel.generatedBy} git={data.malloyModel.git} />
       )}
     </main>
+  );
+}
+
+// The dataset's dashboards (from ./dashboards in the model repo), each linking to
+// its render page. Hidden when the dataset has none.
+function DashboardsSection({ datasetId }: { datasetId: string }) {
+  const [list, setList] = useState<Array<{ name: string; title: string }> | null>(null);
+  useEffect(() => {
+    fetch(`/api/dashboards?datasetId=${datasetId}`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then(setList)
+      .catch(() => setList([]));
+  }, [datasetId]);
+  if (!list || list.length === 0) return null;
+  return (
+    <section className="space-y-2">
+      <h2 className="text-sm font-semibold">dashboards</h2>
+      <div className="flex flex-wrap gap-2">
+        {list.map((d) => (
+          <Link
+            key={d.name}
+            href={`/datasets/${datasetId}/dashboard/${encodeURIComponent(d.name)}`}
+            className="text-xs px-3 py-1.5 rounded border border-gray-300 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-900"
+          >
+            {d.title}
+          </Link>
+        ))}
+      </div>
+    </section>
   );
 }
 

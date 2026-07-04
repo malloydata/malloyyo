@@ -109,7 +109,8 @@ function makeBundler() {
   const frameEntry = resolveFrameEntry();
   return async function bundle(dash: Dashboard): Promise<string> {
     const dashboardFile = path.join(dash.dir, "Dashboard.tsx");
-    const mtimeMs = fs.statSync(dashboardFile).mtimeMs;
+    // Bust the cache when the dashboard OR the frame runtime changes.
+    const mtimeMs = fs.statSync(dashboardFile).mtimeMs + fs.statSync(frameEntry).mtimeMs;
     const hit = cache.get(dash.name);
     if (hit && hit.mtimeMs === mtimeMs) return hit.js;
     const result = await esbuild.build({

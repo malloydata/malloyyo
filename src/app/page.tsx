@@ -240,7 +240,7 @@ export default function HomePage() {
                             Explore in Claude
                           </button>
                           <Link
-                            href={`/datasets/${dsId}`}
+                            href={`/datasets/${encodeURIComponent(g?.name ?? dsId)}`}
                             title="Configure dataset"
                             aria-label="Configure dataset"
                             className="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
@@ -259,7 +259,7 @@ export default function HomePage() {
                           {dashByDataset.get(dsId)!.map((d) => (
                             <Link
                               key={d.name}
-                              href={`/datasets/${dsId}/dashboard/${encodeURIComponent(d.name)}`}
+                              href={`/datasets/${encodeURIComponent(g?.name ?? dsId)}/dashboard/${encodeURIComponent(d.name)}`}
                               className="text-xs px-2 py-0.5 rounded border border-gray-300 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-900"
                             >
                               {d.title}
@@ -310,7 +310,7 @@ export default function HomePage() {
                                 {qs.length > 8 && (
                                   <li className="flex items-start gap-2">
                                     <span className="flex-shrink-0 w-[1ch]" aria-hidden />
-                                    <Link href={`/datasets/${dsId}`} className="text-[11px] text-gray-400 dark:text-gray-500 hover:underline">
+                                    <Link href={`/datasets/${encodeURIComponent(g?.name ?? dsId)}`} className="text-[11px] text-gray-400 dark:text-gray-500 hover:underline">
                                       +{qs.length - 8} more →
                                     </Link>
                                   </li>

@@ -8,7 +8,7 @@
 
 import { and, eq, asc, desc } from "drizzle-orm";
 import { db, datasets, malloyArtifacts } from "@/db";
-import { visibleDatasetWhere, findByDatasetId, latestModel, modelFileMap } from "@/lib/mcp-tools";
+import { visibleDatasetWhere, findByDatasetRef, latestModel, modelFileMap } from "@/lib/mcp-tools";
 import { runNamedMalloyFiles } from "@/lib/malloy";
 
 export interface DashboardSummary {
@@ -28,7 +28,7 @@ async function artifactsForModel(modelId: string) {
 
 /** Dashboards on a single dataset's current (latest) model, if visible. */
 export async function listDashboards(userId: string, datasetId: string): Promise<DashboardSummary[]> {
-  const found = await findByDatasetId(userId, datasetId);
+  const found = await findByDatasetRef(userId, datasetId);
   if (!found) return [];
   const rows = await artifactsForModel(found.model.id);
   return rows.map((a) => ({ datasetId, datasetName: found.ds.name, name: a.name, title: a.title ?? a.name }));
@@ -54,7 +54,7 @@ export interface DashboardDetail extends DashboardSummary {
 }
 
 export async function getDashboard(userId: string, datasetId: string, name: string): Promise<DashboardDetail | null> {
-  const found = await findByDatasetId(userId, datasetId);
+  const found = await findByDatasetRef(userId, datasetId);
   if (!found) return null;
   const [a] = await db
     .select()
@@ -85,7 +85,7 @@ export async function runDashboard(
   givens: Record<string, unknown>,
   maxRows = 5000,
 ): Promise<DashboardRunResult> {
-  const found = await findByDatasetId(userId, datasetId);
+  const found = await findByDatasetRef(userId, datasetId);
   if (!found) return { ok: false, error: "dataset not found" };
   if (found.ds.status !== "ready") return { ok: false, error: "dataset not ready" };
   const [a] = await db

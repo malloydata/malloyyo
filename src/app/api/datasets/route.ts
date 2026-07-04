@@ -40,6 +40,16 @@ export async function POST(req: Request) {
   }
 
   const name = nameToSlug(body.name);
+  // Names are used as URLs and must be unique among live datasets on the server.
+  const [clash] = await db
+    .select({ id: datasets.id })
+    .from(datasets)
+    .where(and(eq(datasets.name, name), eq(datasets.status, "ready")))
+    .limit(1);
+  if (clash) {
+    return NextResponse.json({ error: `a dataset named "${name}" already exists on this server` }, { status: 409 });
+  }
+
   let owner: string, repo: string;
   try {
     ({ owner, repo } = parseGitHubRepo(body.githubRepo));

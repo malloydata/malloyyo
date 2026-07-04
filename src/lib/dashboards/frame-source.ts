@@ -97,13 +97,27 @@ function Panel(props) {
 }
 
 function Root() {
+  // Seed givens from the URL (window.__INITIAL_GIVENS__, injected by the frame
+  // route from its query) so a shared link opens in that filtered state; fall
+  // back to the manifest defaults.
   const initial = {};
+  const fromUrl = window.__INITIAL_GIVENS__ || {};
   const specs = manifest.givens || [];
-  for (let i = 0; i < specs.length; i++) initial[specs[i].name] = specs[i].default;
+  for (let i = 0; i < specs.length; i++) {
+    const spec = specs[i];
+    const raw = fromUrl[spec.name];
+    if (raw !== undefined && raw !== null && raw !== "") {
+      initial[spec.name] = spec.type === "number" ? Number(raw) : raw;
+    } else {
+      initial[spec.name] = spec.default;
+    }
+  }
   const [givens, setGivens] = useState(initial);
   const setGiven = useCallback(function (name, value) {
     setGivens(function (prev) { const next = Object.assign({}, prev); next[name] = value; return next; });
   }, []);
+  // Reflect givens up to the trusted parent so it can mirror them into the URL.
+  useEffect(function () { parent.postMessage({ type: "givens", givens: givens }, "*"); }, [givens]);
   return React.createElement(Dashboard, { manifest: manifest, givens: givens, setGiven: setGiven, Panel: Panel });
 }
 

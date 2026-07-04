@@ -18,8 +18,31 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 import * as esbuild from "esbuild";
 import { makeRunner, type ModelRunner } from "./host.js";
+
+// The dashboard's Dashboard.tsx lives in the user's model repo, which may be
+// anywhere on disk (outside this monorepo). Its `react` / automatic-JSX imports
+// must resolve to the CLI's OWN copies, not the model repo's node_modules (which
+// usually don't exist). Resolve them once from here and alias them at bundle time.
+const require = createRequire(import.meta.url);
+const HOST_LIBS = [
+  "react",
+  "react-dom",
+  "react-dom/client",
+  "react/jsx-runtime",
+  "react/jsx-dev-runtime",
+  "@malloydata/render",
+];
+const HOST_ALIAS: Record<string, string> = {};
+for (const spec of HOST_LIBS) {
+  try {
+    HOST_ALIAS[spec] = require.resolve(spec);
+  } catch {
+    /* optional (jsx-dev-runtime may be absent) */
+  }
+}
 
 interface GivenSpec {
   name: string;
@@ -101,6 +124,11 @@ function makeBundler() {
           name: "virtual-dashboard",
           setup(b) {
             b.onResolve({ filter: /^virtual:dashboard$/ }, () => ({ path: dashboardFile }));
+            // Force react / renderer imports to the CLI's copies, whatever
+            // directory the dashboard file lives in.
+            b.onResolve({ filter: /^(react($|\/)|react-dom($|\/)|@malloydata\/render$)/ }, (args) =>
+              HOST_ALIAS[args.path] ? { path: HOST_ALIAS[args.path] } : undefined,
+            );
           },
         },
       ],

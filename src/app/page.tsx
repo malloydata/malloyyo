@@ -82,6 +82,7 @@ export default function HomePage() {
   const [claudeConnected, setClaudeConnected] = useState(false);
   const [sources, setSources] = useState<SourceSummary[] | null>(null);
   const [favQueries, setFavQueries] = useState<FavQuery[]>([]);
+  const [dashboards, setDashboards] = useState<Array<{ datasetId: string; name: string; title: string }>>([]);
   // Claude connect-instructions modal — shown when clicking a source's Claude
   // button before the connector is linked. claudeTargetUrl is the explore chat
   // to continue to after setup.
@@ -99,9 +100,14 @@ export default function HomePage() {
     if (typeof meJson.signinNotice === "string") setSigninNotice(meJson.signinNotice);
     if (typeof meJson.claudeConnected === "boolean") setClaudeConnected(meJson.claudeConnected);
     if (meJson.user) {
-      const [srcRes, favRes] = await Promise.all([fetch("/api/sources"), fetch("/api/favorited-queries")]);
+      const [srcRes, favRes, dashRes] = await Promise.all([
+        fetch("/api/sources"),
+        fetch("/api/favorited-queries"),
+        fetch("/api/dashboards"),
+      ]);
       if (srcRes.ok) setSources(await srcRes.json());
       if (favRes.ok) setFavQueries(await favRes.json());
+      if (dashRes.ok) setDashboards(await dashRes.json());
     }
   }
 
@@ -119,6 +125,14 @@ export default function HomePage() {
   // Every source grouped by dataset, plus a lookup for dataset metadata.
   const datasetGroups = sources ? groupByDataset(sources) : [];
   const datasetById = new Map(datasetGroups.map((g) => [g.datasetId, g]));
+
+  // Dashboards grouped by dataset, for the per-dataset row below.
+  const dashByDataset = new Map<string, Array<{ name: string; title: string }>>();
+  for (const d of dashboards) {
+    let arr = dashByDataset.get(d.datasetId);
+    if (!arr) { arr = []; dashByDataset.set(d.datasetId, arr); }
+    arr.push({ name: d.name, title: d.title });
+  }
 
   // Datasets to render: those with questions first (recency order), then any
   // remaining datasets (their sources still show, just with no questions).
@@ -238,6 +252,21 @@ export default function HomePage() {
                           </Link>
                         </div>
                       </div>
+
+                      {(dashByDataset.get(dsId)?.length ?? 0) > 0 && (
+                        <div className="px-3 py-2 border-b border-gray-200 dark:border-gray-800 flex flex-wrap items-center gap-2">
+                          <span className="text-[10px] uppercase tracking-wide text-gray-400 dark:text-gray-500">dashboards</span>
+                          {dashByDataset.get(dsId)!.map((d) => (
+                            <Link
+                              key={d.name}
+                              href={`/datasets/${dsId}/dashboard/${encodeURIComponent(d.name)}`}
+                              className="text-xs px-2 py-0.5 rounded border border-gray-300 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-900"
+                            >
+                              {d.title}
+                            </Link>
+                          ))}
+                        </div>
+                      )}
 
                       <div className="divide-y divide-gray-100 dark:divide-gray-900">
                         {order.map((srcKey) => {

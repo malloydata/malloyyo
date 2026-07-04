@@ -17,6 +17,7 @@ type DatasetDetail = {
   isAdmin: boolean;
   githubRepo: string | null;
   githubBranch: string | null;
+  dashboards: Array<{ name: string; title: string; manifest: Record<string, unknown>; source: string }>;
   lastPublish: {
     at: string;
     sha: string | null;
@@ -168,7 +169,7 @@ export default function DatasetPage({
         <span>{data.readyAt ? new Date(data.readyAt).toLocaleString() : "—"}</span>
       </section>
 
-      <DashboardsSection datasetId={data.id} />
+      <DashboardsSection datasetName={data.name} dashboards={data.dashboards} />
 
       {data.statusError && (
         <section>
@@ -199,32 +200,56 @@ export default function DatasetPage({
   );
 }
 
-// The dataset's dashboards (from ./dashboards in the model repo), each linking to
-// its render page. Hidden when the dataset has none.
-function DashboardsSection({ datasetId }: { datasetId: string }) {
-  const [list, setList] = useState<Array<{ name: string; title: string }> | null>(null);
-  useEffect(() => {
-    fetch(`/api/dashboards?datasetId=${datasetId}`)
-      .then((r) => (r.ok ? r.json() : []))
-      .then(setList)
-      .catch(() => setList([]));
-  }, [datasetId]);
-  if (!list || list.length === 0) return null;
+// The dataset's dashboards (from ./dashboards in the model repo): a link to open
+// each, plus its manifest.json + Dashboard.tsx contents (expandable, like the
+// model files). Hidden when the dataset has none.
+function DashboardsSection({
+  datasetName,
+  dashboards,
+}: {
+  datasetName: string;
+  dashboards: DatasetDetail["dashboards"];
+}) {
+  if (!dashboards || dashboards.length === 0) return null;
   return (
-    <section className="space-y-2">
-      <h2 className="text-sm font-semibold">dashboards</h2>
-      <div className="flex flex-wrap gap-2">
-        {list.map((d) => (
-          <Link
-            key={d.name}
-            href={`/datasets/${datasetId}/dashboard/${encodeURIComponent(d.name)}`}
-            className="text-xs px-3 py-1.5 rounded border border-gray-300 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-900"
-          >
-            {d.title}
-          </Link>
-        ))}
-      </div>
+    <section className="space-y-3">
+      <h2 className="text-sm font-semibold">dashboards ({dashboards.length})</h2>
+      {dashboards.map((d) => (
+        <div key={d.name} className="border border-gray-200 dark:border-gray-800 rounded overflow-hidden">
+          <div className="flex items-center justify-between gap-3 px-3 py-2 bg-gray-50 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-800">
+            <span className="font-semibold text-xs">{d.title}</span>
+            <Link
+              href={`/datasets/${encodeURIComponent(datasetName)}/dashboard/${encodeURIComponent(d.name)}`}
+              className="text-[11px] px-2 py-0.5 rounded border border-gray-300 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-900"
+            >
+              open ↗
+            </Link>
+          </div>
+          <DashboardFile path={`dashboards/${d.name}/manifest.json`} content={JSON.stringify(d.manifest, null, 2)} />
+          <DashboardFile path={`dashboards/${d.name}/Dashboard.tsx`} content={d.source} defaultOpen={false} />
+        </div>
+      ))}
     </section>
+  );
+}
+
+function DashboardFile({ path, content, defaultOpen = false }: { path: string; content: string; defaultOpen?: boolean }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="border-t border-gray-100 dark:border-gray-900 first:border-t-0">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center justify-between px-3 py-1.5 text-[11px] font-mono text-left hover:bg-gray-50 dark:hover:bg-gray-900/50"
+      >
+        <span className="text-gray-600 dark:text-gray-400">{path}</span>
+        <span className="text-gray-400 dark:text-gray-500">{open ? "▲" : "▼"}</span>
+      </button>
+      {open && (
+        <pre className="text-[11px] bg-gray-50 dark:bg-gray-900 text-gray-700 dark:text-gray-300 border-t border-gray-200 dark:border-gray-800 p-3 overflow-auto whitespace-pre">
+          {content}
+        </pre>
+      )}
+    </div>
   );
 }
 

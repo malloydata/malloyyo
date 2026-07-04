@@ -12,6 +12,7 @@ import {
   primaryKey,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
   integer,
 } from "drizzle-orm/pg-core";
@@ -133,7 +134,12 @@ export const datasets = pgTable(
       .default(sql`now()`),
     readyAt: timestamp("ready_at", { withTimezone: true }),
   },
-  (t) => [index("datasets_user_id_idx").on(t.userId)],
+  (t) => [
+    index("datasets_user_id_idx").on(t.userId),
+    // One live (ready) dataset per name on the server — names are used as URLs.
+    // Partial: failed/stale dupes (hidden by visibleDatasetWhere) don't conflict.
+    uniqueIndex("datasets_name_ready_unique").on(t.name).where(sql`status = 'ready'`),
+  ],
 );
 
 export const malloyModels = pgTable(

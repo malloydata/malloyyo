@@ -148,7 +148,15 @@ const html = (body: string, title: string) =>
   `<meta name="viewport" content="width=device-width,initial-scale=1"></head>` +
   `<body style="margin:0">${body}</body></html>`;
 
-function parentShell(dash: Dashboard, frameBase: string, all: Dashboard[]): string {
+function parentShell(
+  dash: Dashboard,
+  frameBase: string,
+  all: Dashboard[],
+  initialGivens: Record<string, string>,
+): string {
+  const givensQs = Object.entries(initialGivens)
+    .map(([k, v]) => `&${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+    .join("");
   // Trusted broker: forwards a run request from the sandboxed frame to /api/run
   // (same-origin to THIS page), then posts the result back into the frame. The
   // frame is served from `frameBase` (a DIFFERENT port = different origin), so
@@ -181,14 +189,23 @@ function parentShell(dash: Dashboard, frameBase: string, all: Dashboard[]): stri
     `<div style="display:flex;flex-direction:column;height:100vh">` +
       nav +
       `<iframe id="f" sandbox="allow-scripts allow-same-origin"` +
-      ` src="${frameBase}/frame?d=${encodeURIComponent(dash.name)}"` +
+      ` src="${frameBase}/frame?d=${encodeURIComponent(dash.name)}${givensQs}"` +
       ` style="border:0;flex:1;width:100%"></iframe>` +
       `</div>` +
       `<script>
 const f=document.getElementById('f');
+try{new EventSource('/events').onmessage=()=>location.reload();}catch(e){}
 window.addEventListener('message',async(e)=>{
   if(e.source!==f.contentWindow||e.origin!==${fb})return;
-  const m=e.data; if(!m||m.type!=='run')return;
+  const m=e.data;
+  if(m&&m.type==='givens'){
+    const u=new URL(location.href); u.search='';
+    u.searchParams.set('d',${d});
+    for(const [k,v] of Object.entries(m.givens)) u.searchParams.set(k,String(v));
+    history.replaceState(null,'',u.pathname+u.search);
+    return;
+  }
+  if(!m||m.type!=='run')return;
   let out;
   try{
     const res=await fetch('/api/run',{method:'POST',headers:{'content-type':'application/json'},
@@ -202,13 +219,21 @@ window.addEventListener('message',async(e)=>{
   );
 }
 
-function frameDoc(dash: Dashboard): string {
+/** URL query minus the `d` (dashboard) selector = the givens/filter values. */
+function givensFromUrl(url: URL): Record<string, string> {
+  const g: Record<string, string> = {};
+  for (const [k, v] of url.searchParams) if (k !== "d") g[k] = v;
+  return g;
+}
+
+function frameDoc(dash: Dashboard, initialGivens: Record<string, string>): string {
   // NOTE (prototype): the `sandbox` attribute is the containment here. A
   // production build would also send a strict CSP (connect-src 'none',
   // img-src data:, etc.) to close exfil side-channels — see repo-artifacts.md §8.
   return html(
     `<div id="root"></div>` +
-      `<script>window.__MANIFEST__=${JSON.stringify(dash.manifest)}</script>` +
+      `<script>window.__MANIFEST__=${JSON.stringify(dash.manifest)};` +
+      `window.__INITIAL_GIVENS__=${JSON.stringify(initialGivens)}</script>` +
       `<script src="/bundle.js?d=${encodeURIComponent(dash.name)}"></script>`,
     dash.manifest.title,
   );
@@ -234,11 +259,11 @@ export async function serveDashboard(opts: {
   const framePort = port + 1;
   const frameBase = `http://localhost:${framePort}`;
 
-  const dashboards = discoverDashboards(root);
+  let dashboards = discoverDashboards(root);
   if (dashboards.length === 0) {
     throw new Error(`No dashboards found under ${path.join(root, "dashboards")}/`);
   }
-  const byName = new Map(dashboards.map((d) => [d.name, d]));
+  let byName = new Map(dashboards.map((d) => [d.name, d]));
   const runner: ModelRunner = await makeRunner(root);
   if (!runner.entryExists()) {
     throw new Error(`No index.malloy at ${root} — run this from a Malloy model repo.`);
@@ -247,6 +272,31 @@ export async function serveDashboard(opts: {
 
   const pick = (url: URL): Dashboard =>
     byName.get(url.searchParams.get("d") ?? dashboards[0].name) ?? dashboards[0];
+
+  // Live reload: watch the model + dashboards and tell the browser to reload on
+  // any change. The runner reads model files fresh per run, the bundle cache is
+  // keyed by mtime, and we re-discover manifests here — so a reload picks up
+  // edits to .malloy, manifest.json, or Dashboard.tsx without a restart.
+  const sseClients = new Set<http.ServerResponse>();
+  const notifyReload = () => {
+    for (const c of sseClients) c.write("data: reload\n\n");
+  };
+  let debounce: ReturnType<typeof setTimeout> | undefined;
+  try {
+    fs.watch(root, { recursive: true }, (_evt, filename) => {
+      const f = filename?.toString() ?? "";
+      if (!f.endsWith(".malloy") && !f.includes("dashboards")) return;
+      clearTimeout(debounce);
+      debounce = setTimeout(() => {
+        dashboards = discoverDashboards(root);
+        byName = new Map(dashboards.map((d) => [d.name, d]));
+        console.error(`  ↻ ${f} changed — reloading`);
+        notifyReload();
+      }, 150);
+    });
+  } catch (e) {
+    console.error(`  (file watch unavailable: ${(e as Error).message} — edits won't auto-reload)`);
+  }
 
   const handler = async (req: http.IncomingMessage, res: http.ServerResponse) => {
     const onFramePort = (req.socket.localPort ?? port) === framePort;
@@ -261,7 +311,7 @@ export async function serveDashboard(opts: {
       // the runner on its own origin.
       if (onFramePort) {
         if (url.pathname === "/frame") {
-          return send(200, "text/html; charset=utf-8", frameDoc(pick(url)));
+          return send(200, "text/html; charset=utf-8", frameDoc(pick(url), givensFromUrl(url)));
         }
         if (url.pathname === "/bundle.js") {
           return send(200, "application/javascript; charset=utf-8", await bundle(pick(url)));
@@ -269,8 +319,16 @@ export async function serveDashboard(opts: {
         return send(404, "text/plain", "not found");
       }
       // Parent origin: the trusted shell + the runner.
+      // Live-reload stream: the shell subscribes and reloads on a file change.
+      if (url.pathname === "/events") {
+        res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
+        res.write("retry: 1000\n\n");
+        sseClients.add(res);
+        req.on("close", () => sseClients.delete(res));
+        return;
+      }
       if (url.pathname === "/") {
-        return send(200, "text/html; charset=utf-8", parentShell(pick(url), frameBase, dashboards));
+        return send(200, "text/html; charset=utf-8", parentShell(pick(url), frameBase, dashboards, givensFromUrl(url)));
       }
       if (url.pathname === "/api/run" && req.method === "POST") {
         const { d, query, givens } = JSON.parse(await readBody(req));

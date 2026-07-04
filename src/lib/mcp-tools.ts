@@ -67,6 +67,24 @@ export async function findByDatasetId(userId: string, datasetId: string) {
   return { ds, model, description: null as string | null };
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Resolve a dataset by id (uuid) OR by name — the ready dataset with that name,
+    which is unique on the server. Lets URLs use the readable name while old
+    uuid links keep working. */
+export async function findByDatasetRef(userId: string, ref: string) {
+  if (UUID_RE.test(ref)) return findByDatasetId(userId, ref);
+  const [ds] = await db
+    .select()
+    .from(datasets)
+    .where(and(visibleDatasetWhere(userId), eq(datasets.name, ref)))
+    .limit(1);
+  if (!ds) return null;
+  const model = await latestModel(ds.id);
+  if (!model) return null;
+  return { ds, model, description: null as string | null };
+}
+
 export async function latestModel(datasetId: string) {
   const [row] = await db
     .select()

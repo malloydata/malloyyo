@@ -2,9 +2,8 @@
 // SPDX-License-Identifier: MIT
 
 import { NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
-import { desc } from "drizzle-orm";
-import { db, datasets, malloyModels, malloyModelFiles, users } from "@/db";
+import { and, desc, eq } from "drizzle-orm";
+import { db, datasets, malloyModels, malloyModelFiles, malloyArtifacts, users } from "@/db";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
 
@@ -15,7 +14,11 @@ export async function GET(
   ctx: RouteContext<"/api/datasets/[id]">,
 ) {
   const { id } = await ctx.params;
-  const [ds] = await db.select().from(datasets).where(eq(datasets.id, id));
+  // `id` may be a dataset uuid OR a name (the ready dataset with that name).
+  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
+  const [ds] = isUuid
+    ? await db.select().from(datasets).where(eq(datasets.id, id))
+    : await db.select().from(datasets).where(and(eq(datasets.name, id), eq(datasets.status, "ready")));
   if (!ds) return NextResponse.json({ error: "not found" }, { status: 404 });
 
   let me;
@@ -35,7 +38,7 @@ export async function GET(
 
   const [user] = await db.select().from(users).where(eq(users.id, ds.userId));
   const [model] = await db.select().from(malloyModels)
-    .where(eq(malloyModels.datasetId, id))
+    .where(eq(malloyModels.datasetId, ds.id))
     .orderBy(desc(malloyModels.createdAt))
     .limit(1);
 
@@ -45,6 +48,20 @@ export async function GET(
         .from(malloyModelFiles)
         .where(eq(malloyModelFiles.modelId, model.id))
         .orderBy(malloyModelFiles.path)
+    : [];
+
+  // Dashboard artifacts (manifest + Dashboard.tsx) shown alongside the model files.
+  const dashboards = model
+    ? await db
+        .select({
+          name: malloyArtifacts.name,
+          title: malloyArtifacts.title,
+          manifest: malloyArtifacts.manifest,
+          source: malloyArtifacts.source,
+        })
+        .from(malloyArtifacts)
+        .where(eq(malloyArtifacts.modelId, model.id))
+        .orderBy(malloyArtifacts.name)
     : [];
 
   return NextResponse.json({
@@ -57,6 +74,7 @@ export async function GET(
     githubUseToken: ds.githubUseToken,
     userSlug: user?.slug ?? null,
     isAdmin: me ? isAdmin(me) : false,
+    dashboards,
     lastPublish:
       canManage && ds.lastPublishAt
         ? {

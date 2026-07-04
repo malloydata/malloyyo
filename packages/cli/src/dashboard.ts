@@ -96,8 +96,11 @@ function discoverDashboards(root: string): Dashboard[] {
       console.error(`  ! skipping ${name}: bad manifest.json (${(e as Error).message})`);
     }
   }
-  return out;
+  return out.sort((a, b) => a.name.localeCompare(b.name));
 }
+
+const esc = (s: string) =>
+  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 /** Bundle the artifact's Dashboard.tsx with the frame runtime. Cached by the
     Dashboard.tsx mtime so an edit rebuilds (basic hot reload on next load). */
@@ -144,7 +147,7 @@ const html = (body: string, title: string) =>
   `<meta name="viewport" content="width=device-width,initial-scale=1"></head>` +
   `<body style="margin:0">${body}</body></html>`;
 
-function parentShell(dash: Dashboard, frameBase: string): string {
+function parentShell(dash: Dashboard, frameBase: string, all: Dashboard[]): string {
   // Trusted broker: forwards a run request from the sandboxed frame to /api/run
   // (same-origin to THIS page), then posts the result back into the frame. The
   // frame is served from `frameBase` (a DIFFERENT port = different origin), so
@@ -153,10 +156,33 @@ function parentShell(dash: Dashboard, frameBase: string): string {
   // call /api/run directly, only postMessage. See docs/repo-artifacts.md §7/§8.
   const d = JSON.stringify(dash.name);
   const fb = JSON.stringify(frameBase);
+  // Switcher chrome (only when there's more than one dashboard). Lives in the
+  // TRUSTED shell, outside the sandboxed frame; each tab is a full reload to
+  // `/?d=<name>`, which re-picks the dashboard server-side.
+  const nav =
+    all.length > 1
+      ? `<nav style="display:flex;gap:4px;align-items:center;padding:8px 12px;` +
+        `background:#f6f7f9;border-bottom:1px solid #e2e4e8;font:13px system-ui,sans-serif">` +
+        `<span style="color:#888;margin-right:8px">Dashboards</span>` +
+        all
+          .map((x) => {
+            const on = x.name === dash.name;
+            return (
+              `<a href="/?d=${encodeURIComponent(x.name)}" style="padding:4px 10px;` +
+              `border-radius:6px;text-decoration:none;${on ? "background:#1a1a1a;color:#fff" : "color:#333"}">` +
+              `${esc(x.manifest.title || x.name)}</a>`
+            );
+          })
+          .join("") +
+        `</nav>`
+      : "";
   return html(
-    `<iframe id="f" sandbox="allow-scripts allow-same-origin"` +
+    `<div style="display:flex;flex-direction:column;height:100vh">` +
+      nav +
+      `<iframe id="f" sandbox="allow-scripts allow-same-origin"` +
       ` src="${frameBase}/frame?d=${encodeURIComponent(dash.name)}"` +
-      ` style="border:0;position:fixed;inset:0;width:100%;height:100%"></iframe>` +
+      ` style="border:0;flex:1;width:100%"></iframe>` +
+      `</div>` +
       `<script>
 const f=document.getElementById('f');
 window.addEventListener('message',async(e)=>{
@@ -243,7 +269,7 @@ export async function serveDashboard(opts: {
       }
       // Parent origin: the trusted shell + the runner.
       if (url.pathname === "/") {
-        return send(200, "text/html; charset=utf-8", parentShell(pick(url), frameBase));
+        return send(200, "text/html; charset=utf-8", parentShell(pick(url), frameBase, dashboards));
       }
       if (url.pathname === "/api/run" && req.method === "POST") {
         const { d, query, givens } = JSON.parse(await readBody(req));

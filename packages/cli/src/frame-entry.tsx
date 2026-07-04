@@ -113,7 +113,23 @@ function Panel({ query, givens }) {
     };
   }, [state.result]);
   if (state.error) return <pre style={{ color: "crimson", whiteSpace: "pre-wrap" }}>{state.error}</pre>;
-  return <div ref={ref} style={{ minHeight: 320, opacity: state.loading ? 0.4 : 1, transition: "opacity .15s" }} />;
+  // display:grid + width:100% + a real min-height: the Malloy render web
+  // component has no intrinsic height for charts/maps, so it collapses to
+  // nothing in a plain block container (tables survive on row height). This
+  // matches the hosted MalloyResultView container.
+  return (
+    <div
+      ref={ref}
+      style={{
+        display: "grid",
+        width: "100%",
+        minHeight: 480,
+        overflow: "auto",
+        opacity: state.loading ? 0.4 : 1,
+        transition: "opacity .15s",
+      }}
+    />
+  );
 }
 
 function Root() {

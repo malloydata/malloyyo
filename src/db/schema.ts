@@ -189,6 +189,33 @@ export const malloyModelFiles = pgTable(
   ],
 );
 
+// Dashboard artifacts that ship in the model's repo under ./dashboards/<name>/.
+// Ingested the SAME way model files are — on a GitHub refresh or a CLI publish —
+// and keyed to the model VERSION, so a reload/publish just re-inserts the current
+// dashboards for the new version (mirrors malloy_model_files).
+// See docs/repo-artifacts.md.
+export const malloyArtifacts = pgTable(
+  "malloy_artifacts",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    modelId: uuid("model_id")
+      .notNull()
+      .references(() => malloyModels.id, { onDelete: "cascade" }),
+    // Dashboard directory name = slug within the model, e.g. "over-represented".
+    name: text("name").notNull(),
+    // manifest.title, hoisted for listing without parsing the manifest.
+    title: text("title"),
+    // Parsed manifest.json (query + givens + layout hints).
+    manifest: jsonb("manifest").$type<Record<string, unknown>>().notNull(),
+    // The Dashboard.tsx source; bundled at serve time.
+    source: text("source").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .default(sql`now()`),
+  },
+  (t) => [index("malloy_artifacts_model_id_idx").on(t.modelId)],
+);
+
 // Durable, favoritable queries — the ones we deliberately keep. Created when a
 // user saves an edited query in ltool or favorites a run (which promotes the
 // run's history row into here). Holds a full COPY of the query so `history` can

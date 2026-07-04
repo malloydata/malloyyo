@@ -12,9 +12,12 @@ import {
   MalloyConfig,
   Runtime,
   discoverConfig,
+  type GivenValue,
   type URLReader,
 } from "@malloydata/malloy";
 import { prepareSource, run, type RunResult } from "@malloyyo/mcp-engine";
+
+export type ValidateResult = { ok: true } | { ok: false; error: string };
 
 const ENTRY = "index.malloy";
 
@@ -45,6 +48,9 @@ async function loadConfig(rootUrl: URL, reader: URLReader): Promise<MalloyConfig
 export interface ModelRunner {
   /** Run a top-level named query with the given filter values (the givens). */
   run(queryName: string, givens: Record<string, unknown>): Promise<RunResult>;
+  /** Compile-only: does the named query exist and do the givens bind? No data
+      fetch — used by `lint` to catch drift (unknown given, missing query). */
+  validate(queryName: string, givens: Record<string, unknown>): Promise<ValidateResult>;
   entryExists(): boolean;
   root: string;
 }
@@ -55,26 +61,44 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
   const abs = path.resolve(root);
   const rootUrl = url.pathToFileURL(abs + path.sep);
 
+  // Per-call lease: fresh runtime over the current config, idled after use.
+  async function lease<T>(fn: (runtime: Runtime, entry: URL) => Promise<T>): Promise<T> {
+    const reader = fsReader();
+    const config = await loadConfig(rootUrl, reader);
+    const { reader: prepared, entry } = prepareSource(reader, { url: path.join(abs, ENTRY) });
+    const runtime = new Runtime({ config, urlReader: prepared });
+    try {
+      return await fn(runtime, entry);
+    } finally {
+      await config.shutdown("idle").catch(() => {});
+    }
+  }
+
   return {
     root: abs,
     entryExists: () => fs.existsSync(path.join(abs, ENTRY)),
-    async run(queryName, givens) {
-      const reader = fsReader();
-      const config = await loadConfig(rootUrl, reader);
-      const { reader: prepared, entry } = prepareSource(reader, {
-        url: path.join(abs, ENTRY),
+    run(queryName, givens) {
+      return lease((runtime, entry) =>
+        run(runtime, entry, { name: queryName, givens, stableResult: true, rowLimit: 5000 }),
+      );
+    },
+    validate(queryName, givens) {
+      return lease(async (runtime, entry) => {
+        try {
+          const mm = runtime.loadModel(entry);
+          const model = await mm.getModel();
+          const named = [...model.queries().named];
+          if (!named.includes(queryName)) {
+            return { ok: false, error: `no query named '${queryName}' (model has: ${named.join(", ") || "none"})` };
+          }
+          const q = mm.loadQueryByName(queryName);
+          const has = givens && Object.keys(givens).length > 0;
+          await q.getSQL(has ? { givens: givens as Record<string, GivenValue> } : undefined);
+          return { ok: true };
+        } catch (e) {
+          return { ok: false, error: e instanceof Error ? e.message : String(e) };
+        }
       });
-      const runtime = new Runtime({ config, urlReader: prepared });
-      try {
-        return await run(runtime, entry, {
-          name: queryName,
-          givens,
-          stableResult: true,
-          rowLimit: 5000,
-        });
-      } finally {
-        await config.shutdown("idle").catch(() => {});
-      }
     },
   };
 }

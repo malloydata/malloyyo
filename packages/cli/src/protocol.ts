@@ -21,12 +21,24 @@ export interface GitInfo {
   dirty?: boolean;
 }
 
+/** A dashboard artifact from ./dashboards/<name>/, gathered for publish. */
+export interface DashboardPayload {
+  /** Dashboard directory name = slug within the model. */
+  name: string;
+  /** Parsed manifest.json. */
+  manifest: Record<string, unknown>;
+  /** Dashboard.tsx source. */
+  source: string;
+}
+
 /** Body of POST /api/datasets/:dataset/model/push */
 export interface PublishRequest {
   files: ModelFile[];
   /** Contents of malloy-config.json at the directory root, if present. */
   config?: string;
   git: GitInfo;
+  /** Dashboards under ./dashboards/, stored the same way a GitHub refresh does. */
+  dashboards?: DashboardPayload[];
 }
 
 /** Response from both `model/push` and `model/status`. Mirrors the server's RefreshResult. */

@@ -14,7 +14,8 @@ const ENTRY = `
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 import { MalloyRenderer } from "@malloydata/render";
-window.__DASH_VENDOR__ = { React, createRoot, MalloyRenderer };
+import * as jsxRuntime from "react/jsx-runtime";
+window.__DASH_VENDOR__ = { React, createRoot, MalloyRenderer, jsxRuntime };
 `;
 
 await esbuild.build({

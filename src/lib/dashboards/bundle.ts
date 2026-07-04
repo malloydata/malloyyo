@@ -24,6 +24,13 @@ export const useState = R.useState, useEffect = R.useEffect, useRef = R.useRef,
   memo = R.memo;
 `;
 
+// Automatic JSX (matching the CLI preview) imports react/jsx-runtime, so a
+// Dashboard.tsx that doesn't `import React` still works.
+const JSX_SHIM = `
+const J = window.__DASH_VENDOR__.jsxRuntime;
+export const jsx = J.jsx, jsxs = J.jsxs, Fragment = J.Fragment;
+`;
+
 const cache = new Map<string, string>();
 
 export async function bundleDashboard(source: string): Promise<string> {
@@ -37,10 +44,9 @@ export async function bundleDashboard(source: string): Promise<string> {
     bundle: true,
     format: "iife",
     platform: "browser",
-    // Classic JSX so no react/jsx-runtime import — React comes from the shim.
-    jsx: "transform",
-    jsxFactory: "React.createElement",
-    jsxFragment: "React.Fragment",
+    // Automatic JSX (like the CLI preview) — no `import React` required in a
+    // Dashboard.tsx; the injected react/jsx-runtime import is shimmed below.
+    jsx: "automatic",
     write: false,
     logLevel: "silent",
     define: { "process.env.NODE_ENV": '"production"' },
@@ -50,8 +56,11 @@ export async function bundleDashboard(source: string): Promise<string> {
         setup(b) {
           b.onResolve({ filter: /^virtual:dashboard$/ }, () => ({ path: "dashboard", namespace: "vdash" }));
           b.onLoad({ filter: /.*/, namespace: "vdash" }, () => ({ contents: source, loader: "tsx" }));
-          // `react` / `react/...` → the vendor global. Nothing heavy is bundled.
-          b.onResolve({ filter: /^react($|\/)/ }, () => ({ path: "react", namespace: "vreact" }));
+          // react/jsx-runtime (automatic JSX) → vendor's jsx runtime.
+          b.onResolve({ filter: /^react\/jsx-(dev-)?runtime$/ }, () => ({ path: "jsxr", namespace: "vjsx" }));
+          b.onLoad({ filter: /.*/, namespace: "vjsx" }, () => ({ contents: JSX_SHIM, loader: "js" }));
+          // `import React from "react"` (and named hooks) → the vendor global.
+          b.onResolve({ filter: /^react$/ }, () => ({ path: "react", namespace: "vreact" }));
           b.onLoad({ filter: /.*/, namespace: "vreact" }, () => ({ contents: REACT_SHIM, loader: "js" }));
         },
       },

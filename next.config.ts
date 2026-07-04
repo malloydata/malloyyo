@@ -39,14 +39,15 @@ const nextConfig: NextConfig = {
     "/api/run": [
       "./node_modules/@duckdb/node-bindings*/**/*",
     ],
-    // The dashboard bundle route runs esbuild at request time and reads react /
-    // react-dom / the renderer from node_modules — trace them into the function.
+    // The dashboard bundle route runs esbuild at request time (to compile the
+    // frame runtime + the artifact) — trace esbuild's binary in. React and the
+    // renderer are NOT bundled at runtime (they come from the prebuilt
+    // public/dashboard-vendor.js), so they don't need tracing here.
     "/api/dashboards/[datasetId]/[name]/bundle": [
       "./node_modules/esbuild/**",
       "./node_modules/@esbuild/**",
-      "./node_modules/react/**",
-      "./node_modules/react-dom/**",
-      "./node_modules/@malloydata/render/**",
+      "./node_modules/.pnpm/esbuild@*/node_modules/esbuild/**",
+      "./node_modules/.pnpm/@esbuild+*/node_modules/@esbuild/**",
     ],
   },
 };

@@ -22,6 +22,8 @@ const eslintConfig = defineConfig([
     // constraints). Includes the CLI frame runtime and example dashboards.
     "packages/cli/src/frame-entry.tsx",
     "examples/**",
+    // Generated at build time (react + renderer vendor bundle for dashboards).
+    "public/dashboard-vendor.js",
   ]),
   {
     // Honor the `_`-prefix convention for deliberately-unused bindings

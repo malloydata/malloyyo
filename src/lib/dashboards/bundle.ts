@@ -1,39 +1,28 @@
 // Copyright (c) The Malloy Foundation
 // SPDX-License-Identifier: MIT
 
-// Bundle a stored Dashboard.tsx into a browser IIFE at request time. The
-// artifact source comes from the DB (a string), so the frame runtime is the
-// esbuild entry (via stdin) and the dashboard is a virtual module. react /
-// react-dom / @malloydata/render are forced to the app's own copies so a
-// dashboard authored anywhere resolves them.
+// Compile a stored Dashboard.tsx into a browser IIFE at request time. The heavy
+// libs (React, ReactDOM, the Malloy renderer) are NOT bundled here — they come
+// from the prebuilt vendor bundle (window.__DASH_VENDOR__, see
+// scripts/build-dashboard-vendor.mjs). So this runtime bundle resolves nothing
+// from node_modules: `react` is shimmed to the vendor global, JSX compiles to
+// React.createElement (classic), and the only inputs are the frame runtime + the
+// artifact source. That keeps it reliable in a traced serverless function.
 
 import * as esbuild from "esbuild";
-import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
-import { resolve } from "node:path";
 import { FRAME_SOURCE } from "./frame-source";
 
-// Anchor resolution at the app root's real package.json, NOT import.meta.url —
-// inside a Next route, import.meta.url resolves `react` to Next's vendored RSC
-// build (a virtual [project]/… path, and the wrong React for a browser bundle).
-// A cwd-anchored require does plain node resolution against the real node_modules.
-const require = createRequire(resolve("package.json"));
-const HOST_LIBS = [
-  "react",
-  "react-dom",
-  "react-dom/client",
-  "react/jsx-runtime",
-  "react/jsx-dev-runtime",
-  "@malloydata/render",
-];
-const HOST_ALIAS: Record<string, string> = {};
-for (const spec of HOST_LIBS) {
-  try {
-    HOST_ALIAS[spec] = require.resolve(spec);
-  } catch {
-    /* optional */
-  }
-}
+// `import React from "react"` (and named hooks) → the vendor global. Covers the
+// common imports a Dashboard.tsx uses; anything else is a lint-worthy smell.
+const REACT_SHIM = `
+const R = window.__DASH_VENDOR__.React;
+export default R;
+export const useState = R.useState, useEffect = R.useEffect, useRef = R.useRef,
+  useMemo = R.useMemo, useCallback = R.useCallback, useReducer = R.useReducer,
+  Fragment = R.Fragment, Component = R.Component, createElement = R.createElement,
+  memo = R.memo;
+`;
 
 const cache = new Map<string, string>();
 
@@ -48,24 +37,22 @@ export async function bundleDashboard(source: string): Promise<string> {
     bundle: true,
     format: "iife",
     platform: "browser",
-    jsx: "automatic",
+    // Classic JSX so no react/jsx-runtime import — React comes from the shim.
+    jsx: "transform",
+    jsxFactory: "React.createElement",
+    jsxFragment: "React.Fragment",
     write: false,
     logLevel: "silent",
-    loader: { ".css": "empty" },
     define: { "process.env.NODE_ENV": '"production"' },
     plugins: [
       {
         name: "dashboard",
         setup(b) {
           b.onResolve({ filter: /^virtual:dashboard$/ }, () => ({ path: "dashboard", namespace: "vdash" }));
-          b.onLoad({ filter: /.*/, namespace: "vdash" }, () => ({
-            contents: source,
-            loader: "tsx",
-            resolveDir: process.cwd(),
-          }));
-          b.onResolve({ filter: /^(react($|\/)|react-dom($|\/)|@malloydata\/render$)/ }, (args) =>
-            HOST_ALIAS[args.path] ? { path: HOST_ALIAS[args.path] } : undefined,
-          );
+          b.onLoad({ filter: /.*/, namespace: "vdash" }, () => ({ contents: source, loader: "tsx" }));
+          // `react` / `react/...` → the vendor global. Nothing heavy is bundled.
+          b.onResolve({ filter: /^react($|\/)/ }, () => ({ path: "react", namespace: "vreact" }));
+          b.onLoad({ filter: /.*/, namespace: "vreact" }, () => ({ contents: REACT_SHIM, loader: "js" }));
         },
       },
     ],

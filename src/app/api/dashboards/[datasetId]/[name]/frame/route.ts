@@ -24,6 +24,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ datasetId: str
       `<!doctype html><html><head><meta charset="utf-8"><title>${esc(dash.title)}</title>` +
       `<meta name="viewport" content="width=device-width,initial-scale=1"></head>` +
       `<body style="margin:0"><div id="root"></div>` +
+      `<script src="/dashboard-vendor.js"></script>` +
       `<script>window.__MANIFEST__=${JSON.stringify(dash.manifest)}</script>` +
       `<script src="${bundleUrl}"></script></body></html>`;
     return new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } });

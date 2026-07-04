@@ -12,10 +12,14 @@
 // givens via a postMessage bridge to the trusted parent page, and renders the
 // result with @malloydata/render.
 export const FRAME_SOURCE = String.raw`
-import React, { useState, useEffect, useRef, useCallback } from "react";
-import { createRoot } from "react-dom/client";
-import { MalloyRenderer } from "@malloydata/render";
+// React + ReactDOM + the Malloy renderer come from the prebuilt vendor bundle
+// (window.__DASH_VENDOR__), so the runtime bundle carries none of their deps.
 import Dashboard from "virtual:dashboard";
+const __V = window.__DASH_VENDOR__;
+const React = __V.React;
+const useState = React.useState, useEffect = React.useEffect, useRef = React.useRef, useCallback = React.useCallback;
+const createRoot = __V.createRoot;
+const MalloyRenderer = __V.MalloyRenderer;
 
 const manifest = window.__MANIFEST__;
 

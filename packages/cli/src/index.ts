@@ -2,9 +2,11 @@
 import { Command } from "commander";
 import { resolve } from "node:path";
 import { resolveTarget, resolveInstance } from "./config.js";
-import { gatherDirectory, gitInfo } from "./gather.js";
+import { gatherDirectory, gatherDashboards, gitInfo } from "./gather.js";
+import { lintDashboards, printLintReport } from "./lint.js";
 import { getAccessToken, login } from "./oauth.js";
 import { serveMcp } from "./mcp.js";
+import { serveDashboard } from "./dashboard.js";
 import { clearCreds } from "./store.js";
 import type { PublishRequest, ModelStatus } from "./protocol.js";
 // Single source of truth: the build runs after the release bump, so esbuild
@@ -19,7 +21,7 @@ function shortSha(sha?: string): string {
 async function publish(
   target: string,
   dir: string,
-  opts: { token?: string; dryRun?: boolean },
+  opts: { token?: string; dryRun?: boolean; skipLint?: boolean },
 ): Promise<void> {
   const root = resolve(dir);
   const t = resolveTarget(root, target);
@@ -29,8 +31,22 @@ async function publish(
   if (files.length === 0) {
     throw new Error(`No .malloy files found under ${root}`);
   }
+
+  // Lint dashboards before sending — a broken dashboard shouldn't reach the server.
+  if (!opts.skipLint) {
+    const report = await lintDashboards(root);
+    if (report.dashboards.length > 0) {
+      console.log("dashboards:");
+      printLintReport(report);
+    }
+    if (!report.ok) {
+      throw new Error("dashboard lint failed — fix the above, or pass --skip-lint");
+    }
+  }
+
   const git = gitInfo(root);
-  const body: PublishRequest = { files, config, git };
+  const dashboards = gatherDashboards(root);
+  const body: PublishRequest = { files, config, git, dashboards };
 
   const provenance = git.sha
     ? `${git.branch}@${shortSha(git.sha)}${git.dirty ? " (dirty)" : ""}`
@@ -53,7 +69,10 @@ async function publish(
   if (!res.ok || !out.ok) {
     throw new Error(`publish failed: ${out.error ?? `${res.status} ${res.statusText}`}`);
   }
-  console.log(`✓ published version ${out.version} — ${out.sources?.length ?? 0} source(s)`);
+  console.log(
+    `✓ published version ${out.version} — ${out.sources?.length ?? 0} source(s)` +
+      (dashboards.length ? `, ${dashboards.length} dashboard(s)` : ""),
+  );
 }
 
 async function status(target: string, opts: { token?: string }): Promise<void> {
@@ -107,8 +126,23 @@ program
   .argument("[dir]", "directory to publish", ".")
   .option("--token <token>", "bearer token (overrides login/env)")
   .option("--dry-run", "gather and report what would be sent, but don't POST")
+  .option("--skip-lint", "skip the pre-publish dashboard lint")
   .description('push the Malloy model in <dir> (default ".") to <target>')
   .action(publish);
+
+program
+  .command("lint")
+  .argument("[dir]", "directory to lint", ".")
+  .description("validate ./dashboards against the model (manifest, query, givens, Dashboard.tsx)")
+  .action(async (dir: string) => {
+    const report = await lintDashboards(resolve(dir));
+    if (report.dashboards.length === 0) {
+      console.log("no dashboards to lint");
+      return;
+    }
+    printLintReport(report);
+    if (!report.ok) process.exit(1);
+  });
 
 program
   .command("status")
@@ -126,6 +160,17 @@ program
   )
   .action(async (opts: { root?: string }) => {
     await serveMcp({ root: opts.root, version: VERSION });
+  });
+
+program
+  .command("dashboard")
+  .argument("<action>", "action to run (currently: dev)")
+  .option("-C, --root <dir>", "project root (default: current directory)")
+  .option("-p, --port <port>", "port to serve on", "4173")
+  .description("preview dashboard artifacts in ./dashboards against the local Malloy model")
+  .action(async (action: string, opts: { root?: string; port?: string }) => {
+    if (action !== "dev") throw new Error(`unknown dashboard action '${action}' (expected: dev)`);
+    await serveDashboard({ root: opts.root, port: Number(opts.port) });
   });
 
 program.parseAsync().catch((err: unknown) => {

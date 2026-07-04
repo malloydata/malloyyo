@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import * as malloy from "@malloydata/malloy";
-import { API } from "@malloydata/malloy";
+import { API, type GivenValue } from "@malloydata/malloy";
 import { DuckDBConnection as MalloyDuckDBConnection } from "@malloydata/db-duckdb";
 import { hostname, networkInterfaces } from "node:os";
 import { randomBytes } from "node:crypto";
@@ -607,6 +607,34 @@ export async function runMalloyFiles(
       host: INSTANCE_HOST,
       ip: INSTANCE_IP,
     });
+    return { sql, rows, rowCount: rows.length, stableResult };
+  });
+}
+
+// Run a NAMED query (a top-level `query:` in the model) with given values. Used
+// by dashboards: the manifest names the query, the dashboard passes givens.
+// Mirrors runMalloyFiles but selects by name and binds givens (the compiler
+// validates the values). Reuses the ModelDef cache via acquireModel.
+export async function runNamedMalloyFiles(
+  files: Map<string, string>,
+  entryPath: string,
+  queryName: string,
+  givens: Record<string, unknown>,
+  opts: { rowLimit?: number; cacheKey?: string } = {},
+): Promise<RunResult> {
+  return withRuntime(files, opts.cacheKey, async (runtime) => {
+    const { mm, persist } = await acquireModel(runtime, opts.cacheKey, entryPath);
+    const runner = mm.loadQueryByName(queryName);
+    // Values arrive as user JSON; the compiler validates them when binding.
+    const compileOpts =
+      givens && Object.keys(givens).length > 0
+        ? { givens: givens as Record<string, GivenValue> }
+        : undefined;
+    const sql = await runner.getSQL(compileOpts);
+    const result = await runner.run({ rowLimit: opts.rowLimit ?? DEFAULT_ROW_LIMIT, ...compileOpts });
+    const rows = result.data.toJSON() as Record<string, unknown>[];
+    const stableResult = API.util.wrapResult(result);
+    if (persist && opts.cacheKey) await persistModelDef(opts.cacheKey, () => mm.getModel());
     return { sql, rows, rowCount: rows.length, stableResult };
   });
 }

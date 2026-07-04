@@ -23,7 +23,7 @@
   },
   "scripts": {
     "prebuild": "npm --prefix ../mcp-engine run build",
-    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --external:commander --external:@malloydata/* --external:@modelcontextprotocol/* --outfile=dist/index.js",
+    "build": "esbuild src/index.ts --bundle --platform=node --format=esm --external:commander --external:esbuild --external:@malloydata/* --external:@modelcontextprotocol/* --outfile=dist/index.js",
     "dev": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "pretest": "npm run build",

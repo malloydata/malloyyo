@@ -1,0 +1,22 @@
+{
+  "title": "Over-represented baby names",
+  "query": "over_represented",
+  "givens": [
+    {
+      "name": "STATE",
+      "label": "State",
+      "type": "string",
+      "control": "select",
+      "options": ["CA", "NY", "TX"],
+      "default": "CA"
+    },
+    {
+      "name": "DECADE",
+      "label": "Decade",
+      "type": "number",
+      "control": "select",
+      "options": [1980, 1990],
+      "default": 1980
+    }
+  ]
+}

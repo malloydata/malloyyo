@@ -2,13 +2,13 @@
 // SPDX-License-Identifier: MIT
 
 import { desc, eq } from "drizzle-orm";
-import { db, datasets, malloyModels, malloyModelFiles } from "@/db";
-import { GitHubURLReader, fetchGitHubFile, parseGitHubRepo } from "./github";
+import { db, datasets, malloyModels, malloyModelFiles, malloyArtifacts } from "@/db";
+import { GitHubURLReader, fetchGitHubFile, listGitHubDir, parseGitHubRepo } from "./github";
 import { introspectModelWithReader, type SourceInfo } from "./malloy";
 import { logger } from "./logger";
 
 export type RefreshResult =
-  | { ok: true; version: number; generatedBy: string; compiledAt: Date | null; sources: SourceInfo[]; fileCount: number }
+  | { ok: true; version: number; generatedBy: string; compiledAt: Date | null; sources: SourceInfo[]; fileCount: number; dashboardCount: number }
   | { ok: false; error: string };
 
 export async function refreshGitHubModel(datasetId: string): Promise<RefreshResult> {
@@ -72,7 +72,48 @@ export async function refreshGitHubModel(datasetId: string): Promise<RefreshResu
     );
   }
 
-  logger.info("refreshGitHubModel ok", { datasetId, repo: ds.githubRepo, version: created.version, sourceCount: result.sources.length, fileCount: reader.fetched.size });
+  // Dashboards that ship with the model (./dashboards/<name>/). Ingested the same
+  // way as files — pulled on every refresh, stored for THIS model version.
+  // Non-fatal: a broken/missing dashboard never fails the model refresh.
+  let dashboardCount = 0;
+  try {
+    const entries = await listGitHubDir(owner, repo, branch, "dashboards", {
+      useToken: ds.githubUseToken,
+    });
+    const rows: Array<typeof malloyArtifacts.$inferInsert> = [];
+    for (const entry of entries) {
+      if (entry.type !== "dir") continue;
+      let manifestRaw: string;
+      let source: string;
+      try {
+        manifestRaw = await fetchGitHubFile(owner, repo, branch, `dashboards/${entry.name}/manifest.json`, { useToken: ds.githubUseToken });
+        source = await fetchGitHubFile(owner, repo, branch, `dashboards/${entry.name}/Dashboard.tsx`, { useToken: ds.githubUseToken });
+      } catch {
+        logger.warn("refreshGitHubModel skipping dashboard (missing manifest.json or Dashboard.tsx)", { datasetId, dashboard: entry.name });
+        continue;
+      }
+      let manifest: Record<string, unknown>;
+      try {
+        manifest = JSON.parse(manifestRaw);
+      } catch {
+        logger.warn("refreshGitHubModel skipping dashboard (bad manifest.json)", { datasetId, dashboard: entry.name });
+        continue;
+      }
+      rows.push({
+        modelId: created.id,
+        name: entry.name,
+        title: typeof manifest.title === "string" ? manifest.title : entry.name,
+        manifest,
+        source,
+      });
+    }
+    if (rows.length > 0) await db.insert(malloyArtifacts).values(rows);
+    dashboardCount = rows.length;
+  } catch (e) {
+    logger.warn("refreshGitHubModel dashboard ingestion failed (non-fatal)", { datasetId, error: e instanceof Error ? e.message : String(e) });
+  }
+
+  logger.info("refreshGitHubModel ok", { datasetId, repo: ds.githubRepo, version: created.version, sourceCount: result.sources.length, fileCount: reader.fetched.size, dashboardCount });
   return {
     ok: true,
     version: created.version,
@@ -80,5 +121,6 @@ export async function refreshGitHubModel(datasetId: string): Promise<RefreshResu
     compiledAt: created.compiledAt,
     sources: result.sources,
     fileCount: reader.fetched.size,
+    dashboardCount,
   };
 }

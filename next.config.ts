@@ -13,6 +13,9 @@ const nextConfig: NextConfig = {
   serverExternalPackages: [
     "@duckdb/node-api",
     "@duckdb/node-bindings",
+    // esbuild ships a native binary + dynamic requires; let it stay external so
+    // Turbopack doesn't try to bundle it (used to compile dashboard artifacts).
+    "esbuild",
   ],
   outputFileTracingIncludes: {
     "/mcp": [

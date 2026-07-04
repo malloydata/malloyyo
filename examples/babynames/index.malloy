@@ -1,0 +1,52 @@
+##! experimental.givens
+
+// Filter inputs the dashboard drives. Givens bind at query time; the dashboard
+// passes STATE / DECADE and the query below re-runs with them.
+given:
+  STATE :: string is 'CA'
+  DECADE :: number is 1980
+
+// Tiny self-contained sample so the whole loop runs with no external data.
+// (name, state, decade, ct) — ct is the birth count.
+source: names is duckdb.sql("""
+  SELECT * FROM (VALUES
+    ('Emma',    'CA', 1980, 500),
+    ('Emma',    'NY', 1980, 120),
+    ('Emma',    'TX', 1980, 140),
+    ('Sophia',  'CA', 1980, 110),
+    ('Sophia',  'NY', 1980, 480),
+    ('Sophia',  'TX', 1980, 130),
+    ('Liam',    'CA', 1980, 300),
+    ('Liam',    'NY', 1980, 300),
+    ('Liam',    'TX', 1980, 300),
+    ('Noah',    'CA', 1980,  60),
+    ('Noah',    'NY', 1980,  70),
+    ('Noah',    'TX', 1980, 520),
+    ('Mia',     'CA', 1980, 420),
+    ('Mia',     'NY', 1980,  90),
+    ('Emma',    'CA', 1990, 220),
+    ('Emma',    'NY', 1990, 410),
+    ('Sophia',  'CA', 1990, 640),
+    ('Sophia',  'NY', 1990, 120),
+    ('Liam',    'CA', 1990, 310),
+    ('Liam',    'NY', 1990, 305),
+    ('Olivia',  'CA', 1990, 500),
+    ('Olivia',  'NY', 1990, 150)
+  ) AS t(name, state, decade, ct)
+""") extend {
+  measure: births is ct.sum()
+}
+
+#" Names most over-represented in the selected state vs. the nation, for the decade.
+// pct_in_state = share of a name's births that happened in STATE. Higher = more
+// concentrated in the selected state.
+query: over_represented is names -> {
+  where: decade = $DECADE
+  group_by: name
+  aggregate:
+    state_births is births { where: state = $STATE }
+    national_births is births
+    pct_in_state is births { where: state = $STATE } / births
+  order_by: pct_in_state desc
+  limit: 20
+}

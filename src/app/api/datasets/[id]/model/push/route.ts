@@ -3,7 +3,7 @@
 
 import { NextResponse } from "next/server";
 import { desc, eq } from "drizzle-orm";
-import { db, datasets, malloyModels, malloyModelFiles } from "@/db";
+import { db, datasets, malloyModels, malloyModelFiles, malloyArtifacts } from "@/db";
 import { requireAdminBearer } from "@/lib/bearer-auth";
 import { introspectModelFiles } from "@/lib/malloy";
 import { logger, serializeErr } from "@/lib/logger";
@@ -22,10 +22,16 @@ interface GitInfo {
   sha?: string;
   dirty?: boolean;
 }
+interface DashboardPayload {
+  name: string;
+  manifest: Record<string, unknown>;
+  source: string;
+}
 interface PushBody {
   files?: ModelFile[];
   config?: string;
   git?: GitInfo;
+  dashboards?: DashboardPayload[];
 }
 
 function json(status: number, body: Record<string, unknown>) {
@@ -142,6 +148,21 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
         })),
       );
 
+      // Dashboards travel with the model — stored per version, same as the
+      // GitHub-refresh path. The CLI lints them before sending.
+      const dashboards = body.dashboards ?? [];
+      if (dashboards.length > 0) {
+        await tx.insert(malloyArtifacts).values(
+          dashboards.map((d) => ({
+            modelId: model.id,
+            name: d.name,
+            title: typeof d.manifest?.title === "string" ? (d.manifest.title as string) : d.name,
+            manifest: d.manifest,
+            source: d.source,
+          })),
+        );
+      }
+
       await tx
         .update(datasets)
         .set({
@@ -160,6 +181,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       version: created.version,
       sourceCount: result.sources.length,
       fileCount: fileMap.size,
+      dashboardCount: (body.dashboards ?? []).length,
       generatedBy: created.generatedBy,
     });
 

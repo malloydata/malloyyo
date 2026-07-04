@@ -91,13 +91,16 @@ artifacts/
 parameters, so the artifact layer targets them from the start rather than binding
 to something being retired.
 
-> **Known language dependency (we'll get there):** givens do **not yet drive
-> filter syntax** — you can't currently wire a given into a view's `where:`. So
-> filter-parameterized views are a *near-term Malloy dependency*, not available
-> today. Interim: artifacts bind to **fixed views** (plus whatever filtering a
-> view bakes in); dynamic filter-by-given interactivity lands when givens gain
-> filter syntax. The manifest/bridge design is shaped for givens now, so nothing
-> has to change when that arrives.
+> **Givens & filters — current state (verified in the prototype):** *scalar*
+> givens already drive filters today, behind \`##! experimental.givens\`. A model
+> declares \`given: STATE :: string is 'CA'\` and references \`$STATE\` in a
+> \`where:\`; the dashboard passes given values and the query re-runs. The
+> prototype (\`examples/babynames\`) does exactly this with \`$STATE\`/\`$DECADE\`.
+> What is **not** yet available is richer *filter-expression* givens — a given
+> typed as a whole filter (multi-select, ranges, operators) rather than a single
+> value. So v0 filters are single-value \`select\`s; multi-value/range controls
+> land when filter-expression givens do. The manifest/bridge already carries
+> typed \`{ query, givens }\`, so nothing structural changes when they arrive.
 
 Why this beats declared-but-arbitrary Malloy:
 
@@ -279,22 +282,21 @@ sign-in-gated page path as `/ltool/<slug>`, resolving `malloyArtifacts` by slug.
    subdomains); a real separate-origin story wants custom domains under a shared
    parent (`app.` / `artifacts.<domain>`). Decide v1 = same-origin sandbox, later
    = separate origin?
-2. **Query declaration form — DECIDED (§2).** Named **views + givens** exposed by
-   the model's sources are the primary form; inline Malloy is a discouraged,
-   still-checked escape hatch. Parameterization is **givens, not Malloy source
-   parameters** (givens will replace them). **Tracked language dependency:**
-   givens don't yet drive filter syntax (`where:`), so filter-parameterized views
-   aren't available today — interim artifacts use fixed views; this design is
-   already shaped for givens so it absorbs the capability when it lands.
+2. **Query declaration form — DECIDED (§2).** Named **queries/views + givens**
+   exposed by the model are the primary form (prototype uses a top-level
+   `query:` since the engine's `run({name, givens})` executes those directly);
+   inline Malloy is a discouraged, still-checked escape hatch. Parameterization is
+   **givens, not Malloy source parameters** (givens will replace them). Scalar
+   givens drive `where:` filters today (`##! experimental.givens`); richer
+   filter-expression givens (multi-select/range) are the remaining language
+   dependency — v0 uses single-value `select`s.
 3. **Whitelisted import surface.** Pin React + which charting lib? (Recharts?
    `@malloydata/render` primitives?) The allowlist bounds bundle size and review
    surface.
-4. **Interactivity depth — largely answered by §2, gated on givens.** The end
-   state is interactivity = passing *givens* to a view, validated at the shell —
-   but that's **gated on givens gaining filter syntax** (see #2). Until then,
-   interactivity is limited to what fixed views expose. Sub-decision for later:
-   whether givens may be composed/ranged client-side, or must be enumerated in
-   the manifest.
+4. **Interactivity depth — answered by §2, working in the prototype.**
+   Interactivity = passing *givens* to a query, validated at the shell (the
+   prototype changes STATE/DECADE and the query re-runs). Single-value selects
+   today; multi-value/range controls arrive with filter-expression givens (#2).
 5. **Fixture strategy for tests.** Committed sample tables vs. a recorded result
    snapshot per query. Sample tables exercise the real Malloy compile; snapshots
    are lighter but can rot.

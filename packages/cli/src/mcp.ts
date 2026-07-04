@@ -42,6 +42,7 @@ import {
   type SourceInput,
 } from "@malloyyo/mcp-engine";
 import { attachSurface } from "@malloyyo/mcp-engine/mcp-sdk";
+import { DASHBOARD_GUIDANCE } from "./dashboard-guidance.js";
 
 const ENTRY = "index.malloy";
 
@@ -206,7 +207,7 @@ export async function serveMcp(opts: { root?: string; version: string }): Promis
   const server = new McpServer(
     { name: "malloyyo-explore", version: opts.version },
     {
-      instructions: renderInstructions(surface.instructions, instanceName),
+      instructions: renderInstructions(surface.instructions, instanceName) + DASHBOARD_GUIDANCE,
       capabilities: { tools: {}, prompts: {}, resources: {} },
     },
   );

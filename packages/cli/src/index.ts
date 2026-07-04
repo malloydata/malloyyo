@@ -5,6 +5,7 @@ import { resolveTarget, resolveInstance } from "./config.js";
 import { gatherDirectory, gitInfo } from "./gather.js";
 import { getAccessToken, login } from "./oauth.js";
 import { serveMcp } from "./mcp.js";
+import { serveDashboard } from "./dashboard.js";
 import { clearCreds } from "./store.js";
 import type { PublishRequest, ModelStatus } from "./protocol.js";
 // Single source of truth: the build runs after the release bump, so esbuild
@@ -126,6 +127,17 @@ program
   )
   .action(async (opts: { root?: string }) => {
     await serveMcp({ root: opts.root, version: VERSION });
+  });
+
+program
+  .command("dashboard")
+  .argument("<action>", "action to run (currently: dev)")
+  .option("-C, --root <dir>", "project root (default: current directory)")
+  .option("-p, --port <port>", "port to serve on", "4173")
+  .description("preview dashboard artifacts in ./dashboards against the local Malloy model")
+  .action(async (action: string, opts: { root?: string; port?: string }) => {
+    if (action !== "dev") throw new Error(`unknown dashboard action '${action}' (expected: dev)`);
+    await serveDashboard({ root: opts.root, port: Number(opts.port) });
   });
 
 program.parseAsync().catch((err: unknown) => {

@@ -15,5 +15,9 @@
   "include": [
     "src",
     "test"
+  ],
+  "comment": "frame-entry.tsx is browser JSX bundled at runtime by esbuild, never imported by node code — kept out of the node typecheck.",
+  "exclude": [
+    "src/frame-entry.tsx"
   ]
 }

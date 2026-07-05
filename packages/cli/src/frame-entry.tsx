@@ -13,6 +13,14 @@ import Dashboard from "virtual:dashboard";
 
 const manifest = window.__MANIFEST__;
 
+// Coerce a URL-string given value to the given's declared type. URL params are
+// always strings, so "true"/"1990" must become boolean/number.
+function coerceGiven(raw, type) {
+  if (type === "number") return raw === "" ? raw : Number(raw);
+  if (type === "boolean") return raw === true || raw === "true";
+  return raw;
+}
+
 // Dev preview: surface errors on the page instead of blanking. A throw in the
 // Malloy renderer (or anywhere) would otherwise crash the React tree silently.
 function showFatal(msg) {
@@ -148,10 +156,9 @@ function Root() {
     const fromUrl = window.__INITIAL_GIVENS__ || {};
     for (const spec of manifest.givens ?? []) {
       const raw = fromUrl[spec.name];
-      g[spec.name] =
-        raw !== undefined && raw !== null && raw !== ""
-          ? spec.type === "number" ? Number(raw) : raw
-          : spec.default;
+      // A param that's present (even empty) is used as-is (coerced to the given's
+      // type); only an absent param falls back to the manifest default.
+      g[spec.name] = raw !== undefined && raw !== null ? coerceGiven(raw, spec.type) : spec.default;
     }
     return g;
   });

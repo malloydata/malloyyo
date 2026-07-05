@@ -47,7 +47,7 @@ for (const spec of HOST_LIBS) {
 interface GivenSpec {
   name: string;
   label?: string;
-  type: "string" | "number";
+  type: "string" | "number" | "boolean";
   control?: string;
   options?: (string | number)[];
   default: string | number;

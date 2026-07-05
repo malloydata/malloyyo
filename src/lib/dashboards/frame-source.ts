@@ -23,6 +23,14 @@ const MalloyRenderer = __V.MalloyRenderer;
 
 const manifest = window.__MANIFEST__;
 
+// Coerce a URL-string given value to the given's declared type. URL params are
+// always strings, so "true"/"1990" must become boolean/number.
+function coerceGiven(raw, type) {
+  if (type === "number") return raw === "" ? raw : Number(raw);
+  if (type === "boolean") return raw === true || raw === "true";
+  return raw;
+}
+
 function showFatal(msg) {
   const root = document.getElementById("root");
   if (!root) return;
@@ -106,11 +114,8 @@ function Root() {
   for (let i = 0; i < specs.length; i++) {
     const spec = specs[i];
     const raw = fromUrl[spec.name];
-    if (raw !== undefined && raw !== null && raw !== "") {
-      initial[spec.name] = spec.type === "number" ? Number(raw) : raw;
-    } else {
-      initial[spec.name] = spec.default;
-    }
+    // Present (even empty) → used as-is (coerced); absent → manifest default.
+    initial[spec.name] = raw !== undefined && raw !== null ? coerceGiven(raw, spec.type) : spec.default;
   }
   const [givens, setGivens] = useState(initial);
   const setGiven = useCallback(function (name, value) {

@@ -61,8 +61,8 @@ export async function lintDashboards(root: string): Promise<LintReport> {
             errors.push(`manifest: every given needs a string "name"`);
             continue;
           }
-          if (g.type !== "string" && g.type !== "number") {
-            errors.push(`given "${g.name}": "type" must be "string" or "number"`);
+          if (g.type !== "string" && g.type !== "number" && g.type !== "boolean") {
+            errors.push(`given "${g.name}": "type" must be "string", "number", or "boolean"`);
           }
           if (g.default !== undefined) givenValues[g.name] = g.default;
         }

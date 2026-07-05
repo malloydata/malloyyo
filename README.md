@@ -17,7 +17,7 @@ Malloyyo is the thin layer that serves that model:
 - **A web interface, too** — every query is logged, so you can browse, edit, favorite, re-run, and share them in the browser (ltool), and hand any one off to "Explore further with Claude." Because Malloy renders a whole dashboard as a single query, one saved query can be a full report.
 - **Deploy in minutes** — one-click to Vercel, or self-host with Docker.
 
-Try [the demo server](https://malloyyo.vercel.app/ltool/main_7zfqmk7cv6) and "Explore further with Claude" — sign in with any Google account.
+Try [the demo server](https://malloyyo.vercel.app/) and "Explore further with Claude" — sign in with any Google account.
 
 **Questions, or built something cool? We'd love to hear from you.** Come say hi on [Slack](https://join.slack.com/t/malloy-community/shared_invite/zt-2dvtske75-TJQfolRtZGXLS24RhTQ79g), and learn more about Malloy at [malloydata.dev](https://www.malloydata.dev) and in the [documentation](https://docs.malloydata.dev).
 

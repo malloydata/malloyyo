@@ -281,7 +281,10 @@ sign-in-gated page path as `/ltool/<slug>`, resolving `malloyArtifacts` by slug.
    Suffix List — can't share a session cookie across two `*.vercel.app`
    subdomains); a real separate-origin story wants custom domains under a shared
    parent (`app.` / `artifacts.<domain>`). Decide v1 = same-origin sandbox, later
-   = separate origin?
+   = separate origin? **Update (2026-07-05):** v1 briefly shipped with
+   `allow-same-origin`, which *defeated* the sandbox — now fixed
+   (`sandbox="allow-scripts"`, token-gated assets). Separate origin remains the
+   defense-in-depth step. See `dashboard-iframe-security.md`.
 2. **Query declaration form — DECIDED (§2).** Named **queries/views + givens**
    exposed by the model are the primary form (prototype uses a top-level
    `query:` since the engine's `run({name, givens})` executes those directly);

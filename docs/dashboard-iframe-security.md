@@ -1,6 +1,14 @@
 # Security issue: dashboard iframe sandbox is defeated by `allow-same-origin`
 
-Status: **open / known hole.** Recorded 2026-07-05.
+Status: **FIXED 2026-07-05** (recorded same day). The iframe is now
+`sandbox="allow-scripts"` (opaque origin) and its assets load without the
+session cookie via option **1b** below (frame route mints a capability token for
+the bundle; vendor JS is public). Verified with headless Chromium: both sample
+dashboards render, and adversarial probes from inside the frame confirm the
+guest can no longer read the parent DOM, `document.cookie`, or make a
+credentialed same-origin `fetch` (all blocked / opaque origin). Remaining
+hardening (defense-in-depth, not blocking): steps 2–4 — separate origin, origin
+checks on the bridge, CSP on the frame document.
 
 ## TL;DR
 
@@ -102,12 +110,20 @@ one:
   document — zero authed subresources. Cost: the ~3.6 MB vendor bundle is
   re-sent per frame load (loses static caching) and inline scripts need CSP
   hashes / `'unsafe-inline'`.
-- **1b. Token-gate the frame + assets (recommended — pairs with step 2).** The
-  trusted parent (which has the session) mints a short-lived signed token and
-  passes it in the iframe `src` (`?t=…`); the frame route, bundle route, and a
-  token-gated vendor path validate the token instead of the session cookie.
-  This is exactly what a **separate artifact origin** needs anyway, so 1b and
-  step 2 are the same work — do them together. Keeps vendor cacheable.
+- **1b. Token-gate the assets (IMPLEMENTED).** The **frame route** stays
+  cookie-authed (the same-site subframe navigation still carries the cookie) and
+  mints a short-lived signed capability token (`src/lib/dashboards/frame-token.ts`,
+  HMAC over `AUTH_SECRET`, 5-min TTL, scoped to viewer + dataset + dashboard),
+  embedding it in the **bundle** URL (`?t=…`). The **bundle route** validates the
+  token instead of the cookie and scopes `getDashboard` to the token's viewer.
+  The **vendor JS** is generic library code (no secrets, no user data), so it's
+  made public via a proxy-matcher exemption rather than token-gated. The token
+  grants reading this dashboard's own static assets only — never a data run
+  (still brokered by the trusted parent's session) — so reading it out of the
+  guest document yields no escalation. For a **separate artifact origin** later
+  (step 2), the frame nav loses the cookie too, so the parent would mint/pass a
+  token to the frame as well and the frame route would accept token-or-cookie —
+  a small increment on this.
 - **1c. Make vendor + bundle public (unauthenticated).** Simplest, but the
   bundle is the dashboard's source JS; serving it by URL with no auth leaks
   private-dataset artifact code. Only acceptable for public datasets. Weak;

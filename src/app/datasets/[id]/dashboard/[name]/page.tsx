@@ -7,9 +7,13 @@ import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 
 // Trusted shell for a dashboard. Renders breadcrumbs + a sandboxed iframe, and
-// brokers the iframe's run requests to /api/dashboards/run (viewer-scoped). The
-// iframe is same-origin for now (dev); isolation via a separate artifact origin
-// is the production hardening (docs/repo-artifacts.md §8).
+// brokers the iframe's run requests to /api/dashboards/run (viewer-scoped).
+// The iframe runs untrusted, repo-authored dashboard code, so it is sandboxed
+// WITHOUT allow-same-origin: an opaque origin with no session, no app cookies,
+// and no credentialed same-origin fetch — its only channel is postMessage. Its
+// compiled bundle loads via a capability token the frame route embeds (no cookie
+// needed); the vendor JS is public. A separate artifact origin is the remaining
+// hardening (docs/repo-artifacts.md §8, docs/dashboard-iframe-security.md).
 export default function DashboardViewPage(props: {
   params: Promise<{ id: string; name: string }>;
 }) {
@@ -87,7 +91,7 @@ function DashboardView({
       </nav>
       <iframe
         ref={iframeRef}
-        sandbox="allow-scripts allow-same-origin"
+        sandbox="allow-scripts"
         src={frameSrc}
         className="w-full rounded border border-gray-200 dark:border-gray-800"
         style={{ height: "calc(100vh - 96px)" }}

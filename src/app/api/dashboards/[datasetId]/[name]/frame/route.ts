@@ -2,11 +2,16 @@
 // SPDX-License-Identifier: MIT
 
 // The sandboxed-iframe document for a dashboard: inlines the manifest and loads
-// the bundled artifact. Served same-origin for now (dev); a production build
-// would move this to a separate artifact origin (see docs/repo-artifacts.md §8).
+// the bundled artifact. The iframe runs with sandbox="allow-scripts" (opaque
+// origin, no session cookie), so this route — reached by the cookie-authed
+// subframe navigation — mints a short-lived capability token and hands it to the
+// bundle URL so the guest can load its own compiled code without a cookie.
+// A separate artifact origin is the remaining hardening (docs/repo-artifacts.md
+// §8, docs/dashboard-iframe-security.md).
 
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { getDashboard } from "@/lib/dashboards";
+import { mintFrameToken } from "@/lib/dashboards/frame-token";
 
 export const runtime = "nodejs";
 
@@ -23,7 +28,10 @@ export async function GET(req: Request, ctx: { params: Promise<{ datasetId: stri
     // these so a shared/deep link opens in that state.
     const initialGivens: Record<string, string> = {};
     for (const [k, v] of new URL(req.url).searchParams) initialGivens[k] = v;
-    const bundleUrl = `/api/dashboards/${datasetId}/${encodeURIComponent(name)}/bundle`;
+    // Capability token for the sandboxed guest to fetch its own bundle without a
+    // session cookie (see frame-token.ts). Scoped to this viewer + dashboard.
+    const token = mintFrameToken({ userId: user.id, datasetId, name });
+    const bundleUrl = `/api/dashboards/${datasetId}/${encodeURIComponent(name)}/bundle?t=${encodeURIComponent(token)}`;
     const html =
       `<!doctype html><html><head><meta charset="utf-8"><title>${esc(dash.title)}</title>` +
       `<meta name="viewport" content="width=device-width,initial-scale=1"></head>` +

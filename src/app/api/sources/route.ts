@@ -28,6 +28,7 @@ export async function GET() {
       name: datasets.name,
       status: datasets.status,
       isPublic: datasets.isPublic,
+      githubRepo: datasets.githubRepo,
       ownerEmail: users.email,
       ownerName: users.name,
     })
@@ -52,13 +53,14 @@ export async function GET() {
     datasetId: string;
     status: string;
     isPublic: boolean;
+    githubRepo: string | null;
     ownerEmail?: string | null;
     ownerName?: string | null;
   }> = [];
 
   for (const ds of dsList) {
     const [latestModel] = await db
-      .select({ sources: malloyModels.sources })
+      .select({ sources: malloyModels.sources, gitRepo: malloyModels.gitRepo })
       .from(malloyModels)
       .where(eq(malloyModels.datasetId, ds.id))
       .orderBy(desc(malloyModels.createdAt))
@@ -70,6 +72,9 @@ export async function GET() {
       model: ds.name,
       status: ds.status,
       isPublic: ds.isPublic,
+      // "owner/repo" the model came from: the dataset's configured GitHub repo,
+      // or the git remote recorded by a CLI publish.
+      githubRepo: ds.githubRepo ?? latestModel?.gitRepo ?? null,
       ownerEmail: admin ? ds.ownerEmail : undefined,
       ownerName: admin ? ds.ownerName : undefined,
     };

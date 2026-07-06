@@ -15,9 +15,25 @@ import {
   type GivenValue,
   type URLReader,
 } from "@malloydata/malloy";
-import { prepareSource, run, type RunResult } from "@malloyyo/mcp-engine";
+import {
+  artifactQueries,
+  dashboardGivenSpecs,
+  prepareSource,
+  run,
+  runRestricted,
+  validateRestricted,
+  type ArtifactsResult,
+  type DashboardGivenSpec,
+  type DashboardGivenSpecsResult,
+  type RunResult,
+} from "@malloyyo/mcp-engine";
 
 export type ValidateResult = { ok: true } | { ok: false; error: string };
+
+// The dashboard control contract, read from the MODEL's given: declarations —
+// shared with the hosted serving path via mcp-engine so the two can't drift.
+export type GivenSpec = DashboardGivenSpec;
+export type GivenSpecsResult = DashboardGivenSpecsResult;
 
 const ENTRY = "index.malloy";
 
@@ -48,9 +64,20 @@ async function loadConfig(rootUrl: URL, reader: URLReader): Promise<MalloyConfig
 export interface ModelRunner {
   /** Run a top-level named query with the given filter values (the givens). */
   run(queryName: string, givens: Record<string, unknown>): Promise<RunResult>;
+  /** Run restricted Malloy query text (core's restricted mode is the gate: no
+      import / given: / connection.* / raw SQL / ##! flags). This is how
+      dashboards run suggestion queries and ad-hoc panels. */
+  runText(malloy: string, givens: Record<string, unknown>): Promise<RunResult>;
+  /** Compile-only check of restricted query text (no execution). */
+  validateText(malloy: string): Promise<ValidateResult>;
   /** Compile-only: does the named query exist and do the givens bind? No data
       fetch — used by `lint` to catch drift (unknown given, missing query). */
   validate(queryName: string, givens: Record<string, unknown>): Promise<ValidateResult>;
+  /** The given specs a named query transitively references — read from the
+      model's `given:` declarations (types, defaults, doc comments, tags). */
+  givensForQuery(queryName: string): Promise<GivenSpecsResult>;
+  /** The model's `# artifact`-tagged queries — its declared dashboards. */
+  artifacts(): Promise<ArtifactsResult>;
   entryExists(): boolean;
   root: string;
 }
@@ -81,6 +108,28 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
       return lease((runtime, entry) =>
         run(runtime, entry, { name: queryName, givens, stableResult: true, rowLimit: 5000 }),
       );
+    },
+    runText(malloy, givens) {
+      return lease((runtime, entry) =>
+        runRestricted(runtime, entry, malloy, { givens, stableResult: true, rowLimit: 5000 }),
+      );
+    },
+    validateText(malloy) {
+      return lease(async (runtime, entry) => {
+        const v = await validateRestricted(runtime, entry, malloy);
+        if (v.ok) return { ok: true };
+        const msg = v.problems
+          .filter((p) => p.severity === "error")
+          .map((p) => p.message)
+          .join("; ");
+        return { ok: false, error: msg || "restricted query failed to compile" };
+      });
+    },
+    givensForQuery(queryName) {
+      return lease((runtime, entry) => dashboardGivenSpecs(runtime, entry, queryName));
+    },
+    artifacts() {
+      return lease((runtime, entry) => artifactQueries(runtime, entry));
     },
     validate(queryName, givens) {
       return lease(async (runtime, entry) => {

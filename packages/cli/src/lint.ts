@@ -1,7 +1,10 @@
-// `malloyyo lint` — validate dashboards in ./dashboards against the model before
-// they're published. Catches the failure modes we hit by hand: malformed
-// manifest, a query the model doesn't expose, given names/types that don't match
-// the model's givens (drift), and Dashboard.tsx that won't compile.
+// `malloyyo lint` — validate the model's declared dashboards before they're
+// published. A dashboard is a `# artifact`-tagged top-level query (the tag is
+// the manifest); ./dashboards/<name>/Dashboard.tsx optionally customizes the
+// component. Catches: model compile failure, a tagged query that doesn't run,
+// a `# suggest {…}` declaration that doesn't compile, a Dashboard.tsx that
+// won't compile, an orphaned dashboards/ directory, and leftover manifest.json
+// files.
 
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -18,62 +21,87 @@ export interface LintReport {
   dashboards: DashboardLint[];
 }
 
-interface GivenSpec {
-  name?: unknown;
-  type?: unknown;
-  default?: unknown;
-}
+/** Backtick-quote a field name unless it's a plain identifier — the same rule
+ * the runtime uses when it builds the suggest query. */
+const quoteField = (f: string) => (/^[A-Za-z_]\w*$/.test(f) ? f : `\`${f}\``);
 
 export async function lintDashboards(root: string): Promise<LintReport> {
   const abs = resolve(root);
-  const names = listDashboardDirs(abs);
   const dashboards: DashboardLint[] = [];
-  if (names.length === 0) return { ok: true, dashboards };
 
   const runner = await makeRunner(abs);
   if (!runner.entryExists()) {
     return { ok: false, dashboards: [{ name: "(model)", errors: [`no index.malloy at ${abs}`] }] };
   }
+  const arts = await runner.artifacts();
+  if (!arts.ok) {
+    return { ok: false, dashboards: [{ name: "(model)", errors: [arts.error] }] };
+  }
+  const artifacts = arts.artifacts;
+  const dirs = listDashboardDirs(abs);
+  if (artifacts.length === 0 && dirs.length === 0) return { ok: true, dashboards };
 
-  for (const name of names) {
+  // Directories must belong to a declared dashboard, and the manifest is gone.
+  const declared = new Set(artifacts.map((a) => a.name));
+  for (const dir of dirs) {
     const errors: string[] = [];
-    const dir = join(abs, "dashboards", name);
-
-    // manifest.json — shape + collect the given defaults to bind.
-    let manifest: Record<string, unknown> | null = null;
-    try {
-      manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8"));
-    } catch (e) {
-      errors.push(`manifest.json: invalid JSON (${(e as Error).message})`);
+    if (existsSync(join(abs, "dashboards", dir, "manifest.json"))) {
+      errors.push(
+        `manifest.json is obsolete — delete it; the model's ` +
+          `\`# artifact title="…"\` tag on the query is the manifest now`,
+      );
     }
-    let query: string | undefined;
-    const givenValues: Record<string, unknown> = {};
-    if (manifest) {
-      if (typeof manifest.title !== "string") errors.push(`manifest: "title" must be a string`);
-      if (typeof manifest.query !== "string") errors.push(`manifest: "query" must be a string`);
-      else query = manifest.query;
-      const givens = manifest.givens;
-      if (!Array.isArray(givens)) {
-        errors.push(`manifest: "givens" must be an array`);
-      } else {
-        for (const g of givens as GivenSpec[]) {
-          if (typeof g?.name !== "string") {
-            errors.push(`manifest: every given needs a string "name"`);
-            continue;
-          }
-          if (g.type !== "string" && g.type !== "number" && g.type !== "boolean") {
-            errors.push(`given "${g.name}": "type" must be "string", "number", or "boolean"`);
-          }
-          if (g.default !== undefined) givenValues[g.name] = g.default;
+    if (!declared.has(dir)) {
+      errors.push(
+        `no query is tagged for this dashboard — tag one with ` +
+          `\`# artifact\` (or \`# artifact name="${dir}"\`) in the model`,
+      );
+    }
+    if (errors.length) dashboards.push({ name: dir, errors });
+  }
+
+  for (const artifact of artifacts) {
+    const errors: string[] = [];
+
+    // The tagged query must run with its declaration defaults (compile-only),
+    // and every given's `# suggest {…}` declaration must itself compile as a
+    // restricted query (built exactly as the runtime builds it) — drift in
+    // either is caught here, before publish.
+    const v = await runner.validate(artifact.query, {});
+    if (!v.ok) errors.push(v.error);
+    const specs = await runner.givensForQuery(artifact.query);
+    if (specs.ok) {
+      for (const spec of specs.givens) {
+        if (spec.tags?.suggest_query !== undefined) {
+          errors.push(
+            `given "${spec.name}": suggest_query is obsolete — declare ` +
+              `# suggest { source=… dimension=… } or # suggest { query=… }`,
+          );
         }
+        const suggest = spec.suggest;
+        if (!suggest) continue;
+        const base = suggest.query
+          ? `run: ${suggest.query}`
+          : suggest.source && suggest.dimension
+            ? `run: ${suggest.source} -> ${quoteField(suggest.dimension)}`
+            : null;
+        if (base === null) {
+          errors.push(
+            `given "${spec.name}": suggest must be ` +
+              `\`suggest { source=<source> dimension=<field> }\` or ` +
+              `\`suggest { query=<named_query> [dimension=<field>] }\``,
+          );
+          continue;
+        }
+        const sv = await runner.validateText(base);
+        if (!sv.ok) errors.push(`given "${spec.name}": suggest does not compile — ${sv.error}`);
       }
     }
 
-    // Dashboard.tsx — exists and compiles (syntax).
-    const tsxPath = join(dir, "Dashboard.tsx");
-    if (!existsSync(tsxPath)) {
-      errors.push(`missing Dashboard.tsx`);
-    } else {
+    // Dashboard.tsx is optional (default UI without one); when present it must
+    // at least compile (syntax).
+    const tsxPath = join(abs, "dashboards", artifact.name, "Dashboard.tsx");
+    if (existsSync(tsxPath)) {
       try {
         await esbuild.transform(readFileSync(tsxPath, "utf8"), { loader: "tsx", jsx: "automatic" });
       } catch (e) {
@@ -82,13 +110,7 @@ export async function lintDashboards(root: string): Promise<LintReport> {
       }
     }
 
-    // The query + givens must resolve against the model (compile-only).
-    if (query) {
-      const v = await runner.validate(query, givenValues);
-      if (!v.ok) errors.push(v.error);
-    }
-
-    dashboards.push({ name, errors });
+    dashboards.push({ name: artifact.name, errors });
   }
 
   return { ok: dashboards.every((d) => d.errors.length === 0), dashboards };

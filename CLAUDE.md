@@ -136,4 +136,46 @@ vercel alias set <deploy-url> malloyyo-staging.vercel.app   # staging alias
 
 ## Planned work
 
-_None tracked here right now — the prior items (Google/MCP OAuth, MCP bearer-token auth, git-repo model loading) have all shipped._
+### Dashboard artifacts v2 — built 2026-07-06, working, needs review + deploy
+
+The dashboard system was reworked end-to-end (design doc: `docs/repo-artifacts.md`,
+authoring guide surfaced over MCP: `packages/cli/src/dashboard-guidance.ts`).
+Current state, all verified locally (typechecks, `malloyyo lint`, CLI e2e,
+headless-browser interaction tests):
+
+- **Model is the whole contract.** No manifest.json: a dashboard is a top-level
+  query tagged `# artifact { name= title= givens{…} }` (givens block = per-dashboard
+  starting values). Filters are `filter<T>` givens applied with `~` (empty
+  expression = no filter); `# tags` on the declarations drive controls —
+  `label`, `control=select`, `range_min/max`, and the structured
+  `suggest { source=X dimension=Y }` / `suggest { query=Q dimension=Y }`
+  (dimension ⇒ server-side typeahead: `base + { where: lower(f) ~ f'…%' }`).
+  Engine helpers: `packages/mcp-engine/src/artifacts.ts` + `given-specs.ts`.
+- **One frame runtime** (`packages/cli/src/frame-runtime/`): bridge, `Panel`,
+  hooks (`useGiven`/`useOptions`/`useQuery`), headless widgets
+  (`Controls`/`Given`/`Select`/`Search`/`Range`/`Checkbox`, `--dash-*` CSS vars),
+  `filters` helpers (on `@malloydata/malloy-filter` — escaping matters:
+  `'Tesla, Inc.'` raw parses as alternatives). Dev server bundles it from
+  source; the hosted app gets it via `scripts/build-dashboard-vendor.mjs` →
+  `public/dashboard-vendor.js` (`window.__DASH_RUNTIME__`), so
+  `src/lib/dashboards/frame-source.ts` is gone. Dashboards import
+  `@malloyyo/dashboard` (esbuild-shimmed). A tag-only query renders the
+  runtime's DefaultDashboard — zero JS.
+- **Restricted queries are the governance** for arbitrary Malloy from
+  dashboards (suggestions, `<Panel malloy=…/>`, `runData`) — same contract as
+  the explore MCP surface.
+- **Reference repos** (all converted, uncommitted): `examples/babynames`,
+  `~/dev/malloyyo-babynames` (incl. a tag-only `name_trend` dashboard),
+  `~/dev/malloyyo-auto-recalls` (curated `suggest {query=…}`, Checkbox, empty
+  filter = All).
+
+To resume: everything is uncommitted in this repo + the two model repos.
+Next steps, roughly in order:
+1. Review + commit the three working trees (vendor asset `public/dashboard-vendor.js`
+   must ship rebuilt with any frame-runtime change).
+2. Hosted-path smoke test on staging (publish a converted repo; the push/refresh
+   paths synthesize stored manifests from the tags).
+3. Open questions: whitelisted charting libs for dashboards (deliberately
+   deferred); `# dashboard` renderer-tag vs `# artifact` naming; pre-existing
+   dual-install tsc error at `src/lib/mcp-host.ts:118` (npm root vs pnpm engine
+   copy of @malloydata/malloy).

@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: MIT
 
 import { desc, eq } from "drizzle-orm";
+import { artifactQueries } from "@malloyyo/mcp-engine";
 import { db, datasets, malloyModels, malloyModelFiles, malloyArtifacts } from "@/db";
-import { GitHubURLReader, fetchGitHubFile, listGitHubDir, parseGitHubRepo } from "./github";
-import { introspectModelWithReader, type SourceInfo } from "./malloy";
+import { GitHubURLReader, fetchGitHubFile, parseGitHubRepo } from "./github";
+import { introspectModelWithReader, withModelRuntime, fileUrl, type SourceInfo } from "./malloy";
 import { logger } from "./logger";
 
 export type RefreshResult =
@@ -72,37 +73,33 @@ export async function refreshGitHubModel(datasetId: string): Promise<RefreshResu
     );
   }
 
-  // Dashboards that ship with the model (./dashboards/<name>/). Ingested the same
-  // way as files — pulled on every refresh, stored for THIS model version.
-  // Non-fatal: a broken/missing dashboard never fails the model refresh.
+  // Dashboards the MODEL declares (`# artifact`-tagged queries — the tag is
+  // the manifest; the stored manifest row is synthesized from it). An optional
+  // ./dashboards/<name>/Dashboard.tsx customizes the component; source "" =
+  // the runtime's default dashboard. Pulled on every refresh, stored for THIS
+  // model version. Non-fatal: a broken dashboard never fails the model refresh.
   let dashboardCount = 0;
   try {
-    const entries = await listGitHubDir(owner, repo, branch, "dashboards", {
-      useToken: ds.githubUseToken,
-    });
+    type EngineRuntime = Parameters<typeof artifactQueries>[0];
+    const found = await withModelRuntime(allFiles, created.id, (runtime) =>
+      artifactQueries(runtime as unknown as EngineRuntime, fileUrl("index.malloy")),
+    );
+    if (!found.ok) throw new Error(found.error);
     const rows: Array<typeof malloyArtifacts.$inferInsert> = [];
-    for (const entry of entries) {
-      if (entry.type !== "dir") continue;
-      let manifestRaw: string;
-      let source: string;
+    for (const artifact of found.artifacts) {
+      let source = "";
       try {
-        manifestRaw = await fetchGitHubFile(owner, repo, branch, `dashboards/${entry.name}/manifest.json`, { useToken: ds.githubUseToken });
-        source = await fetchGitHubFile(owner, repo, branch, `dashboards/${entry.name}/Dashboard.tsx`, { useToken: ds.githubUseToken });
+        source = await fetchGitHubFile(owner, repo, branch, `dashboards/${artifact.name}/Dashboard.tsx`, { useToken: ds.githubUseToken });
       } catch {
-        logger.warn("refreshGitHubModel skipping dashboard (missing manifest.json or Dashboard.tsx)", { datasetId, dashboard: entry.name });
-        continue;
+        // No custom component — the runtime renders its default dashboard.
       }
-      let manifest: Record<string, unknown>;
-      try {
-        manifest = JSON.parse(manifestRaw);
-      } catch {
-        logger.warn("refreshGitHubModel skipping dashboard (bad manifest.json)", { datasetId, dashboard: entry.name });
-        continue;
-      }
+      const manifest: Record<string, unknown> = { title: artifact.title, query: artifact.query };
+      if (artifact.description) manifest.description = artifact.description;
+      if (artifact.givens) manifest.givens = artifact.givens;
       rows.push({
         modelId: created.id,
-        name: entry.name,
-        title: typeof manifest.title === "string" ? manifest.title : entry.name,
+        name: artifact.name,
+        title: artifact.title,
         manifest,
         source,
       });

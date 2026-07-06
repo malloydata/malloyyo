@@ -74,16 +74,21 @@ source: orders is duckdb.table('orders.parquet') extend {
 }
 ```
 
-The artifact's manifest references *views + given values*, never query text:
+The artifact is *declared in the model* — a `# artifact`-tagged top-level query
+(**updated 2026-07-06: there is no manifest file; the tag is the manifest**):
+
+```malloy
+#" Names most concentrated in the selected state vs. the nation
+# artifact name="over-represented" title="Over-represented baby names"
+query: over_represented_names is baby_names -> overrepresented_by_gender
+```
 
 ```
-artifacts/
-  sales-overview/
-    manifest.json   # { title,
-                    #   panels: [ { source: "orders", view: "revenue_by_month",
-                    #               givens: { start_date, end_date, region } } ],
-                    #   deps }
-    Dashboard.tsx   # default export; receives { data: { revenueByMonth, ... } }
+dashboards/
+  over-represented/
+    Dashboard.tsx   # OPTIONAL custom component (imports @malloyyo/dashboard);
+                    # without one the runtime auto-renders title + controls
+                    # (from the query's given specs) + the result panel
 ```
 
 **Parameterization uses givens — deliberately NOT Malloy's source parameters
@@ -91,16 +96,34 @@ artifacts/
 parameters, so the artifact layer targets them from the start rather than binding
 to something being retired.
 
-> **Givens & filters — current state (verified in the prototype):** *scalar*
-> givens already drive filters today, behind \`##! experimental.givens\`. A model
-> declares \`given: STATE :: string is 'CA'\` and references \`$STATE\` in a
-> \`where:\`; the dashboard passes given values and the query re-runs. The
-> prototype (\`examples/babynames\`) does exactly this with \`$STATE\`/\`$DECADE\`.
-> What is **not** yet available is richer *filter-expression* givens — a given
-> typed as a whole filter (multi-select, ranges, operators) rather than a single
-> value. So v0 filters are single-value \`select\`s; multi-value/range controls
-> land when filter-expression givens do. The manifest/bridge already carries
-> typed \`{ query, givens }\`, so nothing structural changes when they arrive.
+> **Givens & filters — current state (updated 2026-07-06, shipped):**
+> *filter-expression* givens are the standard now. A model declares
+> \`given: STATE :: filter<string> is f'CA'\` and applies it with \`~\`
+> (\`where: state ~ $STATE\`); the dashboard binds filter-expression *strings*
+> ('CA', 'CA, NY', 'Ann%', '[1910 to 1930]', '> 200'), so one given covers
+> single-value, multi-value, wildcard, and range controls without model
+> changes. Raw scalar givens still work but new models should prefer
+> \`filter<T>\`. The prototype (\`examples/babynames\`, and the full
+> malloyyo-babynames repo) does this end to end.
+>
+> **The model is the single source of truth for the whole contract.** The
+> dashboard itself is a `# artifact` tag on a query (manifest.json is gone —
+> stored manifests are synthesized from the tag at publish/refresh); the
+> runtime introspects the query's transitive `given:` declarations — type,
+> literal default, `#"` doc comment, and `# key=value` tags (`label`,
+> `control`, `suggest {…}`, `range_min/max`, …) — and hands them to the
+> artifact as `givenSpecs`. A structured `# suggest { source=names
+> dimension=state }` (or `# suggest { query=state_options dimension=state }`)
+> tag populates a control's options as a restricted query — distinct values of
+> a source dimension, or a named query's first column — and, when a
+> `dimension` is declared, gets server-side typeahead: the runtime refines it
+> with `+ { where: lower(field) ~ f'<typed>%'; limit: 50 }`. The frame runtime
+> (`packages/cli/src/frame-runtime/`, ONE implementation bundled by both the
+> CLI dev server and the hosted vendor asset) provides `@malloyyo/dashboard`:
+> headless widgets (`Controls`/`Given`/`Select`/`Search`/`Range`, themed via
+> `--dash-*` CSS vars), hooks (`useGiven`/`useOptions`/`useQuery`), and
+> `filters` helpers (built on `@malloydata/malloy-filter`) so artifacts never
+> hand-concatenate a filter expression.
 
 Why this beats declared-but-arbitrary Malloy:
 
@@ -116,9 +139,15 @@ Why this beats declared-but-arbitrary Malloy:
 - **Smaller runtime surface.** The postMessage bridge carries typed `{ view,
   givens }`, not a Malloy string.
 
-**Arbitrary Malloy stays only as a discouraged escape hatch** — still declared in
-the manifest and still compile-checked, but it forfeits the reuse/governance wins
-and widens the runtime surface, so lint it as a smell.
+**Arbitrary Malloy is allowed — as *restricted* queries (decided 2026-07-06).**
+Restricted mode is exactly the contract built for untrusted query text (it's
+what the explore MCP surface runs under): no \`import\`, no \`given:\`
+declarations, no \`connection.table/sql\`, no raw SQL, no \`##!\` flags — only
+the model's published surface. Dashboards use it for \`# suggest {…}\` option
+population, \`<Panel malloy="…"/>\` ad-hoc panels, and \`runData()\`. Named
+queries remain the primary form for anything substantial (reviewed, reusable,
+consistent numbers); restricted text is the sanctioned small-stuff channel, and
+lint compile-checks every \`suggest\` declaration against the model.
 
 `Dashboard.tsx` imports only from a **whitelisted surface** (React + one charting
 lib) — no arbitrary `npm` reach, so bundles stay bounded and reviewable.
@@ -256,19 +285,22 @@ Serving an artifact is where the *runtime* boundary lives. Two layers:
 Flow:
 
 ```
-artifact  --postMessage-->  shell : { view: "top_customers", givens: { region: "West" } }
-shell     : validates view ∈ manifest AND givens match declared types,
-            calls /api/run WITH the viewer's session
+artifact  --postMessage-->  shell : { query: "over_represented", givens: { STATE: "CA, NY" } }
+                                    or { malloy: "run: names -> state" }   // restricted text
+shell     : calls /api/dashboards/run WITH the viewer's session
+            → named query = the model's published surface; malloy text =
+              core's RESTRICTED mode (no import/given:/connection.*/raw SQL)
             → governed, visibleDatasetWhere-scoped
-shell     --postMessage-->  artifact : { rows }
+shell     --postMessage-->  artifact : { stableResult, rows }
 artifact  : renders
 ```
 
-The shell is the single enforcement point: it only honors `{ view, givens }` the
-manifest declared (givens type-checked), scopes every run to the current viewer
-(`visibleDatasetWhere`), and can rate-limit/log. The artifact can at worst draw a
-wrong chart *inside its booth* — it never holds credentials, never runs its own
-SQL, never reaches other data.
+The server is the single enforcement point: a named query must be one the model
+publishes, query text runs under restricted mode (the compiler rejects anything
+that reaches outside the published surface), every run is scoped to the current
+viewer (`visibleDatasetWhere`), and the bridge can rate-limit/log. The artifact
+can at worst draw a wrong chart *inside its booth* — it never holds credentials,
+never runs its own SQL, never reaches other data.
 
 **Artifacts get slugs too** — `/artifact/<slug>` served through the same
 sign-in-gated page path as `/ltool/<slug>`, resolving `malloyArtifacts` by slug.
@@ -285,21 +317,24 @@ sign-in-gated page path as `/ltool/<slug>`, resolving `malloyArtifacts` by slug.
    `allow-same-origin`, which *defeated* the sandbox — now fixed
    (`sandbox="allow-scripts"`, token-gated assets). Separate origin remains the
    defense-in-depth step. See `dashboard-iframe-security.md`.
-2. **Query declaration form — DECIDED (§2).** Named **queries/views + givens**
-   exposed by the model are the primary form (prototype uses a top-level
-   `query:` since the engine's `run({name, givens})` executes those directly);
-   inline Malloy is a discouraged, still-checked escape hatch. Parameterization is
-   **givens, not Malloy source parameters** (givens will replace them). Scalar
-   givens drive `where:` filters today (`##! experimental.givens`); richer
-   filter-expression givens (multi-select/range) are the remaining language
-   dependency — v0 uses single-value `select`s.
+2. **Query declaration form — DECIDED, revised 2026-07-06 (§2).** Named
+   **queries + givens** exposed by the model are the primary form; **inline
+   Malloy is allowed as restricted-mode text** (suggestions, ad-hoc panels) —
+   core's restricted compiler is the gate, not manifest declaration.
+   Parameterization is **givens, not Malloy source parameters** (givens will
+   replace them), and givens should be **filter-expression typed**
+   (`filter<T>`, applied with `~`) — shipped; multi-value/range/wildcard
+   controls all bind to one given. The model's `given:` declarations (+
+   `# label`/`suggest {…}` tags) are the single source of the control
+   contract; manifests no longer redeclare givens.
 3. **Whitelisted import surface.** Pin React + which charting lib? (Recharts?
    `@malloydata/render` primitives?) The allowlist bounds bundle size and review
    surface.
-4. **Interactivity depth — answered by §2, working in the prototype.**
-   Interactivity = passing *givens* to a query, validated at the shell (the
-   prototype changes STATE/DECADE and the query re-runs). Single-value selects
-   today; multi-value/range controls arrive with filter-expression givens (#2).
+4. **Interactivity depth — answered by §2, shipped.** Interactivity = passing
+   *filter-expression given values* to a query (the prototype's STATE select is
+   populated by a `# suggest {…}` restricted run; its year range is one
+   `filter<number>` given driven by a dual slider via `filters.between`).
+   Multi-value/range/wildcard controls all ride the same mechanism.
 5. **Fixture strategy for tests.** Committed sample tables vs. a recorded result
    snapshot per query. Sample tables exercise the real Malloy compile; snapshots
    are lighter but can rot.

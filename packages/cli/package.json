@@ -34,6 +34,7 @@
   "dependencies": {
     "@malloydata/malloy": "0.0.420",
     "@malloydata/malloy-connections": "0.0.420",
+    "@malloydata/malloy-filter": "0.0.420",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "commander": "^12.1.0"
   },

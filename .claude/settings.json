@@ -1,0 +1,24 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__malloyyo-local__query",
+      "mcp__malloyyo-local__list_sources",
+      "mcp__malloyyo-local__describe_source",
+      "mcp__malloyyo-local__yo_help",
+      "mcp__malloy__query",
+      "mcp__malloy__list_sources",
+      "mcp__malloy__describe_source",
+      "mcp__malloy__yo_help",
+      "mcp__claude_ai_Malloyyo__query",
+      "mcp__claude_ai_Malloyyo__list_sources",
+      "mcp__claude_ai_Malloyyo__describe_source",
+      "mcp__claude_ai_Malloyyo__yo_help",
+      "mcp__claude_ai_Staging__query",
+      "mcp__vercel__search_vercel_documentation",
+      "Bash(export PATH=*)",
+      "Bash(npm test)",
+      "Bash(malloyyo lint *)",
+      "Bash(malloyyo dashboard *)"
+    ]
+  }
+}

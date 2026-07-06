@@ -10,7 +10,7 @@
     "dashboard-vendor": "node scripts/build-dashboard-vendor.mjs",
     "malloy-update": "node scripts/malloy-update.mjs",
     "preflight": "bash scripts/preflight.sh",
-    "build": "node scripts/gen-baseline.mjs && node scripts/build-dashboard-vendor.mjs && next build",
+    "build": "npm --prefix packages/mcp-engine run build && node scripts/gen-baseline.mjs && node scripts/build-dashboard-vendor.mjs && next build",
     "db:baseline": "node scripts/gen-baseline.mjs",
     "start": "next start",
     "deploy": "bash scripts/deploy.sh",

@@ -21,13 +21,15 @@ export interface GitInfo {
   dirty?: boolean;
 }
 
-/** A dashboard artifact from ./dashboards/<name>/, gathered for publish. */
+/** A dashboard artifact gathered for publish. Dashboards are DECLARED in the
+    model (`# artifact`-tagged queries); there is no manifest file. */
 export interface DashboardPayload {
-  /** Dashboard directory name = slug within the model. */
+  /** Slug within the model (the tag's name=, default the query name). */
   name: string;
-  /** Parsed manifest.json. */
+  /** Synthesized from the # artifact tag: { title, query, description? }. */
   manifest: Record<string, unknown>;
-  /** Dashboard.tsx source. */
+  /** Optional ./dashboards/<name>/Dashboard.tsx source; "" = the runtime's
+      default dashboard (auto controls + panel). */
   source: string;
 }
 

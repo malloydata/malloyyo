@@ -1,18 +1,24 @@
 // `malloyyo dashboard dev` — a localhost preview server for dashboard artifacts.
 //
 // Architecture (matches docs/repo-artifacts.md):
+//   - the MODEL declares its dashboards: a top-level query tagged `# artifact`
+//     (optionally title="…"/name="…"). There is no manifest file — the tag is
+//     the manifest, and the query's given: declarations are the filter contract.
+//   - `./dashboards/<name>/Dashboard.tsx` OPTIONALLY customizes the component;
+//     without one the runtime renders its DefaultDashboard (auto controls from
+//     the given specs + the result panel).
 //   - trusted PARENT shell (served at /) holds the one privileged capability:
-//     calling the model runner. It brokers postMessage <-> the governed query.
+//     calling the model runner. It brokers postMessage <-> governed queries.
 //   - untrusted ARTIFACT runs in a `sandbox="allow-scripts"` iframe (/frame):
 //     opaque origin, no credentials, no direct network. It can only postMessage
-//     the parent to run a DECLARED query with given values.
-//   - the bundle (/bundle.js) is the artifact's Dashboard.tsx compiled with the
-//     host frame runtime (React + Malloy's renderer) by esbuild, on demand.
+//     the parent to run a model-published named query or restricted Malloy text.
+//   - the bundle (/bundle.js) is the artifact's component compiled with the
+//     shared frame runtime (src/frame-runtime/) by esbuild, on demand.
 //
 // This is a prototype dev server: it runs the SAME engine `run()` the hosted
 // server uses, so filter/givens behavior is faithful. It is NOT the production
 // serving path (no auth/viewer-scope — a single local dev). Run via the dev
-// entry (tsx) so frame-entry.tsx is bundled from source.
+// entry (tsx) so the frame runtime is bundled from source.
 
 import http from "node:http";
 import fs from "node:fs";
@@ -20,7 +26,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import * as esbuild from "esbuild";
-import { makeRunner, type ModelRunner } from "./host.js";
+import { makeRunner, type GivenSpec, type ModelRunner } from "./host.js";
 
 // The dashboard's Dashboard.tsx lives in the user's model repo, which may be
 // anywhere on disk (outside this monorepo). Its `react` / automatic-JSX imports
@@ -34,6 +40,7 @@ const HOST_LIBS = [
   "react/jsx-runtime",
   "react/jsx-dev-runtime",
   "@malloydata/render",
+  "@malloydata/malloy-filter",
 ];
 const HOST_ALIAS: Record<string, string> = {};
 for (const spec of HOST_LIBS) {
@@ -44,75 +51,67 @@ for (const spec of HOST_LIBS) {
   }
 }
 
-interface GivenSpec {
-  name: string;
-  label?: string;
-  type: "string" | "number" | "boolean";
-  control?: string;
-  options?: (string | number)[];
-  default: string | number;
-}
-interface Manifest {
-  title: string;
-  query: string;
-  givens: GivenSpec[];
-}
+/** A dashboard = a `# artifact`-tagged query, plus an optional custom component. */
 interface Dashboard {
   name: string;
-  dir: string;
-  manifest: Manifest;
+  query: string;
+  title: string;
+  description?: string;
+  /** Per-dashboard given defaults from the tag's `givens { … }` block. */
+  givens?: Record<string, string | number | boolean>;
+  /** Path to dashboards/<name>/Dashboard.tsx when the repo customizes it. */
+  tsxPath?: string;
 }
 
-/** frame-entry.tsx is a source file bundled at runtime by esbuild (never part of
-    the node build). Resolve it whether we're running from src/ (tsx dev) or from
-    the built dist/ next to a sibling src/ (local checkout). */
-function resolveFrameEntry(): string {
+/** Runtime source files, resolved whether we're running from src/ (tsx dev) or
+    from the built dist/ next to a sibling src/ (local checkout). */
+function resolveRuntimeDir(): string {
   const candidates = [
-    new URL("./frame-entry.tsx", import.meta.url), // dev: src/dashboard.ts
-    new URL("../src/frame-entry.tsx", import.meta.url), // built: dist/index.js
+    new URL("./frame-runtime/", import.meta.url), // dev: src/dashboard.ts
+    new URL("../src/frame-runtime/", import.meta.url), // built: dist/index.js
   ].map((u) => fileURLToPath(u));
   const found = candidates.find((c) => fs.existsSync(c));
   if (!found) {
     throw new Error(
-      "frame-entry.tsx not found — `dashboard dev` currently needs the CLI source " +
+      "frame-runtime/ not found — `dashboard dev` currently needs the CLI source " +
         "checkout (looked in ./ and ../src). See docs/repo-artifacts.md packaging note.",
     );
   }
   return found;
 }
+const resolveFrameEntry = (): string => path.join(resolveRuntimeDir(), "..", "frame-entry.tsx");
 
-/** Discover ./dashboards/<name>/{manifest.json,Dashboard.tsx} under the root. */
-function discoverDashboards(root: string): Dashboard[] {
-  const base = path.join(root, "dashboards");
-  if (!fs.existsSync(base)) return [];
-  const out: Dashboard[] = [];
-  for (const name of fs.readdirSync(base)) {
-    const dir = path.join(base, name);
-    const mf = path.join(dir, "manifest.json");
-    if (!fs.statSync(dir).isDirectory() || !fs.existsSync(mf)) continue;
-    try {
-      out.push({ name, dir, manifest: JSON.parse(fs.readFileSync(mf, "utf8")) });
-    } catch (e) {
-      console.error(`  ! skipping ${name}: bad manifest.json (${(e as Error).message})`);
-    }
-  }
-  return out.sort((a, b) => a.name.localeCompare(b.name));
+/** The model's `# artifact`-tagged queries + optional custom Dashboard.tsx. */
+async function discoverDashboards(root: string, runner: ModelRunner): Promise<Dashboard[]> {
+  const result = await runner.artifacts();
+  if (!result.ok) throw new Error(`model error: ${result.error}`);
+  return result.artifacts.map((a) => {
+    const tsxPath = path.join(root, "dashboards", a.name, "Dashboard.tsx");
+    return { ...a, tsxPath: fs.existsSync(tsxPath) ? tsxPath : undefined };
+  });
 }
 
 const esc = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
-/** Bundle the artifact's Dashboard.tsx with the frame runtime. Cached by the
-    Dashboard.tsx mtime so an edit rebuilds (basic hot reload on next load). */
+/** Bundle the artifact's component with the frame runtime. Cached by the
+    mtimes of the component AND every runtime source file, so an edit to either
+    rebuilds (basic hot reload on next load). */
 function makeBundler() {
-  const cache = new Map<string, { mtimeMs: number; js: string }>();
+  const cache = new Map<string, { stamp: number; js: string }>();
   const frameEntry = resolveFrameEntry();
+  const runtimeDir = resolveRuntimeDir();
+  const runtimeIndex = path.join(runtimeDir, "index.ts");
+  const runtimeStamp = () =>
+    fs.statSync(frameEntry).mtimeMs +
+    fs
+      .readdirSync(runtimeDir)
+      .map((f) => fs.statSync(path.join(runtimeDir, f)).mtimeMs)
+      .reduce((a, b) => a + b, 0);
   return async function bundle(dash: Dashboard): Promise<string> {
-    const dashboardFile = path.join(dash.dir, "Dashboard.tsx");
-    // Bust the cache when the dashboard OR the frame runtime changes.
-    const mtimeMs = fs.statSync(dashboardFile).mtimeMs + fs.statSync(frameEntry).mtimeMs;
+    const stamp = runtimeStamp() + (dash.tsxPath ? fs.statSync(dash.tsxPath).mtimeMs : 0);
     const hit = cache.get(dash.name);
-    if (hit && hit.mtimeMs === mtimeMs) return hit.js;
+    if (hit && hit.stamp === stamp) return hit.js;
     const result = await esbuild.build({
       entryPoints: [frameEntry],
       bundle: true,
@@ -127,18 +126,35 @@ function makeBundler() {
         {
           name: "virtual-dashboard",
           setup(b) {
-            b.onResolve({ filter: /^virtual:dashboard$/ }, () => ({ path: dashboardFile }));
-            // Force react / renderer imports to the CLI's copies, whatever
-            // directory the dashboard file lives in.
-            b.onResolve({ filter: /^(react($|\/)|react-dom($|\/)|@malloydata\/render$)/ }, (args) =>
-              HOST_ALIAS[args.path] ? { path: HOST_ALIAS[args.path] } : undefined,
+            // The tagged query may ship no component — mount the runtime's
+            // DefaultDashboard (mountDashboard treats null as "use default").
+            if (dash.tsxPath) {
+              const tsxPath = dash.tsxPath;
+              b.onResolve({ filter: /^virtual:dashboard$/ }, () => ({ path: tsxPath }));
+            } else {
+              b.onResolve({ filter: /^virtual:dashboard$/ }, () => ({
+                path: "default-dashboard",
+                namespace: "vdefault",
+              }));
+              b.onLoad({ filter: /.*/, namespace: "vdefault" }, () => ({
+                contents: `export default null;`,
+                loader: "js",
+              }));
+            }
+            // A Dashboard.tsx imports the runtime as "@malloyyo/dashboard".
+            b.onResolve({ filter: /^@malloyyo\/dashboard$/ }, () => ({ path: runtimeIndex }));
+            // Force react / renderer / filter-parser imports to the CLI's
+            // copies, whatever directory the dashboard file lives in.
+            b.onResolve(
+              { filter: /^(react($|\/)|react-dom($|\/)|@malloydata\/(render|malloy-filter)$)/ },
+              (args) => (HOST_ALIAS[args.path] ? { path: HOST_ALIAS[args.path] } : undefined),
             );
           },
         },
       ],
     });
     const js = result.outputFiles[0].text;
-    cache.set(dash.name, { mtimeMs, js });
+    cache.set(dash.name, { stamp, js });
     return js;
   };
 }
@@ -165,9 +181,6 @@ function parentShell(
   // call /api/run directly, only postMessage. See docs/repo-artifacts.md §7/§8.
   const d = JSON.stringify(dash.name);
   const fb = JSON.stringify(frameBase);
-  // Switcher chrome (only when there's more than one dashboard). Lives in the
-  // TRUSTED shell, outside the sandboxed frame; each tab is a full reload to
-  // `/?d=<name>`, which re-picks the dashboard server-side.
   const nav =
     all.length > 1
       ? `<nav style="display:flex;gap:4px;align-items:center;padding:8px 12px;` +
@@ -179,7 +192,7 @@ function parentShell(
             return (
               `<a href="/?d=${encodeURIComponent(x.name)}" style="padding:4px 10px;` +
               `border-radius:6px;text-decoration:none;${on ? "background:#1a1a1a;color:#fff" : "color:#333"}">` +
-              `${esc(x.manifest.title || x.name)}</a>`
+              `${esc(x.title || x.name)}</a>`
             );
           })
           .join("") +
@@ -209,13 +222,13 @@ window.addEventListener('message',async(e)=>{
   let out;
   try{
     const res=await fetch('/api/run',{method:'POST',headers:{'content-type':'application/json'},
-      body:JSON.stringify({d:${d},query:m.query,givens:m.givens})});
+      body:JSON.stringify({d:${d},query:m.query,malloy:m.malloy,givens:m.givens})});
     out=await res.json();
   }catch(err){ out={ok:false,problems:[{message:String(err)}]}; }
   f.contentWindow.postMessage({type:'result',id:m.id,...out},${fb});
 });
 </script>`,
-    dash.manifest.title,
+    dash.title,
   );
 }
 
@@ -226,16 +239,28 @@ function givensFromUrl(url: URL): Record<string, string> {
   return g;
 }
 
-function frameDoc(dash: Dashboard, initialGivens: Record<string, string>): string {
+function frameDoc(
+  dash: Dashboard,
+  givenSpecs: GivenSpec[],
+  initialGivens: Record<string, string>,
+): string {
   // NOTE (prototype): the `sandbox` attribute is the containment here. A
   // production build would also send a strict CSP (connect-src 'none',
   // img-src data:, etc.) to close exfil side-channels — see repo-artifacts.md §8.
+  const info = {
+    name: dash.name,
+    query: dash.query,
+    title: dash.title,
+    description: dash.description,
+    givens: dash.givens,
+  };
   return html(
     `<div id="root"></div>` +
-      `<script>window.__MANIFEST__=${JSON.stringify(dash.manifest)};` +
+      `<script>window.__DASHBOARD__=${JSON.stringify(info)};` +
+      `window.__GIVENS__=${JSON.stringify(givenSpecs)};` +
       `window.__INITIAL_GIVENS__=${JSON.stringify(initialGivens)}</script>` +
       `<script src="/bundle.js?d=${encodeURIComponent(dash.name)}"></script>`,
-    dash.manifest.title,
+    dash.title,
   );
 }
 
@@ -259,15 +284,17 @@ export async function serveDashboard(opts: {
   const framePort = port + 1;
   const frameBase = `http://localhost:${framePort}`;
 
-  let dashboards = discoverDashboards(root);
-  if (dashboards.length === 0) {
-    throw new Error(`No dashboards found under ${path.join(root, "dashboards")}/`);
-  }
-  let byName = new Map(dashboards.map((d) => [d.name, d]));
   const runner: ModelRunner = await makeRunner(root);
   if (!runner.entryExists()) {
     throw new Error(`No index.malloy at ${root} — run this from a Malloy model repo.`);
   }
+  let dashboards = await discoverDashboards(root, runner);
+  if (dashboards.length === 0) {
+    throw new Error(
+      `No dashboards declared — tag a top-level query with \`# artifact title="…"\` in the model.`,
+    );
+  }
+  let byName = new Map(dashboards.map((d) => [d.name, d]));
   const bundle = makeBundler();
 
   const pick = (url: URL): Dashboard =>
@@ -275,8 +302,9 @@ export async function serveDashboard(opts: {
 
   // Live reload: watch the model + dashboards and tell the browser to reload on
   // any change. The runner reads model files fresh per run, the bundle cache is
-  // keyed by mtime, and we re-discover manifests here — so a reload picks up
-  // edits to .malloy, manifest.json, or Dashboard.tsx without a restart.
+  // keyed by mtime, and we re-discover the tagged queries here — so a reload
+  // picks up edits to .malloy (including # artifact tags) or Dashboard.tsx
+  // without a restart.
   const sseClients = new Set<http.ServerResponse>();
   const notifyReload = () => {
     for (const c of sseClients) c.write("data: reload\n\n");
@@ -288,10 +316,14 @@ export async function serveDashboard(opts: {
       if (!f.endsWith(".malloy") && !f.includes("dashboards")) return;
       clearTimeout(debounce);
       debounce = setTimeout(() => {
-        dashboards = discoverDashboards(root);
-        byName = new Map(dashboards.map((d) => [d.name, d]));
-        console.error(`  ↻ ${f} changed — reloading`);
-        notifyReload();
+        discoverDashboards(root, runner)
+          .then((next) => {
+            dashboards = next;
+            byName = new Map(dashboards.map((d) => [d.name, d]));
+            console.error(`  ↻ ${f} changed — reloading`);
+            notifyReload();
+          })
+          .catch((e) => console.error(`  ! model error after ${f} changed: ${(e as Error).message}`));
       }, 150);
     });
   } catch (e) {
@@ -311,7 +343,15 @@ export async function serveDashboard(opts: {
       // the runner on its own origin.
       if (onFramePort) {
         if (url.pathname === "/frame") {
-          return send(200, "text/html; charset=utf-8", frameDoc(pick(url), givensFromUrl(url)));
+          // Given specs are introspected from the model PER LOAD, so an edit to
+          // a `given:` declaration (type, default, tags) shows up on reload.
+          const dash = pick(url);
+          const specs = await runner.givensForQuery(dash.query);
+          if (!specs.ok) {
+            return send(200, "text/html; charset=utf-8",
+              html(`<pre style="color:crimson;padding:16px">model error: ${esc(specs.error)}</pre>`, dash.title));
+          }
+          return send(200, "text/html; charset=utf-8", frameDoc(dash, specs.givens, givensFromUrl(url)));
         }
         if (url.pathname === "/bundle.js") {
           return send(200, "application/javascript; charset=utf-8", await bundle(pick(url)));
@@ -331,14 +371,17 @@ export async function serveDashboard(opts: {
         return send(200, "text/html; charset=utf-8", parentShell(pick(url), frameBase, dashboards, givensFromUrl(url)));
       }
       if (url.pathname === "/api/run" && req.method === "POST") {
-        const { d, query, givens } = JSON.parse(await readBody(req));
+        const { d, query, malloy, givens } = JSON.parse(await readBody(req));
         const dash = byName.get(d);
         if (!dash) return send(404, "application/json", JSON.stringify({ ok: false, problems: [{ message: `no dashboard '${d}'` }] }));
-        // Governance: only run queries this dashboard declared.
-        if (query !== dash.manifest.query) {
-          return send(403, "application/json", JSON.stringify({ ok: false, problems: [{ message: `query '${query}' is not declared by ${d}` }] }));
-        }
-        const out = await runner.run(query, givens ?? {});
+        // Governance: a dashboard may run (a) any named query the model
+        // publishes, or (b) restricted Malloy text — core's restricted mode
+        // (no import / given: / connection.* / raw SQL / ##! flags) is the
+        // gate, exactly the contract the explore MCP surface runs under.
+        const out =
+          typeof malloy === "string"
+            ? await runner.runText(malloy, givens ?? {})
+            : await runner.run(String(query ?? dash.query), givens ?? {});
         return send(200, "application/json", JSON.stringify(out));
       }
       send(404, "text/plain", "not found");
@@ -354,7 +397,8 @@ export async function serveDashboard(opts: {
   console.error(`\n  malloyyo dashboard dev — model: ${root}`);
   console.error(`  http://localhost:${port}/   (artifact origin: ${frameBase})`);
   for (const d of dashboards) {
-    console.error(`    • ${d.name}  →  http://localhost:${port}/?d=${d.name}`);
+    const kind = d.tsxPath ? "custom" : "default UI";
+    console.error(`    • ${d.name} (${kind})  →  http://localhost:${port}/?d=${d.name}`);
   }
   console.error(`  Ctrl-C to stop.\n`);
   await new Promise<void>(() => {});

@@ -45,7 +45,7 @@ async function publish(
   }
 
   const git = gitInfo(root);
-  const dashboards = gatherDashboards(root);
+  const dashboards = await gatherDashboards(root);
   const body: PublishRequest = { files, config, git, dashboards };
 
   const provenance = git.sha

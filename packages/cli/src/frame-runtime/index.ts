@@ -1,0 +1,27 @@
+// @malloyyo/dashboard — the import surface a Dashboard.tsx sees. The bundlers
+// alias "@malloyyo/dashboard" to this file (CLI dev server: esbuild alias;
+// hosted: shimmed to window.__DASH_RUNTIME__, which IS this module bundled
+// into the vendor asset). Everything here also arrives as props on the
+// Dashboard component; imports are the readable form.
+
+export {
+  Panel,
+  filters,
+  runData,
+  useGiven,
+  useOptions,
+  useQuery,
+  mount,
+  dashboardInfo,
+  givenSpecs,
+} from "./runtime";
+export { Controls, Given, Select, Search, Range, Checkbox, Field, DefaultDashboard } from "./ui";
+
+import { mount } from "./runtime";
+import { Controls, Given, Select, Search, Range, Checkbox, DefaultDashboard } from "./ui";
+
+/** Frame entry: mount a Dashboard with the widget components in its props
+    (import-free dashboards keep working). */
+export function mountDashboard(Dashboard: unknown): void {
+  mount(Dashboard ?? DefaultDashboard, { Controls, Given, Select, Search, Range, Checkbox });
+}

@@ -133,7 +133,7 @@ export async function runMalloy(
 }
 
 // Build a file:// URL for a repo-relative path (e.g. "index.malloy" → file:///index.malloy).
-function fileUrl(path: string): URL {
+export function fileUrl(path: string): URL {
   return new URL(`file:///${path.replace(/^\//, "")}`);
 }
 

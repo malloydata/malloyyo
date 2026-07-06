@@ -67,6 +67,18 @@ export { modelCatalogEntry } from './catalog';
 export { run, executeMaterialized, DEFAULT_ROW_LIMIT, type RunOptions } from './run';
 export { validateRestricted, runRestricted } from './restricted';
 export {
+  dashboardGivenSpecs,
+  describeGivenSpec,
+  type DashboardGivenSpec,
+  type DashboardGivenSpecsResult,
+} from './given-specs';
+export {
+  artifactQueries,
+  readArtifactTag,
+  type ArtifactInfo,
+  type ArtifactsResult,
+} from './artifacts';
+export {
   listHelpTopics,
   getHelpTopic,
   helpTopicForCode,

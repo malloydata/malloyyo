@@ -83,9 +83,11 @@ Defaults are `Malloyyo`/`main`. Set both in the Vercel env (per environment)
 
 **To deploy: `npm run deploy`** (`scripts/deploy.sh`) from the working tree you
 want live. The script encodes the whole procedure — build the engine `dist/`
-(gitignored; the remote build won't make it, so it must be built locally and
-uploaded), `vercel --prod`, then a `/api/health` check. Don't re-derive the
-steps; run the one command.
+(gitignored), `vercel --prod`, then a `/api/health` check. The root `build`
+script also builds the engine, so remote/git-based builds work without the
+local pre-build (fixed 2026-07-06 — before that, external deploys failed with
+`Cannot resolve @malloyyo/mcp-engine`). Don't re-derive the steps; run the one
+command.
 
 **Which project** is decided by the gitignored `.vercel` link
 (`vercel link --project <name>`), so each checkout/instance targets its own

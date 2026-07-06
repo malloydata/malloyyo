@@ -8,10 +8,10 @@
 #     vercel link --project <name> --yes      # once, e.g. mtoyyo-worldcup / malloyyo
 #     npm run deploy                           # deploys whatever this checkout is linked to
 #
-# This script encodes the whole procedure (incl. the one non-obvious trap: the
-# engine's dist/ is gitignored and the remote `pnpm install --frozen-lockfile`
-# won't rebuild it, so it must be built locally first to be uploaded). Don't
-# re-derive the steps — just run it.
+# This script encodes the whole procedure. (The engine's dist/ is gitignored;
+# the root `build` script now builds it remotely too, so git-based deploys
+# work — the local pre-build here just keeps the uploaded tree self-contained
+# either way.) Don't re-derive the steps — just run it.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."                      # repo root

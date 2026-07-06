@@ -126,6 +126,9 @@ importers:
       '@malloydata/malloy-connections':
         specifier: 0.0.420
         version: 0.0.420(asn1.js@5.4.1)
+      '@malloydata/malloy-filter':
+        specifier: 0.0.420
+        version: 0.0.420
       '@modelcontextprotocol/sdk':
         specifier: ^1.29.0
         version: 1.29.0(zod@4.4.3)

@@ -128,6 +128,25 @@ equals, not colon):
   (\`… + { where: lower(field) ~ f'll%'; limit: 50 }\`, case-insensitive,
   escaped). Without a dimension the fetched list is filtered client-side.
   Runs as a restricted query; lint checks the declaration compiles.
+
+  **RELATED (faceted) filters** — query-form only: a suggest query may
+  reference the OTHER givens, and the runtime runs it with the dashboard's
+  current values (the suggested given itself is excluded, so the list never
+  collapses to the current pick). Brand suggestions narrow when Category is
+  set:
+
+  \`\`\`malloy
+  query: brand_suggest is inventory_items -> product_brand + {
+    where:
+      product_category ~ $CATEGORY,      // NOT product_brand ~ $BRAND
+      product_department ~ $DEPARTMENT
+    limit: 500
+  }
+  \`\`\`
+
+  Declare one \`*_suggest\` per filter, each referencing the others; \`f''\`
+  defaults mean unset filters don't constrain. \`source=\` suggests can't do
+  this (no place for a \`where:\`) — another reason to prefer \`query=\`.
 - \`control=select\` — a fixed dropdown instead of a typeahead search box
 - \`range_min\` / \`range_max\` — bounds; makes a filter<number> given a
   dual-thumb range slider

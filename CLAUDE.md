@@ -136,7 +136,7 @@ vercel alias set <deploy-url> malloyyo-staging.vercel.app   # staging alias
 
 ## Planned work
 
-### Dashboard artifacts v2 — built 2026-07-06, working, needs review + deploy
+### Dashboard artifacts v2 — SHIPPED 2026-07-06 (PR #65, deployed to prod)
 
 The dashboard system was reworked end-to-end (design doc: `docs/repo-artifacts.md`,
 authoring guide surfaced over MCP: `packages/cli/src/dashboard-guidance.ts`).
@@ -169,13 +169,13 @@ headless-browser interaction tests):
   `~/dev/malloyyo-auto-recalls` (curated `suggest {query=…}`, Checkbox, empty
   filter = All).
 
-To resume: everything is uncommitted in this repo + the two model repos.
-Next steps, roughly in order:
-1. Review + commit the three working trees (vendor asset `public/dashboard-vendor.js`
-   must ship rebuilt with any frame-runtime change).
-2. Hosted-path smoke test on staging (publish a converted repo; the push/refresh
-   paths synthesize stored manifests from the tags).
-3. Open questions: whitelisted charting libs for dashboards (deliberately
-   deferred); `# dashboard` renderer-tag vs `# artifact` naming; pre-existing
-   dual-install tsc error at `src/lib/mcp-host.ts:118` (npm root vs pnpm engine
-   copy of @malloydata/malloy).
+Shipped: sample repos pushed to main, this repo landed via PR #65 (+ a
+pnpm-lock sync for the CLI's new @malloydata/malloy-filter dep — remember to
+`npx pnpm install` after ANY dep change), deployed to production, and both
+prod datasets refreshed (babynames v10 / auto_recalls v3 — six v2 dashboards
+live). Verified first on the `dev-github-links` prod-fork branch
+(local/CLAUDE.md).
+
+Open questions for later: whitelisted charting libs for dashboards
+(deliberately deferred); pre-existing dual-install tsc error at
+`src/lib/mcp-host.ts:118` (npm root vs pnpm engine copy of @malloydata/malloy).

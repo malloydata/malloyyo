@@ -151,18 +151,28 @@ function typeaheadText(s, typed) {
 /** Options for a control, from the given's `# suggest {…}` tag. Pass the text
     the user has typed so far for typeahead: { options, loading }. */
 export function useOptions(name, typed) {
+  const { givens } = useDashboard();
   const spec = givenSpecs().find((s) => s.name === name);
   const suggest = spec && spec.suggest;
   const base = suggest ? suggestBase(suggest) : null;
   const term = (typed ?? "").trim();
+  // RELATED FILTERS: suggestion queries run with the dashboard's CURRENT given
+  // values, so a suggest query that references other givens (e.g. brand_suggest
+  // with `where: product_category ~ $CATEGORY`) narrows as the user filters.
+  // The suggested given itself is excluded — its current value is what the
+  // user is replacing; self-filtering would collapse the list to the current
+  // pick. Which givens apply (if any) stays declared in the model's query.
+  const others = {};
+  for (const k of Object.keys(givens)) if (k !== name) others[k] = givens[k];
+  const othersKey = JSON.stringify(others);
   const [state, setState] = useState({ options: [], loading: !!base });
   useEffect(() => {
     if (!base) return;
     let cancelled = false;
     // With a known dimension the typed term refines server-side; otherwise the
-    // full base list is fetched once (per given) and filtered client-side.
+    // full base list is fetched once (per given values) and filtered client-side.
     const serverSide = !!suggest.dimension;
-    const key = `${name}\0${serverSide ? term.toLowerCase() : ""}`;
+    const key = `${name}\0${serverSide ? term.toLowerCase() : ""}\0${othersKey}`;
     const hit = optionCache.get(key);
     if (hit) {
       setState({ options: clientFilter(hit, serverSide, term), loading: false });
@@ -173,7 +183,7 @@ export function useOptions(name, typed) {
     const timer = setTimeout(
       () => {
         const q = term && serverSide ? typeaheadText(suggest, term) : base;
-        runData(q, {})
+        runData(q, JSON.parse(othersKey))
           .then((rows) => {
             const options = firstColumn(rows);
             optionCache.set(key, options);
@@ -190,7 +200,7 @@ export function useOptions(name, typed) {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [name, base, term]);
+  }, [name, base, term, othersKey]);
   return state;
 }
 

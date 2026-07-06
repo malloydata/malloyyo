@@ -10,9 +10,14 @@
 import {
   NumberFilterExpression,
   StringFilterExpression,
+  TemporalFilterExpression,
   type NumberFilter,
   type StringFilter,
+  type TemporalFilter,
+  type TemporalUnit,
 } from "@malloydata/malloy-filter";
+
+export type { TemporalUnit };
 
 export interface FilterHelpers {
   // ── build (JS state → filter expression source) ──────────────────
@@ -28,6 +33,16 @@ export interface FilterHelpers {
   atLeast(n: number): string;
   lessThan(n: number): string;
   atMost(n: number): string;
+  /** Rolling window ending now, for a filter<timestamp|date> given:
+      lastN(7, "day") → '7 days' (Malloy's "in the last 7 days"). */
+  lastN(n: number, units: TemporalUnit): string;
+  /** Inclusive literal date/time range: dateRange("2026-01-01", "2026-07-01")
+      → '2026-01-01 to 2026-07-01'. Accepts date ('2026-01-01') or timestamp
+      ('2026-01-01 12:30') literals. */
+  dateRange(from: string, to: string): string;
+  /** One-sided literal bounds: afterDate("2026-01-01") → 'after 2026-01-01'. */
+  afterDate(literal: string): string;
+  beforeDate(literal: string): string;
 
   // ── read (filter expression source → JS state, null when it isn't that shape) ──
   /** The exact-match values of a string filter: values('CA, NY') → ["CA","NY"].
@@ -38,14 +53,23 @@ export interface FilterHelpers {
   numberRange(src: string): { lo: number; hi: number } | null;
   /** The bound of a one-sided comparison: threshold('> 200') → {op: ">", n: 200}. */
   threshold(src: string): { op: ">" | ">=" | "<" | "<=" | "=" | "!="; n: number } | null;
+  /** The rolling window of a temporal filter: inLast('7 days') →
+      {n: 7, units: "day"}. Null when the expression is not that shape. */
+  inLast(src: string): { n: number; units: TemporalUnit } | null;
+  /** The literal bounds of a temporal range: temporalRange('2026-01-01 to
+      2026-07-01') → {from: "2026-01-01", to: "2026-07-01"}. Null otherwise. */
+  temporalRange(src: string): { from: string; to: string } | null;
 
   // ── validate ──────────────────────────────────────────────────────
-  /** True when src parses as a filter over the Malloy type ("string" | "number"). */
+  /** True when src parses as a filter over the Malloy type
+      ("string" | "number" | "timestamp" | "timestamptz" | "date"). */
   isValid(filterType: string, src: string): boolean;
 }
 
 const str = (f: StringFilter | null) => StringFilterExpression.unparse(f);
 const num = (f: NumberFilter | null) => NumberFilterExpression.unparse(f);
+const tmp = (f: TemporalFilter | null) => TemporalFilterExpression.unparse(f);
+const isTemporalType = (t: string) => t === "timestamp" || t === "timestamptz" || t === "date";
 
 export const filters: FilterHelpers = {
   oneOf: (...values) => str({ operator: "=", values }),
@@ -64,6 +88,15 @@ export const filters: FilterHelpers = {
   atLeast: (n) => num({ operator: ">=", values: [String(n)] }),
   lessThan: (n) => num({ operator: "<", values: [String(n)] }),
   atMost: (n) => num({ operator: "<=", values: [String(n)] }),
+  lastN: (n, units) => tmp({ operator: "in_last", units, n: String(n) }),
+  dateRange: (from, to) =>
+    tmp({
+      operator: "to",
+      fromMoment: { moment: "literal", literal: from },
+      toMoment: { moment: "literal", literal: to },
+    }),
+  afterDate: (literal) => tmp({ operator: "after", after: { moment: "literal", literal } }),
+  beforeDate: (literal) => tmp({ operator: "before", before: { moment: "literal", literal } }),
 
   values(src) {
     const { parsed } = StringFilterExpression.parse(src);
@@ -99,9 +132,33 @@ export const filters: FilterHelpers = {
     }
     return null;
   },
+  inLast(src) {
+    const { parsed } = TemporalFilterExpression.parse(src);
+    if (parsed && parsed.operator === "in_last") {
+      const n = Number(parsed.n);
+      if (Number.isFinite(n)) return { n, units: parsed.units };
+    }
+    return null;
+  },
+  temporalRange(src) {
+    const { parsed } = TemporalFilterExpression.parse(src);
+    if (
+      parsed &&
+      parsed.operator === "to" &&
+      parsed.fromMoment.moment === "literal" &&
+      parsed.toMoment.moment === "literal"
+    ) {
+      return { from: parsed.fromMoment.literal, to: parsed.toMoment.literal };
+    }
+    return null;
+  },
   isValid(filterType, src) {
     if (filterType === "number") {
       const r = NumberFilterExpression.parse(src);
+      return r.parsed !== null && !r.log.some((l) => l.severity === "error");
+    }
+    if (isTemporalType(filterType)) {
+      const r = TemporalFilterExpression.parse(src);
       return r.parsed !== null && !r.log.some((l) => l.severity === "error");
     }
     const r = StringFilterExpression.parse(src);

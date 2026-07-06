@@ -181,6 +181,85 @@ export function Range({ given, min, max, label, step = 1 }) {
   );
 }
 
+/** Relative-time presets + a custom literal range, bound to a
+    filter<timestamp|date> given. Presets are {value, text} where value is a
+    temporal filter EXPRESSION ('' = all time, '7 days' = the last 7 days) —
+    override via the `presets` prop or the declaration's tags. Picking
+    "Custom range…" swaps in from/to date inputs committed through
+    filters.dateRange (never hand-built strings). */
+export function TimeRange({ given, label, presets, style }) {
+  const { value, set, spec } = useGiven(given);
+  const range = filters.temporalRange(value ?? "");
+  const [custom, setCustom] = useState(!!range);
+  const [draft, setDraft] = useState({ from: range?.from ?? "", to: range?.to ?? "" });
+  // Follow external value changes (URL-seeded links, artifact-tag defaults).
+  useEffect(() => {
+    const r = filters.temporalRange(value ?? "");
+    setCustom(!!r);
+    if (r) setDraft({ from: r.from, to: r.to });
+  }, [value]);
+  const opts = (presets ?? DEFAULT_TIME_PRESETS).map((o) =>
+    typeof o === "object" ? o : { value: String(o), text: String(o) },
+  );
+  const CUSTOM = "__custom__";
+  const current = custom ? CUSTOM : (value ?? "");
+  if (!custom && !opts.some((o) => o.value === current)) {
+    opts.push({ value: current, text: current || "All time" });
+  }
+  const commitCustom = (next) => {
+    setDraft(next);
+    if (next.from && next.to) set(filters.dateRange(next.from, next.to));
+  };
+  const dateInput = (key) => (
+    <input
+      type="date"
+      value={draft[key]}
+      onChange={(e) => commitCustom({ ...draft, [key]: e.target.value })}
+      style={controlStyle}
+    />
+  );
+  return (
+    <Field label={label ?? label_(spec)} style={style}>
+      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+        <select
+          value={current}
+          onChange={(e) => {
+            if (e.target.value === CUSTOM) setCustom(true);
+            else {
+              setCustom(false);
+              set(e.target.value);
+            }
+          }}
+          style={controlStyle}
+        >
+          {opts.map((o) => (
+            <option key={o.value} value={o.value}>
+              {o.text}
+            </option>
+          ))}
+          <option value={CUSTOM}>Custom range…</option>
+        </select>
+        {custom && (
+          <>
+            {dateInput("from")}
+            <span style={{ color: V("muted", "#888") }}>to</span>
+            {dateInput("to")}
+          </>
+        )}
+      </div>
+    </Field>
+  );
+}
+
+export const DEFAULT_TIME_PRESETS = [
+  { value: "", text: "All time" },
+  { value: "today", text: "Today" },
+  { value: "7 days", text: "Last 7 days" },
+  { value: "30 days", text: "Last 30 days" },
+  { value: "90 days", text: "Last 90 days" },
+  { value: "12 months", text: "Last 12 months" },
+];
+
 /** A checkbox bound to a boolean given. */
 export function Checkbox({ given, label, style }) {
   const { value, set, spec } = useGiven(given);
@@ -203,14 +282,17 @@ export function Checkbox({ given, label, style }) {
 }
 
 /** The right control for a given, picked from its declaration: numeric range
-    tags → Range, suggestions + control=select → Select, boolean → Checkbox,
-    anything else → Search. */
+    tags → Range, temporal filter → TimeRange, suggestions + control=select →
+    Select, boolean → Checkbox, anything else → Search. */
 export function Given({ name, ...rest }) {
   const spec = givenSpecs().find((s) => s.name === name);
   if (!spec) return null;
   const tags = spec.tags ?? {};
   if (spec.filterType === "number" && tags.range_min != null && tags.range_max != null) {
     return <Range given={name} {...rest} />;
+  }
+  if (spec.filterType === "timestamp" || spec.filterType === "timestamptz" || spec.filterType === "date") {
+    return <TimeRange given={name} {...rest} />;
   }
   if (spec.suggest && tags.control === "select") return <Select given={name} {...rest} />;
   if (spec.type === "boolean") return <Checkbox given={name} {...rest} />;
@@ -239,25 +321,34 @@ export function Controls({ style, children }) {
 }
 
 /** The whole no-code dashboard: title + doc comment + controls + panel. Used
-    when a `# artifact`-tagged query ships no Dashboard.tsx. */
+    when a `# artifact`-tagged query ships no Dashboard.tsx.
+
+    App-like layout: the frame page itself never scrolls (both hosts embed it
+    in a fixed-height iframe) — title and controls stay pinned and the Panel
+    is the ONE scroll container, so the renderer's virtualizer (bound to the
+    panel via scrollEl) sees real scroll events instead of fighting the page. */
 export function DefaultDashboard({ givens }) {
   const dash = dashboardInfo();
   return (
     <div
       style={{
         fontFamily: V("font", "system-ui, sans-serif"),
+        height: "100vh",
+        display: "flex",
+        flexDirection: "column",
+        boxSizing: "border-box",
         padding: 24,
         maxWidth: 960,
         margin: "0 auto",
         color: V("fg", "#1a1a1a"),
       }}
     >
-      <h1 style={{ fontSize: 22, margin: "0 0 4px" }}>{dash.title}</h1>
+      <h1 style={{ fontSize: 22, margin: "0 0 4px", flexShrink: 0 }}>{dash.title}</h1>
       {dash.description && (
-        <p style={{ color: V("muted", "#666"), margin: "0 0 20px", lineHeight: 1.5 }}>{dash.description}</p>
+        <p style={{ color: V("muted", "#666"), margin: "0 0 20px", lineHeight: 1.5, flexShrink: 0 }}>{dash.description}</p>
       )}
-      <Controls />
-      <Panel givens={givens} />
+      <Controls style={{ flexShrink: 0 }} />
+      <Panel givens={givens} style={{ flex: 1, minHeight: 0, maxHeight: "none" }} />
     </div>
   );
 }

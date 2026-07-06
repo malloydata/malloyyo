@@ -15,13 +15,24 @@ export {
   dashboardInfo,
   givenSpecs,
 } from "./runtime";
-export { Controls, Given, Select, Search, Range, Checkbox, Field, DefaultDashboard } from "./ui";
+export {
+  Controls,
+  Given,
+  Select,
+  Search,
+  Range,
+  Checkbox,
+  TimeRange,
+  DEFAULT_TIME_PRESETS,
+  Field,
+  DefaultDashboard,
+} from "./ui";
 
 import { mount } from "./runtime";
-import { Controls, Given, Select, Search, Range, Checkbox, DefaultDashboard } from "./ui";
+import { Controls, Given, Select, Search, Range, Checkbox, TimeRange, DefaultDashboard } from "./ui";
 
 /** Frame entry: mount a Dashboard with the widget components in its props
     (import-free dashboards keep working). */
 export function mountDashboard(Dashboard: unknown): void {
-  mount(Dashboard ?? DefaultDashboard, { Controls, Given, Select, Search, Range, Checkbox });
+  mount(Dashboard ?? DefaultDashboard, { Controls, Given, Select, Search, Range, Checkbox, TimeRange });
 }

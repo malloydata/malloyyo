@@ -65,7 +65,13 @@ const TAG = `[${env.INSTANCE_NAME}]`;
 const HOST_POLICY =
   `Tools are tagged ${TAG} — if several instances are connected, ` +
   `route to the one the user means. On every tool call, set \`model\` to your own ` +
-  `model identifier (e.g. "claude-opus-4-8") so runs can be attributed by model.`;
+  `model identifier (e.g. "claude-opus-4-8") so runs can be attributed by model.\n\n` +
+  `This hosted connector serves models already PUBLISHED to ${TAG} — not files on ` +
+  `disk — so it is NOT the right tool for developing or editing Malloy models locally ` +
+  `with the CLI: on-disk edits are invisible here until you \`malloyyo publish\`. For ` +
+  `local model development, use the malloyyo CLI's own MCP server ` +
+  `(\`malloyyo mcp -C <model-dir>\`), which reads the working directory; validate edits ` +
+  `with \`malloyyo lint\`. Use this connector only to explore already-published data.`;
 
 function text(value: unknown): ToolResult {
   return { content: [{ type: "text", text: typeof value === "string" ? value : JSON.stringify(value, null, 2) }] };

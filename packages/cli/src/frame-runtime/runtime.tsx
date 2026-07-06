@@ -207,35 +207,73 @@ export function Panel({ query, malloy, givens, style }) {
   const req = malloy ? { malloy } : { query: query ?? dashboardInfo().query };
   const { result, loading, error } = useQuery({ ...req, givens });
   const ref = useRef(null);
+  // Keep ONE renderer/viz alive for the Panel's lifetime and update it in place
+  // (setResult + render) on each new result. Rebuilding the MalloyRenderer per
+  // result — the old approach — cold-re-inits plugins/metadata/chart workers and
+  // remove()s the previous render, so the whole panel blanks and flashes on every
+  // control change. render() disposes only the prior render, not the renderer.
+  const vizRef = useRef(null);
   useEffect(() => {
     if (!ref.current || !result) return;
     const container = ref.current;
-    let viz;
     try {
-      const renderer = new MalloyRenderer({});
-      viz = renderer.createViz({ tableConfig: { enableDrill: false }, scrollEl: container });
-      viz.setResult(result);
-      viz.render(container);
+      if (!vizRef.current) {
+        const renderer = new MalloyRenderer({});
+        // Virtualization OFF, and no scrollEl. The renderer's virtualizers
+        // only work when they own the scroll container; here the Panel is the
+        // scroller. scrollEl binds EVERY virtualizer in the result (each
+        // nested `# dashboard` table gets one) to that single element and
+        // they fight over its offset; without scrollEl they unmount whatever
+        // "scrolled away" from their frozen offset 0 and the content
+        // collapses. Either way the panel snaps to 0 while the user scrolls —
+        // the "screen jumps around" bug. Static rendering is fine at the
+        // dashboard row cap (5000).
+        vizRef.current = renderer.createViz({
+          tableConfig: { enableDrill: false, disableVirtualization: true },
+          dashboardConfig: { disableVirtualization: true },
+        });
+      }
+      vizRef.current.setResult(result);
+      vizRef.current.render(container);
     } catch (err) {
+      // Drop the viz so the next good result rebuilds cleanly from scratch.
+      try {
+        vizRef.current && vizRef.current.remove();
+      } catch {
+        /* ignore */
+      }
+      vizRef.current = null;
       container.innerHTML = "";
       const pre = document.createElement("pre");
       pre.style.cssText = "color:crimson;white-space:pre-wrap;font:12px ui-monospace,monospace";
       pre.textContent = "Malloy render error:\n" + ((err && err.stack) || String(err));
       container.appendChild(pre);
-      return;
     }
-    return () => {
+  }, [result]);
+  // Dispose the viz only when the Panel unmounts.
+  useEffect(
+    () => () => {
       try {
-        viz && viz.remove();
+        vizRef.current && vizRef.current.remove();
       } catch {
         /* ignore */
       }
-    };
-  }, [result]);
+      vizRef.current = null;
+    },
+    [],
+  );
   if (error) return <pre style={{ color: "crimson", whiteSpace: "pre-wrap" }}>{error}</pre>;
   // display:grid + width:100% + a real min-height: the Malloy render web
   // component has no intrinsic height for charts/maps, so it collapses in a
   // plain block container.
+  //
+  // maxHeight caps the panel at the frame viewport so the container is the
+  // element that ACTUALLY scrolls. The renderer's virtualizer is bound to it
+  // via scrollEl; if the page scrolled instead, the virtualizer would fight
+  // the user (it keeps restoring its own offset → the "screen jumps around"
+  // bug with `# dashboard` results). Override via the style prop only with a
+  // layout that keeps the panel itself scrollable (e.g. flex:1 + minHeight:0
+  // in a 100vh column, as DefaultDashboard does).
   return (
     <div
       ref={ref}
@@ -243,6 +281,7 @@ export function Panel({ query, malloy, givens, style }) {
         display: "grid",
         width: "100%",
         minHeight: 480,
+        maxHeight: "100vh",
         overflow: "auto",
         opacity: loading ? 0.4 : 1,
         transition: "opacity .15s",

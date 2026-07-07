@@ -41,22 +41,23 @@ source: names is duckdb.sql("""
   ) AS t(name, state, decade, ct)
 """) extend {
   measure: births is ct.sum()
-}
 
-#" Names most over-represented in the selected state vs. the nation, for the decades.
-// The `# artifact` tag IS the dashboard declaration (no manifest file):
-// ./dashboards/over-represented/Dashboard.tsx optionally customizes the
-// component; delete it and the runtime auto-renders controls + panel.
-// pct_in_state = share of a name's births that happened in STATE. Higher = more
-// concentrated in the selected state. Filter givens apply with `~`.
-# artifact name="over-represented" title="Over-represented baby names"
-query: over_represented is names -> {
-  where: decade ~ $DECADES
-  group_by: name
-  aggregate:
-    state_births is births { where: state ~ $STATE }
-    national_births is births
-    pct_in_state is births { where: state ~ $STATE } / births
-  order_by: pct_in_state desc
-  limit: 20
+  #" Names most over-represented in the selected state vs. the nation, for the decades.
+  // The `# artifact` tag on a VIEW IS the dashboard declaration (no manifest
+  // file): it runs as `run: names -> over_represented`.
+  // ./dashboards/over-represented/Dashboard.tsx optionally customizes the
+  // component; delete it and the runtime auto-renders controls + panel.
+  // pct_in_state = share of a name's births that happened in STATE. Higher =
+  // more concentrated in the selected state. Filter givens apply with `~`.
+  # artifact name="over-represented" title="Over-represented baby names"
+  view: over_represented is {
+    where: decade ~ $DECADES
+    group_by: name
+    aggregate:
+      state_births is births { where: state ~ $STATE }
+      national_births is births
+      pct_in_state is births { where: state ~ $STATE } / births
+    order_by: pct_in_state desc
+    limit: 20
+  }
 }

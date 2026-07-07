@@ -62,20 +62,23 @@ async function loadConfig(rootUrl: URL, reader: URLReader): Promise<MalloyConfig
 }
 
 export interface ModelRunner {
-  /** Run a top-level named query with the given filter values (the givens). */
-  run(queryName: string, givens: Record<string, unknown>): Promise<RunResult>;
+  /** Run a dashboard's run-expression (a top-level query name or a
+      `<source> -> <view>` path) with the given filter values (the givens). */
+  run(runExpr: string, givens: Record<string, unknown>): Promise<RunResult>;
   /** Run restricted Malloy query text (core's restricted mode is the gate: no
       import / given: / connection.* / raw SQL / ##! flags). This is how
       dashboards run suggestion queries and ad-hoc panels. */
   runText(malloy: string, givens: Record<string, unknown>): Promise<RunResult>;
   /** Compile-only check of restricted query text (no execution). */
   validateText(malloy: string): Promise<ValidateResult>;
-  /** Compile-only: does the named query exist and do the givens bind? No data
-      fetch — used by `lint` to catch drift (unknown given, missing query). */
-  validate(queryName: string, givens: Record<string, unknown>): Promise<ValidateResult>;
-  /** The given specs a named query transitively references — read from the
-      model's `given:` declarations (types, defaults, doc comments, tags). */
-  givensForQuery(queryName: string): Promise<GivenSpecsResult>;
+  /** Compile-only: does the run-expression compile and do the givens bind? No
+      data fetch — used by `lint` to catch drift (unknown given, missing
+      query/view). */
+  validate(runExpr: string, givens: Record<string, unknown>): Promise<ValidateResult>;
+  /** The given specs a dashboard's run-expression transitively references —
+      read from the model's `given:` declarations (types, defaults, doc
+      comments, tags). */
+  givensForQuery(runExpr: string): Promise<GivenSpecsResult>;
   /** The model's `# artifact`-tagged queries — its declared dashboards. */
   artifacts(): Promise<ArtifactsResult>;
   entryExists(): boolean;
@@ -104,9 +107,9 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
   return {
     root: abs,
     entryExists: () => fs.existsSync(path.join(abs, ENTRY)),
-    run(queryName, givens) {
+    run(runExpr, givens) {
       return lease((runtime, entry) =>
-        run(runtime, entry, { name: queryName, givens, stableResult: true, rowLimit: 5000 }),
+        run(runtime, entry, { runExpr, givens, stableResult: true, rowLimit: 5000 }),
       );
     },
     runText(malloy, givens) {
@@ -125,22 +128,18 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
         return { ok: false, error: msg || "restricted query failed to compile" };
       });
     },
-    givensForQuery(queryName) {
-      return lease((runtime, entry) => dashboardGivenSpecs(runtime, entry, queryName));
+    givensForQuery(runExpr) {
+      return lease((runtime, entry) => dashboardGivenSpecs(runtime, entry, runExpr));
     },
     artifacts() {
       return lease((runtime, entry) => artifactQueries(runtime, entry));
     },
-    validate(queryName, givens) {
+    validate(runExpr, givens) {
       return lease(async (runtime, entry) => {
         try {
-          const mm = runtime.loadModel(entry);
-          const model = await mm.getModel();
-          const named = [...model.queries().named];
-          if (!named.includes(queryName)) {
-            return { ok: false, error: `no query named '${queryName}' (model has: ${named.join(", ") || "none"})` };
-          }
-          const q = mm.loadQueryByName(queryName);
+          // Compile `run: <runExpr>` — accepts a query name or `<source> ->
+          // <view>`. A bad name/view surfaces as the compiler's own error.
+          const q = runtime.loadModel(entry).loadQuery(`run: ${runExpr}`);
           const has = givens && Object.keys(givens).length > 0;
           await q.getSQL(has ? { givens: givens as Record<string, GivenValue> } : undefined);
           return { ok: true };

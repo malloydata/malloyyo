@@ -59,6 +59,8 @@ export async function gatherDashboards(dir: string): Promise<DashboardPayload[]>
   return res.artifacts.map((a) => {
     const tsxPath = join(dir, "dashboards", a.name, "Dashboard.tsx");
     const manifest: Record<string, unknown> = { title: a.title, query: a.query };
+    if (a.source) manifest.source = a.source;
+    if (a.view) manifest.view = a.view;
     if (a.description) manifest.description = a.description;
     if (a.givens) manifest.givens = a.givens;
     return {

@@ -611,20 +611,22 @@ export async function runMalloyFiles(
   });
 }
 
-// Run a NAMED query (a top-level `query:` in the model) with given values. Used
-// by dashboards: the manifest names the query, the dashboard passes givens.
-// Mirrors runMalloyFiles but selects by name and binds givens (the compiler
-// validates the values). Reuses the ModelDef cache via acquireModel.
+// Run a dashboard's run-expression with given values. `runExpr` is a top-level
+// query name or a `<source> -> <view>` path — both compile as `run: <runExpr>`,
+// so query artifacts and view artifacts share one path. Used by dashboards: the
+// manifest carries the run-expression, the dashboard passes givens. Mirrors
+// runMalloyFiles but binds givens (the compiler validates the values). Reuses
+// the ModelDef cache via acquireModel.
 export async function runNamedMalloyFiles(
   files: Map<string, string>,
   entryPath: string,
-  queryName: string,
+  runExpr: string,
   givens: Record<string, unknown>,
   opts: { rowLimit?: number; cacheKey?: string } = {},
 ): Promise<RunResult> {
   return withRuntime(files, opts.cacheKey, async (runtime) => {
     const { mm, persist } = await acquireModel(runtime, opts.cacheKey, entryPath);
-    const runner = mm.loadQueryByName(queryName);
+    const runner = mm.loadQuery(`run: ${runExpr}`);
     // Values arrive as user JSON; the compiler validates them when binding.
     const compileOpts =
       givens && Object.keys(givens).length > 0

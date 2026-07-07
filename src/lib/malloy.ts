@@ -72,7 +72,12 @@ function makeConnection(): MalloyDuckDBConnection {
   return new MalloyDuckDBConnection({
     name: "duckdb",
     ...(token ? { databasePath: "md:", motherDuckToken: token } : {}),
-    setupSQL: `SET home_directory='/tmp';`,
+    // On Vercel the working dir is READ-ONLY; only /tmp is writable. DuckDB
+    // defaults its spill dir to `.tmp` in the CWD, so any query that spills
+    // (large sort/aggregation, httpfs-buffered parquet) dies with
+    // "Failed to create directory .tmp: Read-only file system". Point both the
+    // home dir (extensions) and the temp/spill dir at /tmp.
+    setupSQL: `SET home_directory='/tmp'; SET temp_directory='/tmp';`,
     enableExternalAccess: true,
   });
 }

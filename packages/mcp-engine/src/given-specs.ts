@@ -138,26 +138,23 @@ export function describeGivenSpec(name: string, g: GivenLike): DashboardGivenSpe
 }
 
 /**
- * The given specs a named query transitively references (the authoritative
- * "what controls does this dashboard need"). Never throws on user input —
- * unknown query / compile failure come back as {ok:false}.
+ * The given specs a dashboard's run-expression transitively references (the
+ * authoritative "what controls does this dashboard need"). `runExpr` is a
+ * top-level query name or a `<source> -> <view>` path — both compile as
+ * `run: <runExpr>`, whose PreparedQuery exposes exactly the givens it touches.
+ * (A view's `.givens` is only populated through this compiled `run:` path, not
+ * via `Explore.getQueryByName`, so we always go through `loadQuery`.)
+ * Never throws on user input — unknown query / compile failure come back as
+ * {ok:false}.
  */
 export async function dashboardGivenSpecs(
   runtime: Runtime,
   entry: URL,
-  queryName: string,
+  runExpr: string,
 ): Promise<DashboardGivenSpecsResult> {
   try {
     const mm = runtime.loadModel(entry);
-    const model = await mm.getModel();
-    const named = [...model.queries().named];
-    if (!named.includes(queryName)) {
-      return {
-        ok: false,
-        error: `no query named '${queryName}' (model has: ${named.join(', ') || 'none'})`,
-      };
-    }
-    const pq = await mm.loadQueryByName(queryName).getPreparedQuery();
+    const pq = await mm.loadQuery(`run: ${runExpr}`).getPreparedQuery();
     const specs: DashboardGivenSpec[] = [];
     for (const [name, g] of (pq as unknown as { givens: ReadonlyMap<string, unknown> }).givens) {
       specs.push(describeGivenSpec(name, g as GivenLike));

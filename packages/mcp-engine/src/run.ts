@@ -13,8 +13,11 @@ import type { Problem, RunResult } from './types';
 export const DEFAULT_ROW_LIMIT = 10_000;
 
 export interface RunOptions {
-  /** Selection: `name` (a query: definition) wins, else `index` (0-based into
-      run: statements), else the final run:. */
+  /** Selection: `runExpr` (run this as `run: <expr>` — a query name or a
+      `<source> -> <view>` path; the dashboard path) wins, else `name` (a
+      query: definition), else `index` (0-based into run: statements), else
+      the final run:. */
+  runExpr?: string;
   name?: string;
   index?: number;
   /** Memory/transfer cap, not a context cap (that is the byte budget's job). */
@@ -111,7 +114,11 @@ export async function run(
   }
 
   let query: QueryMaterializer;
-  if (opts.name !== undefined) {
+  if (opts.runExpr !== undefined) {
+    // Dashboard selection: a query name or `<source> -> <view>` — both are
+    // valid after `run:`. Compile/bind errors surface via executeMaterialized.
+    query = materializer.loadQuery(`run: ${opts.runExpr}`);
+  } else if (opts.name !== undefined) {
     if (!modelQueries.named.includes(opts.name)) {
       return {
         ok: false,

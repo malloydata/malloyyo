@@ -84,9 +84,10 @@ export type DashboardRunResult =
   | { ok: true; stableResult: unknown; rows?: unknown[]; rowCount: number }
   | { ok: false; error: string };
 
-/** Run a dashboard query: `req.query` names a model query (defaults to the
-    stored manifest's), `req.malloy` runs restricted Malloy text instead — the
-    path suggestion queries and ad-hoc panels use. */
+/** Run a dashboard query: `req.query` is a run-expression (a query name or a
+    `<source> -> <view>` path; defaults to the stored manifest's), `req.malloy`
+    runs restricted Malloy text instead — the path suggestion queries and
+    ad-hoc panels use. */
 export async function runDashboard(
   userId: string,
   datasetId: string,
@@ -126,10 +127,10 @@ export async function runDashboard(
     return { ok: true, stableResult: out.stable_result, rows: out.rows, rowCount: out.row_count ?? 0 };
   }
 
-  const query = req.query ?? (a.manifest as Record<string, unknown>).query;
-  if (typeof query !== "string") return { ok: false, error: "dashboard manifest has no query" };
+  const runExpr = req.query ?? (a.manifest as Record<string, unknown>).query;
+  if (typeof runExpr !== "string") return { ok: false, error: "dashboard manifest has no query" };
   try {
-    const res = await runNamedMalloyFiles(files, "index.malloy", query, givens ?? {}, {
+    const res = await runNamedMalloyFiles(files, "index.malloy", runExpr, givens ?? {}, {
       rowLimit: maxRows,
       cacheKey: found.model.id,
     });

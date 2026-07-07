@@ -1,0 +1,25 @@
+##! experimental.givens
+given:
+  # label="Target"
+  TARGET :: number is 0
+
+source: nums is duckdb.sql("""
+  SELECT 1 as v UNION ALL SELECT 2 as v UNION ALL SELECT 3 as v
+""") extend {
+  #" Numbers at or above the target (view form).
+  # artifact title="At or above target"
+  view: at_or_above is {
+    select: v
+    where: v >= $TARGET
+  }
+
+  // A plain view with no artifact tag — must NOT be discovered.
+  view: everything is { select: v }
+}
+
+#" Numbers strictly above the target (top-level query form).
+# artifact name="over-target" title="Above target"
+query: above_target is nums -> {
+  select: v
+  where: v > $TARGET
+}

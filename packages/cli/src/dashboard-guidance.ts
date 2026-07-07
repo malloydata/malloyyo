@@ -20,9 +20,11 @@ with \`malloyyo lint\`.
 server only see what that file EXPORTS. Three things must all be surfaced
 (imported AND exported) through it, or the feature looks broken:
 
-1. **The \`# artifact\`-tagged queries.** Declared in another file and not
-   exported → \`dashboard dev\` says "No dashboards declared" and \`lint\` says
-   "no dashboards to lint", even though the model compiles clean.
+1. **Whatever holds each \`# artifact\` tag.** A tag on a \`view:\` rides along
+   with its SOURCE (export the source — you can't export a view on its own); a
+   tag on a top-level \`query:\` needs that query exported. Not surfaced →
+   \`dashboard dev\` says "No dashboards declared" and \`lint\` says "no dashboards
+   to lint", even though the model compiles clean.
 2. **Every filter given the dashboards reference.** An unexported given
    silently resolves to its declaration default — the control still renders
    but CAN'T CHANGE THE QUERY (the filter looks inert).
@@ -33,13 +35,15 @@ server only see what that file EXPORTS. Three things must all be surfaced
 \`\`\`malloy
 ##! experimental.givens
 import {
-  order_items,
+  order_items,                      // the source — carries its # artifact views
   BRAND, CATEGORY, PERIOD,          // the filter givens
-  brand_suggest,                    // backs a suggest {query=…}
-  overview_dashboard                // the # artifact query
+  brand_suggest                     // backs a suggest {query=…}
 } from 'ecommerce.malloy'
-export { order_items, BRAND, CATEGORY, PERIOD, brand_suggest, overview_dashboard }
+export { order_items, BRAND, CATEGORY, PERIOD, brand_suggest }
 \`\`\`
+
+Exporting the source is often the whole job: its \`# artifact\` views, its
+dimensions (for \`suggest {source=…}\`), and its measures all travel with it.
 
 Prefer \`suggest { query=<named-query> … }\` over \`suggest { source=… }\` for
 anything beyond a throwaway: you export one small governed query instead of a
@@ -47,35 +51,45 @@ whole base source.
 
 ## The model is the whole contract
 
-**1. Tag a top-level query** with \`# artifact\` to declare a dashboard. For
-the common overview shape (top-level aggregates + nests), ALSO tag it
-\`# dashboard\` so the result renders as KPI tiles + a card grid instead of one
-flat table — they're partners: \`# artifact\` declares the dashboard,
-\`# dashboard\` is the renderer tag that draws it like one:
+**1. Tag a \`view:\` inside a source** with \`# artifact\` to declare a dashboard
+(the idiomatic form — a view is reusable, nestable, and explorable through the
+normal \`query\`/\`describe_source\` surface). For the common overview shape
+(top-level aggregates + nests), ALSO tag it \`# dashboard\` so the result
+renders as KPI tiles + a card grid instead of one flat table — they're
+partners: \`# artifact\` declares the dashboard, \`# dashboard\` is the renderer
+tag that draws it like one:
 
 \`\`\`malloy
-#" Business health at a glance — sales, margin, orders.
-# artifact { title="Business Overview" } dashboard
-query: overview_dashboard is order_items -> {
-  where:
-    inventory_items.product_brand ~ $BRAND,     // multi-filter where: is
-    inventory_items.product_category ~ $CATEGORY,  // COMMA separated
-    created_at ~ $PERIOD
-  aggregate: total_sales, total_gross_margin, order_count
-  nest:
-    # line_chart
-    sales_trend is by_month
-    top_brands
-    # shape_map
-    sales_by_state
+source: order_items is … extend {
+  #" Business health at a glance — sales, margin, orders.
+  # artifact { title="Business Overview" } dashboard
+  view: overview_dashboard is {
+    where:
+      inventory_items.product_brand ~ $BRAND,     // multi-filter where: is
+      inventory_items.product_category ~ $CATEGORY,  // COMMA separated
+      created_at ~ $PERIOD
+    aggregate: total_sales, total_gross_margin, order_count
+    nest:
+      # line_chart
+      sales_trend is by_month
+      top_brands
+      # shape_map
+      sales_by_state
+  }
 }
 \`\`\`
 
 That's a complete dashboard: the runtime auto-renders a title (the tag's
-\`title\`, else the \`#"\` doc comment), a control for every given the query
-references, and the result panel. \`name="slug"\` overrides the URL/directory
-slug (default: the query name). Note the \`where:\` clauses applying givens are
-COMMA-separated — newline-separated conditions do not parse.
+\`title\`, else the \`#"\` doc comment), a control for every given the view
+references, and the result panel. It runs as \`run: <source> -> <view>\` (here
+\`order_items -> overview_dashboard\`). \`name="slug"\` overrides the
+URL/directory slug (default: the view name). Note the \`where:\` clauses
+applying givens are COMMA-separated — newline-separated conditions do not
+parse.
+
+Tagging a **top-level \`query:\`** still works and behaves identically (it runs
+as \`run: <name>\`) — reach for it only when the dashboard query doesn't belong
+to any one source.
 
 Two dashboards can share a given but start on different values — a \`givens\`
 block in the tag sets PER-DASHBOARD defaults (given values, i.e. filter
@@ -246,9 +260,10 @@ usually means the \`# artifact\` queries aren't exported through
 
 Validation loop that works well: the local \`malloyyo mcp\` server hot-reloads
 working-directory edits — \`query(execute:false)\` to compile-check,
-\`execute:true\` to run. A top-level \`# artifact\` query runs as
-\`run: <name>\` (not \`source -> <name>\`), and is only visible once exported
-through the entry. Don't validate local edits against a hosted/claude.ai
-connector — that serves the PUBLISHED model, which is stale until
-\`malloyyo publish\`.
+\`execute:true\` to run. A \`# artifact\` view runs as
+\`run: <source> -> <view>\`; a top-level \`# artifact\` query runs as
+\`run: <name>\`. Either is only visible once surfaced through the entry (export
+the source for a view, the query for a top-level query). Don't validate local
+edits against a hosted/claude.ai connector — that serves the PUBLISHED model,
+which is stale until \`malloyyo publish\`.
 `;

@@ -37,8 +37,10 @@ test('dashboardGivenSpecs: surfaces a view artifact’s givens through the run: 
     res.givens.map((g) => g.name),
     ['TARGET'],
   );
-  assert.equal(res.givens[0].type, 'number');
-  assert.equal(res.givens[0].tags?.label, 'Target');
+  const [g] = res.givens;
+  assert.ok(g);
+  assert.equal(g.type, 'number');
+  assert.equal(g.tags?.label, 'Target');
 });
 
 test('run: a view artifact by run-expression, binding a given', async () => {

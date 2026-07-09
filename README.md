@@ -15,7 +15,7 @@ Malloyyo is the thin layer that serves that model:
 - **DuckDB built in** — query Parquet over plain HTTP (S3, GCS, any web server) with **no warehouse required**, or attach your own (BigQuery, Snowflake, MotherDuck, Databricks, …).
 - **Tight control** — the AI can only query what's in the semantic model; nothing outside it is reachable.
 - **A web interface, too** — every query is logged, so you can browse, edit, favorite, re-run, and share them in the browser (ltool), and hand any one off to "Explore further with Claude." Because Malloy renders a whole dashboard as a single query, one saved query can be a full report.
-- **Deploy in minutes** — one-click to Vercel, or self-host with Docker.
+- **Deploy in minutes** — one-click to Vercel, or [self-host with Docker](docs/docker.md).
 
 Try [the demo server](https://malloyyo.vercel.app/) and "Explore further with Claude" — sign in with any Google account.
 
@@ -163,6 +163,11 @@ After that, sign in with the admin email and add a dataset.
 
 > Your model's `malloy-config.json` references your analytical database's secret from an
 > env var (e.g. `ANALYTICAL_DATABASE_SECRET` — see [Developing Malloy models](#developing-malloy-models)). Set that var on the project so the server can connect. `GITHUB_TOKEN` is optional (private-repo model pulls).
+
+### Self-host with Docker
+
+Prefer containers to Vercel? The repo ships a production `Dockerfile`. See
+**[Self-hosting with Docker](docs/docker.md)** for build and run instructions.
 
 ## Running locally
 

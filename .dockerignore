@@ -3,7 +3,11 @@
 local/
 .env*
 .git
-node_modules
+# Exclude node_modules at EVERY level. A bare `node_modules` only matches the
+# top-level dir in .dockerignore, so a stale packages/*/node_modules would be
+# copied by `COPY . .` and shadow the clean `npm ci` layout (dangling .bin
+# shims → "Cannot find module …/tsx").
+**/node_modules
 .next
 .vercel
 drizzle/meta

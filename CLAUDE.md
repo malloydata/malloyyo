@@ -74,7 +74,7 @@ Defaults are `Malloyyo`/`main`. Set both in the Vercel env (per environment)
 - `outputFileTracingIncludes` keys must NOT have `/route` suffix
 - DB initialization is lazy (Proxy in src/db/index.ts) to avoid build-time DATABASE_URL access
 - `proxy.ts` exports `proxy` function (not `middleware`) — Next.js 16 convention
-- After adding npm packages locally, run `npx pnpm install` to sync pnpm-lock.yaml before deploying
+- After adding npm packages locally, run `npm install` to sync package-lock.json before deploying
 - **`next build` needs `DATABASE_URL`** at "Collecting page data" (some API
   routes evaluate it). Build with the instance env, e.g.
   `npx dotenv-cli -e local/staging -- npm run build`.
@@ -172,8 +172,8 @@ headless-browser interaction tests):
   filter = All).
 
 Shipped: sample repos pushed to main, this repo landed via PR #65 (+ a
-pnpm-lock sync for the CLI's new @malloydata/malloy-filter dep — remember to
-`npx pnpm install` after ANY dep change), deployed to production, and both
+lockfile sync for the CLI's new @malloydata/malloy-filter dep — remember to
+`npm install` after ANY dep change), deployed to production, and both
 prod datasets refreshed (babynames v10 / auto_recalls v3 — six v2 dashboards
 live). Verified first on the `dev-github-links` prod-fork branch
 (local/CLAUDE.md).

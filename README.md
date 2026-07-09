@@ -190,7 +190,7 @@ http://localhost:3000/api/auth/callback/google
 (Miss this and Google rejects sign-in with `redirect_uri_mismatch`.)
 
 ```bash
-pnpm install
+npm install
 npx dotenv-cli -e local/main -- npx drizzle-kit push   # first run only
 npx dotenv-cli -e local/main -- npm run dev
 ```

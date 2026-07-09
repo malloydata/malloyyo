@@ -44,7 +44,7 @@ Inspired by cellardoor's Malloy+MCP shape, generalized to "bring your own datase
 
 ## Stack
 
-- **Web/API**: Next.js 16 App Router, Node 24, TypeScript, pnpm
+- **Web/API**: Next.js 16 App Router, Node 24, TypeScript, npm
 - **DB**: Neon Postgres via Drizzle ORM
 - **Blob**: AWS S3, provisioned via Terraform (AWS SDK v3). Swap to R2 later is one env change.
 - **Query engine**: DuckDB (in-process via `@duckdb/node-api`)

@@ -1,0 +1,56 @@
+name: docker
+
+# Build the production Docker image on every PR (and pushes to main) to prove
+# the container still builds and boots. The Dockerfile runs its own `npm ci` +
+# `npm run build`, so this is independent of
+# preflight (which builds on the host) — its unique signal is that the Next.js
+# standalone output is correct, the runtime layer is complete, and `node
+# server.js` comes up. GitHub-hosted runners ship a running Docker daemon.
+#
+# No secrets: the image builds with placeholder DATABASE_URL/MOTHERDUCK_TOKEN
+# (db init is lazy and never connects at build or boot), and the smoke test only
+# checks that the server answers HTTP on / — it doesn't sign in or query data.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  docker:
+    runs-on: ubuntu-latest # GitHub-hosted runners ship a running Docker daemon
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true # load into the local daemon so the smoke test can run it
+          tags: malloyyo:ci
+          # Persist BuildKit layers across runs so the unchanged `npm ci`
+          # dependency layer doesn't rebuild every PR.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test (boots + answers HTTP)
+        run: |
+          docker run -d --name malloyyo -p 3000:3000 \
+            -e DATABASE_URL="postgresql:///" malloyyo:ci
+          ok=0
+          for i in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/ || true)
+            if [ "$code" = "200" ]; then echo "OK: server returned HTTP 200"; ok=1; break; fi
+            sleep 2
+          done
+          echo "----- container logs -----"
+          docker logs malloyyo || true
+          docker rm -f malloyyo >/dev/null 2>&1 || true
+          if [ "$ok" != "1" ]; then echo "FAIL: server did not return HTTP 200"; exit 1; fi

@@ -1,6 +1,6 @@
-// Build via esbuild's JS API (not the CLI bin shim, which pnpm lays out
-// inconsistently across installs — the API resolves the native binary
-// reliably regardless).
+// Build via esbuild's JS API (not the CLI bin shim, whose workspace layout can
+// vary across installs — the API resolves the native binary reliably
+// regardless).
 import { build } from 'esbuild';
 
 await build({

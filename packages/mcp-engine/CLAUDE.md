@@ -36,6 +36,6 @@ Rules specific to this package:
 - **No fs/DB reads in `src/`** (tests may read fixtures). The host supplies
   readers; content is embedded at build time.
 - Build goes through `scripts/build.mjs` (esbuild JS API), not the esbuild
-  CLI bin — pnpm lays the bin shim out inconsistently across installs.
+  CLI bin — the workspace bin-shim layout can vary across installs.
 - Tests are `node:test` via tsx and use real DuckDB compiles; run them from
   this directory: `npm run test`.

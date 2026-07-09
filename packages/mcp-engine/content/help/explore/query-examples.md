@@ -200,6 +200,42 @@ In the second stage `flights_that_year` is an ordinary column (the first stage's
 output), so `.max()` is valid. The same shape filters or re-ranks already-
 aggregated rows.
 
+## Make a cell a clickable deep link — `# link`
+
+When the answer is "here's the row, go look at it in the source system", tag a
+`group_by:`/`select:` field with `# link` so its cell renders as a hyperlink
+(in the shareable ltool view and in dashboards). Three forms:
+
+```malloy
+run: flights -> {
+  # link                                                    -- the value IS a full URL
+  group_by: page is concat('https://wikipedia.org/wiki/', origin)
+}
+```
+
+```malloy
+run: flights -> {
+  # link { url_template='https://www.flightsfrom.com/$$' }  -- $$ = this cell's value
+  group_by: origin
+}
+```
+
+Link to a value *other* than the one displayed with `field=`, and hide the raw
+id with `# hidden` so only the label shows:
+
+```malloy
+run: flights -> {
+  # link { url_template='https://crm.example.com/person/$$' field=person_id }
+  group_by: person_name
+  # hidden
+  group_by: person_id
+}
+```
+
+`$$` is substituted anywhere in the template (`.../$$-SJC` works). Sibling
+`# image { url_template=… width= height= alt= }` renders the cell as an inline
+image instead. Deep links open in a new browser tab.
+
 ## SQL habits that are WRONG in Malloy
 
 | You'd write in SQL | Malloy |

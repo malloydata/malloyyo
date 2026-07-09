@@ -91,6 +91,13 @@ Tagging a **top-level \`query:\`** still works and behaves identically (it runs
 as \`run: <name>\`) — reach for it only when the dashboard query doesn't belong
 to any one source.
 
+**Deep-link a cell** to an external system — tag any \`group_by:\`/\`select:\`
+field \`# link\` (the value is a full URL) or
+\`# link { url_template="https://…/$$" }\` (\`$$\` = the cell value; add
+\`field=id\` to link on a separate, usually \`# hidden\`, id column). Common in a
+nested detail table so each row jumps to its record. \`# image { url_template=… }\`
+renders a cell as an inline image. Links open in a new browser tab.
+
 Two dashboards can share a given but start on different values — a \`givens\`
 block in the tag sets PER-DASHBOARD defaults (given values, i.e. filter
 expressions; URL params still win):

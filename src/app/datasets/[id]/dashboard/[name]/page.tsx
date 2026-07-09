@@ -91,7 +91,12 @@ function DashboardView({
       </nav>
       <iframe
         ref={iframeRef}
-        sandbox="allow-scripts"
+        // allow-popups lets a link mark (# link) open its target on click;
+        // allow-popups-to-escape-sandbox makes that popup a normal top-level
+        // window (a plain external tab) instead of inheriting this frame's
+        // opaque-origin sandbox. Without these, deep links are silently blocked
+        // ("...sandboxed frame whose 'allow-popups' permission is not set").
+        sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
         src={frameSrc}
         className="w-full rounded border border-gray-200 dark:border-gray-800"
         style={{ height: "calc(100vh - 96px)" }}

@@ -421,7 +421,7 @@ Not all annotations are tags. An annotation is just text. Tags are annotations t
 
 The character(s) immediately after `#` route the annotation to different consumers:
 
-- `# ` (hash-space) — renderer tags, parsed by the Malloy VS Code extension for visualization
+- `# ` (hash-space) — renderer tags, parsed by the Malloy VS Code extension for visualization (`# bar_chart`, `# line_chart`, `# shape_map`; `# link { url_template="https://…/$$" }` turns a field's cell into a clickable deep link — `$$` is the cell value, `field=other` links on a different (often `# hidden`) field; `# image { url_template=… }` renders it as an image)
 - `##!` — compiler directives (e.g., `##! experimental.parameters`, `##! experimental.givens`)
 - `#"` — reserved for documentation strings
 - `#(appName)` — application-specific tags (e.g., `#(docs) hidden`)

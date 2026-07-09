@@ -201,7 +201,9 @@ function parentShell(
   return html(
     `<div style="display:flex;flex-direction:column;height:100vh">` +
       nav +
-      `<iframe id="f" sandbox="allow-scripts allow-same-origin"` +
+      // allow-popups(+escape-sandbox): let a # link mark open its target in a
+      // normal new tab on click instead of being blocked by the sandbox.
+      `<iframe id="f" sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"` +
       ` src="${frameBase}/frame?d=${encodeURIComponent(dash.name)}${givensQs}"` +
       ` style="border:0;flex:1;width:100%"></iframe>` +
       `</div>` +

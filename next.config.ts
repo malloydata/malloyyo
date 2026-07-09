@@ -4,6 +4,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // Emit .next/standalone (minimal server + traced node_modules) for the Docker image.
+  output: "standalone",
   async rewrites() {
     return [
       { source: "/.well-known/oauth-authorization-server", destination: "/api/oauth/discovery/authorization-server" },
@@ -46,8 +48,6 @@ const nextConfig: NextConfig = {
     "/api/dashboards/[datasetId]/[name]/bundle": [
       "./node_modules/esbuild/**",
       "./node_modules/@esbuild/**",
-      "./node_modules/.pnpm/esbuild@*/node_modules/esbuild/**",
-      "./node_modules/.pnpm/@esbuild+*/node_modules/@esbuild/**",
     ],
   },
 };

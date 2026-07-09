@@ -20,7 +20,7 @@
  * command: npm trusted publishing (OIDC) in CI, or a personal npm token /
  * `npm login` when an authorized person runs it from the command line.
  *
- * Run `pnpm release -- --help` for the full guided walkthrough.
+ * Run `npm run release -- --help` for the full guided walkthrough.
  */
 import {execFileSync} from 'node:child_process';
 import {readFileSync, writeFileSync} from 'node:fs';
@@ -147,11 +147,11 @@ ${bold('WHAT IT DOES')}
   share one version.
 
 ${bold('USAGE')}
-  ${cyan('pnpm release')}                 cut a release (prompts before publishing locally)
-  ${cyan('pnpm release -- --dry-run')}    build + ${cyan('npm publish --dry-run')}; touches nothing
-  ${cyan('pnpm release -- --no-push')}    publish + commit/tag locally, but don't push
-  ${cyan('pnpm release -- --yes')}        skip the confirmation prompt
-  ${cyan('pnpm release -- --help')}       this message
+  ${cyan('npm run release')}                 cut a release (prompts before publishing locally)
+  ${cyan('npm run release -- --dry-run')}    build + ${cyan('npm publish --dry-run')}; touches nothing
+  ${cyan('npm run release -- --no-push')}    publish + commit/tag locally, but don't push
+  ${cyan('npm run release -- --yes')}        skip the confirmation prompt
+  ${cyan('npm run release -- --help')}       this message
 
 ${bold('AUTH (you do not pass a token)')}
   ${bold('In CI')}    npm trusted publishing (OIDC). No secrets. Provenance is automatic.
@@ -174,7 +174,7 @@ ${bold('SAFE TO RE-RUN')}
 // main
 // ---------------------------------------------------------------------------
 async function main(): Promise<void> {
-  // Drop a bare `--` separator (pnpm forwards it through `pnpm release -- …`).
+  // Drop a bare `--` separator (npm forwards it through `npm run release -- …`).
   const argv = process.argv.slice(2).filter((a) => a !== "--");
 
   if (argv.includes('-h') || argv.includes('--help')) {
@@ -187,7 +187,7 @@ async function main(): Promise<void> {
   if (unknown.length) {
     die(
       `Unknown option(s): ${unknown.join(', ')}`,
-      `Run ${cyan('pnpm release -- --help')} to see the available options.`
+      `Run ${cyan('npm run release -- --help')} to see the available options.`
     );
   }
 
@@ -249,7 +249,7 @@ async function main(): Promise<void> {
           'npm login'
         )} (you must have publish rights on ${cyan(
           name
-        )}), then re-run.\nOr preview safely with ${cyan('pnpm release -- --dry-run')}.`
+        )}), then re-run.\nOr preview safely with ${cyan('npm run release -- --dry-run')}.`
       );
     }
   }

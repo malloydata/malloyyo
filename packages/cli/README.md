@@ -23,8 +23,8 @@ It lives in the `malloyyo` monorepo as `packages/cli`.
 
 ```bash
 # from the repo root
-pnpm install
-pnpm --filter @malloydata/malloyyo build   # → packages/cli/dist/index.js
+npm install
+npm run build -w @malloydata/malloyyo   # → packages/cli/dist/index.js
 
 # put `malloyyo` on your PATH (symlink to the built CLI)
 cd packages/cli && npm link                # then: malloyyo --help

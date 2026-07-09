@@ -1,21 +1,17 @@
 #!/usr/bin/env node
 // Update every @malloydata/* dependency to its latest published version.
 //
-// pnpm 11 refuses any package published within the last 24h (its built-in
-// `minimum-release-age` default). We do NOT disable that guard globally — doing
-// so would let pnpm drag fresh, unvetted transitive deps (aws-sdk, azure, …)
-// into the lockfile, which a later `--frozen-lockfile` install (CI) then
-// rejects. Instead pnpm-workspace.yaml exempts the whole `@malloydata/*` scope
-// from the guard (a glob, any version), so only those packages may be young —
-// every other dep still has to age 24h and stays put. The update therefore runs
-// with the guard ACTIVE; nothing here needs to touch the exclude list.
+// NOTE: npm has no "minimum release age" guard (pnpm did — the repo dropped it
+// when it moved to npm). `npm install @malloydata/*@latest` therefore takes
+// whatever is newest right now, including any fresh transitive deps the new
+// malloydata versions pull in. Review the diff before committing.
 //
 //   npm run malloy-update                 # do it
 //   npm run malloy-update -- --dry-run    # show latest available, touch nothing
 //   npm run malloy-update -- --current    # report what's installed now (offline)
 //   npm run --silent malloy-update -- --json   # machine-readable result on stdout
 //
-// --json: human chatter (and pnpm's output) is routed to stderr; the only thing
+// --json: human chatter (and npm's output) is routed to stderr; the only thing
 // written to stdout is a single JSON object. The shape depends on the mode:
 //
 //   default / --dry-run:
@@ -64,18 +60,30 @@ const SECTIONS = [
 const npmView = (name) =>
   execFileSync("npm", ["view", name, "version"], { encoding: "utf8" }).trim();
 
-// pnpm may not be on PATH directly; fall back to corepack (packageManager field).
-function pnpm(args) {
-  const env = { ...process.env, COREPACK_ENABLE_DOWNLOAD_PROMPT: "0" };
-  // In --json mode keep stdout clean: pnpm's chatter goes to our stderr (fd 2).
+function npm(args) {
+  // In --json mode keep stdout clean: npm's chatter goes to our stderr (fd 2).
   const stdio = JSON_OUT ? ["inherit", 2, "inherit"] : "inherit";
-  try {
-    execFileSync("pnpm", args, { stdio, env });
-  } catch (e) {
-    if (e.code === "ENOENT")
-      execFileSync("corepack", ["pnpm", ...args], { stdio, env });
-    else throw e;
+  execFileSync("npm", args, { stdio, env: process.env });
+}
+
+// The npm `-w` flag for a manifest path (the root manifest → no flag). Used to
+// target `npm install` at the workspace that actually declares each dep.
+const workspaceFlag = (file) =>
+  file === "package.json" ? [] : ["-w", file.replace(/\/package\.json$/, "")];
+
+// @malloydata/* deps grouped by the manifest that declares them. peerDependencies
+// are version FLOORS, not pins — leave them; only real install sections get bumped.
+function malloydataByManifest() {
+  const byFile = new Map();
+  for (const f of PKG_FILES) {
+    const j = JSON.parse(readFileSync(f, "utf8"));
+    const found = new Set();
+    for (const s of ["dependencies", "devDependencies", "optionalDependencies"])
+      for (const k of Object.keys(j[s] ?? {}))
+        if (k.startsWith("@malloydata/")) found.add(k);
+    if (found.size) byFile.set(f, [...found]);
   }
+  return byFile;
 }
 
 // Map of @malloydata/* name -> pinned version (range prefix stripped), read from
@@ -152,15 +160,14 @@ if (DRY) {
   process.exit(0);
 }
 
-// 3. let pnpm edit the manifests + lockfile — it handles dependency types,
-//    range operators, and duplicate entries correctly (a hand-rolled regex
-//    does not). The age guard stays ON: `@malloydata/*` is exempt via
-//    pnpm-workspace.yaml, so malloydata floats to latest while every other dep
-//    stays aged. We DON'T pass --config.minimumReleaseAge=0 — that global
-//    bypass is exactly what used to pull fresh transitive deps into the lockfile
-//    and break CI's --frozen-lockfile install.
-say("\nUpdating @malloydata/* to latest (age guard active; scope exempt)…");
-pnpm(["update", "--recursive", "--latest", ...names]);
+// 3. let npm edit each manifest + the lockfile. `npm install <name>@latest`
+//    keeps a dep in its existing section and handles the range operator, so we
+//    install per workspace (npm preserves where each dep already lives).
+say("\nUpdating @malloydata/* to latest…");
+for (const [file, pkgNames] of malloydataByManifest()) {
+  const specs = pkgNames.map((n) => `${n}@latest`);
+  npm(["install", ...specs, ...workspaceFlag(file), "--no-audit", "--no-fund"]);
+}
 
 // Re-read the manifests so the reported `to` is what actually landed on disk.
 const changed = emit(readPins());
@@ -169,6 +176,6 @@ say(
   changed
     ? "\n✓ Updated @malloydata/* to latest. Expect the diff to be malloydata plus" +
         "\n  any transitive deps the new versions pulled in. Review, then commit:" +
-        "\n  package.json(s) and pnpm-lock.yaml."
+        "\n  package.json(s) and package-lock.json."
     : "\n✓ @malloydata/* already at latest — nothing changed.",
 );

@@ -71,17 +71,17 @@ fi
 printf '%s🔎 preflight — paranoid full check%s\n' "$BOLD" "$RESET"
 
 # --- 1. engine -------------------------------------------------------------
-run "mcp-engine: typecheck"        npm --prefix packages/mcp-engine run typecheck
-run "mcp-engine: unit tests"       npm --prefix packages/mcp-engine test
+run "mcp-engine: typecheck"        npm run typecheck -w packages/mcp-engine
+run "mcp-engine: unit tests"       npm test -w packages/mcp-engine
 # The engine's dist/ is gitignored; cli typecheck, cli build, AND the server's
 # next build all import @malloyyo/mcp-engine and need its compiled .d.ts/.js. A
 # dev machine usually has dist lingering from a prior build — a clean checkout
 # (CI) does not — so build it explicitly before anything consumes it.
-run "mcp-engine: build (dist)"     npm --prefix packages/mcp-engine run build
+run "mcp-engine: build (dist)"     npm run build -w packages/mcp-engine
 
 # --- 2. cli (pretest builds the bundle + engine) ---------------------------
-run "cli: typecheck"               npm --prefix packages/cli run typecheck
-run "cli: build + tests"           npm --prefix packages/cli test
+run "cli: typecheck"               npm run typecheck -w packages/cli
+run "cli: build + tests"           npm test -w packages/cli
 
 # --- 3. server -------------------------------------------------------------
 run "server: lint"                 npm run lint

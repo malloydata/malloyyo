@@ -29,13 +29,10 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: "24"
-
-      # pnpm via corepack (reads the `packageManager` field), matching cli-publish.
-      - name: Enable pnpm
-        run: corepack enable
+          cache: npm
 
       - name: Install
-        run: pnpm install --frozen-lockfile
+        run: npm ci
 
       - name: Preflight
         run: bash scripts/preflight.sh

@@ -28,7 +28,7 @@ manifest or guess a version — capture them from the tool.
   `{ "primary", "self", "changed": bool, "packages": [{name, from, to}] }`.
   Add `--dry-run` to peek (network, no write) or `--current` to read just what's
   installed now (offline, instant: `{ "primary", "self", packages:[{name,version}] }`).
-  Human chatter and pnpm output always go to stderr.
+  Human chatter and npm output always go to stderr.
 - `npm run preflight` → `bash scripts/preflight.sh` — the offline gate
   (typecheck + unit + cli build + server lint + `next build` + hosted-explore
   integration test). **Needs a running Docker daemon**; if Docker is down the
@@ -85,10 +85,10 @@ npm run --silent malloy-update -- --json > /tmp/malloy-update-real.json
 cat /tmp/malloy-update-real.json
 ```
 
-`pnpm update` here also populates this worktree's `node_modules`. Confirm
+`npm install` here also populates this worktree's `node_modules`. Confirm
 `changed` is true and `primary` matches `$V`; **report the bump** (`from -> to`
 per package, lead with `@malloydata/malloy`). If preflight later complains about
-missing deps, run `pnpm install` in the worktree and retry.
+missing deps, run `npm install` in the worktree and retry.
 
 ### 5. Preflight — STOP if red
 
@@ -111,7 +111,7 @@ gh pr create --repo malloydata/malloyyo --base main --head malloy-update-$V \
   --body "Update to Malloy npm package $V"
 ```
 
-The diff should be exactly the three `package.json`s + `pnpm-lock.yaml`. Title
+The diff should be exactly the three `package.json`s + `package-lock.json`. Title
 and body are exactly `Update to Malloy npm package $V` — no changelog, the diff
 speaks for itself.
 

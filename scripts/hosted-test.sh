@@ -25,9 +25,20 @@ docker run -d --name "$CONTAINER" \
   -p "${PORT}:5432" postgres:16-alpine >/dev/null
 
 echo "→ waiting for Postgres to accept connections"
-for _ in $(seq 1 60); do
-  if docker exec "$CONTAINER" pg_isready -U postgres -d postgres >/dev/null 2>&1; then
-    ready=1; break
+# The postgres image starts a THROWAWAY server to run init, then shuts it down
+# and restarts the real one. The init server listens ONLY on the unix socket
+# (listen_addresses=''), so a socket-based check — `pg_isready -U postgres` or a
+# `SELECT 1` over the socket — passes on it prematurely, and the schema apply
+# below then hits the "database system is shutting down" window. Check over TCP
+# (`-h 127.0.0.1`) instead: the init server isn't listening on TCP, so this only
+# succeeds on the final server. Require a couple in a row for good measure.
+streak=0
+for _ in $(seq 1 120); do
+  if docker exec "$CONTAINER" pg_isready -h 127.0.0.1 -U postgres -d postgres >/dev/null 2>&1; then
+    streak=$((streak + 1))
+    if [ "$streak" -ge 3 ]; then ready=1; break; fi
+  else
+    streak=0
   fi
   sleep 0.5
 done

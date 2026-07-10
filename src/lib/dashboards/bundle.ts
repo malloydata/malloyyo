@@ -52,7 +52,8 @@ export const Panel = D.Panel, filters = D.filters, runData = D.runData,
   mount = D.mount, mountDashboard = D.mountDashboard,
   dashboardInfo = D.dashboardInfo, givenSpecs = D.givenSpecs,
   Controls = D.Controls, Given = D.Given, Select = D.Select, Search = D.Search,
-  Range = D.Range, Checkbox = D.Checkbox, Field = D.Field, DefaultDashboard = D.DefaultDashboard;
+  Range = D.Range, Checkbox = D.Checkbox, Field = D.Field, DefaultDashboard = D.DefaultDashboard,
+  VegaChart = D.VegaChart;
 export default D;
 `;
 

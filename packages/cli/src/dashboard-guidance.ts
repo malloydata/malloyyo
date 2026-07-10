@@ -222,7 +222,9 @@ From \`@malloyyo/dashboard\` (also handed to the component as props):
   \`<Controls/>\` (all givens, or compose children), \`<Given name/>\`,
   \`<Select given [options]/>\`, \`<Search given/>\`, \`<Range given [min max]/>\`,
   \`<TimeRange given [presets]/>\` (temporal presets + custom range),
-  \`<Checkbox given/>\` (bound to a boolean given)
+  \`<Checkbox given/>\` (bound to a boolean given),
+  \`<VegaChart spec query|malloy|data givens/>\` (a Vega-Lite chart over query
+  rows — see "Custom charts" below)
 - **Hooks**: \`useGiven(name)\` → {value, set, spec};
   \`useOptions(name, typed?)\` → {options, loading} (typeahead);
   \`useQuery({query|malloy, givens})\` → {rows, loading, error} — plain rows
@@ -245,6 +247,47 @@ From \`@malloyyo/dashboard\` (also handed to the component as props):
 - \`<Panel/>\` and \`runData(text, givens)\` — named queries are the primary
   form; arbitrary Malloy runs as a RESTRICTED query (no import / given: /
   connection.* / raw SQL / ##! flags — the model's published surface only).
+
+### Custom charts with Vega-Lite: \`<VegaChart>\`
+
+For a chart the Malloy renderer's tags (\`# bar_chart\`, \`# line_chart\`,
+\`# shape_map\` …) don't cover, use \`<VegaChart>\`. It renders a **Vega-Lite
+spec** against Malloy query rows — the engine is bundled into the runtime, so a
+dashboard ships only the JSON spec + a query (no chart library is loaded).
+
+\`\`\`tsx
+import { VegaChart } from "@malloyyo/dashboard";
+
+// The spec's own \`data\` is IGNORED — rows are inlined as the dataset. Point the
+// encodings at your query's OUTPUT COLUMN NAMES.
+const spec = {
+  mark: "bar",
+  encoding: {
+    x: { field: "state", type: "nominal", sort: "-y" },
+    y: { field: "births", type: "quantitative" },
+    color: { field: "gender", type: "nominal" },
+  },
+};
+
+<VegaChart spec={spec} query="births_by_state" givens={givens} />   // a named query
+<VegaChart spec={spec} malloy="baby_names -> births_by_state" givens={givens} />  // restricted text
+<VegaChart spec={spec} data={rows} />                              // rows you already have (useQuery)
+\`\`\`
+
+Rules that keep it working inside the sandbox:
+- **Data comes only from Malloy.** Any \`data.url\` / remote loader in the spec is
+  STRIPPED — the frame has no network. Adapt a gallery example by DELETING its
+  \`"data": {"url": …}\` and pointing encodings at your query's columns; the rows
+  are inlined for you. (Geo examples that fetch topojson by URL won't work.)
+- **Column names must match** the query output exactly (run it with
+  \`query(execute:true)\` to see the columns). Malloy nests come back as arrays —
+  flatten to the rows you want to plot with the query itself, or bind a nest to
+  its own \`<VegaChart data={row.nest}/>\`.
+- One inlined dataset per chart; give the spec a \`width\`/\`height\` or let it
+  default to container width. Client-side interactions (tooltips, zoom, brush)
+  work; anything that calls a server does not.
+- Style via the spec (\`config\`), or wrap in a div. It reads the same
+  \`--dash-*\` surface as the rest of the dashboard is up to your \`config\`.
 
 ## Rules
 - Declare data in the model: givens are \`filter<T>\`, options come from

@@ -27,12 +27,23 @@ export {
   Field,
   DefaultDashboard,
 } from "./ui";
+export { VegaChart } from "./vega-chart";
 
 import { mount } from "./runtime";
 import { Controls, Given, Select, Search, Range, Checkbox, TimeRange, DefaultDashboard } from "./ui";
+import { VegaChart } from "./vega-chart";
 
 /** Frame entry: mount a Dashboard with the widget components in its props
     (import-free dashboards keep working). */
 export function mountDashboard(Dashboard: unknown): void {
-  mount(Dashboard ?? DefaultDashboard, { Controls, Given, Select, Search, Range, Checkbox, TimeRange });
+  mount(Dashboard ?? DefaultDashboard, {
+    Controls,
+    Given,
+    Select,
+    Search,
+    Range,
+    Checkbox,
+    TimeRange,
+    VegaChart,
+  });
 }

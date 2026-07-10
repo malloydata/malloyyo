@@ -239,7 +239,14 @@ export function Panel({ query, malloy, givens, style }) {
         // the "screen jumps around" bug. Static rendering is fine at the
         // dashboard row cap (5000).
         vizRef.current = renderer.createViz({
-          tableConfig: { enableDrill: false, disableVirtualization: true },
+          // rowLimit caps how many rows any table (incl. dashboard cards) builds
+          // into the DOM. Without it, an unbounded card table (e.g. group_by user)
+          // renders every row as static DOM (virtualization is off) and crashes
+          // the tab. The renderer truncates data() at rowLimit and shows a
+          // "Limiting … to N records" footer — so a huge table degrades to
+          // "top N + too many rows" instead of blowing up. Dashboard cards get
+          // this via the tableConfig fallback (they pass no rowLimit of their own).
+          tableConfig: { enableDrill: false, disableVirtualization: true, rowLimit: 1000 },
           dashboardConfig: { disableVirtualization: true },
         });
       }

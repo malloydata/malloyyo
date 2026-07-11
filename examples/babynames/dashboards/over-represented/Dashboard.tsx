@@ -20,9 +20,9 @@ const DECADE_CHOICES = [
 
 export default function Dashboard({ dashboard, givens }) {
   return (
-    <div style={{ fontFamily: "system-ui, sans-serif", padding: 24, maxWidth: 780, margin: "0 auto" }}>
+    <div style={{ padding: 24, maxWidth: 780, margin: "0 auto" }}>
       <h1 style={{ fontSize: 20, margin: "0 0 4px" }}>{dashboard.title}</h1>
-      <p style={{ color: "#666", margin: "0 0 16px" }}>
+      <p style={{ color: "var(--dash-muted, #666)", margin: "0 0 16px" }}>
         Share of a name&rsquo;s births that happened in the selected state — higher means more
         concentrated there. Change the filters to re-run the query.
       </p>

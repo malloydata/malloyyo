@@ -18,7 +18,7 @@ source: nums is duckdb.sql("""
 }
 
 #" Numbers strictly above the target (top-level query form).
-# artifact name="over-target" title="Above target"
+# artifact name="over-target" title="Above target" autorun=false
 query: above_target is nums -> {
   select: v
   where: v > $TARGET

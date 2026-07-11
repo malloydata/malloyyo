@@ -44,6 +44,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ datasetId: stri
       title: dash.title,
       description: dash.manifest.description,
       givens: dash.manifest.givens,
+      autorun: dash.manifest.autorun,
     };
     const html =
       `<!doctype html><html><head><meta charset="utf-8"><title>${esc(dash.title)}</title>` +

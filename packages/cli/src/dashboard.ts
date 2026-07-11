@@ -59,6 +59,9 @@ interface Dashboard {
   description?: string;
   /** Per-dashboard given defaults from the tag's `givens { … }` block. */
   givens?: Record<string, string | number | boolean>;
+  /** `# artifact { autorun=false }` → stage control changes behind an Apply
+      button. Absent = live (re-run on every change). */
+  autorun?: boolean;
   /** Path to dashboards/<name>/Dashboard.tsx when the repo customizes it. */
   tsxPath?: string;
 }
@@ -255,6 +258,7 @@ function frameDoc(
     title: dash.title,
     description: dash.description,
     givens: dash.givens,
+    autorun: dash.autorun,
   };
   return html(
     `<div id="root"></div>` +

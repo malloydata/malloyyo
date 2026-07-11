@@ -19,12 +19,14 @@ test('artifactQueries: discovers both a view artifact and a top-level query arti
   assert.equal(view.view, 'at_or_above');
   assert.equal(view.title, 'At or above target');
   assert.match(view.description ?? '', /at or above the target/i);
+  assert.equal(view.autorun, undefined); // live by default — no flag carried
 
   const q = byName.get('over-target')!;
   assert.equal(q.query, 'above_target'); // run-expression for a top-level query
   assert.equal(q.source, undefined);
   assert.equal(q.view, undefined);
   assert.equal(q.title, 'Above target');
+  assert.equal(q.autorun, false); // `# artifact … autorun=false` → staged/Apply
 });
 
 test('dashboardGivenSpecs: surfaces a view artifact’s givens through the run: path', async () => {

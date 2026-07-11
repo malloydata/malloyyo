@@ -20,6 +20,7 @@ export {
   Given,
   Select,
   Search,
+  MultiSelect,
   Range,
   Checkbox,
   TimeRange,
@@ -30,7 +31,7 @@ export {
 export { VegaChart } from "./vega-chart";
 
 import { mount } from "./runtime";
-import { Controls, Given, Select, Search, Range, Checkbox, TimeRange, DefaultDashboard } from "./ui";
+import { Controls, Given, Select, Search, MultiSelect, Range, Checkbox, TimeRange, DefaultDashboard } from "./ui";
 import { VegaChart } from "./vega-chart";
 
 /** Frame entry: mount a Dashboard with the widget components in its props
@@ -41,6 +42,7 @@ export function mountDashboard(Dashboard: unknown): void {
     Given,
     Select,
     Search,
+    MultiSelect,
     Range,
     Checkbox,
     TimeRange,

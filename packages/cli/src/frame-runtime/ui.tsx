@@ -11,12 +11,13 @@
 // whole no-code dashboard (title + controls + panel) used when a tagged query
 // ships no Dashboard.tsx.
 import React, { useEffect, useState } from "react";
-import { dashboardInfo, givenSpecs, filters, useGiven, useOptions, Panel } from "./runtime";
+import { dashboardInfo, givenSpecs, filters, useGiven, useOptions, useDashboard, Panel } from "./runtime";
 
 const V = (name, fallback) => `var(--dash-${name}, ${fallback})`;
 const label_ = (spec) => spec?.tags?.label ?? spec?.name;
 
 const labelStyle = { color: V("muted", "#888"), marginBottom: 4, fontSize: 13 };
+const hintStyle = { fontSize: 11, color: V("muted", "#888"), marginTop: 3, minHeight: 14 };
 const controlStyle = {
   fontSize: 14,
   padding: "5px 8px",
@@ -25,6 +26,88 @@ const controlStyle = {
   background: V("control-bg", "white"),
   color: V("fg", "#1a1a1a"),
 };
+
+const clearBtnStyle = {
+  position: "absolute",
+  right: 4,
+  top: "50%",
+  transform: "translateY(-50%)",
+  border: "none",
+  background: "transparent",
+  cursor: "pointer",
+  color: V("muted", "#888"),
+  fontSize: 16,
+  lineHeight: 1,
+  padding: "0 4px",
+};
+
+const chipStyle = {
+  display: "inline-flex",
+  alignItems: "center",
+  gap: 4,
+  background: V("chip-bg", "#eef2ff"),
+  color: V("chip-fg", "#3730a3"),
+  borderRadius: 6,
+  padding: "2px 4px 2px 8px",
+  fontSize: 13,
+  lineHeight: 1.4,
+};
+const chipXStyle = {
+  border: "none",
+  background: "transparent",
+  color: "inherit",
+  cursor: "pointer",
+  fontSize: 15,
+  lineHeight: 1,
+  padding: 0,
+  opacity: 0.7,
+};
+const dropdownStyle = {
+  position: "absolute",
+  zIndex: 20,
+  top: "calc(100% + 4px)",
+  left: 0,
+  right: 0,
+  margin: 0,
+  padding: 4,
+  listStyle: "none",
+  maxHeight: 220,
+  overflowY: "auto",
+  background: V("control-bg", "#fff"),
+  border: `1px solid ${V("border", "#ccc")}`,
+  borderRadius: 8,
+  boxShadow: "0 6px 20px rgba(0,0,0,.12)",
+};
+const dropdownItemStyle = {
+  display: "block",
+  width: "100%",
+  textAlign: "left",
+  border: "none",
+  background: "transparent",
+  color: V("fg", "#1a1a1a"),
+  fontSize: 14,
+  padding: "6px 8px",
+  borderRadius: 6,
+  cursor: "pointer",
+};
+
+const btnBase = { fontSize: 14, padding: "7px 14px", borderRadius: 6 };
+const primaryBtnStyle = (enabled) => ({
+  ...btnBase,
+  background: V("accent", "#2563eb"),
+  color: V("accent-fg", "#fff"),
+  border: "1px solid transparent",
+  opacity: enabled ? 1 : 0.5,
+  cursor: enabled ? "pointer" : "default",
+});
+const secondaryBtnStyle = (enabled) => ({
+  ...btnBase,
+  background: V("control-bg", "#fff"),
+  color: V("fg", "#1a1a1a"),
+  border: `1px solid ${V("border", "#ccc")}`,
+  opacity: enabled ? 1 : 0.5,
+  cursor: enabled ? "pointer" : "default",
+});
 
 /** Labeled wrapper every control uses; bring your own label with label={null}. */
 export function Field({ label, children, style }) {
@@ -70,7 +153,12 @@ export function Select({ given, options, label, style }) {
 
 /** A committing text input bound to a filter<T> given, with typeahead
     suggestions from the given's `# suggest {…}` tag and filter-syntax validation.
-    Users can type filter expressions: `Emma, Olivia`, `Em%`, `-NY`. */
+    Users can type filter expressions: `Emma, Olivia`, `Em%`, `-NY`.
+
+    Free text can't re-run per keystroke (a half-typed expression is invalid), so
+    it commits on Enter/blur. That action is made explicit: a "Press ↵ to apply"
+    hint shows while the draft differs from what's running, and an inline ✕ clears
+    the box (committing the empty = no-filter value). Esc also clears. */
 export function Search({ given, label, placeholder, style }) {
   const { value, set, spec } = useGiven(given);
   const [draft, setDraft] = useState(value ?? "");
@@ -79,35 +167,165 @@ export function Search({ given, label, placeholder, style }) {
   const lastTerm = draft.split(",").pop().trim();
   const { options } = useOptions(given, lastTerm);
   const filterType = spec?.filterType ?? "string";
-  const valid = draft.trim() === "" || filters.isValid(filterType, draft);
+  const empty = draft.trim() === "";
+  const valid = empty || filters.isValid(filterType, draft);
+  const current = value ?? "";
+  const dirty = draft !== current;
   const listId = `dash-options-${given}`;
-  const commit = (v) => {
-    const next = (v ?? draft).trim();
-    if (next && filters.isValid(filterType, next) && next !== value) set(next);
+  const commit = () => {
+    const next = draft.trim();
+    if (!valid || next === current) return;
+    set(next); // "" is a valid commit: clears the filter (matches all)
+  };
+  const clear = () => {
+    setDraft("");
+    if (current !== "") set("");
   };
   return (
     <Field label={label ?? label_(spec)}>
-      <input
-        value={draft}
-        list={listId}
-        placeholder={placeholder ?? spec?.description}
-        onChange={(e) => setDraft(e.target.value)}
-        onBlur={() => commit()}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") commit();
-        }}
-        style={{
-          ...controlStyle,
-          minWidth: 180,
-          border: `1px solid ${valid ? V("border", "#ccc") : "#d33"}`,
-          ...style,
-        }}
-      />
-      <datalist id={listId}>
-        {options.map((o) => (
-          <option key={o} value={o} />
-        ))}
-      </datalist>
+      <div style={{ position: "relative", display: "inline-block" }}>
+        <input
+          value={draft}
+          list={listId}
+          placeholder={placeholder ?? spec?.description}
+          onChange={(e) => setDraft(e.target.value)}
+          onBlur={commit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commit();
+            else if (e.key === "Escape") clear();
+          }}
+          style={{
+            ...controlStyle,
+            minWidth: 180,
+            paddingRight: 26,
+            border: `1px solid ${valid ? V("border", "#ccc") : V("danger", "#d33")}`,
+            ...style,
+          }}
+        />
+        {!empty && (
+          <button type="button" onClick={clear} aria-label="Clear" style={clearBtnStyle}>
+            ×
+          </button>
+        )}
+        <datalist id={listId}>
+          {options.map((o) => (
+            <option key={o} value={o} />
+          ))}
+        </datalist>
+      </div>
+      <div style={{ ...hintStyle, color: valid ? V("muted", "#888") : V("danger", "#d33") }}>
+        {!valid ? "Invalid filter expression" : dirty ? "Press ↵ to apply" : " "}
+      </div>
+    </Field>
+  );
+}
+
+/** A tokenized multi-select bound to a filter<string> given: each pick becomes a
+    removable chip and the committed value is an exact-match alternatives filter
+    (`Emma, Olivia, Sophia`), round-tripped through filters.oneOf / filters.values.
+    Suggestions come from the given's `# suggest {…}` tag (server-side typeahead
+    when it names a dimension) or an explicit `options` prop. Backspace on an
+    empty box removes the last chip; empty selection = no filter (all). */
+export function MultiSelect({ given, label, placeholder, options, style }) {
+  const { value, set, spec } = useGiven(given);
+  const selected = filters.values(value ?? "") ?? [];
+  const [term, setTerm] = useState("");
+  const [open, setOpen] = useState(false);
+  const suggested = useOptions(given, term);
+  const commit = (vals) => set(vals.length ? filters.oneOf(...vals) : "");
+  const add = (v) => {
+    const t = String(v).trim();
+    setTerm("");
+    if (!t || selected.includes(t)) return;
+    commit([...selected, t]);
+  };
+  const remove = (v) => commit(selected.filter((x) => x !== v));
+  const source = options
+    ? options.map((o) => (typeof o === "object" ? String(o.value) : String(o)))
+    : suggested.options.map(String);
+  const lower = term.toLowerCase();
+  const avail = source
+    .filter((o) => !selected.includes(o))
+    .filter((o) => o.toLowerCase().includes(lower))
+    .slice(0, 50);
+  return (
+    <Field label={label ?? label_(spec)}>
+      <div style={{ position: "relative", minWidth: 220, ...style }}>
+        <div
+          style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", ...controlStyle, padding: 5 }}
+          onClick={() => setOpen(true)}
+        >
+          {selected.map((v) => (
+            <span key={v} style={chipStyle}>
+              {v}
+              <button
+                type="button"
+                aria-label={`Remove ${v}`}
+                // mouseDown+preventDefault so removing a chip doesn't blur the input
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  remove(v);
+                }}
+                style={chipXStyle}
+              >
+                ×
+              </button>
+            </span>
+          ))}
+          <input
+            value={term}
+            placeholder={selected.length ? "" : placeholder ?? "Add…"}
+            onChange={(e) => {
+              setTerm(e.target.value);
+              setOpen(true);
+            }}
+            onFocus={() => setOpen(true)}
+            onBlur={() => setTimeout(() => setOpen(false), 120)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                add(avail[0] ?? term);
+              } else if (e.key === "Backspace" && !term && selected.length) {
+                remove(selected[selected.length - 1]);
+              } else if (e.key === "Escape") {
+                setOpen(false);
+              }
+            }}
+            style={{
+              border: "none",
+              outline: "none",
+              background: "transparent",
+              color: V("fg", "#1a1a1a"),
+              fontSize: 14,
+              flex: 1,
+              minWidth: 80,
+              padding: "2px 0",
+            }}
+          />
+        </div>
+        {open && avail.length > 0 && (
+          <ul style={dropdownStyle}>
+            {avail.map((o) => (
+              <li key={o}>
+                <button
+                  type="button"
+                  // preventDefault keeps focus in the input so the dropdown stays
+                  // open for picking several in a row.
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    add(o);
+                  }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = V("controls-bg", "#f3f4f6"))}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+                  style={dropdownItemStyle}
+                >
+                  {o}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
     </Field>
   );
 }
@@ -282,8 +500,8 @@ export function Checkbox({ given, label, style }) {
 }
 
 /** The right control for a given, picked from its declaration: numeric range
-    tags → Range, temporal filter → TimeRange, suggestions + control=select →
-    Select, boolean → Checkbox, anything else → Search. */
+    tags → Range, temporal filter → TimeRange, control=multiselect → MultiSelect,
+    suggestions + control=select → Select, boolean → Checkbox, else → Search. */
 export function Given({ name, ...rest }) {
   const spec = givenSpecs().find((s) => s.name === name);
   if (!spec) return null;
@@ -294,28 +512,45 @@ export function Given({ name, ...rest }) {
   if (spec.filterType === "timestamp" || spec.filterType === "timestamptz" || spec.filterType === "date") {
     return <TimeRange given={name} {...rest} />;
   }
+  if (tags.control === "multiselect") return <MultiSelect given={name} {...rest} />;
   if (spec.suggest && tags.control === "select") return <Select given={name} {...rest} />;
   if (spec.type === "boolean") return <Checkbox given={name} {...rest} />;
   return <Search given={name} {...rest} />;
 }
 
-/** Every given the dashboard's query references, laid out in a filter bar. */
+/** Every given the dashboard's query references, laid out in a filter bar. Under
+    `# artifact { autorun=false }` the bar grows an Apply/Reset pair — controls
+    edit a draft and nothing re-runs until Apply. In the live default (autorun),
+    changes re-run immediately and no buttons show. */
 export function Controls({ style, children }) {
+  const { autorun, apply, reset, dirty } = useDashboard();
   return (
     <div
       style={{
         display: "flex",
-        flexWrap: "wrap",
         alignItems: "flex-start",
-        gap: 24,
+        gap: 16,
         marginBottom: 20,
         padding: "14px 16px",
         background: V("controls-bg", "#f6f7f9"),
-        borderRadius: 8,
+        border: `1px solid ${V("border", "#e5e7eb")}`,
+        borderRadius: V("radius", "8px"),
         ...style,
       }}
     >
-      {children ?? givenSpecs().map((s) => <Given key={s.name} name={s.name} />)}
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "flex-start", gap: 24, flex: 1 }}>
+        {children ?? givenSpecs().map((s) => <Given key={s.name} name={s.name} />)}
+      </div>
+      {!autorun && (
+        <div style={{ display: "flex", gap: 8, alignSelf: "center" }}>
+          <button type="button" onClick={reset} disabled={!dirty} style={secondaryBtnStyle(dirty)}>
+            Reset
+          </button>
+          <button type="button" onClick={apply} disabled={!dirty} style={primaryBtnStyle(dirty)}>
+            Apply
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -327,8 +562,12 @@ export function Controls({ style, children }) {
     in a fixed-height iframe) — title and controls stay pinned and the Panel
     is the ONE scroll container, so the renderer's virtualizer (bound to the
     panel via scrollEl) sees real scroll events instead of fighting the page. */
-export function DefaultDashboard({ givens }) {
+export function DefaultDashboard({ givens, theme }) {
   const dash = dashboardInfo();
+  // theme={{ accent:"#e11d48", controlsBg:"#fff", … }} → --dash-accent etc. on
+  // this wrapper, overriding the runtime defaults for this dashboard only.
+  const vars = {};
+  if (theme) for (const [k, v] of Object.entries(theme)) vars[`--dash-${k.replace(/[A-Z]/g, (c) => "-" + c.toLowerCase())}`] = v;
   return (
     <div
       style={{
@@ -341,6 +580,7 @@ export function DefaultDashboard({ givens }) {
         maxWidth: 960,
         margin: "0 auto",
         color: V("fg", "#1a1a1a"),
+        ...vars,
       }}
     >
       <h1 style={{ fontSize: 22, margin: "0 0 4px", flexShrink: 0 }}>{dash.title}</h1>

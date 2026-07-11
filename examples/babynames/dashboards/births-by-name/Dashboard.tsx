@@ -6,7 +6,7 @@
 // the runtime from the query — any remote `data.url` would be stripped, since
 // the sandboxed frame has no network. See the model's `births_by_name` view.
 import React from "react";
-import { Controls, Given, Select, VegaChart } from "@malloyyo/dashboard";
+import { Controls, Given, Select, MultiSelect, VegaChart } from "@malloyyo/dashboard";
 
 const spec = {
   mark: { type: "bar", tooltip: true, cornerRadiusEnd: 3 },
@@ -25,16 +25,21 @@ const DECADE_CHOICES = [
 ];
 
 export default function Dashboard({ dashboard, givens }) {
+  // No hardcoded font/colors: the runtime's default theme (the --dash-* vars,
+  // auto light/dark) styles this. Override per-dashboard by setting --dash-* on
+  // this wrapper, e.g. style={{ "--dash-accent": "#e11d48" }}.
   return (
-    <div style={{ fontFamily: "system-ui, sans-serif", padding: 24, maxWidth: 720, margin: "0 auto" }}>
+    <div style={{ padding: 24, maxWidth: 720, margin: "0 auto" }}>
       <h1 style={{ fontSize: 20, margin: "0 0 4px" }}>{dashboard.title}</h1>
-      <p style={{ color: "#666", margin: "0 0 16px" }}>
-        Total births per name for the selected state and decades — change the filters to re-run.
+      <p style={{ color: "var(--dash-muted, #666)", margin: "0 0 16px" }}>
+        Total births per name for the selected state and decades. Pick names, adjust the
+        decade, then click Apply (this dashboard is <code>autorun=false</code>).
       </p>
 
       <Controls>
         <Given name="STATE" />
         <Select given="DECADES" options={DECADE_CHOICES} />
+        <MultiSelect given="NAMES" placeholder="All names…" />
       </Controls>
 
       {/* Runs `run: names -> births_by_name` as a restricted query; rows are

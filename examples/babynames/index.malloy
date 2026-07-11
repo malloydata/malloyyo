@@ -11,6 +11,10 @@ given:
   STATE :: filter<string> is f'CA'
   # label="Decades"
   DECADES :: filter<number> is f'1980'
+  // A tokenized multi-select: each pick is a chip, the committed value is an
+  // exact-match list ('Emma, Olivia'). Empty (the default) = all names.
+  # label="Names" control=multiselect suggest { source=names dimension=name }
+  NAMES :: filter<string> is f''
 
 // Tiny self-contained sample so the whole loop runs with no external data.
 // (name, state, decade, ct) — ct is the birth count.
@@ -66,9 +70,11 @@ source: names is duckdb.sql("""
   // governed query surface, rendered by a Vega-Lite spec instead of the Malloy
   // renderer. See ./dashboards/births-by-name/Dashboard.tsx — the view returns
   // flat (name, births) rows and the spec's encodings point at those columns.
-  # artifact name="births-by-name" title="Births by name (Vega-Lite)"
+  // autorun=false: the NAMES multi-select + decade edits are staged, and the
+  // Controls bar shows Apply/Reset — nothing re-runs until Apply.
+  # artifact name="births-by-name" title="Births by name (Vega-Lite)" autorun=false
   view: births_by_name is {
-    where: state ~ $STATE, decade ~ $DECADES
+    where: state ~ $STATE, decade ~ $DECADES, name ~ $NAMES
     group_by: name
     aggregate: births
     order_by: births desc

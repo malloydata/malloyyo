@@ -83,12 +83,15 @@ export function useDashboard() {
   return ctx;
 }
 
-/** One given's value + setter + declaration spec: const state = useGiven("STATE"). */
+/** One given's value + setter + declaration spec: const state = useGiven("STATE").
+    `value` is the DRAFT value the control is editing — in the live (autorun)
+    default draft === committed, so a control change re-runs immediately; under
+    `autorun=false` the draft accumulates until Controls' Apply commits it. */
 export function useGiven(name) {
-  const { givens, setGiven } = useDashboard();
+  const { draft, setGiven } = useDashboard();
   const spec = useMemo(() => givenSpecs().find((s) => s.name === name), [name]);
   return {
-    value: givens[name],
+    value: draft[name],
     set: useCallback((v) => setGiven(name, v), [name, setGiven]),
     spec,
   };
@@ -151,7 +154,10 @@ function typeaheadText(s, typed) {
 /** Options for a control, from the given's `# suggest {…}` tag. Pass the text
     the user has typed so far for typeahead: { options, loading }. */
 export function useOptions(name, typed) {
-  const { givens } = useDashboard();
+  // Narrow suggestions against the DRAFT filters the user is composing, so a
+  // related-filter suggest query (e.g. brand narrowed by category) tracks
+  // edits even before Apply under autorun=false.
+  const { draft: givens } = useDashboard();
   const spec = givenSpecs().find((s) => s.name === name);
   const suggest = spec && spec.suggest;
   const base = suggest ? suggestBase(suggest) : null;
@@ -300,6 +306,12 @@ export function Panel({ query, malloy, givens, style }) {
         minHeight: 480,
         maxHeight: "100vh",
         overflow: "auto",
+        // A light results surface in both light/dark shells — the Malloy renderer
+        // has no dark theme, so it always draws on a legible card.
+        background: "var(--dash-panel-bg, #fff)",
+        color: "#171717",
+        border: "1px solid var(--dash-border, #e5e7eb)",
+        borderRadius: "var(--dash-radius, 8px)",
         opacity: loading ? 0.4 : 1,
         transition: "opacity .15s",
         ...style,
@@ -348,12 +360,20 @@ class ErrorBoundary extends React.Component {
   }
 }
 
+// Shallow value equality over the union of keys — givens values are strings,
+// numbers, booleans (filter-expression source or scalars), never objects.
+function sameGivens(a, b) {
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+  for (const k of keys) if (a[k] !== b[k]) return false;
+  return true;
+}
+
 function Root({ Dashboard, extraProps }) {
   // Seed givens: URL (shareable links) > the artifact tag's per-dashboard
   // defaults (`# artifact { givens { X="…" } }`) > the given declaration's
   // default. A given with no usable value is omitted — the model default
   // still applies at run time; the control just starts empty.
-  const [givens, setGivens] = useState(() => {
+  const seed = useMemo(() => {
     const g = {};
     const fromUrl = window.__INITIAL_GIVENS__ || {};
     const fromTag = dashboardInfo().givens || {};
@@ -364,21 +384,39 @@ function Root({ Dashboard, extraProps }) {
       else if (spec.default !== undefined) g[spec.name] = spec.default;
     }
     return g;
-  });
-  const setGiven = useCallback((name, value) => {
-    setGivens((prev) => ({ ...prev, [name]: value }));
   }, []);
-  // Reflect givens up to the trusted parent so it can mirror them into the URL.
+  // Live by default; `# artifact { autorun=false }` stages changes behind Apply.
+  const autorun = dashboardInfo().autorun !== false;
+  // `committed` is what queries run with; `draft` is what the controls edit.
+  // Live: every setGiven commits at once (draft === committed). Staged: setGiven
+  // only touches the draft; apply() promotes it to committed.
+  const [committed, setCommitted] = useState(seed);
+  const [draft, setDraft] = useState(seed);
+  const setGiven = useCallback(
+    (name, value) => {
+      setDraft((prev) => ({ ...prev, [name]: value }));
+      if (autorun) setCommitted((prev) => ({ ...prev, [name]: value }));
+    },
+    [autorun],
+  );
+  const apply = useCallback(() => setCommitted(draft), [draft]);
+  const reset = useCallback(() => setDraft(committed), [committed]);
+  const dirty = !autorun && !sameGivens(draft, committed);
+  // Reflect the COMMITTED givens up to the trusted parent so it mirrors the
+  // applied state (not half-typed drafts) into the shareable URL.
   useEffect(() => {
-    parent.postMessage({ type: "givens", givens }, "*");
-  }, [givens]);
-  const ctx = useMemo(() => ({ givens, setGiven }), [givens, setGiven]);
+    parent.postMessage({ type: "givens", givens: committed }, "*");
+  }, [committed]);
+  const ctx = useMemo(
+    () => ({ givens: committed, draft, setGiven, apply, reset, dirty, autorun }),
+    [committed, draft, setGiven, apply, reset, dirty, autorun],
+  );
   return (
     <Ctx.Provider value={ctx}>
       <Dashboard
         dashboard={dashboardInfo()}
         givenSpecs={givenSpecs()}
-        givens={givens}
+        givens={committed}
         setGiven={setGiven}
         Panel={Panel}
         filters={filters}
@@ -392,8 +430,64 @@ function Root({ Dashboard, extraProps }) {
   );
 }
 
+// ── default theme ───────────────────────────────────────────────────
+// The Malloyyo look, expressed entirely as the `--dash-*` custom properties the
+// widgets already read. Injected once at mount into document root, so it styles
+// BOTH the no-code DefaultDashboard and any custom Dashboard.tsx. Authors
+// override by setting the same vars on a wrapper element (more specific than
+// :root wins) or via DefaultDashboard's `theme={{ accent: "…" }}` prop.
+//
+// Auto light/dark follows the viewer's OS via prefers-color-scheme. The results
+// Panel keeps a light surface in both modes (--dash-panel-bg) because the Malloy
+// renderer has no dark theme of its own — a dark shell with a light results card
+// stays legible; override --dash-panel-bg if your renderer output is dark-safe.
+const THEME_CSS = `
+:root {
+  --dash-font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --dash-bg: #ffffff;
+  --dash-fg: #171717;
+  --dash-muted: #6b7280;
+  --dash-border: #e5e7eb;
+  --dash-accent: #2563eb;
+  --dash-accent-fg: #ffffff;
+  --dash-control-bg: #ffffff;
+  --dash-controls-bg: #f9fafb;
+  --dash-chip-bg: #eef2ff;
+  --dash-chip-fg: #3730a3;
+  --dash-panel-bg: #ffffff;
+  --dash-radius: 8px;
+  --dash-danger: #dc2626;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --dash-bg: #0a0a0a;
+    --dash-fg: #ededed;
+    --dash-muted: #9ca3af;
+    --dash-border: #2a2a2a;
+    --dash-accent: #3b82f6;
+    --dash-accent-fg: #ffffff;
+    --dash-control-bg: #171717;
+    --dash-controls-bg: #141414;
+    --dash-chip-bg: #1e293b;
+    --dash-chip-fg: #bfdbfe;
+    --dash-panel-bg: #ffffff;
+    --dash-danger: #f87171;
+  }
+}
+html, body { margin: 0; background: var(--dash-bg); color: var(--dash-fg); font-family: var(--dash-font); }
+`;
+
+function injectTheme() {
+  if (typeof document === "undefined" || document.getElementById("dash-theme")) return;
+  const style = document.createElement("style");
+  style.id = "dash-theme";
+  style.textContent = THEME_CSS;
+  document.head.appendChild(style);
+}
+
 /** Frame entry point: mount a Dashboard component (custom or default). */
 export function mount(Dashboard, extraProps) {
+  injectTheme();
   window.addEventListener("error", (e) => {
     if (isBenign(e && e.message)) return;
     showFatal((e.error && e.error.stack) || e.message);

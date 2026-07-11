@@ -68,13 +68,15 @@ tag that draws it like one:
 \`\`\`malloy
 source: order_items is … extend {
   #" Business health at a glance — sales, margin, orders.
-  # artifact { title="Business Overview" } dashboard
+  # artifact { title="Business Overview" } dashboard {columns=6}
   view: overview_dashboard is {
     where:
       inventory_items.product_brand ~ $BRAND,     // multi-filter where: is
       inventory_items.product_category ~ $CATEGORY,  // COMMA separated
       created_at ~ $PERIOD
+    # colspan=2
     aggregate: total_sales, total_gross_margin, order_count
+    # colspan=3
     nest:
       # line_chart
       sales_trend is by_month
@@ -92,6 +94,47 @@ references, and the result panel. It runs as \`run: <source> -> <view>\` (here
 URL/directory slug (default: the view name). Note the \`where:\` clauses
 applying givens are COMMA-separated — newline-separated conditions do not
 parse.
+
+### Grid layout — \`dashboard {columns=N}\`
+
+Draw the dashboard on an N-column grid instead of the default free-flowing
+wrap — **use \`dashboard {columns=6}\`**. The key mechanic: a tag placed ABOVE
+\`aggregate:\` or \`nest:\` applies to EVERY item declared in that block, so you
+set widths once per block, not per field. Standard recipe:
+
+- **\`# colspan=2\` above \`aggregate:\`** — each KPI/measure tile spans 2 of the
+  6 columns → 3 tiles per row.
+- **\`# colspan=3\` above \`nest:\`** — each graph or small table spans 3 → 2 per
+  row. Per-item render tags (\`# line_chart\`, \`# bar_chart\`, \`# shape_map\`)
+  still go on the individual nested items.
+- **\`# colspan=6\`** — a single wide / many-column table gets its own line.
+  Tag that one item; a per-item \`# colspan\` overrides the block default.
+- **\`# break\` on the FIRST nest item** — starts the graphs on a fresh row so
+  KPI tiles and charts never share a row. Just always add it: it's a harmless
+  no-op when the tiles already fill complete rows, and the fix when they don't
+  (e.g. 4 measures leave a lone tile a chart would otherwise pack in beside).
+
+\`# colspan\` only takes effect in columns mode; drop \`{columns=N}\` and the
+layout falls back to free-flow wrap with colspan ignored.
+
+\`\`\`malloy
+# artifact { title="Customer Insights" } dashboard {columns=6}
+view: customer_insights is {
+  where: created_at ~ $PERIOD
+  # colspan=2
+  aggregate: total_sales, user_count, order_count, average_order_value
+  # colspan=3
+  nest:
+    # break
+    # bar_chart
+    users_by_spend_tier
+    sales_by_traffic_source
+    # shape_map
+    sales_by_state
+    # colspan=6
+    recent_orders                      // wide detail table → full width
+}
+\`\`\`
 
 Tagging a **top-level \`query:\`** still works and behaves identically (it runs
 as \`run: <name>\`) — reach for it only when the dashboard query doesn't belong

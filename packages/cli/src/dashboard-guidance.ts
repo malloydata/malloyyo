@@ -14,6 +14,12 @@ A dashboard is DECLARED IN THE MODEL — there is no manifest file and, for the
 basic case, no JavaScript at all. Preview with \`malloyyo dashboard dev\`; check
 with \`malloyyo lint\`.
 
+> **Need a chart the \`# bar_chart\`/\`# line_chart\`/\`# shape_map\` renderer tags
+> can't do?** Use the \`<VegaChart>\` COMPONENT (a Vega-Lite spec over query
+> rows) in a custom \`Dashboard.tsx\` — NOT a \`#\` tag; there is no
+> \`# vega_lite\`. See "Custom charts with Vega-Lite" below, or
+> \`yo_help dashboards/vega-charts\`.
+
 ## Make dashboards discoverable: the entry model
 
 **The entry is \`index.malloy\`.** \`dashboard dev\`, \`lint\`, and the hosted
@@ -62,13 +68,15 @@ tag that draws it like one:
 \`\`\`malloy
 source: order_items is … extend {
   #" Business health at a glance — sales, margin, orders.
-  # artifact { title="Business Overview" } dashboard
+  # artifact { title="Business Overview" } dashboard {columns=6}
   view: overview_dashboard is {
     where:
       inventory_items.product_brand ~ $BRAND,     // multi-filter where: is
       inventory_items.product_category ~ $CATEGORY,  // COMMA separated
       created_at ~ $PERIOD
+    # colspan=2
     aggregate: total_sales, total_gross_margin, order_count
+    # colspan=3
     nest:
       # line_chart
       sales_trend is by_month
@@ -86,6 +94,47 @@ references, and the result panel. It runs as \`run: <source> -> <view>\` (here
 URL/directory slug (default: the view name). Note the \`where:\` clauses
 applying givens are COMMA-separated — newline-separated conditions do not
 parse.
+
+### Grid layout — \`dashboard {columns=N}\`
+
+Draw the dashboard on an N-column grid instead of the default free-flowing
+wrap — **use \`dashboard {columns=6}\`**. The key mechanic: a tag placed ABOVE
+\`aggregate:\` or \`nest:\` applies to EVERY item declared in that block, so you
+set widths once per block, not per field. Standard recipe:
+
+- **\`# colspan=2\` above \`aggregate:\`** — each KPI/measure tile spans 2 of the
+  6 columns → 3 tiles per row.
+- **\`# colspan=3\` above \`nest:\`** — each graph or small table spans 3 → 2 per
+  row. Per-item render tags (\`# line_chart\`, \`# bar_chart\`, \`# shape_map\`)
+  still go on the individual nested items.
+- **\`# colspan=6\`** — a single wide / many-column table gets its own line.
+  Tag that one item; a per-item \`# colspan\` overrides the block default.
+- **\`# break\` on the FIRST nest item** — starts the graphs on a fresh row so
+  KPI tiles and charts never share a row. Just always add it: it's a harmless
+  no-op when the tiles already fill complete rows, and the fix when they don't
+  (e.g. 4 measures leave a lone tile a chart would otherwise pack in beside).
+
+\`# colspan\` only takes effect in columns mode; drop \`{columns=N}\` and the
+layout falls back to free-flow wrap with colspan ignored.
+
+\`\`\`malloy
+# artifact { title="Customer Insights" } dashboard {columns=6}
+view: customer_insights is {
+  where: created_at ~ $PERIOD
+  # colspan=2
+  aggregate: total_sales, user_count, order_count, average_order_value
+  # colspan=3
+  nest:
+    # break
+    # bar_chart
+    users_by_spend_tier
+    sales_by_traffic_source
+    # shape_map
+    sales_by_state
+    # colspan=6
+    recent_orders                      // wide detail table → full width
+}
+\`\`\`
 
 Tagging a **top-level \`query:\`** still works and behaves identically (it runs
 as \`run: <name>\`) — reach for it only when the dashboard query doesn't belong
@@ -222,7 +271,9 @@ From \`@malloyyo/dashboard\` (also handed to the component as props):
   \`<Controls/>\` (all givens, or compose children), \`<Given name/>\`,
   \`<Select given [options]/>\`, \`<Search given/>\`, \`<Range given [min max]/>\`,
   \`<TimeRange given [presets]/>\` (temporal presets + custom range),
-  \`<Checkbox given/>\` (bound to a boolean given)
+  \`<Checkbox given/>\` (bound to a boolean given),
+  \`<VegaChart spec query|malloy|data givens/>\` (a Vega-Lite chart over query
+  rows — see "Custom charts" below)
 - **Hooks**: \`useGiven(name)\` → {value, set, spec};
   \`useOptions(name, typed?)\` → {options, loading} (typeahead);
   \`useQuery({query|malloy, givens})\` → {rows, loading, error} — plain rows
@@ -245,6 +296,47 @@ From \`@malloyyo/dashboard\` (also handed to the component as props):
 - \`<Panel/>\` and \`runData(text, givens)\` — named queries are the primary
   form; arbitrary Malloy runs as a RESTRICTED query (no import / given: /
   connection.* / raw SQL / ##! flags — the model's published surface only).
+
+### Custom charts with Vega-Lite: \`<VegaChart>\`
+
+For a chart the Malloy renderer's tags (\`# bar_chart\`, \`# line_chart\`,
+\`# shape_map\` …) don't cover, use \`<VegaChart>\`. It renders a **Vega-Lite
+spec** against Malloy query rows — the engine is bundled into the runtime, so a
+dashboard ships only the JSON spec + a query (no chart library is loaded).
+
+\`\`\`tsx
+import { VegaChart } from "@malloyyo/dashboard";
+
+// The spec's own \`data\` is IGNORED — rows are inlined as the dataset. Point the
+// encodings at your query's OUTPUT COLUMN NAMES.
+const spec = {
+  mark: "bar",
+  encoding: {
+    x: { field: "state", type: "nominal", sort: "-y" },
+    y: { field: "births", type: "quantitative" },
+    color: { field: "gender", type: "nominal" },
+  },
+};
+
+<VegaChart spec={spec} query="births_by_state" givens={givens} />   // a named query
+<VegaChart spec={spec} malloy="baby_names -> births_by_state" givens={givens} />  // restricted text
+<VegaChart spec={spec} data={rows} />                              // rows you already have (useQuery)
+\`\`\`
+
+Rules that keep it working inside the sandbox:
+- **Data comes only from Malloy.** Any \`data.url\` / remote loader in the spec is
+  STRIPPED — the frame has no network. Adapt a gallery example by DELETING its
+  \`"data": {"url": …}\` and pointing encodings at your query's columns; the rows
+  are inlined for you. (Geo examples that fetch topojson by URL won't work.)
+- **Column names must match** the query output exactly (run it with
+  \`query(execute:true)\` to see the columns). Malloy nests come back as arrays —
+  flatten to the rows you want to plot with the query itself, or bind a nest to
+  its own \`<VegaChart data={row.nest}/>\`.
+- One inlined dataset per chart; give the spec a \`width\`/\`height\` or let it
+  default to container width. Client-side interactions (tooltips, zoom, brush)
+  work; anything that calls a server does not.
+- Style via the spec (\`config\`), or wrap in a div. It reads the same
+  \`--dash-*\` surface as the rest of the dashboard is up to your \`config\`.
 
 ## Rules
 - Declare data in the model: givens are \`filter<T>\`, options come from

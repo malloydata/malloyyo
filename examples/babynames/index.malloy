@@ -60,4 +60,17 @@ source: names is duckdb.sql("""
     order_by: pct_in_state desc
     limit: 20
   }
+
+  #" Total births per name in the selected state and decades.
+  // A second dashboard, this one custom-drawn with <VegaChart>: the same
+  // governed query surface, rendered by a Vega-Lite spec instead of the Malloy
+  // renderer. See ./dashboards/births-by-name/Dashboard.tsx — the view returns
+  // flat (name, births) rows and the spec's encodings point at those columns.
+  # artifact name="births-by-name" title="Births by name (Vega-Lite)"
+  view: births_by_name is {
+    where: state ~ $STATE, decade ~ $DECADES
+    group_by: name
+    aggregate: births
+    order_by: births desc
+  }
 }

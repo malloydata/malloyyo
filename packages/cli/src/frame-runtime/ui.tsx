@@ -16,11 +16,18 @@ import { dashboardInfo, givenSpecs, filters, useGiven, useOptions, useDashboard,
 const V = (name, fallback) => `var(--dash-${name}, ${fallback})`;
 const label_ = (spec) => spec?.tags?.label ?? spec?.name;
 
-const labelStyle = { color: V("muted", "#888"), marginBottom: 4, fontSize: 13 };
-const hintStyle = { fontSize: 11, color: V("muted", "#888"), marginTop: 3, minHeight: 14 };
+const labelStyle = {
+  color: V("muted", "#888"),
+  marginBottom: 2,
+  fontSize: 11,
+  fontWeight: 500,
+  textTransform: "uppercase",
+  letterSpacing: ".03em",
+};
+const hintStyle = { fontSize: 10, color: V("muted", "#888"), marginTop: 2, minHeight: 12 };
 const controlStyle = {
-  fontSize: 14,
-  padding: "5px 8px",
+  fontSize: 13,
+  padding: "4px 7px",
   borderRadius: 6,
   border: `1px solid ${V("border", "#ccc")}`,
   background: V("control-bg", "white"),
@@ -44,13 +51,13 @@ const clearBtnStyle = {
 const chipStyle = {
   display: "inline-flex",
   alignItems: "center",
-  gap: 4,
+  gap: 3,
   background: V("chip-bg", "#eef2ff"),
   color: V("chip-fg", "#3730a3"),
-  borderRadius: 6,
-  padding: "2px 4px 2px 8px",
-  fontSize: 13,
-  lineHeight: 1.4,
+  borderRadius: 4,
+  padding: "1px 3px 1px 7px",
+  fontSize: 12,
+  lineHeight: 1.35,
 };
 const chipXStyle = {
   border: "none",
@@ -91,7 +98,7 @@ const dropdownItemStyle = {
   cursor: "pointer",
 };
 
-const btnBase = { fontSize: 14, padding: "7px 14px", borderRadius: 6 };
+const btnBase = { fontSize: 13, padding: "5px 12px", borderRadius: 6 };
 const primaryBtnStyle = (enabled) => ({
   ...btnBase,
   background: V("accent", "#2563eb"),
@@ -112,7 +119,7 @@ const secondaryBtnStyle = (enabled) => ({
 /** Labeled wrapper every control uses; bring your own label with label={null}. */
 export function Field({ label, children, style }) {
   return (
-    <label style={{ fontSize: 13, ...style }}>
+    <label style={{ fontSize: 13, display: "inline-block", ...style }}>
       {label != null && <div style={labelStyle}>{label}</div>}
       {children}
     </label>
@@ -196,8 +203,8 @@ export function Search({ given, label, placeholder, style }) {
           }}
           style={{
             ...controlStyle,
-            minWidth: 180,
-            paddingRight: 26,
+            minWidth: 150,
+            paddingRight: 24,
             border: `1px solid ${valid ? V("border", "#ccc") : V("danger", "#d33")}`,
             ...style,
           }}
@@ -250,9 +257,9 @@ export function MultiSelect({ given, label, placeholder, options, style }) {
     .slice(0, 50);
   return (
     <Field label={label ?? label_(spec)}>
-      <div style={{ position: "relative", minWidth: 220, ...style }}>
+      <div style={{ position: "relative", minWidth: 180, ...style }}>
         <div
-          style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center", ...controlStyle, padding: 5 }}
+          style={{ display: "flex", flexWrap: "wrap", gap: 4, alignItems: "center", ...controlStyle, padding: 3 }}
           onClick={() => setOpen(true)}
         >
           {selected.map((v) => (
@@ -331,20 +338,20 @@ export function MultiSelect({ given, label, placeholder, options, style }) {
 }
 
 const RANGE_CSS = `
-.dash-range { position: relative; width: 240px; height: 34px; }
-.dash-range .track { position:absolute; top:15px; left:0; right:0; height:4px; border-radius:2px; background:${V("border", "#d5d8dd")}; }
-.dash-range .fill  { position:absolute; top:15px; height:4px; border-radius:2px; background:${V("accent", "#1a1a1a")}; }
+.dash-range { position: relative; width: 170px; height: 22px; }
+.dash-range .track { position:absolute; top:9px; left:0; right:0; height:4px; border-radius:2px; background:${V("border", "#d5d8dd")}; }
+.dash-range .fill  { position:absolute; top:9px; height:4px; border-radius:2px; background:${V("accent", "#1a1a1a")}; }
 .dash-range input[type=range] {
-  position:absolute; top:6px; left:0; width:100%; height:22px; margin:0;
+  position:absolute; top:3px; left:0; width:100%; height:16px; margin:0;
   -webkit-appearance:none; appearance:none; background:transparent; pointer-events:none;
 }
 .dash-range input[type=range]::-webkit-slider-thumb {
   -webkit-appearance:none; appearance:none; pointer-events:auto; cursor:pointer;
-  height:18px; width:18px; border-radius:50%; background:${V("control-bg", "#fff")}; border:2px solid ${V("accent", "#1a1a1a")}; box-sizing:border-box;
+  height:16px; width:16px; border-radius:50%; background:${V("control-bg", "#fff")}; border:2px solid ${V("accent", "#1a1a1a")}; box-sizing:border-box;
 }
 .dash-range input[type=range]::-moz-range-thumb {
   pointer-events:auto; cursor:pointer;
-  height:18px; width:18px; border-radius:50%; background:${V("control-bg", "#fff")}; border:2px solid ${V("accent", "#1a1a1a")}; box-sizing:border-box;
+  height:16px; width:16px; border-radius:50%; background:${V("control-bg", "#fff")}; border:2px solid ${V("accent", "#1a1a1a")}; box-sizing:border-box;
 }
 .dash-range input[type=range]::-moz-range-track { background:transparent; }
 `;
@@ -528,21 +535,21 @@ export function Controls({ style, children }) {
     <div
       style={{
         display: "flex",
-        alignItems: "flex-start",
-        gap: 16,
-        marginBottom: 20,
-        padding: "14px 16px",
+        alignItems: "flex-end",
+        gap: 12,
+        marginBottom: 14,
+        padding: "8px 12px",
         background: V("controls-bg", "#f6f7f9"),
         border: `1px solid ${V("border", "#e5e7eb")}`,
         borderRadius: V("radius", "8px"),
         ...style,
       }}
     >
-      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "flex-start", gap: 24, flex: 1 }}>
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "flex-end", gap: 14, flex: 1 }}>
         {children ?? givenSpecs().map((s) => <Given key={s.name} name={s.name} />)}
       </div>
       {!autorun && (
-        <div style={{ display: "flex", gap: 8, alignSelf: "center" }}>
+        <div style={{ display: "flex", gap: 6, alignSelf: "flex-end" }}>
           <button type="button" onClick={reset} disabled={!dirty} style={secondaryBtnStyle(dirty)}>
             Reset
           </button>

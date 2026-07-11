@@ -13,7 +13,9 @@ given:
   DECADES :: filter<number> is f'1980'
   // A tokenized multi-select: each pick is a chip, the committed value is an
   // exact-match list ('Emma, Olivia'). Empty (the default) = all names.
-  # label="Names" control=multiselect suggest { source=names dimension=name }
+  // query-form suggest → the list NARROWS by the OTHER filters' CURRENT values
+  // (draft, before Apply): pick a decade and the name options track it.
+  # label="Names" control=multiselect suggest { query=name_suggest dimension=name }
   NAMES :: filter<string> is f''
 
 // Tiny self-contained sample so the whole loop runs with no external data.
@@ -79,4 +81,13 @@ source: names is duckdb.sql("""
     aggregate: births
     order_by: births desc
   }
+}
+
+// Backs the NAMES suggest. Referencing $STATE/$DECADES is what makes the name
+// options NARROW to the currently-filtered slice — the runtime runs this with
+// the other controls' CURRENT (draft) values, excluding NAMES itself.
+query: name_suggest is names -> {
+  where: state ~ $STATE, decade ~ $DECADES
+  group_by: name
+  order_by: name
 }

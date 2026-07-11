@@ -24,6 +24,8 @@ given:
   STATE :: filter<string> is f'NY'
   # label="Brand" suggest { query=brand_suggest dimension=product_brand }
   BRAND :: filter<string> is f''
+  # label="Names" control=multiselect suggest { query=name_suggest dimension=name }
+  NAMES :: filter<string> is f''
   # label="Years" range_min=1910 range_max=2025
   YEAR_RANGE :: filter<number> is f'[1910 to 1930]'
   # label="Time period"

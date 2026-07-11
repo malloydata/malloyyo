@@ -14,6 +14,12 @@ A dashboard is DECLARED IN THE MODEL — there is no manifest file and, for the
 basic case, no JavaScript at all. Preview with \`malloyyo dashboard dev\`; check
 with \`malloyyo lint\`.
 
+> **Need a chart the \`# bar_chart\`/\`# line_chart\`/\`# shape_map\` renderer tags
+> can't do?** Use the \`<VegaChart>\` COMPONENT (a Vega-Lite spec over query
+> rows) in a custom \`Dashboard.tsx\` — NOT a \`#\` tag; there is no
+> \`# vega_lite\`. See "Custom charts with Vega-Lite" below, or
+> \`yo_help dashboards/vega-charts\`.
+
 ## Make dashboards discoverable: the entry model
 
 **The entry is \`index.malloy\`.** \`dashboard dev\`, \`lint\`, and the hosted

@@ -306,6 +306,12 @@ export function Panel({ query, malloy, givens, style }) {
         minHeight: 480,
         maxHeight: "100vh",
         overflow: "auto",
+        // Trap the Malloy renderer's own z-indexes (its sticky dashboard-row
+        // header is position:sticky z-index:200). Without an isolate here the
+        // Panel is position:static, so that 200 escapes into the ROOT stacking
+        // context and paints OVER a control's open dropdown. isolate makes the
+        // Panel a stacking context so its internals stay below the filter bar.
+        isolation: "isolate",
         // A light results surface in both light/dark shells — the Malloy renderer
         // has no dark theme, so it always draws on a legible card.
         background: "var(--dash-panel-bg, #fff)",

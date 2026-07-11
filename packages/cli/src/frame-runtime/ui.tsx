@@ -71,7 +71,7 @@ const chipXStyle = {
 };
 const dropdownStyle = {
   position: "absolute",
-  zIndex: 20,
+  zIndex: 1000,
   top: "calc(100% + 4px)",
   left: 0,
   right: 0,
@@ -137,11 +137,19 @@ export function Select({ given, options, label, style }) {
   const suggested = useOptions(given);
   const isFilter = !!spec?.filterType;
   const toValue = (o) => (isFilter && o !== "" ? filters.oneOf(String(o)) : String(o));
-  const raw = options ?? (suggested.loading ? [value].filter((v) => v != null) : suggested.options);
+  const raw = options ?? (suggested.loading ? [value].filter((v) => v != null && v !== "") : suggested.options);
   const opts = raw.map((o) =>
     typeof o === "object" ? o : { value: toValue(o), text: String(o) },
   );
-  if (value != null && !opts.some((o) => o.value === value)) {
+  // Suggest-driven filter selects get an "All" (empty filter) option so a pick
+  // is clearable — otherwise setting DEPARTMENT strands you with no way back to
+  // unfiltered. Author-supplied `options` are left exactly as given.
+  if (!options && isFilter && !opts.some((o) => o.value === "")) {
+    opts.unshift({ value: "", text: "All" });
+  }
+  // Keep the current value selectable even if it isn't in the option list —
+  // but "" is already the All option, so don't add a blank entry for it.
+  if (value != null && value !== "" && !opts.some((o) => o.value === value)) {
     const texts = isFilter ? filters.values(value) : null;
     opts.push({ value, text: texts?.join(", ") ?? String(value) });
   }
@@ -534,22 +542,31 @@ export function Controls({ style, children }) {
   return (
     <div
       style={{
+        // position/zIndex: the filter bar (and any open control dropdown inside
+        // it) forms a stacking context ABOVE the results Panel — a later DOM
+        // sibling whose chart content would otherwise paint over a dropdown.
+        position: "relative",
+        zIndex: 40,
         display: "flex",
-        alignItems: "flex-end",
+        alignItems: "flex-start",
         gap: 12,
         marginBottom: 14,
-        padding: "8px 12px",
+        padding: "10px 12px",
         background: V("controls-bg", "#f6f7f9"),
         border: `1px solid ${V("border", "#e5e7eb")}`,
         borderRadius: V("radius", "8px"),
         ...style,
       }}
     >
-      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "flex-end", gap: 14, flex: 1 }}>
+      {/* Every field is label-on-top; flex-start keeps all labels on one line
+          (bottom-align made hint-carrying fields float their labels up — jagged). */}
+      <div style={{ display: "flex", flexWrap: "wrap", alignItems: "flex-start", gap: 16, flex: 1 }}>
         {children ?? givenSpecs().map((s) => <Given key={s.name} name={s.name} />)}
       </div>
       {!autorun && (
-        <div style={{ display: "flex", gap: 6, alignSelf: "flex-end" }}>
+        // marginTop ≈ label height, so buttons line up with the control inputs
+        // (which sit below their labels), not with the labels.
+        <div style={{ display: "flex", gap: 6, marginTop: 17 }}>
           <button type="button" onClick={reset} disabled={!dirty} style={secondaryBtnStyle(dirty)}>
             Reset
           </button>

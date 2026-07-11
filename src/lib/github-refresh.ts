@@ -96,6 +96,7 @@ export async function refreshGitHubModel(datasetId: string): Promise<RefreshResu
       const manifest: Record<string, unknown> = { title: artifact.title, query: artifact.query };
       if (artifact.description) manifest.description = artifact.description;
       if (artifact.givens) manifest.givens = artifact.givens;
+      if (artifact.autorun === false) manifest.autorun = false;
       rows.push({
         modelId: created.id,
         name: artifact.name,

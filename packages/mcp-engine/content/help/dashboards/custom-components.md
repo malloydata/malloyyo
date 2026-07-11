@@ -38,12 +38,14 @@ export default function Dashboard({ dashboard, givens }) {
 ```
 
 From `@malloyyo/dashboard` (also handed to the component as props):
-- **Widgets** (headless-ish; restyle via className/style or CSS vars
-  `--dash-fg/-muted/-border/-accent/-control-bg/-controls-bg`):
-  `<Controls/>` (all givens, or compose children), `<Given name/>`,
-  `<Select given [options]/>`, `<Search given/>`, `<Range given [min max]/>`,
-  `<TimeRange given [presets]/>` (temporal presets + custom range),
-  `<Checkbox given/>` (bound to a boolean given),
+- **Widgets** (headless-ish; restyle via className/style or the `--dash-*` CSS
+  vars — see Theming below): `<Controls/>` (all givens, or compose children;
+  grows Apply/Reset under `autorun=false`), `<Given name/>`,
+  `<Select given [options]/>`, `<Search given/>` (committing input + typeahead +
+  inline ✕ clear), `<MultiSelect given [options]/>` (chip multi-select for a
+  `filter<string>` — commits an exact-match list via `filters.oneOf`),
+  `<Range given [min max]/>`, `<TimeRange given [presets]/>` (temporal presets +
+  custom range), `<Checkbox given/>` (bound to a boolean given),
   `<VegaChart spec query|malloy|data givens/>` (a Vega-Lite chart over query
   rows — see `yo_help dashboards/vega-charts`)
 - **Hooks**: `useGiven(name)` → {value, set, spec};
@@ -68,6 +70,28 @@ From `@malloyyo/dashboard` (also handed to the component as props):
 - `<Panel/>` and `runData(text, givens)` — named queries are the primary
   form; arbitrary Malloy runs as a RESTRICTED query (no import / given: /
   connection.* / raw SQL / ##! flags — the model's published surface only).
+
+## Theming
+
+Every widget is styled by the runtime's **default Malloyyo theme** (system
+font, neutral grays, blue accent, auto light/dark following the viewer's OS) —
+a bare `Dashboard.tsx` looks styled with zero effort, so DON'T hand-hardcode
+`fontFamily`/colors. The theme is CSS custom properties; override any subset by
+setting them on a wrapper element (more specific than the runtime's `:root`):
+
+```tsx
+<div style={{ "--dash-accent": "#e11d48", "--dash-controls-bg": "#faf5ff" }}>
+  <Controls /> …
+</div>
+```
+
+Vars: `--dash-font`, `--dash-bg`, `--dash-fg`, `--dash-muted`, `--dash-border`,
+`--dash-accent`, `--dash-accent-fg`, `--dash-control-bg`, `--dash-controls-bg`,
+`--dash-chip-bg`, `--dash-chip-fg`, `--dash-panel-bg`, `--dash-radius`,
+`--dash-danger`. `DefaultDashboard` also takes a `theme={{ accent, controlsBg }}`
+prop (camelCase keys → `--dash-*`). The results `<Panel>` keeps a light surface
+in both light/dark (the Malloy renderer has no dark theme) — override
+`--dash-panel-bg` if your renderer output is dark-safe.
 
 For charts beyond the Malloy renderer's `#` tags, use `<VegaChart>` —
 `yo_help dashboards/vega-charts`.

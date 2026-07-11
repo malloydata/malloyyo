@@ -24,6 +24,8 @@ given:
   STATE :: filter<string> is f'NY'
   # label="Brand" suggest { query=brand_suggest dimension=product_brand }
   BRAND :: filter<string> is f''
+  # label="Names" control=multiselect suggest { query=name_suggest dimension=name }
+  NAMES :: filter<string> is f''
   # label="Years" range_min=1910 range_max=2025
   YEAR_RANGE :: filter<number> is f'[1910 to 1930]'
   # label="Time period"
@@ -67,6 +69,11 @@ equals, not colon):
   defaults mean unset filters don't constrain. `source=` suggests can't do
   this (no place for a `where:`) — another reason to prefer `query=`.
 - `control=select` — a fixed dropdown instead of a typeahead search box
+- `control=multiselect` — a tokenized multi-select for a `filter<string>`:
+  each pick is a removable chip, the committed value is an exact-match list
+  (`Emma, Olivia, Sophia`). Ideal for "pick several" filters (names, brands).
+  Suggestions come from the given's `suggest {…}` (server-side typeahead when
+  it names a dimension). Empty (start from `f''`) = no filter (all).
 - `range_min` / `range_max` — bounds; makes a filter<number> given a
   dual-thumb range slider
 - anything else passes through in `spec.tags` for custom components
@@ -74,9 +81,27 @@ equals, not colon):
 Control picked from the declaration automatically: numeric range tags →
 dual-thumb slider; `filter<timestamp|timestamptz|date>` → the TimeRange
 widget (relative presets: Today / Last 7 days / Last 30 days / … plus a
-"Custom range…" from/to date picker); suggest + control=select → dropdown;
-boolean → checkbox; anything else → committing search box with typeahead.
+"Custom range…" from/to date picker); `control=multiselect` → chip
+multi-select; suggest + control=select → dropdown; boolean → checkbox;
+anything else → committing search box with typeahead (an inline ✕ clears it;
+a "Press ↵ to apply" hint shows while the typed draft differs from what's
+running — free text can't safely re-run per keystroke).
 The suggest-driven options are DATA VALUES only — options that aren't column
 values (custom time presets, threshold buckets) need a custom component
 (`yo_help dashboards/custom-components`) with explicit `{value, text}` options
 where value is a filter expression built with `filters.*`.
+
+## When the query re-runs: live (default) vs. Apply
+
+By default a dashboard is **live** — every control change re-runs the query
+immediately (the committing search box is the exception: free text commits on
+Enter/blur, since a half-typed filter is invalid). To batch changes behind an
+**Apply** button instead, set `autorun=false` on the `# artifact` tag:
+
+```malloy
+# artifact { name="births-by-name" title="Births by name" autorun=false }
+```
+
+`autorun=false` makes `<Controls>` grow an Apply/Reset pair — controls edit a
+draft and nothing re-runs until Apply. Reach for it when the query is expensive
+or several filters are usually changed together; leave it off (live) otherwise.

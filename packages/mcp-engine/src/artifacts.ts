@@ -41,6 +41,11 @@ export interface ArtifactInfo {
       dashboards can share a given but land on different starting values;
       these override the declaration defaults (URL params still win). */
   givens?: Record<string, string | number | boolean>;
+  /** Whether a control change re-runs the query immediately (the default) or
+      is staged behind an Apply button. `# artifact { autorun=false }` opts a
+      dashboard into the staged/Apply model; omitted or `autorun=true` = live.
+      Only carried when explicitly `false` (the runtime treats absent as live). */
+  autorun?: boolean;
 }
 
 /** How a candidate declaration identifies itself to `readArtifactTag`. */
@@ -105,6 +110,10 @@ export function readArtifactTag(ident: ArtifactIdent, q: Tagged): ArtifactInfo |
   if (ident.source) info.source = ident.source;
   if (ident.view) info.view = ident.view;
   if (description) info.description = description;
+  // `autorun=false` stages control changes behind an Apply button; live is the
+  // default, so only carry the flag when explicitly turned off.
+  const autorunText = nested?.text('autorun') ?? tag.text('autorun');
+  if (autorunText === 'false') info.autorun = false;
   const givensTag = tag.tag('artifact', 'givens');
   if (givensTag) {
     const givens: Record<string, string | number | boolean> = {};

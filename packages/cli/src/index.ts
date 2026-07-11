@@ -7,6 +7,8 @@ import { lintDashboards, printLintReport } from "./lint.js";
 import { getAccessToken, login } from "./oauth.js";
 import { serveMcp } from "./mcp.js";
 import { serveDashboard } from "./dashboard.js";
+import { initCmd } from "./init.js";
+import { launchCmd } from "./launch.js";
 import { clearCreds } from "./store.js";
 import type { PublishRequest, ModelStatus } from "./protocol.js";
 // Single source of truth: the build runs after the release bump, so esbuild
@@ -154,12 +156,46 @@ program
 program
   .command("mcp")
   .option("-C, --root <dir>", "project root (default: current directory)")
+  .option("--develop", "author surface: compile/prettify/query any .malloy in the project")
+  .option("--explore", "explore surface: the claude.ai web preview (index.malloy only) [default]")
   .description(
-    "run a local stdio MCP server (the explore / test-window surface) over the " +
-      "Malloy model in the current directory",
+    "run a local stdio MCP server over the Malloy model in the current directory. " +
+      "--develop for authoring, --explore (default) to preview the web experience",
   )
+  .action(async (opts: { root?: string; develop?: boolean; explore?: boolean }) => {
+    if (opts.develop && opts.explore) {
+      throw new Error("pass only one of --develop / --explore");
+    }
+    await serveMcp({
+      root: opts.root,
+      version: VERSION,
+      mode: opts.develop ? "develop" : "explore",
+    });
+  });
+
+program
+  .command("init")
+  .argument("[dir]", "model repo to set up", ".")
+  .description(
+    "set up a model repo: write .mcp.json so `cd <repo> && claude` opens in " +
+      "author mode, and scaffold index.malloy if missing",
+  )
+  .action(initCmd);
+
+program
+  .command("author")
+  .option("-C, --root <dir>", "project root (default: current directory)")
+  .description("launch Claude wired ONLY to the author surface (compile/edit the model)")
   .action(async (opts: { root?: string }) => {
-    await serveMcp({ root: opts.root, version: VERSION });
+    await launchCmd("author", opts);
+  });
+
+program
+  .command("test")
+  .option("-C, --root <dir>", "project root (default: current directory)")
+  .description("launch Claude wired ONLY to the explore surface — the claude.ai web preview")
+  .action(async (opts: { root?: string }) => {
+    await launchCmd("test", opts);
   });
 
 program

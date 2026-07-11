@@ -29,6 +29,7 @@ import {
 import {
   codeProblem,
   compile,
+  developSurface,
   exploreSurface,
   gateConfigProblems,
   mapProblems,
@@ -36,15 +37,41 @@ import {
   prepareSource,
   renderInstructions,
   type BoundModel,
+  type DevelopHost,
   type ExploreHost,
   type ModelEntry,
   type Problem,
   type SourceInput,
+  type ToolSurface,
 } from "@malloyyo/mcp-engine";
 import { attachSurface } from "@malloyyo/mcp-engine/mcp-sdk";
-import { DASHBOARD_GUIDANCE } from "./dashboard-guidance.js";
 
 const ENTRY = "index.malloy";
+
+/**
+ * The two local windows, chosen at launch (see `malloyyo mcp --develop/--explore`).
+ * The mode is announced in the server NAME (so it lands in every tool prefix,
+ * e.g. mcp__malloyyo_author__compile) and reinforced by a short instructions
+ * stub. Full authoring guidance lives in yo_help topics, NOT here — the old
+ * 18KB DASHBOARD_GUIDANCE blob overran the client's ~2KB instructions cap and
+ * got truncated. yo_help is the one channel that never clips.
+ */
+type Mode = "develop" | "explore";
+
+const MODE_STUB: Record<Mode, string> = {
+  develop:
+    "\n\n# DEVELOP (author) mode\n" +
+    "You can author this Malloy model — compile / compile_file / prettify / query the files " +
+    "in this project (any .malloy path; no index.malloy required). For how-to, call yo_help — " +
+    "start with `dashboards/authoring`, then `dashboards/grid-layout`, `dashboards/vega-charts`, " +
+    "and the `develop/*` topics. To preview exactly what claude.ai web will see, relaunch as " +
+    "`malloyyo test`.",
+  explore:
+    "\n\n# TEST (explore) mode\n" +
+    "This mirrors the claude.ai web experience — the same tools a hosted consumer gets, over " +
+    "this project's published entry model (index.malloy). Call yo_help for guidance. To author " +
+    "the model (compile / edit / dashboards), relaunch as `malloyyo author`.",
+};
 
 type WithRuntime = <T>(input: SourceInput, fn: (m: BoundModel) => Promise<T>) => Promise<T>;
 
@@ -193,21 +220,38 @@ function makeExploreHost(root: string, currentConfig: () => Promise<LoadedConfig
   };
 }
 
-export async function serveMcp(opts: { root?: string; version: string }): Promise<void> {
+/** The authoring host: lease a runtime over ANY .malloy path or inline text
+    (no index.malloy gate) — makeWithRuntime already IS DevelopHost.withRuntime. */
+function makeDevelopHost(root: string, currentConfig: () => Promise<LoadedConfig>): DevelopHost {
+  return { withRuntime: makeWithRuntime(root, currentConfig) };
+}
+
+export async function serveMcp(opts: {
+  root?: string;
+  version: string;
+  mode?: Mode;
+}): Promise<void> {
   // Registers every current connection type. Dynamic so the other CLI commands
   // never load native DB backends; MUST complete before any MalloyConfig is
   // built (the registry feeds includeDefaultConnections).
   await import("@malloydata/malloy-connections");
   const root = path.resolve(opts.root ?? process.cwd());
+  const mode: Mode = opts.mode ?? "explore";
   const currentConfig = makeConfigSource(root);
-  const surface = exploreSurface(makeExploreHost(root, currentConfig));
-  // The local test window has no env.INSTANCE_NAME; honor one if set so a fox
-  // can preview a specific instance's name, else fall back to the product name.
+  const surface: ToolSurface =
+    mode === "develop"
+      ? developSurface(makeDevelopHost(root, currentConfig))
+      : exploreSurface(makeExploreHost(root, currentConfig));
+  // The local window has no env.INSTANCE_NAME; honor one if set so a fox can
+  // preview a specific instance's name, else fall back to the product name.
   const instanceName = process.env.INSTANCE_NAME || "Malloyyo";
+  // Server name encodes the mode — it becomes the mcp__<name>__ tool prefix, an
+  // un-truncatable, always-visible mode announcement.
+  const serverName = mode === "develop" ? "malloyyo-develop" : "malloyyo-explore";
   const server = new McpServer(
-    { name: "malloyyo-explore", version: opts.version },
+    { name: serverName, version: opts.version },
     {
-      instructions: renderInstructions(surface.instructions, instanceName) + DASHBOARD_GUIDANCE,
+      instructions: renderInstructions(surface.instructions, instanceName) + MODE_STUB[mode],
       capabilities: { tools: {}, prompts: {}, resources: {} },
     },
   );

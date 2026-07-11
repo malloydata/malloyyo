@@ -89,14 +89,24 @@ The MCP endpoint speaks OAuth 2.1, so claude.ai's remote MCP integration can con
 
 **You don't have to know Malloy — or wire up the database by hand.** Install the [`malloyyo` CLI](packages/cli), register it with Claude, then ask Claude to do the rest: connect to your data, turn your existing SQL / dbt / Looker definitions into a Malloy model, and test it against real data before you publish. One tool for the whole loop.
 
-**1. Install and register the local test window.**
+**1. Install and set up your model repo.**
 
 ```bash
-npm install -g @malloydata/malloyyo        # one tool for the whole loop
-claude mcp add malloyyo -- malloyyo mcp    # register it with Claude Code
+npm install -g @malloydata/malloyyo   # one tool for the whole loop
+cd my-model-repo
+malloyyo init                         # write .mcp.json + scaffold index.malloy
 ```
 
-`malloyyo mcp` runs a local stdio MCP server over the Malloy model in the current directory — the **same explore surface** (`list_sources`, `describe_source`, `query`) the hosted instance serves, so what you test locally is exactly what consumers get. It also registers the **`writing-malloy-with-mcp` skill** and `yo_help`, which teach Claude how to author Malloy, set up connections, and recover from compiler errors. (For Claude Desktop or another client, add the same `malloyyo mcp` command to its MCP config instead.)
+`malloyyo init` sets the repo up so that **`cd my-model-repo && claude` opens in author mode** — connected to `malloyyo mcp --develop`, whose tools (`compile`, `compile_file`, `prettify`, `query`, `yo_help`) let Claude build the model *and* ask data questions of it. The server is named **`malloyyo_author`**, so the mode shows in every tool call (`mcp__malloyyo_author__…`) — no confusion with the core `malloy-cli`. `init` also scaffolds an `index.malloy` (the entry model the dashboard/publish tooling needs) if you don't have one.
+
+Two modes, chosen at launch, kept separate:
+
+| command | surface | for |
+| --- | --- | --- |
+| `cd repo && claude` (after `init`) | **author** (`--develop`) | build the model — compile/edit/query, any `.malloy` file |
+| `malloyyo test` | **explore** (`--explore`) | preview **exactly** what claude.ai web will see (`list_sources`/`describe_source`/`query`, `index.malloy` only) |
+
+`malloyyo test` launches Claude wired to *only* the explore surface, so it's a faithful web dress rehearsal. (`malloyyo author` is the explicit, single-surface counterpart to the `cd && claude` default.) Full authoring guidance — dashboards, givens/controls, grid layout, Vega charts — is reachable from either mode via `yo_help` (topics under `dashboards/*`, `develop/*`). For Claude Desktop or another client, add `malloyyo mcp --develop` (author) or `malloyyo mcp --explore` (test) to its MCP config.
 
 **2. Build your model with Claude.** Start `claude` in your model directory and just describe what you have:
 

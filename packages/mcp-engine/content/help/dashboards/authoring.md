@@ -104,28 +104,37 @@ field `# link` (the value is a full URL) or
 nested detail table so each row jumps to its record. `# image { url_template=… }`
 renders a cell as an inline image. Links open in a new browser tab.
 
-**Cross-link to another dashboard** (drill from a summary row into a detail
-dashboard) with the `dashboard:` URL scheme:
+**Drill from a dimension** into another dashboard (or filter in place) with
+`# drill` on the DIMENSION — not `# link` (that's for external URLs). Drill is a
+property of the dimension, so it works everywhere that dimension is grouped:
 
 ```malloy
-# link { url_template="dashboard:<slug>/<GIVEN>/$$" }
-group_by: name is name    // see the bare-field caveat below
+dimension:
+  # drill { to=[category_dashboard, self] }
+  category is inventory_items.product_category
+  # drill { to=[brand_dashboard] }
+  brand is inventory_items.product_brand
 ```
 
-`<slug>` is the target `# artifact` name, `<GIVEN>` is a filter given it
-declares, and `$$` is the clicked cell value. The dashboard runtime resolves
-this to the right URL for wherever it's running (hosted
-`/datasets/:id/dashboard/:slug` or the local `dashboard dev` preview) — the
-model needs no host/dataset knowledge — and navigates in the SAME tab with the
-given seeded to an exact-match filter of the value. So `# link
-{ url_template="dashboard:name-explorer/NAME/$$" }` on a name column opens the
-`name-explorer` dashboard filtered to the clicked name.
+`to` is a list of destinations; each is either a target `# artifact` slug or the
+keyword **`self`**. Clicking a dimension cell:
+- **slug** → opens that dashboard, seeding the clicked value into its given named
+  like the dimension **upper-cased** (`category` → `CATEGORY`) as an exact-match
+  filter.
+- **`self`** → sets that same given on the CURRENT dashboard (filter in place, no
+  navigation). Offered only if this dashboard actually declares the given.
 
-> **Bare-field caveat (malloy#2979):** a field annotation on a *bare*
-> `group_by: name` is dropped when the view is nested through a `+ {…}`
-> refinement (e.g. `nest: male is names + { where: … }`), so the link silently
-> won't render. Make the grouped field an expression — `group_by: name is name`
-> — and the annotation survives. (Flat use and un-refined nests are unaffected.)
+One destination acts immediately; two or more pop a small menu at the cursor.
+Measure/aggregate cells never drill. Navigation is SAME-tab (Back returns), and
+the runtime resolves the URL for wherever it runs — hosted
+`/datasets/:id/dashboard/:slug` or the local `dashboard dev` preview — so the
+model needs no host/dataset knowledge. Given values ride the URL `$`-prefixed
+(`?$CATEGORY=Books`); bare params are reserved for future dimension filters.
+
+> **malloy#2979 caveat:** a `# drill` written on a *bare* `group_by: name` is
+> dropped when that view is nested through a `+ {…}` refinement. Put it on the
+> source `dimension:` (survives refinement), or make the grouped field an
+> expression — `group_by: name is concat(name,'')`.
 
 Two dashboards can share a given but start on different values — a `givens`
 block in the tag sets PER-DASHBOARD defaults (given values, i.e. filter

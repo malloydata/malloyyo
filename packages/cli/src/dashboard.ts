@@ -219,14 +219,14 @@ window.addEventListener('message',async(e)=>{
   if(m&&m.type==='givens'){
     const u=new URL(location.href); u.search='';
     u.searchParams.set('d',${d});
-    for(const [k,v] of Object.entries(m.givens)) u.searchParams.set(k,String(v));
+    for(const [k,v] of Object.entries(m.givens)) u.searchParams.set('$'+k,String(v));
     history.replaceState(null,'',u.pathname+u.search);
     return;
   }
   if(m&&m.type==='navigate'&&typeof m.dashboard==='string'){
     const u=new URL(location.href); u.search='';
     u.searchParams.set('d',m.dashboard);
-    for(const [k,v] of Object.entries(m.givens||{})) u.searchParams.set(k,String(v));
+    for(const [k,v] of Object.entries(m.givens||{})) u.searchParams.set('$'+k,String(v));
     location.href=u.pathname+u.search;
     return;
   }

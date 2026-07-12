@@ -218,11 +218,54 @@ function clientFilter(options, serverSide, term) {
   return options.filter((o) => String(o).toLowerCase().startsWith(lower)).slice(0, TYPEAHEAD_LIMIT);
 }
 
+// Slug → menu label: "category_dashboard"/"brand-explorer" → "Category dashboard".
+function humanizeSlug(s) {
+  const t = String(s).replace(/[-_]+/g, " ").trim();
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
+
 // ── Panel: run a query, render with Malloy's renderer ───────────────
 export function Panel({ query, malloy, givens, style }) {
   const req = malloy ? { malloy } : { query: query ?? dashboardInfo().query };
   const { result, loading, error } = useQuery({ ...req, givens });
   const ref = useRef(null);
+  // Drill: a dimension declared `# drill { to=[<slug>|self, …] }` makes clicking
+  // its cell navigate to another dashboard (slug) and/or filter in place (self),
+  // seeding the given named like the dimension, upcased (category → CATEGORY).
+  const { setGiven } = useDashboard();
+  const setGivenRef = useRef(setGiven);
+  setGivenRef.current = setGiven;
+  const [menu, setMenu] = useState(null); // { x, y, items:[{label, run}] } | null
+  const onCellClick = useCallback((payload) => {
+    if (!payload || payload.isHeader) return;
+    const f = payload.field;
+    // Only dimensions drill — a measure/aggregate click shouldn't navigate.
+    if (!f || typeof f.wasDimension !== "function" || !f.wasDimension()) return;
+    const drillTag = f.tag && f.tag.tag("drill");
+    // `to=[a, self]` (array) or `to=x` (single) — a dest is a dashboard slug or `self`.
+    const dests = drillTag && (drillTag.textArray("to") ?? (drillTag.text("to") ? [drillTag.text("to")] : []));
+    if (!dests || !dests.length || payload.value == null) return;
+    const given = String(f.name).toUpperCase(); // category → CATEGORY
+    const filterExpr = filters.oneOf(String(payload.value)); // exact-match, escaped
+    // `self` needs a matching given on THIS dashboard to filter in place.
+    const selfSpec = givenSpecs().find((s) => s.name.toUpperCase() === given);
+    const run = (dest) => {
+      if (dest === "self") {
+        if (selfSpec) setGivenRef.current(selfSpec.name, filterExpr);
+      } else {
+        parent.postMessage({ type: "navigate", dashboard: dest, givens: { [given]: filterExpr } }, "*");
+      }
+    };
+    const valid = dests.filter((d) => d !== "self" || selfSpec);
+    if (!valid.length) return;
+    if (valid.length === 1) return run(valid[0]);
+    const items = valid.map((d) => ({
+      label: d === "self" ? "Filter this dashboard" : humanizeSlug(d),
+      run: () => run(d),
+    }));
+    const ev = payload.event || {};
+    setMenu({ x: ev.clientX || 0, y: ev.clientY || 0, items });
+  }, []);
   // Keep ONE renderer/viz alive for the Panel's lifetime and update it in place
   // (setResult + render) on each new result. Rebuilding the MalloyRenderer per
   // result — the old approach — cold-re-inits plugins/metadata/chart workers and
@@ -254,6 +297,9 @@ export function Panel({ query, malloy, givens, style }) {
           // this via the tableConfig fallback (they pass no rowLimit of their own).
           tableConfig: { enableDrill: false, disableVirtualization: true, rowLimit: 1000 },
           dashboardConfig: { disableVirtualization: true },
+          // Drill: clicking a `# drill`-tagged dimension navigates / filters in
+          // place (no-op for cells without the tag).
+          onClick: onCellClick,
         });
       }
       vizRef.current.setResult(result);
@@ -298,31 +344,92 @@ export function Panel({ query, malloy, givens, style }) {
   // layout that keeps the panel itself scrollable (e.g. flex:1 + minHeight:0
   // in a 100vh column, as DefaultDashboard does).
   return (
-    <div
-      ref={ref}
-      style={{
-        display: "grid",
-        width: "100%",
-        minHeight: 480,
-        maxHeight: "100vh",
-        overflow: "auto",
-        // Trap the Malloy renderer's own z-indexes (its sticky dashboard-row
-        // header is position:sticky z-index:200). Without an isolate here the
-        // Panel is position:static, so that 200 escapes into the ROOT stacking
-        // context and paints OVER a control's open dropdown. isolate makes the
-        // Panel a stacking context so its internals stay below the filter bar.
-        isolation: "isolate",
-        // A light results surface in both light/dark shells — the Malloy renderer
-        // has no dark theme, so it always draws on a legible card.
-        background: "var(--dash-panel-bg, #fff)",
-        color: "#171717",
-        border: "1px solid var(--dash-border, #e5e7eb)",
-        borderRadius: "var(--dash-radius, 8px)",
-        opacity: loading ? 0.4 : 1,
-        transition: "opacity .15s",
-        ...style,
-      }}
-    />
+    <>
+      <div
+        ref={ref}
+        style={{
+          display: "grid",
+          width: "100%",
+          minHeight: 480,
+          maxHeight: "100vh",
+          overflow: "auto",
+          // Trap the Malloy renderer's own z-indexes (its sticky dashboard-row
+          // header is position:sticky z-index:200). Without an isolate here the
+          // Panel is position:static, so that 200 escapes into the ROOT stacking
+          // context and paints OVER a control's open dropdown. isolate makes the
+          // Panel a stacking context so its internals stay below the filter bar.
+          isolation: "isolate",
+          // A light results surface in both light/dark shells — the Malloy renderer
+          // has no dark theme, so it always draws on a legible card.
+          background: "var(--dash-panel-bg, #fff)",
+          color: "#171717",
+          border: "1px solid var(--dash-border, #e5e7eb)",
+          borderRadius: "var(--dash-radius, 8px)",
+          opacity: loading ? 0.4 : 1,
+          transition: "opacity .15s",
+          ...style,
+        }}
+      />
+      {menu && <DrillMenu menu={menu} onClose={() => setMenu(null)} />}
+    </>
+  );
+}
+
+// A small popup shown at the cursor when a drilled dimension offers more than one
+// target (e.g. open a dashboard vs. filter in place). Fixed-position, above
+// everything; a full-viewport backdrop dismisses it.
+function DrillMenu({ menu, onClose }) {
+  useEffect(() => {
+    const onKey = (e) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+  return (
+    <>
+      <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 2000 }} />
+      <div
+        style={{
+          position: "fixed",
+          left: Math.min(menu.x, (typeof window !== "undefined" ? window.innerWidth : 9999) - 220),
+          top: menu.y,
+          zIndex: 2001,
+          minWidth: 180,
+          padding: 4,
+          background: "var(--dash-control-bg, #fff)",
+          color: "var(--dash-fg, #171717)",
+          border: "1px solid var(--dash-border, #e5e7eb)",
+          borderRadius: "var(--dash-radius, 8px)",
+          boxShadow: "0 8px 24px rgba(0,0,0,.16)",
+          font: "14px var(--dash-font, system-ui, sans-serif)",
+        }}
+      >
+        {menu.items.map((it, i) => (
+          <button
+            key={i}
+            onClick={() => {
+              it.run();
+              onClose();
+            }}
+            onMouseEnter={(e) => (e.currentTarget.style.background = "var(--dash-controls-bg, #f3f4f6)")}
+            onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+            style={{
+              display: "block",
+              width: "100%",
+              textAlign: "left",
+              border: "none",
+              background: "transparent",
+              color: "inherit",
+              font: "inherit",
+              padding: "7px 10px",
+              borderRadius: 6,
+              cursor: "pointer",
+            }}
+          >
+            {it.label}
+          </button>
+        ))}
+      </div>
+    </>
   );
 }
 
@@ -381,10 +488,17 @@ function Root({ Dashboard, extraProps }) {
   // still applies at run time; the control just starts empty.
   const seed = useMemo(() => {
     const g = {};
+    // URL givens are `$`-prefixed (`?$NAME=…`) — bare params are reserved for
+    // future dimension filters. Normalize to a case-insensitive lookup so a
+    // drilled dimension (`name`) matches its given (`NAME`) with no config.
     const fromUrl = window.__INITIAL_GIVENS__ || {};
+    const urlByLower = {};
+    for (const [k, v] of Object.entries(fromUrl)) {
+      if (k[0] === "$") urlByLower[k.slice(1).toLowerCase()] = v;
+    }
     const fromTag = dashboardInfo().givens || {};
     for (const spec of givenSpecs()) {
-      const raw = fromUrl[spec.name];
+      const raw = urlByLower[spec.name.toLowerCase()];
       if (raw !== undefined && raw !== null) g[spec.name] = coerceGiven(raw, spec.type);
       else if (fromTag[spec.name] !== undefined) g[spec.name] = fromTag[spec.name];
       else if (spec.default !== undefined) g[spec.name] = spec.default;
@@ -491,59 +605,15 @@ function injectTheme() {
   document.head.appendChild(style);
 }
 
-// ── cross-dashboard links ───────────────────────────────────────────
-// A field tagged `# link { url_template="dashboard:<slug>/<GIVEN>/$$" }` renders
-// (via the Malloy renderer's link mark) as an anchor whose href carries the
-// clicked cell's value: <a href="dashboard:name-explorer/NAME/Emma">. The
-// `dashboard:` scheme is ours, not a real URL, so the browser can't follow it —
-// we intercept the click here and ask the trusted parent to open that dashboard
-// with the given seeded to the value. Resolving the actual URL lives in the
-// parent because only it knows the environment's dashboard shape (hosted
-// /datasets/:id/dashboard/:slug vs local /?d=slug) and origin; the sandboxed,
-// opaque-origin frame cannot see either.
-const DASH_SCHEME = "dashboard:";
-
-/** Parse `dashboard:<slug>/<GIVEN>/<rawValue>` → {dashboard, given, value}. The
-    value is everything after the second slash (so it may itself contain "/"). */
-export function parseDashboardHref(href) {
-  if (!href || href.slice(0, DASH_SCHEME.length) !== DASH_SCHEME) return null;
-  const rest = href.slice(DASH_SCHEME.length);
-  const s1 = rest.indexOf("/");
-  const s2 = rest.indexOf("/", s1 + 1);
-  if (s1 < 0 || s2 < 0) return null;
-  return {
-    dashboard: decodeURIComponent(rest.slice(0, s1)),
-    given: decodeURIComponent(rest.slice(s1 + 1, s2)),
-    value: rest.slice(s2 + 1),
-  };
-}
-
-function installCrossLinks() {
-  if (typeof document === "undefined") return;
-  // Capture phase so we beat the anchor's default navigation to the bogus scheme.
-  document.addEventListener(
-    "click",
-    (e) => {
-      const el = e.target instanceof Element ? e.target : e.target && e.target.parentElement;
-      const a = el && el.closest(`a[href^="${DASH_SCHEME}"]`);
-      if (!a) return;
-      e.preventDefault();
-      e.stopPropagation();
-      const spec = parseDashboardHref(a.getAttribute("href") || "");
-      if (!spec) return;
-      // The clicked value seeds the target's given as an exact-match filter, so
-      // punctuation ('Tesla, Inc.') can't reparse as filter syntax.
-      const givens = { [spec.given]: filters.oneOf(spec.value) };
-      parent.postMessage({ type: "navigate", dashboard: spec.dashboard, givens }, "*");
-    },
-    true,
-  );
-}
+// Drill (click a `# drill`-tagged dimension → navigate to another dashboard
+// and/or filter in place) is wired in Panel via the renderer's onClick — see
+// onCellClick there. The trusted parent resolves the real URL (only it knows the
+// environment's dashboard shape: hosted /datasets/:id/dashboard/:slug vs local
+// /?d=slug) from the structured {dashboard, givens} we post.
 
 /** Frame entry point: mount a Dashboard component (custom or default). */
 export function mount(Dashboard, extraProps) {
   injectTheme();
-  installCrossLinks();
   window.addEventListener("error", (e) => {
     if (isBenign(e && e.message)) return;
     showFatal((e.error && e.error.stack) || e.message);

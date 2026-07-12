@@ -104,6 +104,40 @@ field `# link` (the value is a full URL) or
 nested detail table so each row jumps to its record. `# image { url_template=… }`
 renders a cell as an inline image. Links open in a new browser tab.
 
+**Drill from a dimension** into another dashboard (or filter in place) with
+`# drill` on the DIMENSION — not `# link` (that's for external URLs). Drill is a
+property of the dimension, so it works everywhere that dimension is grouped:
+
+```malloy
+dimension:
+  # drill { to=[category_dashboard, self] }
+  category is inventory_items.product_category
+  # drill { to=[brand_dashboard] }
+  brand is inventory_items.product_brand
+```
+
+`to` is a list of destinations; each is either a target `# artifact` slug or the
+keyword **`self`**. Clicking a dimension cell:
+- **slug** → opens that dashboard, seeding the clicked value into its given named
+  like the dimension **upper-cased** (`category` → `CATEGORY`) as an exact-match
+  filter.
+- **`self`** → sets that same given on the CURRENT dashboard (filter in place, no
+  navigation). Offered only if this dashboard actually declares the given.
+
+One destination acts immediately; two or more pop a small menu at the cursor.
+Drillable cells get a pointer cursor and turn the accent color on hover (the web
+app's clickable-item look) so users can see they're clickable. Measure/aggregate
+cells never drill. Navigation is SAME-tab (Back returns), and
+the runtime resolves the URL for wherever it runs — hosted
+`/datasets/:id/dashboard/:slug` or the local `dashboard dev` preview — so the
+model needs no host/dataset knowledge. Given values ride the URL `$`-prefixed
+(`?$CATEGORY=Books`); bare params are reserved for future dimension filters.
+
+> **malloy#2979 caveat:** a `# drill` written on a *bare* `group_by: name` is
+> dropped when that view is nested through a `+ {…}` refinement. Put it on the
+> source `dimension:` (survives refinement), or make the grouped field an
+> expression — `group_by: name is concat(name,'')`.
+
 Two dashboards can share a given but start on different values — a `givens`
 block in the tag sets PER-DASHBOARD defaults (given values, i.e. filter
 expressions; URL params still win):

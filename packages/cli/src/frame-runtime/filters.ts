@@ -71,8 +71,29 @@ const num = (f: NumberFilter | null) => NumberFilterExpression.unparse(f);
 const tmp = (f: TemporalFilter | null) => TemporalFilterExpression.unparse(f);
 const isTemporalType = (t: string) => t === "timestamp" || t === "timestamptz" || t === "date";
 
+// Exact-match filter source, minimally escaped. `unparse` conservatively
+// backslash-escapes spaces/hyphens/etc. ('Outerwear\ &\ Coats', 'Ray\-Ban')
+// even though those parse fine unescaped — the escaping then leaks into the URL
+// and the Search box as stray `\`. So prefer the CLEAN comma-joined form when it
+// round-trips to exactly these values, and only fall back to escaping when a
+// value carries filter-significant punctuation (an internal comma, a leading
+// '-', a '%', …) that would otherwise change the parse.
+function exactMatch(values: string[]): string {
+  const clean = values.join(", ");
+  const { parsed, log } = StringFilterExpression.parse(clean);
+  const roundTrips =
+    !!parsed &&
+    parsed.operator === "=" &&
+    !("not" in parsed && (parsed as { not?: boolean }).not) &&
+    Array.isArray((parsed as { values?: string[] }).values) &&
+    (parsed as { values: string[] }).values.length === values.length &&
+    (parsed as { values: string[] }).values.every((v, i) => v === values[i]) &&
+    !(log || []).some((l) => l.severity === "error");
+  return roundTrips ? clean : str({ operator: "=", values });
+}
+
 export const filters: FilterHelpers = {
-  oneOf: (...values) => str({ operator: "=", values }),
+  oneOf: (...values) => exactMatch(values),
   contains: (s) => str({ operator: "contains", values: [s] }),
   startsWith: (s) => str({ operator: "starts", values: [s] }),
   endsWith: (s) => str({ operator: "ends", values: [s] }),

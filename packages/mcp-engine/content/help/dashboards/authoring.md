@@ -125,8 +125,9 @@ keyword **`self`**. Clicking a dimension cell:
   navigation). Offered only if this dashboard actually declares the given.
 
 One destination acts immediately; two or more pop a small menu at the cursor.
-Drillable cells render as **links** (accent color, pointer cursor, underline on
-hover) so users can see they're clickable. Measure/aggregate cells never drill. Navigation is SAME-tab (Back returns), and
+Drillable cells get a pointer cursor and turn the accent color on hover (the web
+app's clickable-item look) so users can see they're clickable. Measure/aggregate
+cells never drill. Navigation is SAME-tab (Back returns), and
 the runtime resolves the URL for wherever it runs — hosted
 `/datasets/:id/dashboard/:slug` or the local `dashboard dev` preview — so the
 model needs no host/dataset knowledge. Given values ride the URL `$`-prefixed

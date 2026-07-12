@@ -647,11 +647,10 @@ const THEME_CSS = `
   }
 }
 html, body { margin: 0; background: var(--dash-bg); color: var(--dash-fg); font-family: var(--dash-font); }
-/* Drillable dimension cells read as links: accent color + pointer, underline on
-   hover. Marked with .dash-drill by the runtime after each render. */
+/* Drillable dimension cells (marked .dash-drill by the runtime): normal text,
+   accent color on hover + pointer — matching the web app's clickable-item look. */
 .dash-drill { cursor: pointer; }
-.dash-drill > .cell-content { color: var(--dash-accent, #2563eb); }
-.dash-drill:hover > .cell-content { text-decoration: underline; }
+.dash-drill:hover > .cell-content { color: var(--dash-accent, #2563eb); }
 `;
 
 function injectTheme() {

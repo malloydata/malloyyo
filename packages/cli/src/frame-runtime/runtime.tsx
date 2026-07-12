@@ -224,6 +224,56 @@ function humanizeSlug(s) {
   return t.charAt(0).toUpperCase() + t.slice(1);
 }
 
+// The renderer gives no per-cell field id, but each cell carries an inline
+// `grid-column: N / …` and each table's header cells (.th) hold the field names.
+const gridColStart = (el) => {
+  const m = (el.style && el.style.gridColumn ? el.style.gridColumn : "").match(/^\s*(\d+)/);
+  return m ? m[1] : null;
+};
+
+// Names of the fields that declare `# drill`, from the renderer's metadata
+// (includes any `# label` so we can match either against the header text).
+function drillFieldNames(viz) {
+  const names = new Set();
+  try {
+    const fields = viz.getMetadata() ? viz.getMetadata().getAllFields() : [];
+    for (const f of fields) {
+      if (f && f.tag && f.tag.tag && f.tag.tag("drill")) {
+        names.add(String(f.name));
+        const label = f.tag.text && f.tag.text("label");
+        if (label) names.add(label);
+      }
+    }
+  } catch {
+    /* metadata unavailable — no affordance, clicks still work */
+  }
+  return names;
+}
+
+// Tag drillable cells with `dash-drill` (styled as links via THEME_CSS) so users
+// can see they're clickable. Per table: header .th cells at a drillable field →
+// that column's grid-column → mark this table's own body .td cells in that column.
+function markDrillableCells(container, names) {
+  if (!names.size) return;
+  for (const table of container.querySelectorAll(".malloy-table")) {
+    const mine = (el) => el.closest(".malloy-table") === table; // skip nested tables
+    const cols = new Set();
+    for (const th of table.querySelectorAll(".column-cell.th")) {
+      if (!mine(th)) continue;
+      const text = (th.textContent || "").replace(/​/g, "").trim();
+      const gc = gridColStart(th);
+      if (gc && names.has(text)) cols.add(gc);
+    }
+    if (!cols.size) continue;
+    for (const td of table.querySelectorAll(".column-cell.td")) {
+      // Only leaf value cells — never a cell that wraps a nested table.
+      if (mine(td) && cols.has(gridColStart(td)) && !td.querySelector(".malloy-table")) {
+        td.classList.add("dash-drill");
+      }
+    }
+  }
+}
+
 // ── Panel: run a query, render with Malloy's renderer ───────────────
 export function Panel({ query, malloy, givens, style }) {
   const req = malloy ? { malloy } : { query: query ?? dashboardInfo().query };
@@ -304,6 +354,8 @@ export function Panel({ query, malloy, givens, style }) {
       }
       vizRef.current.setResult(result);
       vizRef.current.render(container);
+      // Flag drillable cells so they read as links (see .dash-drill in THEME_CSS).
+      markDrillableCells(container, drillFieldNames(vizRef.current));
     } catch (err) {
       // Drop the viz so the next good result rebuilds cleanly from scratch.
       try {
@@ -595,6 +647,11 @@ const THEME_CSS = `
   }
 }
 html, body { margin: 0; background: var(--dash-bg); color: var(--dash-fg); font-family: var(--dash-font); }
+/* Drillable dimension cells read as links: accent color + pointer, underline on
+   hover. Marked with .dash-drill by the runtime after each render. */
+.dash-drill { cursor: pointer; }
+.dash-drill > .cell-content { color: var(--dash-accent, #2563eb); }
+.dash-drill:hover > .cell-content { text-decoration: underline; }
 `;
 
 function injectTheme() {

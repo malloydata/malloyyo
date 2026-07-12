@@ -286,6 +286,8 @@ export function Panel({ query, malloy, givens, style }) {
   const setGivenRef = useRef(setGiven);
   setGivenRef.current = setGiven;
   const [menu, setMenu] = useState(null); // { x, y, items:[{label, run}] } | null
+  const drillNamesRef = useRef(new Set()); // drillable field names for the current result
+  const observerRef = useRef(null);
   const onCellClick = useCallback((payload) => {
     if (!payload || payload.isHeader) return;
     const f = payload.field;
@@ -355,7 +357,18 @@ export function Panel({ query, malloy, givens, style }) {
       vizRef.current.setResult(result);
       vizRef.current.render(container);
       // Flag drillable cells so they read as links (see .dash-drill in THEME_CSS).
-      markDrillableCells(container, drillFieldNames(vizRef.current));
+      // `# dashboard` cards render progressively, so a one-shot mark right after
+      // render() misses tables that appear a frame later — re-mark on DOM changes.
+      drillNamesRef.current = drillFieldNames(vizRef.current);
+      markDrillableCells(container, drillNamesRef.current);
+      if (!observerRef.current && typeof MutationObserver !== "undefined") {
+        let raf = 0;
+        observerRef.current = new MutationObserver(() => {
+          cancelAnimationFrame(raf);
+          raf = requestAnimationFrame(() => markDrillableCells(container, drillNamesRef.current));
+        });
+        observerRef.current.observe(container, { childList: true, subtree: true });
+      }
     } catch (err) {
       // Drop the viz so the next good result rebuilds cleanly from scratch.
       try {
@@ -375,10 +388,12 @@ export function Panel({ query, malloy, givens, style }) {
   useEffect(
     () => () => {
       try {
+        observerRef.current && observerRef.current.disconnect();
         vizRef.current && vizRef.current.remove();
       } catch {
         /* ignore */
       }
+      observerRef.current = null;
       vizRef.current = null;
     },
     [],

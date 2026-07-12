@@ -104,6 +104,29 @@ field `# link` (the value is a full URL) or
 nested detail table so each row jumps to its record. `# image { url_template=… }`
 renders a cell as an inline image. Links open in a new browser tab.
 
+**Cross-link to another dashboard** (drill from a summary row into a detail
+dashboard) with the `dashboard:` URL scheme:
+
+```malloy
+# link { url_template="dashboard:<slug>/<GIVEN>/$$" }
+group_by: name is name    // see the bare-field caveat below
+```
+
+`<slug>` is the target `# artifact` name, `<GIVEN>` is a filter given it
+declares, and `$$` is the clicked cell value. The dashboard runtime resolves
+this to the right URL for wherever it's running (hosted
+`/datasets/:id/dashboard/:slug` or the local `dashboard dev` preview) — the
+model needs no host/dataset knowledge — and navigates in the SAME tab with the
+given seeded to an exact-match filter of the value. So `# link
+{ url_template="dashboard:name-explorer/NAME/$$" }` on a name column opens the
+`name-explorer` dashboard filtered to the clicked name.
+
+> **Bare-field caveat (malloy#2979):** a field annotation on a *bare*
+> `group_by: name` is dropped when the view is nested through a `+ {…}`
+> refinement (e.g. `nest: male is names + { where: … }`), so the link silently
+> won't render. Make the grouped field an expression — `group_by: name is name`
+> — and the annotation survives. (Flat use and un-refined nests are unaffected.)
+
 Two dashboards can share a given but start on different values — a `givens`
 block in the tag sets PER-DASHBOARD defaults (given values, i.e. filter
 expressions; URL params still win):

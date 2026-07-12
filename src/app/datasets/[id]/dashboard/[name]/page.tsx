@@ -62,6 +62,16 @@ function DashboardView({
         window.history.replaceState(null, "", u.pathname + u.search);
         return;
       }
+      // Cross-dashboard link (a `dashboard:` # link the frame intercepted): open
+      // the sibling dashboard in THIS dataset with the given(s) seeded. Same-tab
+      // navigation (a postMessage-driven window.open would trip popup blockers,
+      // and drill-down reads naturally with the back button).
+      if (m?.type === "navigate" && typeof m.dashboard === "string") {
+        const u = new URL(`/datasets/${id}/dashboard/${encodeURIComponent(m.dashboard)}`, window.location.origin);
+        for (const [k, v] of Object.entries((m.givens ?? {}) as Record<string, unknown>)) u.searchParams.set(k, String(v));
+        window.location.href = u.pathname + u.search;
+        return;
+      }
       if (!m || m.type !== "run") return;
       let out: unknown;
       try {

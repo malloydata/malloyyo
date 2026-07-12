@@ -491,9 +491,59 @@ function injectTheme() {
   document.head.appendChild(style);
 }
 
+// ── cross-dashboard links ───────────────────────────────────────────
+// A field tagged `# link { url_template="dashboard:<slug>/<GIVEN>/$$" }` renders
+// (via the Malloy renderer's link mark) as an anchor whose href carries the
+// clicked cell's value: <a href="dashboard:name-explorer/NAME/Emma">. The
+// `dashboard:` scheme is ours, not a real URL, so the browser can't follow it —
+// we intercept the click here and ask the trusted parent to open that dashboard
+// with the given seeded to the value. Resolving the actual URL lives in the
+// parent because only it knows the environment's dashboard shape (hosted
+// /datasets/:id/dashboard/:slug vs local /?d=slug) and origin; the sandboxed,
+// opaque-origin frame cannot see either.
+const DASH_SCHEME = "dashboard:";
+
+/** Parse `dashboard:<slug>/<GIVEN>/<rawValue>` → {dashboard, given, value}. The
+    value is everything after the second slash (so it may itself contain "/"). */
+export function parseDashboardHref(href) {
+  if (!href || href.slice(0, DASH_SCHEME.length) !== DASH_SCHEME) return null;
+  const rest = href.slice(DASH_SCHEME.length);
+  const s1 = rest.indexOf("/");
+  const s2 = rest.indexOf("/", s1 + 1);
+  if (s1 < 0 || s2 < 0) return null;
+  return {
+    dashboard: decodeURIComponent(rest.slice(0, s1)),
+    given: decodeURIComponent(rest.slice(s1 + 1, s2)),
+    value: rest.slice(s2 + 1),
+  };
+}
+
+function installCrossLinks() {
+  if (typeof document === "undefined") return;
+  // Capture phase so we beat the anchor's default navigation to the bogus scheme.
+  document.addEventListener(
+    "click",
+    (e) => {
+      const el = e.target instanceof Element ? e.target : e.target && e.target.parentElement;
+      const a = el && el.closest(`a[href^="${DASH_SCHEME}"]`);
+      if (!a) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const spec = parseDashboardHref(a.getAttribute("href") || "");
+      if (!spec) return;
+      // The clicked value seeds the target's given as an exact-match filter, so
+      // punctuation ('Tesla, Inc.') can't reparse as filter syntax.
+      const givens = { [spec.given]: filters.oneOf(spec.value) };
+      parent.postMessage({ type: "navigate", dashboard: spec.dashboard, givens }, "*");
+    },
+    true,
+  );
+}
+
 /** Frame entry point: mount a Dashboard component (custom or default). */
 export function mount(Dashboard, extraProps) {
   injectTheme();
+  installCrossLinks();
   window.addEventListener("error", (e) => {
     if (isBenign(e && e.message)) return;
     showFatal((e.error && e.error.stack) || e.message);

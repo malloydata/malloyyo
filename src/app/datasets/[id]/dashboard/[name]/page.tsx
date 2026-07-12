@@ -59,8 +59,10 @@ function DashboardView({
         const u = new URL(window.location.href);
         u.search = "";
         // Givens are `$`-prefixed in the URL; bare params are reserved for future
-        // dimension filters.
-        for (const [k, v] of Object.entries(m.givens as Record<string, unknown>)) u.searchParams.set(`$${k}`, String(v));
+        // dimension filters. Skip empty (no-filter) givens so the URL stays clean.
+        for (const [k, v] of Object.entries(m.givens as Record<string, unknown>)) {
+          if (v != null && String(v) !== "") u.searchParams.set(`$${k}`, String(v));
+        }
         window.history.replaceState(null, "", u.pathname + u.search);
         return;
       }
@@ -70,7 +72,9 @@ function DashboardView({
       // blockers, and drill-down reads naturally with the back button).
       if (m?.type === "navigate" && typeof m.dashboard === "string") {
         const u = new URL(`/datasets/${id}/dashboard/${encodeURIComponent(m.dashboard)}`, window.location.origin);
-        for (const [k, v] of Object.entries((m.givens ?? {}) as Record<string, unknown>)) u.searchParams.set(`$${k}`, String(v));
+        for (const [k, v] of Object.entries((m.givens ?? {}) as Record<string, unknown>)) {
+          if (v != null && String(v) !== "") u.searchParams.set(`$${k}`, String(v));
+        }
         window.location.href = u.pathname + u.search;
         return;
       }

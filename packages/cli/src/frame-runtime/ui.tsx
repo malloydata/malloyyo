@@ -10,7 +10,7 @@
 // out every given the dashboard's query references; <DefaultDashboard/> is the
 // whole no-code dashboard (title + controls + panel) used when a tagged query
 // ships no Dashboard.tsx.
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { dashboardInfo, givenSpecs, filters, useGiven, useOptions, useDashboard, Panel } from "./runtime";
 
 const V = (name, fallback) => `var(--dash-${name}, ${fallback})`;
@@ -176,21 +176,38 @@ export function Select({ given, options, label, style }) {
     the box (committing the empty = no-filter value). Esc also clears. */
 export function Search({ given, label, placeholder, style }) {
   const { value, set, spec } = useGiven(given);
-  const [draft, setDraft] = useState(value ?? "");
-  useEffect(() => setDraft(value ?? ""), [value]);
+  const filterType = spec?.filterType ?? "string";
+  // Show exact-match string values UNESCAPED: a drilled/committed `Ray\-Ban`
+  // (the `-` escaped because a bare hyphen means negation) reads as `Ray-Ban`,
+  // `Outerwear\ &\ Coats` reads as `Outerwear & Coats`. Wildcards / ranges /
+  // negation aren't exact matches, so they show their raw expression as before.
+  const displayOf = (v) => {
+    if (v == null || v === "") return "";
+    const vals = filterType === "string" ? filters.values(v) : null;
+    return vals ? vals.join(", ") : v;
+  };
+  const [draft, setDraft] = useState(() => displayOf(value));
+  // What we last displayed for `value`; an unedited draft equal to it commits the
+  // EXACT stored filter (never re-parse the pretty form back into a filter).
+  const shownRef = useRef(displayOf(value));
+  useEffect(() => {
+    const d = displayOf(value);
+    setDraft(d);
+    shownRef.current = d;
+  }, [value]);
   // Suggest against the last typed token so `Emma, Ol` suggests Olivia.
   const lastTerm = draft.split(",").pop().trim();
   const { options } = useOptions(given, lastTerm);
-  const filterType = spec?.filterType ?? "string";
   const empty = draft.trim() === "";
   const valid = empty || filters.isValid(filterType, draft);
   const current = value ?? "";
-  const dirty = draft !== current;
+  const dirty = draft !== shownRef.current;
   const listId = `dash-options-${given}`;
   const commit = () => {
+    if (!valid || draft === shownRef.current) return; // unedited → keep exact value
     const next = draft.trim();
-    if (!valid || next === current) return;
-    set(next); // "" is a valid commit: clears the filter (matches all)
+    if (next === current) return;
+    set(next); // user-typed filter expression ("" clears the filter)
   };
   const clear = () => {
     setDraft("");

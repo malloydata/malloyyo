@@ -23,14 +23,6 @@ const nextConfig: NextConfig = {
     "/mcp": [
       "./node_modules/@duckdb/node-bindings*/**/*",
     ],
-    // The shared-query replay page imports loadSharedQuery from lib/mcp-tools,
-    // which transitively pulls in @malloydata/db-duckdb → @duckdb/node-api. That
-    // native module loads libduckdb.so at import time, so the .so must be traced
-    // into this function or the RSC render 500s ("libduckdb.so: cannot open
-    // shared object file").
-    "/ltool/[slug]": [
-      "./node_modules/@duckdb/node-bindings*/**/*",
-    ],
     "/api/datasets": [
       "./node_modules/@duckdb/node-bindings*/**/*",
     ],

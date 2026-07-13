@@ -6,7 +6,7 @@
 // won't compile, an orphaned dashboards/ directory, and leftover manifest.json
 // files.
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import * as esbuild from "esbuild";
 import { listDashboardDirs } from "./gather.js";
@@ -15,6 +15,9 @@ import { makeRunner } from "./host.js";
 export interface DashboardLint {
   name: string;
   errors: string[];
+  /** Non-fatal findings: real problems that don't block publish (e.g. a given
+      whose control silently won't render because index.malloy doesn't export it). */
+  warnings: string[];
 }
 export interface LintReport {
   ok: boolean;
@@ -31,12 +34,16 @@ export async function lintDashboards(root: string): Promise<LintReport> {
 
   const runner = await makeRunner(abs);
   if (!runner.entryExists()) {
-    return { ok: false, dashboards: [{ name: "(model)", errors: [`no index.malloy at ${abs}`] }] };
+    return { ok: false, dashboards: [{ name: "(model)", errors: [`no index.malloy at ${abs}`], warnings: [] }] };
   }
   const arts = await runner.artifacts();
   if (!arts.ok) {
-    return { ok: false, dashboards: [{ name: "(model)", errors: [arts.error] }] };
+    return { ok: false, dashboards: [{ name: "(model)", errors: [arts.error], warnings: [] }] };
   }
+  // Peer model files — a dashboard's source is defined in one of these. Compiling
+  // a dashboard against its defining file reveals the givens it truly references,
+  // even ones index.malloy doesn't re-export (whose controls won't render).
+  const peerModels = readdirSync(abs).filter((f) => f.endsWith(".malloy") && f !== "index.malloy");
   const artifacts = arts.artifacts;
   const dirs = listDashboardDirs(abs);
   if (artifacts.length === 0 && dirs.length === 0) return { ok: true, dashboards };
@@ -57,11 +64,12 @@ export async function lintDashboards(root: string): Promise<LintReport> {
           `\`# artifact\` (or \`# artifact name="${dir}"\`) in the model`,
       );
     }
-    if (errors.length) dashboards.push({ name: dir, errors });
+    if (errors.length) dashboards.push({ name: dir, errors, warnings: [] });
   }
 
   for (const artifact of artifacts) {
     const errors: string[] = [];
+    const warnings: string[] = [];
 
     // The tagged query must run with its declaration defaults (compile-only),
     // and every given's `# suggest {…}` declaration must itself compile as a
@@ -98,6 +106,29 @@ export async function lintDashboards(root: string): Promise<LintReport> {
       }
     }
 
+    // A dashboard's filter controls are built from the givens the ENTRY compile
+    // surfaces (givensForQuery above). A given the dashboard actually filters on
+    // but which index.malloy doesn't re-export never surfaces there, so its
+    // control silently won't render — the query still runs with the given baked
+    // in at its declaration default. Catch it: the givens the dashboard
+    // references from its source's defining file, minus the entry-surfaced set.
+    if (specs.ok) {
+      const surfaced = new Set(specs.givens.map((s) => s.name));
+      const referenced = new Set<string>();
+      for (const file of peerModels) {
+        const r = await runner.givensForQueryIn(file, artifact.query);
+        if (r.ok) for (const s of r.givens) referenced.add(s.name);
+      }
+      for (const name of referenced) {
+        if (surfaced.has(name)) continue;
+        warnings.push(
+          `filters on given "${name}", which index.malloy doesn't export — its ` +
+            `control won't render (the given stays at its default). Re-export it: ` +
+            `add "${name}" to the \`import {…}\` and \`export {…}\` in index.malloy.`,
+        );
+      }
+    }
+
     // Dashboard.tsx is optional (default UI without one); when present it must
     // at least compile (syntax).
     const tsxPath = join(abs, "dashboards", artifact.name, "Dashboard.tsx");
@@ -110,19 +141,23 @@ export async function lintDashboards(root: string): Promise<LintReport> {
       }
     }
 
-    dashboards.push({ name: artifact.name, errors });
+    dashboards.push({ name: artifact.name, errors, warnings });
   }
 
+  // Warnings never fail lint — only errors do (so publish isn't blocked).
   return { ok: dashboards.every((d) => d.errors.length === 0), dashboards };
 }
 
 export function printLintReport(report: LintReport): void {
   for (const d of report.dashboards) {
-    if (d.errors.length === 0) {
+    const hasErr = d.errors.length > 0;
+    const hasWarn = d.warnings.length > 0;
+    if (!hasErr && !hasWarn) {
       console.log(`  ✓ ${d.name}`);
-    } else {
-      console.log(`  ✗ ${d.name}`);
-      for (const e of d.errors) console.log(`      ${e}`);
+      continue;
     }
+    console.log(`  ${hasErr ? "✗" : "⚠"} ${d.name}`);
+    for (const e of d.errors) console.log(`      ${e}`);
+    for (const w of d.warnings) console.log(`      warning: ${w}`);
   }
 }

@@ -124,6 +124,20 @@ keyword **`self`**. Clicking a dimension cell:
 - **`self`** → sets that same given on the CURRENT dashboard (filter in place, no
   navigation). Offered only if this dashboard actually declares the given.
 
+Add **`given=`** when the destination's given is named differently from the
+dimension (upper-cased). It overrides the target given name for every `to` in
+this tag — including `self`:
+
+```malloy
+dimension:
+  # drill { to=[state_dashboard, self] given=STATE_CODE }
+  state is orders.ship_state
+```
+
+Here clicking `state` seeds `STATE_CODE` (not `STATE`). One given per drill tag;
+to map several givens from one query, use separate `# drill` tags on separate
+dimensions.
+
 One destination acts immediately; two or more pop a small menu at the cursor.
 Drillable cells get a pointer cursor and turn the accent color on hover (the web
 app's clickable-item look) so users can see they're clickable. Measure/aggregate

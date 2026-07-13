@@ -1,0 +1,4 @@
+// Entry surface: re-exports SHOWN but NOT HIDDEN. `hidden_dash` filters on
+// HIDDEN, so its control silently won't render — `lint` should warn.
+import {items, SHOWN} from './model.malloy'
+export {items, SHOWN}

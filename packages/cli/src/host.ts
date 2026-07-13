@@ -79,6 +79,11 @@ export interface ModelRunner {
       read from the model's `given:` declarations (types, defaults, doc
       comments, tags). */
   givensForQuery(runExpr: string): Promise<GivenSpecsResult>;
+  /** Same, but compiled against an ALTERNATE project file (a peer .malloy)
+      instead of index.malloy. lint uses this to learn the givens a dashboard
+      references from its source's DEFINING file — including givens
+      index.malloy doesn't re-export, whose controls silently won't render. */
+  givensForQueryIn(entryFile: string, runExpr: string): Promise<GivenSpecsResult>;
   /** The model's `# artifact`-tagged queries — its declared dashboards. */
   artifacts(): Promise<ArtifactsResult>;
   entryExists(): boolean;
@@ -92,10 +97,15 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
   const rootUrl = url.pathToFileURL(abs + path.sep);
 
   // Per-call lease: fresh runtime over the current config, idled after use.
-  async function lease<T>(fn: (runtime: Runtime, entry: URL) => Promise<T>): Promise<T> {
+  // `entryFile` is the model file compiled against — index.malloy for the real
+  // serving surface, or a peer .malloy when lint needs a source's own scope.
+  async function leaseIn<T>(
+    entryFile: string,
+    fn: (runtime: Runtime, entry: URL) => Promise<T>,
+  ): Promise<T> {
     const reader = fsReader();
     const config = await loadConfig(rootUrl, reader);
-    const { reader: prepared, entry } = prepareSource(reader, { url: path.join(abs, ENTRY) });
+    const { reader: prepared, entry } = prepareSource(reader, { url: path.join(abs, entryFile) });
     const runtime = new Runtime({ config, urlReader: prepared });
     try {
       return await fn(runtime, entry);
@@ -103,6 +113,8 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
       await config.shutdown("idle").catch(() => {});
     }
   }
+  const lease = <T>(fn: (runtime: Runtime, entry: URL) => Promise<T>): Promise<T> =>
+    leaseIn(ENTRY, fn);
 
   return {
     root: abs,
@@ -130,6 +142,9 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
     },
     givensForQuery(runExpr) {
       return lease((runtime, entry) => dashboardGivenSpecs(runtime, entry, runExpr));
+    },
+    givensForQueryIn(entryFile, runExpr) {
+      return leaseIn(entryFile, (runtime, entry) => dashboardGivenSpecs(runtime, entry, runExpr));
     },
     artifacts() {
       return lease((runtime, entry) => artifactQueries(runtime, entry));

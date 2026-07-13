@@ -297,10 +297,13 @@ export function Panel({ query, malloy, givens, style }) {
     // `to=[a, self]` (array) or `to=x` (single) — a dest is a dashboard slug or `self`.
     const dests = drillTag && (drillTag.textArray("to") ?? (drillTag.text("to") ? [drillTag.text("to")] : []));
     if (!dests || !dests.length || payload.value == null) return;
-    const given = String(f.name).toUpperCase(); // category → CATEGORY
+    // Target given defaults to the dimension name upper-cased (category → CATEGORY);
+    // `given=` names it explicitly when the destination's given differs. One given
+    // per drill today; a future syntax may map several from a single query.
+    const given = drillTag.text("given") || String(f.name).toUpperCase();
     const filterExpr = filters.oneOf(String(payload.value)); // exact-match, escaped
-    // `self` needs a matching given on THIS dashboard to filter in place.
-    const selfSpec = givenSpecs().find((s) => s.name.toUpperCase() === given);
+    // `self` needs a matching given on THIS dashboard to filter in place (case-insensitive).
+    const selfSpec = givenSpecs().find((s) => s.name.toUpperCase() === given.toUpperCase());
     const run = (dest) => {
       if (dest === "self") {
         if (selfSpec) setGivenRef.current(selfSpec.name, filterExpr);

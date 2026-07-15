@@ -68,3 +68,28 @@ test('run: a top-level query artifact by run-expression', async () => {
     [3], // v > 2
   );
 });
+
+const COMPOSITE = 'composite_artifacts_model.malloy';
+
+test('artifactQueries: discovers model-level ## and source-level # composites', async () => {
+  const res = await withFixtureRuntime((rt) => artifactQueries(rt, fixtureUrl(COMPOSITE)));
+  assert.equal(res.ok, true);
+  if (!res.ok) return;
+  const byName = new Map(res.artifacts.map((a) => [a.name, a]));
+
+  // Model-level cross-source composite: tiles pass through verbatim.
+  const overview = byName.get('overview')!;
+  assert.ok(overview, 'model-level ## artifact composite discovered');
+  assert.equal(overview.query, ''); // composite has no single run-expression
+  assert.deepEqual(overview.tiles, ['nums -> by_v', 'words -> by_w']);
+  assert.equal(overview.dashboard_columns, 3);
+  assert.equal(overview.title, 'Overview');
+
+  // Source-level composite: bare tiles resolve to `<source> -> <view>`.
+  const words = byName.get('words')!;
+  assert.ok(words, 'source-level # artifact composite discovered');
+  assert.deepEqual(words.tiles, ['words -> by_w', 'words -> counts']);
+  assert.equal(words.source, 'words');
+  assert.equal(words.dashboard_columns, undefined); // unset → renderer default
+  assert.equal(words.title, 'Words');
+});

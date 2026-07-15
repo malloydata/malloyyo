@@ -26,8 +26,19 @@ export interface ArtifactInfo {
       to the query/view name; override with `# artifact name="…"`. */
   name: string;
   /** Run-expression handed to `run:` — a top-level query name, or a
-      `<source> -> <view>` path for a view artifact. */
+      `<source> -> <view>` path for a view artifact. Empty string for a
+      COMPOSITE artifact (see `tiles`) — it has no single run-expression. */
   query: string;
+  /** Composite dashboard: the tile run-expressions (each a query name or a
+      `<source> -> <view>` path), in declaration order. Present iff this is a
+      composite artifact — declared `## artifact { tiles=[…] }` at model scope
+      (cross-source) or `# artifact { tiles=[…] }` on a source (its own views).
+      When set, `query` is "" and the tiles are run separately and combined into
+      one `# dashboard` result. */
+  tiles?: string[];
+  /** Composite only: pass-through to the dashboard nest's `columns`; omitted
+      lets the renderer choose. `## artifact { dashboard_columns=3 }`. */
+  dashboard_columns?: number;
   /** For a view artifact: the source that holds the view. Absent for a
       top-level `query:` artifact. */
   source?: string;
@@ -74,6 +85,8 @@ type Tagged = {
 type TagLike = {
   has(...path: string[]): boolean;
   text(...path: string[]): string | undefined;
+  textArray(...path: string[]): string[] | undefined;
+  numeric(...path: string[]): number | undefined;
   tag(...path: string[]): TagLike | undefined;
   dict: Record<string, { eq?: unknown }>;
 };
@@ -90,9 +103,33 @@ function docText(t: Tagged): string | undefined {
   }
 }
 
+/** A tile string → a run-expression. At a SOURCE site (`source` set) a bare
+    identifier is one of that source's views, so it becomes `<source> -> <view>`;
+    an already-arrowed tile (or any tile at the model site) passes through. */
+function resolveTile(tile: string, source?: string): string {
+  const t = tile.trim();
+  if (source && !t.includes('->')) return `${source} -> ${t}`;
+  return t;
+}
+
+/** Read the per-dashboard given defaults off `# artifact { givens { … } }`. */
+function readGivens(tag: TagLike): Record<string, string | number | boolean> | undefined {
+  const givensTag = tag.tag('artifact', 'givens');
+  if (!givensTag) return undefined;
+  const givens: Record<string, string | number | boolean> = {};
+  for (const [key, t] of Object.entries(givensTag.dict ?? {})) {
+    const eq = t.eq;
+    if (typeof eq === 'string' || typeof eq === 'number' || typeof eq === 'boolean') {
+      givens[key] = eq;
+    }
+  }
+  return Object.keys(givens).length ? givens : undefined;
+}
+
 /** Read one declaration's `# artifact` tag; undefined when untagged. `ident`
-    supplies the run-expression and slug/title defaults — the same reader
-    serves both top-level `query:` and `view:` declarations. */
+    supplies the run-expression and slug/title defaults — the same reader serves
+    top-level `query:`, `view:`, a `source:` (composite), and the model
+    (`## artifact`, composite). A `tiles=[…]` list makes it a composite. */
 export function readArtifactTag(ident: ArtifactIdent, q: Tagged): ArtifactInfo | undefined {
   let tag: TagLike;
   try {
@@ -106,6 +143,28 @@ export function readArtifactTag(ident: ArtifactIdent, q: Tagged): ArtifactInfo |
   const name = nested?.text('name') ?? tag.text('name') ?? ident.defaultName;
   const title =
     nested?.text('title') ?? tag.text('title') ?? description?.split('\n')[0] ?? ident.defaultName;
+
+  // Composite: `tiles=[…]`. Each tile resolves to a run-expression (bare views
+  // scoped to the declaring source); `query` is empty — there is no single one.
+  const rawTiles = nested?.textArray('tiles') ?? tag.textArray('tiles');
+  if (rawTiles && rawTiles.length) {
+    const info: ArtifactInfo = {
+      name,
+      query: '',
+      title,
+      tiles: rawTiles.map((t) => resolveTile(t, ident.source)),
+    };
+    if (ident.source) info.source = ident.source;
+    if (description) info.description = description;
+    const cols = nested?.numeric('dashboard_columns') ?? tag.numeric('dashboard_columns');
+    if (typeof cols === 'number') info.dashboard_columns = cols;
+    const autorunText = nested?.text('autorun') ?? tag.text('autorun');
+    if (autorunText === 'false') info.autorun = false;
+    const givens = readGivens(tag);
+    if (givens) info.givens = givens;
+    return info;
+  }
+
   const info: ArtifactInfo = { name, query: ident.runExpr, title };
   if (ident.source) info.source = ident.source;
   if (ident.view) info.view = ident.view;
@@ -114,25 +173,17 @@ export function readArtifactTag(ident: ArtifactIdent, q: Tagged): ArtifactInfo |
   // default, so only carry the flag when explicitly turned off.
   const autorunText = nested?.text('autorun') ?? tag.text('autorun');
   if (autorunText === 'false') info.autorun = false;
-  const givensTag = tag.tag('artifact', 'givens');
-  if (givensTag) {
-    const givens: Record<string, string | number | boolean> = {};
-    for (const [key, t] of Object.entries(givensTag.dict ?? {})) {
-      const eq = t.eq;
-      if (typeof eq === 'string' || typeof eq === 'number' || typeof eq === 'boolean') {
-        givens[key] = eq;
-      }
-    }
-    if (Object.keys(givens).length) info.givens = givens;
-  }
+  const givens = readGivens(tag);
+  if (givens) info.givens = givens;
   return info;
 }
 
 /** Structural subset of a source's view field. */
 type QueryFieldLike = Tagged & { name: string };
 type FieldLike = { name: string; isQueryField(): boolean };
-type ExploreLike = { name: string; allFields: FieldLike[] };
-type ModelLike = {
+/** A source is itself Tagged — it can carry a `# artifact { tiles }` composite. */
+type ExploreLike = Tagged & { name: string; allFields: FieldLike[] };
+type ModelLike = Tagged & {
   queries(): { named: readonly string[] };
   getPreparedQueryByName(name: string): unknown;
   explores: ExploreLike[];
@@ -148,15 +199,29 @@ export async function artifactQueries(runtime: Runtime, entry: URL): Promise<Art
   try {
     const model = (await runtime.loadModel(entry).getModel()) as unknown as ModelLike;
     const artifacts: ArtifactInfo[] = [];
+    // Model-level `## artifact { tiles }` — the cross-source composite. Only the
+    // ENTRY file's model annotations are visible here (they don't cross imports),
+    // and the merged tag parser exposes at most one, so this yields the single
+    // cross-source dashboard declared in index.malloy. Ignored unless composite
+    // (a bare `## artifact` with no tiles isn't a dashboard).
+    const modelComposite = readArtifactTag({ runExpr: '', defaultName: 'dashboard' }, model);
+    if (modelComposite?.tiles) artifacts.push(modelComposite);
     // Top-level `query: … # artifact` declarations.
     for (const queryName of model.queries().named) {
       const pq = model.getPreparedQueryByName(queryName) as unknown as Tagged;
       const info = readArtifactTag({ runExpr: queryName, defaultName: queryName }, pq);
       if (info) artifacts.push(info);
     }
-    // `view: … # artifact` declarations inside each source. The run-expression
-    // is `<source> -> <view>`, which `run:` accepts just like a query name.
     for (const src of model.explores) {
+      // A `# artifact { tiles }` on the SOURCE itself — a composite of that
+      // source's own views. Travels with the (exported) source across imports.
+      const srcComposite = readArtifactTag(
+        { runExpr: '', defaultName: src.name, source: src.name },
+        src,
+      );
+      if (srcComposite?.tiles) artifacts.push(srcComposite);
+      // `view: … # artifact` declarations inside each source. The run-expression
+      // is `<source> -> <view>`, which `run:` accepts just like a query name.
       for (const field of src.allFields) {
         if (!field.isQueryField()) continue;
         const view = field as unknown as QueryFieldLike;

@@ -79,6 +79,12 @@ export {
   type ArtifactsResult,
 } from './artifacts';
 export {
+  combineTiles,
+  type CombinableResult,
+  type CombineOptions,
+  type DashboardTile,
+} from './combine-tiles';
+export {
   listHelpTopics,
   getHelpTopic,
   helpTopicForCode,

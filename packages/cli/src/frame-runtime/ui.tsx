@@ -629,7 +629,15 @@ export function DefaultDashboard({ givens, theme }) {
         <p style={{ color: V("muted", "#666"), margin: "0 0 20px", lineHeight: 1.5, flexShrink: 0 }}>{dash.description}</p>
       )}
       <Controls style={{ flexShrink: 0 }} />
-      <Panel givens={givens} style={{ flex: 1, minHeight: 0, maxHeight: "none" }} />
+      {/* A COMPOSITE artifact (tiles) runs its tiles server-side and renders the
+          combined `# dashboard` result; a single artifact runs its one query.
+          Either way it's ONE Panel + one renderer — the composite grid layout is
+          Malloy's own dashboard renderer (dashboard_columns → its `columns`). */}
+      {dash.tiles ? (
+        <Panel dashboard givens={givens} style={{ flex: 1, minHeight: 0, maxHeight: "none" }} />
+      ) : (
+        <Panel givens={givens} style={{ flex: 1, minHeight: 0, maxHeight: "none" }} />
+      )}
     </div>
   );
 }

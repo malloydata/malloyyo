@@ -44,15 +44,19 @@ if (typeof window !== "undefined") {
   });
 }
 
-// req: { query } (a named query the model publishes) or { malloy } (restricted
-// Malloy text — the server's restricted mode is the gate). The result shape is
-// normalized across hosts (dev server: {stable_result, problems[]}; hosted:
-// {stableResult, error}).
+// req: { query } (a named query the model publishes), { malloy } (restricted
+// Malloy text — the server's restricted mode is the gate), or { dashboard } (run
+// the current COMPOSITE artifact's declared tiles, combined into one dashboard
+// result). The result shape is normalized across hosts (dev server:
+// {stable_result, problems[]}; hosted: {stableResult, error}).
 export function runQuery(req, givens) {
   const id = ++seq;
   return new Promise((resolve) => {
     pending.set(id, resolve);
-    parent.postMessage({ type: "run", id, query: req.query, malloy: req.malloy, givens }, "*");
+    parent.postMessage(
+      { type: "run", id, query: req.query, malloy: req.malloy, dashboard: req.dashboard, givens },
+      "*",
+    );
   }).then((m) => ({
     ok: !!m.ok,
     rows: m.rows || [],
@@ -102,11 +106,17 @@ export function useGiven(name) {
     req: { query?: string, malloy?: string, givens?: object }. For charting
     with your own components — Panel is the same thing plus Malloy's renderer. */
 export function useQuery(req) {
-  const wire = req.malloy ? { malloy: asRunText(req.malloy) } : { query: req.query };
+  const wire = req.dashboard
+    ? { dashboard: true }
+    : req.malloy
+      ? { malloy: asRunText(req.malloy) }
+      : { query: req.query };
+  const skip = !!req.skip; // a Panel handed a pre-run result fetches nothing
   const givens = req.givens ?? {};
-  const key = JSON.stringify([wire, givens]);
-  const [state, setState] = useState({ rows: [], loading: true });
+  const key = JSON.stringify([wire, givens, skip]);
+  const [state, setState] = useState({ rows: [], loading: !skip });
   useEffect(() => {
+    if (skip) return;
     let cancelled = false;
     setState((s) => ({ ...s, loading: true }));
     runQuery(wire, givens).then((m) => {
@@ -275,9 +285,21 @@ function markDrillableCells(container, names) {
 }
 
 // ── Panel: run a query, render with Malloy's renderer ───────────────
-export function Panel({ query, malloy, givens, style }) {
-  const req = malloy ? { malloy } : { query: query ?? dashboardInfo().query };
-  const { result, loading, error } = useQuery({ ...req, givens });
+// Inputs (pick one): `query` (a model query name or `source -> view`), `malloy`
+// (restricted text), `dashboard` (run the current composite artifact's tiles),
+// or a pre-run `result` (render it as-is, fetch nothing — the composite simple
+// path hands the combined result straight in).
+export function Panel({ query, malloy, dashboard, result: presetResult, givens, style }) {
+  const req = malloy
+    ? { malloy }
+    : dashboard
+      ? { dashboard: true }
+      : { query: query ?? dashboardInfo().query };
+  const hasPreset = presetResult !== undefined;
+  const live = useQuery(hasPreset ? { skip: true } : { ...req, givens });
+  const result = hasPreset ? presetResult : live.result;
+  const loading = hasPreset ? false : live.loading;
+  const error = hasPreset ? undefined : live.error;
   const ref = useRef(null);
   // Drill: a dimension declared `# drill { to=[<slug>|self, …] }` makes clicking
   // its cell navigate to another dashboard (slug) and/or filter in place (self),

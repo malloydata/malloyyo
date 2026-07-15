@@ -17,12 +17,14 @@ import {
 } from "@malloydata/malloy";
 import {
   artifactQueries,
+  combineTiles,
   dashboardGivenSpecs,
   prepareSource,
   run,
   runRestricted,
   validateRestricted,
   type ArtifactsResult,
+  type CombinableResult,
   type DashboardGivenSpec,
   type DashboardGivenSpecsResult,
   type RunResult,
@@ -36,6 +38,13 @@ export type GivenSpec = DashboardGivenSpec;
 export type GivenSpecsResult = DashboardGivenSpecsResult;
 
 const ENTRY = "index.malloy";
+
+/** Card name for a tile run-expression: the view name from `source -> view`,
+    else the query name. Collisions are deduped downstream by `combineTiles`. */
+function tileName(runExpr: string): string {
+  const arrow = runExpr.lastIndexOf("->");
+  return (arrow >= 0 ? runExpr.slice(arrow + 2) : runExpr).trim();
+}
 
 /** Local files only — the preview server serves THIS project, not the disk. */
 function fsReader(): URLReader {
@@ -86,6 +95,18 @@ export interface ModelRunner {
   givensForQueryIn(entryFile: string, runExpr: string): Promise<GivenSpecsResult>;
   /** The model's `# artifact`-tagged queries — its declared dashboards. */
   artifacts(): Promise<ArtifactsResult>;
+  /** Run a COMPOSITE dashboard: run each tile run-expression separately (each
+      with only the givens it references, so an unused filter never errors a
+      tile), then combine the results into one `# dashboard` result carried on
+      `stable_result`. A failed tile's problems ride on the returned result; the
+      dashboard still renders the tiles that ran. */
+  runDashboard(
+    tiles: string[],
+    opts: { columns?: number; givens?: Record<string, unknown> },
+  ): Promise<RunResult>;
+  /** The UNION of given specs across a composite's tiles — the controls a
+      composite dashboard shows (each given declared once at model scope). */
+  dashboardGivens(tiles: string[]): Promise<GivenSpecsResult>;
   entryExists(): boolean;
   /** Close the shared connections for good (release sockets/file locks, drop
       the schema cache). Call at end of a short-lived command (e.g. `lint`) so
@@ -177,6 +198,48 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
     },
     artifacts() {
       return lease((runtime, entry) => artifactQueries(runtime, entry));
+    },
+    runDashboard(tiles, opts) {
+      return lease(async (runtime, entry) => {
+        const givens = opts.givens ?? {};
+        const ran: { name: string; result: RunResult }[] = [];
+        for (const tile of tiles) {
+          // Only the givens this tile references — an unused filter binding a
+          // tile that doesn't declare it would fail the compile.
+          const specs = await dashboardGivenSpecs(runtime, entry, tile);
+          const names = specs.ok ? new Set(specs.givens.map((s) => s.name)) : null;
+          const tileGivens = names
+            ? Object.fromEntries(Object.entries(givens).filter(([k]) => names.has(k)))
+            : givens;
+          const result = await run(runtime, entry, {
+            runExpr: tile,
+            givens: tileGivens,
+            stableResult: true,
+            rowLimit: 5000,
+          });
+          ran.push({ name: tileName(tile), result });
+        }
+        const problems = ran.flatMap((t) => t.result.problems ?? []);
+        const good = ran.filter((t) => t.result.ok && t.result.stable_result);
+        if (good.length === 0) return { ok: false, problems };
+        const combined = combineTiles(
+          good.map((t) => ({ name: t.name, result: t.result.stable_result as CombinableResult })),
+          { columns: opts.columns },
+        );
+        return { ok: true, stable_result: combined, problems };
+      });
+    },
+    dashboardGivens(tiles) {
+      return lease(async (runtime, entry) => {
+        // Union by name — a given is declared once at model scope, so the first
+        // tile that references it carries the authoritative spec.
+        const byName = new Map<string, DashboardGivenSpec>();
+        for (const tile of tiles) {
+          const specs = await dashboardGivenSpecs(runtime, entry, tile);
+          if (specs.ok) for (const s of specs.givens) if (!byName.has(s.name)) byName.set(s.name, s);
+        }
+        return { ok: true, givens: [...byName.values()] };
+      });
     },
     validate(runExpr, givens) {
       return lease(async (runtime, entry) => {

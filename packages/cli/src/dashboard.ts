@@ -57,6 +57,11 @@ interface Dashboard {
   query: string;
   title: string;
   description?: string;
+  /** Composite dashboard: tile run-expressions run separately and combined into
+      one `# dashboard` result. Present iff composite (then `query` is ""). */
+  tiles?: string[];
+  /** Composite only: pass-through to the dashboard nest's `columns`. */
+  dashboard_columns?: number;
   /** Per-dashboard given defaults from the tag's `givens { … }` block. */
   givens?: Record<string, string | number | boolean>;
   /** `# artifact { autorun=false }` → stage control changes behind an Apply
@@ -234,7 +239,7 @@ window.addEventListener('message',async(e)=>{
   let out;
   try{
     const res=await fetch('/api/run',{method:'POST',headers:{'content-type':'application/json'},
-      body:JSON.stringify({d:${d},query:m.query,malloy:m.malloy,givens:m.givens})});
+      body:JSON.stringify({d:${d},query:m.query,malloy:m.malloy,givens:m.givens,dashboard:m.dashboard})});
     out=await res.json();
   }catch(err){ out={ok:false,problems:[{message:String(err)}]}; }
   f.contentWindow.postMessage({type:'result',id:m.id,...out},${fb});
@@ -264,6 +269,8 @@ function frameDoc(
     query: dash.query,
     title: dash.title,
     description: dash.description,
+    tiles: dash.tiles,
+    dashboard_columns: dash.dashboard_columns,
     givens: dash.givens,
     autorun: dash.autorun,
   };
@@ -359,7 +366,11 @@ export async function serveDashboard(opts: {
           // Given specs are introspected from the model PER LOAD, so an edit to
           // a `given:` declaration (type, default, tags) shows up on reload.
           const dash = pick(url);
-          const specs = await runner.givensForQuery(dash.query);
+          // Composite controls = the UNION of givens across its tiles; a single
+          // artifact = the one query's givens.
+          const specs = dash.tiles
+            ? await runner.dashboardGivens(dash.tiles)
+            : await runner.givensForQuery(dash.query);
           if (!specs.ok) {
             return send(200, "text/html; charset=utf-8",
               html(`<pre style="color:crimson;padding:16px">model error: ${esc(specs.error)}</pre>`, dash.title));
@@ -384,17 +395,21 @@ export async function serveDashboard(opts: {
         return send(200, "text/html; charset=utf-8", parentShell(pick(url), frameBase, dashboards, givensFromUrl(url)));
       }
       if (url.pathname === "/api/run" && req.method === "POST") {
-        const { d, query, malloy, givens } = JSON.parse(await readBody(req));
+        const { d, query, malloy, givens, dashboard } = JSON.parse(await readBody(req));
         const dash = byName.get(d);
         if (!dash) return send(404, "application/json", JSON.stringify({ ok: false, problems: [{ message: `no dashboard '${d}'` }] }));
-        // Governance: a dashboard may run (a) any named query the model
-        // publishes, or (b) restricted Malloy text — core's restricted mode
-        // (no import / given: / connection.* / raw SQL / ##! flags) is the
-        // gate, exactly the contract the explore MCP surface runs under.
+        // Governance: a dashboard may run (a) the whole COMPOSITE (its declared
+        // tiles), (b) any named query the model publishes, or (c) restricted
+        // Malloy text — core's restricted mode (no import / given: / connection.*
+        // / raw SQL / ##! flags) is the gate, the contract the explore MCP
+        // surface runs under. A `dashboard` request runs only the tiles the
+        // model declared, never arbitrary tiles from the frame.
         const out =
-          typeof malloy === "string"
-            ? await runner.runText(malloy, givens ?? {})
-            : await runner.run(String(query ?? dash.query), givens ?? {});
+          dashboard && dash.tiles
+            ? await runner.runDashboard(dash.tiles, { columns: dash.dashboard_columns, givens: givens ?? {} })
+            : typeof malloy === "string"
+              ? await runner.runText(malloy, givens ?? {})
+              : await runner.run(String(query ?? dash.query), givens ?? {});
         return send(200, "application/json", JSON.stringify(out));
       }
       send(404, "text/plain", "not found");

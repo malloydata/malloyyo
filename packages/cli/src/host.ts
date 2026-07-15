@@ -87,6 +87,10 @@ export interface ModelRunner {
   /** The model's `# artifact`-tagged queries — its declared dashboards. */
   artifacts(): Promise<ArtifactsResult>;
   entryExists(): boolean;
+  /** Close the shared connections for good (release sockets/file locks, drop
+      the schema cache). Call at end of a short-lived command (e.g. `lint`) so
+      the process can exit promptly; long-lived hosts can rely on process exit. */
+  dispose(): Promise<void>;
   root: string;
 }
 
@@ -96,21 +100,40 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
   const abs = path.resolve(root);
   const rootUrl = url.pathToFileURL(abs + path.sep);
 
-  // Per-call lease: fresh runtime over the current config, idled after use.
-  // `entryFile` is the model file compiled against — index.malloy for the real
-  // serving surface, or a peer .malloy when lint needs a source's own scope.
+  // ONE long-lived config/connection set for the whole runner. Reusing it
+  // across leases is what keeps each connection's in-memory schema cache warm:
+  // a fresh MalloyConfig per call (as this used to do) builds fresh connections
+  // with empty caches, so every compile re-fetches every table's schema cold —
+  // turning a BigQuery-backed `lint` (dozens of compiles) into minutes of
+  // repeated schema fetches that read like a hang. The base reader is stateless
+  // (prepareSource layers its own per-entry cache over it), so it's shared too.
+  const reader = fsReader();
+  let configPromise: Promise<MalloyConfig> | null = null;
+  const getConfig = () => (configPromise ??= loadConfig(rootUrl, reader));
+
+  // Release connections to 'idle' only when no lease is in flight. 'idle'
+  // frees sockets/file locks (so a long-lived host doesn't hold them, and the
+  // process can exit) while PRESERVING the schema cache on the reused config;
+  // gating on inFlight keeps a concurrent lease from idling connections another
+  // is mid-compile on.
+  let inFlight = 0;
+
+  // Per-call lease: fresh runtime over the shared config. `entryFile` is the
+  // model file compiled against — index.malloy for the real serving surface, or
+  // a peer .malloy when lint needs a source's own scope.
   async function leaseIn<T>(
     entryFile: string,
     fn: (runtime: Runtime, entry: URL) => Promise<T>,
   ): Promise<T> {
-    const reader = fsReader();
-    const config = await loadConfig(rootUrl, reader);
+    const config = await getConfig();
     const { reader: prepared, entry } = prepareSource(reader, { url: path.join(abs, entryFile) });
     const runtime = new Runtime({ config, urlReader: prepared });
+    inFlight++;
     try {
       return await fn(runtime, entry);
     } finally {
-      await config.shutdown("idle").catch(() => {});
+      inFlight--;
+      if (inFlight === 0) await config.shutdown("idle").catch(() => {});
     }
   }
   const lease = <T>(fn: (runtime: Runtime, entry: URL) => Promise<T>): Promise<T> =>
@@ -119,6 +142,12 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
   return {
     root: abs,
     entryExists: () => fs.existsSync(path.join(abs, ENTRY)),
+    async dispose() {
+      if (!configPromise) return;
+      const config = await configPromise.catch(() => null);
+      configPromise = null;
+      if (config) await config.shutdown("close").catch(() => {});
+    },
     run(runExpr, givens) {
       return lease((runtime, entry) =>
         run(runtime, entry, { runExpr, givens, stableResult: true, rowLimit: 5000 }),

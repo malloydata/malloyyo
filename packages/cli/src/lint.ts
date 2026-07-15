@@ -80,6 +80,16 @@ async function runLint(abs: string, runner: ModelRunner): Promise<LintReport> {
     const errors: string[] = [];
     const warnings: string[] = [];
 
+    // TODO(composite-dashboards): composites have no single `query` (it's ""),
+    // so the single-artifact checks below don't apply. Skip them for now —
+    // per-tile validation (compile each tile, union givens, dashboard_columns is
+    // a positive int) is deferred while the composite structure is still in
+    // flux. See docs/composite-dashboards.md §7.
+    if (artifact.tiles) {
+      dashboards.push({ name: artifact.name, errors, warnings });
+      continue;
+    }
+
     // The tagged query must run with its declaration defaults (compile-only),
     // and every given's `# suggest {…}` declaration must itself compile as a
     // restricted query (built exactly as the runtime builds it) — drift in

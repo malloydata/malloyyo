@@ -153,10 +153,11 @@ card subtitle) onto its nest field so the card renders as the tile intended.
 `dashboard_columns` becomes the root `# dashboard { columns=n }` (omitted when
 unset → renderer default).
 
-Per-tile failure is isolated: a tile that fails to compile/run becomes an error
-card (its own `problems[]`), never nuking the dashboard — matching the engine's
-"helpers never throw; failures ride as `problems[]`" rule. Only the real browser
-render remains to validate, at integration via the dev server.
+Per-tile failure is isolated: a failed tile's problems ride on the returned
+result and the rest still render — matching the engine's "helpers never throw;
+failures ride as `problems[]`" rule. **Browser render VALIDATED 2026-07-15**: a
+cross-source `## artifact` (tiles from two different sources) rendered as a
+two-column dashboard through Malloy's own renderer via the dev server.
 
 ## 5. Data shapes
 
@@ -207,6 +208,11 @@ wire; the novelty is entirely in *how* `stable_result` is built.
 
 ## 7. Lint / validation
 
+**STATUS: deferred.** Lint currently **skips** composite artifacts (a guard in
+`lint.ts` short-circuits them) — the single-artifact checks assume one `query`,
+which a composite doesn't have, and the composite structure is still in flux.
+When it settles, implement the per-composite checks below.
+
 For each composite artifact:
 - every tile resolves and `run: <expr>` compiles (bad tile → clear error naming
   the tile);
@@ -225,10 +231,12 @@ For each composite artifact:
    one `# dashboard` result. Pure, unit-testable against golden fixtures.
 3. **Tag + discovery** — `ArtifactInfo.tiles`/`dashboard_columns`,
    `readArtifactTag`, `artifactQueries` model (`## artifact`) + source passes.
-4. **Composite runner + given union** — `runDashboard` in `host.ts`: resolve
-   tiles → `run:` each → `combineTiles`; union the per-tile given specs.
-5. **`Panel` accepts `result`** + **`DefaultDashboard` composite branch.**
-6. **`suggest` arrow form** (tiny) + **lint**.
+4. ~~**Composite runner + given union**~~ — DONE. `runDashboard` /
+   `dashboardGivens` in `host.ts`.
+5. ~~**`Panel` accepts `result`** + **`DefaultDashboard` composite branch**~~ —
+   DONE; browser-render validated.
+6. **`suggest` arrow form** (tiny) + **lint** (validate each tile; composites
+   have no single `query`).
 7. **Docs/guidance** — extend the authoring guide; a `yo_help` topic later.
 
 ## 9. Open questions / later

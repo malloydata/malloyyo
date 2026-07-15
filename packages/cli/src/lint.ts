@@ -10,7 +10,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import * as esbuild from "esbuild";
 import { listDashboardDirs } from "./gather.js";
-import { makeRunner } from "./host.js";
+import { makeRunner, type ModelRunner } from "./host.js";
 
 export interface DashboardLint {
   name: string;
@@ -30,9 +30,18 @@ const quoteField = (f: string) => (/^[A-Za-z_]\w*$/.test(f) ? f : `\`${f}\``);
 
 export async function lintDashboards(root: string): Promise<LintReport> {
   const abs = resolve(root);
+  const runner = await makeRunner(abs);
+  try {
+    return await runLint(abs, runner);
+  } finally {
+    // Close the shared connections so the CLI process exits promptly.
+    await runner.dispose();
+  }
+}
+
+async function runLint(abs: string, runner: ModelRunner): Promise<LintReport> {
   const dashboards: DashboardLint[] = [];
 
-  const runner = await makeRunner(abs);
   if (!runner.entryExists()) {
     return { ok: false, dashboards: [{ name: "(model)", errors: [`no index.malloy at ${abs}`], warnings: [] }] };
   }

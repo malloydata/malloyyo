@@ -3,6 +3,32 @@
 
 import { env } from "./env";
 
+// GitHub's contents API intermittently returns transient errors under load
+// (spurious 400s, secondary-rate-limit 403/429, 5xx) — a model refresh fetches
+// many files, so retry those a few times with backoff before giving up. 401
+// (auth) and 404 (missing) are definitive and never retried.
+const RETRYABLE = new Set([400, 403, 408, 425, 429, 500, 502, 503, 504]);
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** Fetch with backoff on transient GitHub errors. A model refresh makes many
+    contents-API calls, and GitHub intermittently returns spurious 400s and
+    secondary-rate-limit 403/429s under that load — retry those; 401 (auth) and
+    404 (missing) are definitive. */
+async function githubFetch(url: string, headers: Record<string, string>): Promise<Response> {
+  for (let attempt = 0; ; attempt++) {
+    let res: Response;
+    try {
+      res = await fetch(url, { headers });
+    } catch (e) {
+      if (attempt >= 3) throw e; // network error
+      await sleep(300 * 2 ** attempt);
+      continue;
+    }
+    if (res.ok || !RETRYABLE.has(res.status) || attempt >= 3) return res;
+    await sleep(300 * 2 ** attempt); // 300ms, 600ms, 1200ms
+  }
+}
+
 export async function fetchGitHubFile(
   owner: string,
   repo: string,
@@ -18,7 +44,7 @@ export async function fetchGitHubFile(
   };
   if (useToken && env.GITHUB_TOKEN) headers["Authorization"] = `Bearer ${env.GITHUB_TOKEN}`;
 
-  const res = await fetch(url, { headers });
+  const res = await githubFetch(url, headers);
   if (!res.ok) {
     let detail = "";
     try { detail = (await res.json()).message ?? ""; } catch { /* ignore */ }
@@ -91,7 +117,7 @@ export async function listGitHubDir(
   };
   if (useToken && env.GITHUB_TOKEN) headers["Authorization"] = `Bearer ${env.GITHUB_TOKEN}`;
 
-  const res = await fetch(url, { headers });
+  const res = await githubFetch(url, headers);
   if (res.status === 404) return [];
   if (!res.ok) {
     throw new Error(`GitHub returned ${res.status} listing ${path} in ${owner}/${repo}@${branch}`);

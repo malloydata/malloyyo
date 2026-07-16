@@ -276,6 +276,23 @@ async function buildRuntimeWithReader(
   return { runtime, cleanup: () => conn.close() };
 }
 
+/** Run `fn` against a fresh Runtime backed by an on-demand `reader` (e.g. a
+    GitHubURLReader that fetches each file as the compiler resolves an import).
+    Used by the GitHub refresh to compile per-dashboard entries — the reader
+    accumulates the dashboard files and their transitive imports as it goes. */
+export async function withReaderRuntime<T>(
+  reader: malloy.URLReader | GitHubURLReader,
+  configJson: string | undefined,
+  fn: (runtime: malloy.Runtime) => Promise<T>,
+): Promise<T> {
+  const handle = await buildRuntimeWithReader(reader as malloy.URLReader, configJson);
+  try {
+    return await fn(handle.runtime as malloy.Runtime);
+  } finally {
+    await handle.cleanup();
+  }
+}
+
 // Build a throwaway Runtime from a file map. If malloy-config.json is present, uses
 // MalloyConfig (BigQuery, Postgres, Snowflake, Trino, MySQL, Databricks, DuckDB).
 // Falls back to a MotherDuck DuckDB SingleConnectionRuntime when no config is present.

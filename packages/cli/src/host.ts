@@ -269,6 +269,13 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
         const problems = ran.flatMap((t) => t.result.problems ?? []);
         const good = ran.filter((t) => t.result.ok && t.result.stable_result);
         if (good.length === 0) return { ok: false, problems };
+        // A SINGLE tile IS the dashboard — pass its result through untouched so
+        // the tile's own render tags govern (a `# dashboard {columns}` view, a
+        // `# bar_chart`, …). Wrapping it as one nest of a synthetic dashboard
+        // would add a redundant layer and bury those tags.
+        if (good.length === 1) {
+          return { ok: true, stable_result: good[0].result.stable_result, problems };
+        }
         const combined = combineTiles(
           good.map((t) => ({ name: t.name, result: t.result.stable_result as CombinableResult })),
           { columns: opts.columns },

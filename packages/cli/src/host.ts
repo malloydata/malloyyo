@@ -19,10 +19,12 @@ import {
   artifactQueries,
   combineTiles,
   dashboardGivenSpecs,
+  modelArtifact,
   prepareSource,
   run,
   runRestricted,
   validateRestricted,
+  type ArtifactInfo,
   type ArtifactsResult,
   type CombinableResult,
   type DashboardGivenSpec,
@@ -95,18 +97,27 @@ export interface ModelRunner {
   givensForQueryIn(entryFile: string, runExpr: string): Promise<GivenSpecsResult>;
   /** The model's `# artifact`-tagged queries — its declared dashboards. */
   artifacts(): Promise<ArtifactsResult>;
-  /** Run a COMPOSITE dashboard: run each tile run-expression separately (each
-      with only the givens it references, so an unused filter never errors a
-      tile), then combine the results into one `# dashboard` result carried on
-      `stable_result`. A failed tile's problems ride on the returned result; the
-      dashboard still renders the tiles that ran. */
+  /** Structure v2: read the `## artifact` a `dashboards/<name>.malloy` file
+      declares, compiling that file AS the entry. `entryFile` is relative to the
+      project root; `defaultName` (the basename) names it when the tag omits
+      `name=`. */
+  artifactForFile(
+    entryFile: string,
+    defaultName: string,
+  ): Promise<{ ok: true; artifact?: ArtifactInfo } | { ok: false; error: string }>;
+  /** Run a COMPOSITE dashboard: compile `entryFile` (the dashboard's own file)
+      and run each tile run-expression separately in its scope (each with only
+      the givens it references, so an unused filter never errors a tile), then
+      combine into one `# dashboard` result on `stable_result`. A failed tile's
+      problems ride along; the dashboard still renders the tiles that ran. */
   runDashboard(
+    entryFile: string,
     tiles: string[],
     opts: { columns?: number; givens?: Record<string, unknown> },
   ): Promise<RunResult>;
-  /** The UNION of given specs across a composite's tiles — the controls a
-      composite dashboard shows (each given declared once at model scope). */
-  dashboardGivens(tiles: string[]): Promise<GivenSpecsResult>;
+  /** The UNION of given specs across a composite's tiles, resolved in the
+      dashboard file's own scope — the controls the dashboard shows. */
+  dashboardGivens(entryFile: string, tiles: string[]): Promise<GivenSpecsResult>;
   entryExists(): boolean;
   /** Close the shared connections for good (release sockets/file locks, drop
       the schema cache). Call at end of a short-lived command (e.g. `lint`) so
@@ -199,8 +210,11 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
     artifacts() {
       return lease((runtime, entry) => artifactQueries(runtime, entry));
     },
-    runDashboard(tiles, opts) {
-      return lease(async (runtime, entry) => {
+    artifactForFile(entryFile, defaultName) {
+      return leaseIn(entryFile, (runtime, entry) => modelArtifact(runtime, entry, defaultName));
+    },
+    runDashboard(entryFile, tiles, opts) {
+      return leaseIn(entryFile, async (runtime, entry) => {
         const givens = opts.givens ?? {};
         const ran: { name: string; result: RunResult }[] = [];
         for (const tile of tiles) {
@@ -229,8 +243,8 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
         return { ok: true, stable_result: combined, problems };
       });
     },
-    dashboardGivens(tiles) {
-      return lease(async (runtime, entry) => {
+    dashboardGivens(entryFile, tiles) {
+      return leaseIn(entryFile, async (runtime, entry) => {
         // Union by name — a given is declared once at model scope, so the first
         // tile that references it carries the authoritative spec.
         const byName = new Map<string, DashboardGivenSpec>();

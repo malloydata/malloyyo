@@ -242,3 +242,23 @@ export async function artifactQueries(runtime: Runtime, entry: URL): Promise<Art
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
 }
+
+/** Structure v2: read the single dashboard declared by a `dashboards/<name>.malloy`
+    file — its model-level `## artifact`, which (because the file is compiled AS
+    the entry) is read directly with no import-crossing or one-per-file caveat.
+    `defaultName` (the file's basename) names the dashboard when the tag omits
+    `name=`. Returns {ok:true, artifact: undefined} when the file has no
+    `## artifact` (or a bare one with no `tiles`). Never throws on user input. */
+export async function modelArtifact(
+  runtime: Runtime,
+  entry: URL,
+  defaultName: string,
+): Promise<{ ok: true; artifact?: ArtifactInfo } | { ok: false; error: string }> {
+  try {
+    const model = (await runtime.loadModel(entry).getModel()) as unknown as Tagged;
+    const info = readArtifactTag({ runExpr: '', defaultName }, model);
+    return { ok: true, artifact: info?.tiles ? info : undefined };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}

@@ -67,7 +67,10 @@ interface Dashboard {
   /** `# artifact { autorun=false }` → stage control changes behind an Apply
       button. Absent = live (re-run on every change). */
   autorun?: boolean;
-  /** Path to dashboards/<name>/Dashboard.tsx when the repo customizes it. */
+  /** Structure v2: the dashboard's own file, relative to the project root
+      (`dashboards/<name>.malloy`) — compiled AS the entry to run its tiles. */
+  entryFile?: string;
+  /** Path to the optional custom component: `dashboards/<name>.jsx` (or .tsx). */
   tsxPath?: string;
 }
 
@@ -89,14 +92,30 @@ function resolveRuntimeDir(): string {
 }
 const resolveFrameEntry = (): string => path.join(resolveRuntimeDir(), "..", "frame-entry.tsx");
 
-/** The model's `# artifact`-tagged queries + optional custom Dashboard.tsx. */
+/** Structure v2: each `dashboards/<name>.malloy` is one dashboard, compiled AS
+    its own entry to read its `## artifact`. The optional custom component is a
+    flat sibling `dashboards/<name>.jsx` (or .tsx). A `.malloy` with no
+    `## artifact` is skipped (e.g. a shared include). */
 async function discoverDashboards(root: string, runner: ModelRunner): Promise<Dashboard[]> {
-  const result = await runner.artifacts();
-  if (!result.ok) throw new Error(`model error: ${result.error}`);
-  return result.artifacts.map((a) => {
-    const tsxPath = path.join(root, "dashboards", a.name, "Dashboard.tsx");
-    return { ...a, tsxPath: fs.existsSync(tsxPath) ? tsxPath : undefined };
-  });
+  const dir = path.join(root, "dashboards");
+  if (!fs.existsSync(dir)) return [];
+  const files = fs
+    .readdirSync(dir)
+    .filter((f) => f.endsWith(".malloy"))
+    .sort();
+  const dashboards: Dashboard[] = [];
+  for (const file of files) {
+    const base = file.slice(0, -".malloy".length);
+    const entryFile = path.join("dashboards", file); // relative to root (leaseIn joins it)
+    const res = await runner.artifactForFile(entryFile, base);
+    if (!res.ok) throw new Error(`dashboard ${file}: ${res.error}`);
+    if (!res.artifact) continue; // no `## artifact` in this file — not a dashboard
+    const component = ["jsx", "tsx"]
+      .map((ext) => path.join(dir, `${base}.${ext}`))
+      .find((p) => fs.existsSync(p));
+    dashboards.push({ ...res.artifact, name: res.artifact.name || base, entryFile, tsxPath: component });
+  }
+  return dashboards;
 }
 
 const esc = (s: string) =>
@@ -368,9 +387,10 @@ export async function serveDashboard(opts: {
           const dash = pick(url);
           // Composite controls = the UNION of givens across its tiles; a single
           // artifact = the one query's givens.
-          const specs = dash.tiles
-            ? await runner.dashboardGivens(dash.tiles)
-            : await runner.givensForQuery(dash.query);
+          const specs =
+            dash.tiles && dash.entryFile
+              ? await runner.dashboardGivens(dash.entryFile, dash.tiles)
+              : await runner.givensForQuery(dash.query);
           if (!specs.ok) {
             return send(200, "text/html; charset=utf-8",
               html(`<pre style="color:crimson;padding:16px">model error: ${esc(specs.error)}</pre>`, dash.title));
@@ -405,8 +425,8 @@ export async function serveDashboard(opts: {
         // surface runs under. A `dashboard` request runs only the tiles the
         // model declared, never arbitrary tiles from the frame.
         const out =
-          dashboard && dash.tiles
-            ? await runner.runDashboard(dash.tiles, { columns: dash.dashboard_columns, givens: givens ?? {} })
+          dashboard && dash.tiles && dash.entryFile
+            ? await runner.runDashboard(dash.entryFile, dash.tiles, { columns: dash.dashboard_columns, givens: givens ?? {} })
             : typeof malloy === "string"
               ? await runner.runText(malloy, givens ?? {})
               : await runner.run(String(query ?? dash.query), givens ?? {});

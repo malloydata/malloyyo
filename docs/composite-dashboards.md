@@ -86,10 +86,16 @@ refined nests. We bump 0.0.420 → 0.0.423 as part of this work.
 ### 0.3 Discovery, runner, lint (the code changes)
 
 - **Discovery** — glob `dashboards/*.malloy`; compile **each as its own entry**;
-  read its `## artifact`. Replaces the `index.malloy` annotation scan and the
-  source-`# artifact { tiles }` scan (both DELETED). Name = file basename,
-  overridable by `name=`. Optional sibling `<name>.jsx` is the custom component.
-  Cheap now that the config/schema cache stays warm across the per-file compiles.
+  read its dashboard declaration. Two forms (see `modelArtifact`): a model-level
+  `## artifact { tiles=[…] }` (multi-tile / cross-source, references tiles
+  elsewhere), OR — the **preferred** form — a top-level `query: … # artifact { … }`
+  defined **inline** in the file, so the given application (`where: … ~ $GIVEN`)
+  lives with the dashboard. The inline query becomes a single tile
+  (tiles=[queryName]); single-tile passthrough keeps its own render tags at the
+  root. Replaces the `index.malloy` annotation scan and the source-`# artifact
+  { tiles }` scan (both DELETED). Name = file basename, overridable by `name=`.
+  Optional sibling `<name>.jsx` is the custom component. Cheap now that the
+  config/schema cache stays warm across the per-file compiles.
 - **Runner** — `runDashboard`/`dashboardGivens` already take an `entryFile` via
   `leaseIn`; point them at `dashboards/<name>.malloy` instead of `index.malloy`.
   No other change — tiles resolve in the dashboard file's own scope.

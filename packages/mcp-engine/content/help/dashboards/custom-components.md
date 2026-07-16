@@ -1,14 +1,15 @@
 ---
-description: Custom dashboard UI — a ./dashboards/<slug>/Dashboard.tsx composing @malloyyo/dashboard widgets/hooks/helpers with your own React
+description: Custom dashboard UI — a flat dashboards/<name>.jsx|tsx sibling composing @malloyyo/dashboard widgets/hooks/helpers with your own React
 ---
 
-# Custom dashboard components (`Dashboard.tsx`)
+# Custom dashboard components (`dashboards/<name>.jsx`)
 
-The default UI (auto-rendered controls + panel) covers most dashboards. When
-it isn't enough, add ONE file — `./dashboards/<slug>/Dashboard.tsx` — that
+The default UI (auto-rendered controls + panel) covers most dashboards. When it
+isn't enough, add ONE file — a **flat sibling** `dashboards/<name>.jsx` (or
+`.tsx`) next to the dashboard's `dashboards/<name>.malloy` (same basename) — that
 composes the runtime's widgets/hooks with your own React. You own layout, copy,
-and theming; the model still owns every query and filter. See also `yo_help
-dashboards/authoring` and `dashboards/vega-charts`.
+and theming; the `.malloy` file still owns every query and filter. See also
+`yo_help dashboards/authoring` and `dashboards/vega-charts`.
 
 ```tsx
 import React from "react";
@@ -30,8 +31,8 @@ export default function Dashboard({ dashboard, givens }) {
         <Select given="MIN_SAMPLE"
           options={[10, 200, 1000].map(n => ({ value: filters.greaterThan(n), text: `> ${n}` }))} />
       </Controls>
-      <Panel givens={givens} />         {/* the tagged query, Malloy renderer */}
-      <Panel malloy="baby_names -> births_by_decade" givens={givens} />  {/* restricted text */}
+      <Panel givens={givens} />         {/* the dashboard itself (its tiles/query) */}
+      <Panel query="baby_names -> births_by_decade" givens={givens} />  {/* a specific query */}
     </div>
   );
 }
@@ -67,15 +68,18 @@ From `@malloyyo/dashboard` (also handed to the component as props):
   `filters.values(src)`. The stock `<Select/>` does this automatically;
   `<Search/>` deliberately commits raw text (its input IS a filter
   expression).
-- `<Panel/>` and `runData(text, givens)` — named queries are the primary
-  form; arbitrary Malloy runs as a RESTRICTED query (no import / given: /
-  connection.* / raw SQL / ##! flags — the model's published surface only).
+- `<Panel/>` runs against the DASHBOARD's own file: a bare `<Panel/>` renders
+  the whole dashboard (its tiles); `<Panel query="…"/>` runs a query defined in
+  the dashboard file (by name) or a `source -> view`; `<Panel malloy="…"/>` and
+  `runData(text, givens)` run arbitrary Malloy as a RESTRICTED query (no import /
+  given: / connection.* / raw SQL / ##! flags — the model's governed surface
+  only). `lint` checks each hard-coded `query="…"` still resolves.
 
 ## Theming
 
 Every widget is styled by the runtime's **default Malloyyo theme** (system
 font, neutral grays, blue accent, auto light/dark following the viewer's OS) —
-a bare `Dashboard.tsx` looks styled with zero effort, so DON'T hand-hardcode
+a bare component looks styled with zero effort, so DON'T hand-hardcode
 `fontFamily`/colors. The theme is CSS custom properties; override any subset by
 setting them on a wrapper element (more specific than the runtime's `:root`):
 

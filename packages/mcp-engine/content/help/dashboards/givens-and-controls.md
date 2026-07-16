@@ -40,10 +40,11 @@ equals, not colon):
 - `suggest { … }` — where the control's options come from. NO Malloy code in
   strings — just names:
   - `suggest { query=brand_suggest dimension=product_brand }` — the FIRST
-    COLUMN of a named query (declare the query in the model — governed,
-    reviewable, and only that query needs exporting). PREFER THIS FORM.
+    COLUMN of a named query (declare the query in the model — governed and
+    reviewable). PREFER THIS FORM. The query must be in scope where the dashboard
+    runs (bring it in with the dashboard file's bare `import`).
   - `suggest { source=baby_names dimension=state }` — the DISTINCT VALUES of
-    a dimension on a source (the whole source must be exported)
+    a dimension on a source (the source must be in the dashboard's scope)
   A `dimension` (in either form) is what enables SERVER-SIDE TYPEAHEAD: the
   runtime refines the base query with what the user has typed
   (`… + { where: lower(field) ~ f'll%'; limit: 50 }`, case-insensitive,

@@ -1,0 +1,8 @@
+##! experimental.givens
+import "givens.malloy"
+source: sales is duckdb.sql("SELECT 'CA' as st, 10 as amt UNION ALL SELECT 'NY', 20") extend {
+  # drill { to=[ghosttown] }
+  dimension: state is st
+  view: by_state is { group_by: st; aggregate: total is sum(amt); where: st ~ $STATE }
+  view: totals is { aggregate: total is sum(amt) }
+}

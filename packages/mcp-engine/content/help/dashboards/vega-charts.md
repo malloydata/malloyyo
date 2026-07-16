@@ -10,11 +10,12 @@ the `<VegaChart>` component. The chart engine ships in the dashboard runtime, so
 you author only a JSON spec + a Malloy query — no library to load.
 
 **It is a COMPONENT, not a `#` tag.** There is no `# vega_lite` or
-`# scatter_chart` tag. `<VegaChart>` lives in a custom
-`./dashboards/<slug>/Dashboard.tsx` — a different layer from the `#` renderer
-tags. (Dashboards are `# artifact`-tagged views/queries in the model; the
-`.tsx` file only customizes presentation. Preview with
-`malloyyo dashboard dev`, validate with `malloyyo lint`.)
+`# scatter_chart` tag. `<VegaChart>` lives in a custom component — a flat sibling
+`dashboards/<name>.jsx` (or `.tsx`) next to the dashboard's
+`dashboards/<name>.malloy` — a different layer from the `#` renderer tags. (The
+dashboard's query is declared in the `.malloy` file; the component only
+customizes presentation. Preview with `malloyyo dashboard dev`, validate with
+`malloyyo lint`.)
 
 ## The recipe
 
@@ -31,13 +32,13 @@ const spec = {
 };
 
 export default function Dashboard({ givens }) {
-  return <VegaChart spec={spec} malloy="names -> births_by_name" givens={givens} />;
+  return <VegaChart spec={spec} query="births_by_name" givens={givens} />;
 }
 ```
 
 Three ways to feed it data:
-- `<VegaChart spec={spec} query="named_query" givens={givens}/>` — a named query
-  the model publishes
+- `<VegaChart spec={spec} query="births_by_name" givens={givens}/>` — a query
+  defined in the dashboard's `.malloy` file (by name), or a `source -> view`
 - `<VegaChart spec={spec} malloy="source -> view" givens={givens}/>` — restricted
   Malloy text (same governance as the explore surface: no import / given: /
   connection.* / raw SQL / ##! flags)
@@ -68,5 +69,6 @@ Three ways to feed it data:
 
 ## Validate
 
-`malloyyo lint` checks the query, the givens, AND the `Dashboard.tsx` — it is
-your only pre-browser check. Then `malloyyo dashboard dev` to see it render.
+`malloyyo lint` checks the query, the givens, AND the component (it compiles,
+and each `query="…"` it references resolves) — your only pre-browser check. Then
+`malloyyo dashboard dev` to see it render.

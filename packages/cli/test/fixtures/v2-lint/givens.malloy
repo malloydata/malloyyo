@@ -1,0 +1,4 @@
+##! experimental.givens
+given:
+  # label="State"
+  STATE :: string is "%"

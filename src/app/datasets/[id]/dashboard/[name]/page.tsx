@@ -84,7 +84,7 @@ function DashboardView({
         const res = await fetch("/api/dashboards/run", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ datasetId: id, name, query: m.query, malloy: m.malloy, givens: m.givens }),
+          body: JSON.stringify({ datasetId: id, name, query: m.query, malloy: m.malloy, dashboard: m.dashboard, givens: m.givens }),
         });
         out = await res.json();
       } catch (err) {

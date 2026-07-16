@@ -1,6 +1,15 @@
 # Design: Repo-authored, compiled, sandboxed dashboard artifacts
 
-**Status:** Draft for review — not started. Written 2026-07-04.
+> **SUPERSEDED (structure v2).** This is the original design record for the v1
+> artifact system (dashboards declared in the model, discovered by scanning
+> `index.malloy`). The current system is **dashboards as files** — each dashboard
+> is a self-contained `dashboards/<name>.malloy`. For how it works and how to
+> author, see `docs/composite-dashboards.md` (design),
+> `docs/creating-dashboards.md` (guide), and `docs/migrating-dashboards-to-files.md`
+> (converting a v1 model). Kept here for history; the sandboxing/publish
+> reasoning below still holds.
+
+**Status:** Superseded by structure v2 (see banner). Written 2026-07-04.
 **Author:** Lloyd, with Claude.
 **Related:** `docs/model-publishing-design.md` (the CLI push-publish path this
 reuses), `docs/cold-start-model-cache.md` (the compiled-`ModelDef` cache we key

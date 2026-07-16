@@ -57,12 +57,20 @@ interface Dashboard {
   query: string;
   title: string;
   description?: string;
+  /** Composite dashboard: tile run-expressions run separately and combined into
+      one `# dashboard` result. Present iff composite (then `query` is ""). */
+  tiles?: string[];
+  /** Composite only: pass-through to the dashboard nest's `columns`. */
+  dashboard_columns?: number;
   /** Per-dashboard given defaults from the tag's `givens { … }` block. */
   givens?: Record<string, string | number | boolean>;
   /** `# artifact { autorun=false }` → stage control changes behind an Apply
       button. Absent = live (re-run on every change). */
   autorun?: boolean;
-  /** Path to dashboards/<name>/Dashboard.tsx when the repo customizes it. */
+  /** Structure v2: the dashboard's own file, relative to the project root
+      (`dashboards/<name>.malloy`) — compiled AS the entry to run its tiles. */
+  entryFile?: string;
+  /** Path to the optional custom component: `dashboards/<name>.jsx` (or .tsx). */
   tsxPath?: string;
 }
 
@@ -84,14 +92,30 @@ function resolveRuntimeDir(): string {
 }
 const resolveFrameEntry = (): string => path.join(resolveRuntimeDir(), "..", "frame-entry.tsx");
 
-/** The model's `# artifact`-tagged queries + optional custom Dashboard.tsx. */
+/** Structure v2: each `dashboards/<name>.malloy` is one dashboard, compiled AS
+    its own entry to read its `## artifact`. The optional custom component is a
+    flat sibling `dashboards/<name>.jsx` (or .tsx). A `.malloy` with no
+    `## artifact` is skipped (e.g. a shared include). */
 async function discoverDashboards(root: string, runner: ModelRunner): Promise<Dashboard[]> {
-  const result = await runner.artifacts();
-  if (!result.ok) throw new Error(`model error: ${result.error}`);
-  return result.artifacts.map((a) => {
-    const tsxPath = path.join(root, "dashboards", a.name, "Dashboard.tsx");
-    return { ...a, tsxPath: fs.existsSync(tsxPath) ? tsxPath : undefined };
-  });
+  const dir = path.join(root, "dashboards");
+  if (!fs.existsSync(dir)) return [];
+  const files = fs
+    .readdirSync(dir)
+    .filter((f) => f.endsWith(".malloy"))
+    .sort();
+  const dashboards: Dashboard[] = [];
+  for (const file of files) {
+    const base = file.slice(0, -".malloy".length);
+    const entryFile = path.join("dashboards", file); // relative to root (leaseIn joins it)
+    const res = await runner.artifactForFile(entryFile, base);
+    if (!res.ok) throw new Error(`dashboard ${file}: ${res.error}`);
+    if (!res.artifact) continue; // no `## artifact` in this file — not a dashboard
+    const component = ["jsx", "tsx"]
+      .map((ext) => path.join(dir, `${base}.${ext}`))
+      .find((p) => fs.existsSync(p));
+    dashboards.push({ ...res.artifact, name: res.artifact.name || base, entryFile, tsxPath: component });
+  }
+  return dashboards;
 }
 
 const esc = (s: string) =>
@@ -234,7 +258,7 @@ window.addEventListener('message',async(e)=>{
   let out;
   try{
     const res=await fetch('/api/run',{method:'POST',headers:{'content-type':'application/json'},
-      body:JSON.stringify({d:${d},query:m.query,malloy:m.malloy,givens:m.givens})});
+      body:JSON.stringify({d:${d},query:m.query,malloy:m.malloy,givens:m.givens,dashboard:m.dashboard})});
     out=await res.json();
   }catch(err){ out={ok:false,problems:[{message:String(err)}]}; }
   f.contentWindow.postMessage({type:'result',id:m.id,...out},${fb});
@@ -264,6 +288,8 @@ function frameDoc(
     query: dash.query,
     title: dash.title,
     description: dash.description,
+    tiles: dash.tiles,
+    dashboard_columns: dash.dashboard_columns,
     givens: dash.givens,
     autorun: dash.autorun,
   };
@@ -359,7 +385,12 @@ export async function serveDashboard(opts: {
           // Given specs are introspected from the model PER LOAD, so an edit to
           // a `given:` declaration (type, default, tags) shows up on reload.
           const dash = pick(url);
-          const specs = await runner.givensForQuery(dash.query);
+          // Composite controls = the UNION of givens across its tiles; a single
+          // artifact = the one query's givens.
+          const specs =
+            dash.tiles && dash.entryFile
+              ? await runner.dashboardGivens(dash.entryFile, dash.tiles)
+              : await runner.givensForQuery(dash.query);
           if (!specs.ok) {
             return send(200, "text/html; charset=utf-8",
               html(`<pre style="color:crimson;padding:16px">model error: ${esc(specs.error)}</pre>`, dash.title));
@@ -384,17 +415,28 @@ export async function serveDashboard(opts: {
         return send(200, "text/html; charset=utf-8", parentShell(pick(url), frameBase, dashboards, givensFromUrl(url)));
       }
       if (url.pathname === "/api/run" && req.method === "POST") {
-        const { d, query, malloy, givens } = JSON.parse(await readBody(req));
+        const { d, query, malloy, givens, dashboard } = JSON.parse(await readBody(req));
         const dash = byName.get(d);
         if (!dash) return send(404, "application/json", JSON.stringify({ ok: false, problems: [{ message: `no dashboard '${d}'` }] }));
-        // Governance: a dashboard may run (a) any named query the model
-        // publishes, or (b) restricted Malloy text — core's restricted mode
-        // (no import / given: / connection.* / raw SQL / ##! flags) is the
-        // gate, exactly the contract the explore MCP surface runs under.
+        // Governance: a dashboard may run (a) the whole COMPOSITE (its declared
+        // tiles), (b) any named query the model publishes, or (c) restricted
+        // Malloy text — core's restricted mode (no import / given: / connection.*
+        // / raw SQL / ##! flags) is the gate, the contract the explore MCP
+        // surface runs under. A `dashboard` request runs only the tiles the
+        // model declared, never arbitrary tiles from the frame.
+        // A v2 dashboard runs everything against its OWN file (its inline query /
+        // imports live there, not index.malloy); v1 falls back to index.malloy.
+        const entry = dash.entryFile;
         const out =
-          typeof malloy === "string"
-            ? await runner.runText(malloy, givens ?? {})
-            : await runner.run(String(query ?? dash.query), givens ?? {});
+          dashboard && dash.tiles && entry
+            ? await runner.runDashboard(entry, dash.tiles, { columns: dash.dashboard_columns, givens: givens ?? {} })
+            : typeof malloy === "string"
+              ? entry
+                ? await runner.runTextIn(entry, malloy, givens ?? {})
+                : await runner.runText(malloy, givens ?? {})
+              : entry
+                ? await runner.runIn(entry, String(query ?? ""), givens ?? {})
+                : await runner.run(String(query ?? dash.query), givens ?? {});
         return send(200, "application/json", JSON.stringify(out));
       }
       send(404, "text/plain", "not found");

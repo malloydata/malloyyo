@@ -1,0 +1,17 @@
+##! experimental.givens
+
+// Model-level cross-source composite (would live in index.malloy). A `##`
+// annotation is one line — the whole tag stays on a single line.
+## artifact { name="overview" title="Overview" tiles=["nums -> by_v", "words -> by_w"] dashboard_columns=3 }
+
+source: nums is duckdb.sql("SELECT 1 as v UNION ALL SELECT 2 as v") extend {
+  view: by_v is { group_by: v }
+  view: totals is { aggregate: c is count() }
+}
+
+// Source-level composite of this source's own views (bare tile names).
+# artifact { title="Words" tiles=[by_w, counts] }
+source: words is duckdb.sql("SELECT 'a' as w UNION ALL SELECT 'b' as w") extend {
+  view: by_w is { group_by: w }
+  view: counts is { aggregate: c is count() }
+}

@@ -1,0 +1,3 @@
+##! experimental.givens
+import { sales } from "../sales.malloy"
+## artifact { title="Bad" tiles=["sales -> nope"] dashboard_columns=0 }

@@ -41,6 +41,11 @@ export async function GET(req: Request, ctx: { params: Promise<{ datasetId: stri
     const info = {
       name: dash.name,
       query: dash.manifest.query,
+      // Structure v2: tiles/dashboard_columns drive the composite render path
+      // (a tag-only dashboard renders the runtime's DefaultDashboard when tiles
+      // is present — see frame-runtime ui.tsx `dash.tiles ? …`).
+      tiles: dash.manifest.tiles,
+      dashboard_columns: dash.manifest.dashboard_columns,
       title: dash.title,
       description: dash.manifest.description,
       givens: dash.manifest.givens,

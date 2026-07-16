@@ -74,10 +74,18 @@ export {
 } from './given-specs';
 export {
   artifactQueries,
+  collectDrillTargets,
+  modelArtifact,
   readArtifactTag,
   type ArtifactInfo,
   type ArtifactsResult,
 } from './artifacts';
+export {
+  combineTiles,
+  type CombinableResult,
+  type CombineOptions,
+  type DashboardTile,
+} from './combine-tiles';
 export {
   listHelpTopics,
   getHelpTopic,

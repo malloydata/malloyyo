@@ -1,0 +1,2 @@
+import { sales } from "sales.malloy"
+export { sales }

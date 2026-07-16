@@ -109,10 +109,16 @@ export interface ModelRunner {
   /** Run a dashboard's run-expression (a top-level query name or a
       `<source> -> <view>` path) with the given filter values (the givens). */
   run(runExpr: string, givens: Record<string, unknown>): Promise<RunResult>;
+  /** Run a run-expression against a specific `entryFile` (a dashboard's own
+      file) — a component's `<Panel query=…>`/`<VegaChart query=…>` whose query
+      is defined in the dashboard file, not index.malloy. */
+  runIn(entryFile: string, runExpr: string, givens: Record<string, unknown>): Promise<RunResult>;
   /** Run restricted Malloy query text (core's restricted mode is the gate: no
       import / given: / connection.* / raw SQL / ##! flags). This is how
       dashboards run suggestion queries and ad-hoc panels. */
   runText(malloy: string, givens: Record<string, unknown>): Promise<RunResult>;
+  /** Same, compiled against a specific `entryFile` (a dashboard's own file). */
+  runTextIn(entryFile: string, malloy: string, givens: Record<string, unknown>): Promise<RunResult>;
   /** Compile-only check of restricted query text (no execution). */
   validateText(malloy: string): Promise<ValidateResult>;
   /** Same, compiled against a specific `entryFile` (a dashboard's own file). */
@@ -223,8 +229,18 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
         run(runtime, entry, { runExpr, givens, stableResult: true, rowLimit: 5000 }),
       );
     },
+    runIn(entryFile, runExpr, givens) {
+      return leaseIn(entryFile, (runtime, entry) =>
+        run(runtime, entry, { runExpr, givens, stableResult: true, rowLimit: 5000 }),
+      );
+    },
     runText(malloy, givens) {
       return lease((runtime, entry) =>
+        runRestricted(runtime, entry, malloy, { givens, stableResult: true, rowLimit: 5000 }),
+      );
+    },
+    runTextIn(entryFile, malloy, givens) {
+      return leaseIn(entryFile, (runtime, entry) =>
         runRestricted(runtime, entry, malloy, { givens, stableResult: true, rowLimit: 5000 }),
       );
     },

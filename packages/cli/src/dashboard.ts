@@ -424,12 +424,19 @@ export async function serveDashboard(opts: {
         // / raw SQL / ##! flags) is the gate, the contract the explore MCP
         // surface runs under. A `dashboard` request runs only the tiles the
         // model declared, never arbitrary tiles from the frame.
+        // A v2 dashboard runs everything against its OWN file (its inline query /
+        // imports live there, not index.malloy); v1 falls back to index.malloy.
+        const entry = dash.entryFile;
         const out =
-          dashboard && dash.tiles && dash.entryFile
-            ? await runner.runDashboard(dash.entryFile, dash.tiles, { columns: dash.dashboard_columns, givens: givens ?? {} })
+          dashboard && dash.tiles && entry
+            ? await runner.runDashboard(entry, dash.tiles, { columns: dash.dashboard_columns, givens: givens ?? {} })
             : typeof malloy === "string"
-              ? await runner.runText(malloy, givens ?? {})
-              : await runner.run(String(query ?? dash.query), givens ?? {});
+              ? entry
+                ? await runner.runTextIn(entry, malloy, givens ?? {})
+                : await runner.runText(malloy, givens ?? {})
+              : entry
+                ? await runner.runIn(entry, String(query ?? ""), givens ?? {})
+                : await runner.run(String(query ?? dash.query), givens ?? {});
         return send(200, "application/json", JSON.stringify(out));
       }
       send(404, "text/plain", "not found");

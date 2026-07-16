@@ -290,11 +290,22 @@ function markDrillableCells(container, names) {
 // or a pre-run `result` (render it as-is, fetch nothing — the composite simple
 // path hands the combined result straight in).
 export function Panel({ query, malloy, dashboard, result: presetResult, givens, style }) {
+  // Input precedence: explicit malloy / dashboard / query prop wins. A BARE
+  // <Panel/> (no input) renders "this dashboard": for a composite (tiles) that's
+  // the whole thing (dashboard mode); for a single-query artifact it's that
+  // query. In v1 a bare Panel meant `dashboardInfo().query`; v2 dashboards carry
+  // `tiles` and an empty query, so a bare Panel in a hand-written component must
+  // fall through to dashboard mode rather than run an empty query.
+  const info = dashboardInfo();
   const req = malloy
     ? { malloy }
     : dashboard
       ? { dashboard: true }
-      : { query: query ?? dashboardInfo().query };
+      : query
+        ? { query }
+        : info.tiles
+          ? { dashboard: true }
+          : { query: info.query };
   const hasPreset = presetResult !== undefined;
   const live = useQuery(hasPreset ? { skip: true } : { ...req, givens });
   const result = hasPreset ? presetResult : live.result;

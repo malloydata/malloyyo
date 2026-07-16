@@ -260,15 +260,25 @@ export async function modelArtifact(
     //    (references tiles defined elsewhere).
     const composite = readArtifactTag({ runExpr: '', defaultName }, model);
     if (composite?.tiles) return { ok: true, artifact: composite };
-    // 2. A top-level `query:` tagged `# artifact` — the query IS the (single)
-    //    dashboard, defined inline in this file. It becomes a one-tile artifact
-    //    (tiles=[queryName]); single-tile passthrough keeps the query's own
-    //    render tags (`# dashboard {columns=…}`, `# bar_chart`, …) at the root.
+    // 2 & 3. A single tagged declaration IS the (single-tile) dashboard, defined
+    //    inline in this file — either a top-level `query: … # artifact`, or a
+    //    `view: … # artifact` inside a source the file defines/extends. Either
+    //    becomes tiles=[<run-expression>]; single-tile passthrough keeps the
+    //    declaration's own render tags (`# dashboard {columns=…}`, …) at the root.
     for (const queryName of model.queries().named) {
       const pq = model.getPreparedQueryByName(queryName) as unknown as Tagged;
       const info = readArtifactTag({ runExpr: queryName, defaultName }, pq);
-      if (info && !info.tiles) {
-        return { ok: true, artifact: { ...info, query: '', tiles: [queryName] } };
+      if (info && !info.tiles) return { ok: true, artifact: { ...info, tiles: [info.query], query: '' } };
+    }
+    for (const src of model.explores) {
+      for (const field of src.allFields) {
+        if (!field.isQueryField()) continue;
+        const view = field as unknown as QueryFieldLike;
+        const info = readArtifactTag(
+          { runExpr: `${src.name} -> ${view.name}`, defaultName, source: src.name, view: view.name },
+          view,
+        );
+        if (info && !info.tiles) return { ok: true, artifact: { ...info, tiles: [info.query], query: '' } };
       }
     }
     return { ok: true, artifact: undefined };

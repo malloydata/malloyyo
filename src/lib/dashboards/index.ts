@@ -10,13 +10,23 @@
 
 import { and, eq, asc, desc } from "drizzle-orm";
 import {
+  combineTiles,
   dashboardGivenSpecs,
+  run,
   runRestricted,
+  type CombinableResult,
   type DashboardGivenSpec,
 } from "@malloyyo/mcp-engine";
 import { db, datasets, malloyArtifacts } from "@/db";
 import { visibleDatasetWhere, findByDatasetRef, latestModel, modelFileMap } from "@/lib/mcp-tools";
 import { runNamedMalloyFiles, withModelRuntime, fileUrl } from "@/lib/malloy";
+
+/** Card name for a tile run-expression: the view name from `source -> view`,
+    else the query name (deduped downstream by combineTiles). */
+function tileName(runExpr: string): string {
+  const arrow = runExpr.lastIndexOf("->");
+  return (arrow >= 0 ? runExpr.slice(arrow + 2) : runExpr).trim();
+}
 
 export interface DashboardSummary {
   datasetId: string;
@@ -84,15 +94,19 @@ export type DashboardRunResult =
   | { ok: true; stableResult: unknown; rows?: unknown[]; rowCount: number }
   | { ok: false; error: string };
 
-/** Run a dashboard query: `req.query` is a run-expression (a query name or a
-    `<source> -> <view>` path; defaults to the stored manifest's), `req.malloy`
-    runs restricted Malloy text instead — the path suggestion queries and
-    ad-hoc panels use. */
+/** Run a dashboard. Structure v2: every request compiles against the
+    dashboard's OWN file (`manifest.entryFile` = `dashboards/<name>.malloy`),
+    not `index.malloy`, so its inline query and imports are in scope. `req`:
+    `dashboard:true` runs the whole COMPOSITE (its declared `tiles`, combined
+    into one `# dashboard` result); `query` runs a single run-expression (a
+    component's `<Panel query=…>`); `malloy` runs restricted Malloy text
+    (suggestion queries / ad-hoc panels). Falls back to `index.malloy` for a v1
+    manifest with no `entryFile`. */
 export async function runDashboard(
   userId: string,
   datasetId: string,
   name: string,
-  req: { query?: string; malloy?: string },
+  req: { query?: string; malloy?: string; dashboard?: boolean },
   givens: Record<string, unknown>,
   maxRows = 5000,
 ): Promise<DashboardRunResult> {
@@ -107,6 +121,12 @@ export async function runDashboard(
   if (!a) return { ok: false, error: `dashboard '${name}' not found` };
   const files = await modelFileMap(found.model);
 
+  const manifest = a.manifest as Record<string, unknown>;
+  const entryFile = typeof manifest.entryFile === "string" ? manifest.entryFile : "index.malloy";
+  const entry = fileUrl(entryFile);
+  const tiles = Array.isArray(manifest.tiles) ? (manifest.tiles as string[]) : null;
+  const columns = typeof manifest.dashboard_columns === "number" ? manifest.dashboard_columns : undefined;
+
   if (typeof req.malloy === "string") {
     // Restricted text: core rejects anything outside the model's published
     // surface with 'restricted-construct-forbidden'. The runtime cast bridges
@@ -114,7 +134,7 @@ export async function runDashboard(
     // mcp-host.ts) — one runtime object, two identical declaration trees.
     type EngineRuntime = Parameters<typeof runRestricted>[0];
     const out = await withModelRuntime(files, found.model.id, (runtime) =>
-      runRestricted(runtime as unknown as EngineRuntime, fileUrl("index.malloy"), req.malloy as string, {
+      runRestricted(runtime as unknown as EngineRuntime, entry, req.malloy as string, {
         givens: givens ?? {},
         stableResult: true,
         rowLimit: maxRows,
@@ -127,10 +147,51 @@ export async function runDashboard(
     return { ok: true, stableResult: out.stable_result, rows: out.rows, rowCount: out.row_count ?? 0 };
   }
 
-  const runExpr = req.query ?? (a.manifest as Record<string, unknown>).query;
+  // Composite dashboard: run each tile against the dashboard's own file (with
+  // only the givens it references, so an unused filter can't error a tile), then
+  // combine into one `# dashboard` result. A single tile passes through
+  // untouched so its own render tags govern. Mirrors the CLI runner.
+  if (req.dashboard && tiles) {
+    type EngineRuntime = Parameters<typeof run>[0];
+    const out = await withModelRuntime(files, found.model.id, async (runtime) => {
+      const rt = runtime as unknown as EngineRuntime;
+      const ran: { name: string; result: Awaited<ReturnType<typeof run>> }[] = [];
+      for (const tile of tiles) {
+        const specs = await dashboardGivenSpecs(rt, entry, tile);
+        const names = specs.ok ? new Set(specs.givens.map((s) => s.name)) : null;
+        const tileGivens = names
+          ? Object.fromEntries(Object.entries(givens ?? {}).filter(([k]) => names.has(k)))
+          : (givens ?? {});
+        const result = await run(rt, entry, {
+          runExpr: tile,
+          givens: tileGivens,
+          stableResult: true,
+          rowLimit: maxRows,
+        });
+        ran.push({ name: tileName(tile), result });
+      }
+      const problems = ran.flatMap((t) => t.result.problems ?? []);
+      const good = ran.filter((t) => t.result.ok && t.result.stable_result);
+      if (good.length === 0) {
+        return { ok: false as const, error: problems.map((p) => p.message).join("; ") || "dashboard failed" };
+      }
+      if (good.length === 1) return { ok: true as const, stableResult: good[0].result.stable_result };
+      const combined = combineTiles(
+        good.map((t) => ({ name: t.name, result: t.result.stable_result as CombinableResult })),
+        { columns },
+      );
+      return { ok: true as const, stableResult: combined };
+    });
+    if (!out.ok) return { ok: false, error: out.error };
+    return { ok: true, stableResult: out.stableResult, rowCount: 0 };
+  }
+
+  // Single run-expression — a custom component's `<Panel query=…>`, or a v1
+  // dashboard's stored query. Runs against the dashboard's own entry.
+  const runExpr = req.query ?? manifest.query;
   if (typeof runExpr !== "string") return { ok: false, error: "dashboard manifest has no query" };
   try {
-    const res = await runNamedMalloyFiles(files, "index.malloy", runExpr, givens ?? {}, {
+    const res = await runNamedMalloyFiles(files, entryFile, runExpr, givens ?? {}, {
       rowLimit: maxRows,
       cacheKey: found.model.id,
     });
@@ -155,13 +216,32 @@ export async function dashboardGivens(
 ): Promise<DashboardGivensResult> {
   const dash = await getDashboard(userId, datasetId, name);
   if (!dash) return { ok: false, error: "dashboard not found" };
-  const query = dash.manifest.query;
-  if (typeof query !== "string") return { ok: false, error: "dashboard manifest has no query" };
   const found = await findByDatasetRef(userId, datasetId);
   if (!found) return { ok: false, error: "dataset not found" };
   const files = await modelFileMap(found.model);
+  const entryFile = typeof dash.manifest.entryFile === "string" ? dash.manifest.entryFile : "index.malloy";
+  const entry = fileUrl(entryFile);
+  const tiles = Array.isArray(dash.manifest.tiles) ? (dash.manifest.tiles as string[]) : null;
   type EngineRuntime = Parameters<typeof dashboardGivenSpecs>[0];
+
+  // Composite: the controls are the UNION of givens across the tiles, resolved
+  // in the dashboard file's own scope (a given is declared once at model scope).
+  if (tiles) {
+    return withModelRuntime(files, found.model.id, async (runtime) => {
+      const rt = runtime as unknown as EngineRuntime;
+      const byName = new Map<string, DashboardGivenSpec>();
+      for (const tile of tiles) {
+        const specs = await dashboardGivenSpecs(rt, entry, tile);
+        if (specs.ok) for (const s of specs.givens) if (!byName.has(s.name)) byName.set(s.name, s);
+      }
+      return { ok: true, givens: [...byName.values()] };
+    });
+  }
+
+  // v1: a single stored query.
+  const query = dash.manifest.query;
+  if (typeof query !== "string") return { ok: false, error: "dashboard manifest has no query" };
   return withModelRuntime(files, found.model.id, (runtime) =>
-    dashboardGivenSpecs(runtime as unknown as EngineRuntime, fileUrl("index.malloy"), query),
+    dashboardGivenSpecs(runtime as unknown as EngineRuntime, entry, query),
   );
 }

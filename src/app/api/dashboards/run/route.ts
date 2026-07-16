@@ -24,6 +24,7 @@ export async function POST(req: Request) {
     name?: string;
     query?: string;
     malloy?: string;
+    dashboard?: boolean;
     givens?: Record<string, unknown>;
   };
   try {
@@ -31,10 +32,10 @@ export async function POST(req: Request) {
   } catch {
     return NextResponse.json({ ok: false, error: "invalid JSON" }, { status: 400 });
   }
-  const { datasetId, name, query, malloy, givens } = body;
+  const { datasetId, name, query, malloy, dashboard, givens } = body;
   if (!datasetId || !name) {
     return NextResponse.json({ ok: false, error: "datasetId and name are required" }, { status: 400 });
   }
-  const result = await runDashboard(user.id, datasetId, name, { query, malloy }, givens ?? {});
+  const result = await runDashboard(user.id, datasetId, name, { query, malloy, dashboard }, givens ?? {});
   return NextResponse.json(result);
 }

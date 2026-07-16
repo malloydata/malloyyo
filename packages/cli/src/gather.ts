@@ -46,29 +46,52 @@ export function listDashboardDirs(dir: string): string[] {
 }
 
 /**
- * Gather the model's dashboards into publish payloads. The model DECLARES its
- * dashboards (`# artifact`-tagged queries — no manifest file); the payload
- * manifest is synthesized from the tag, and `source` is the optional
- * ./dashboards/<name>/Dashboard.tsx ("" = the runtime's default dashboard).
+ * Structure v2: gather the model's dashboards into publish payloads. Each
+ * `dashboards/<name>.malloy` is a dashboard, compiled AS its own entry to read
+ * its `## artifact` / inline `# artifact` (no manifest file — the tag is the
+ * manifest). The synthesized manifest carries `entryFile` + `tiles` +
+ * `dashboard_columns` so the SERVER runs the dashboard against its own file
+ * (the same way the CLI dev preview does). `source` is the optional flat
+ * component `dashboards/<name>.jsx|tsx` ("" = the runtime's default dashboard).
+ * The dashboard `.malloy` files themselves ride along as ordinary model files
+ * (gatherDirectory collects them), so the server can compile each as an entry.
  * `lint` runs first in `publish`, so by here these are already validated.
  */
 export async function gatherDashboards(dir: string): Promise<DashboardPayload[]> {
+  const dashDir = join(dir, "dashboards");
+  if (!existsSync(dashDir)) return [];
   const runner = await makeRunner(dir);
-  const res = await runner.artifacts();
-  if (!res.ok) throw new Error(`model error: ${res.error}`);
-  return res.artifacts.map((a) => {
-    const tsxPath = join(dir, "dashboards", a.name, "Dashboard.tsx");
-    const manifest: Record<string, unknown> = { title: a.title, query: a.query };
-    if (a.source) manifest.source = a.source;
-    if (a.view) manifest.view = a.view;
-    if (a.description) manifest.description = a.description;
-    if (a.givens) manifest.givens = a.givens;
-    return {
-      name: a.name,
-      manifest,
-      source: existsSync(tsxPath) ? readFileSync(tsxPath, "utf8") : "",
-    };
-  });
+  try {
+    const files = readdirSync(dashDir)
+      .filter((f) => f.endsWith(".malloy"))
+      .sort();
+    const payloads: DashboardPayload[] = [];
+    for (const file of files) {
+      const base = file.slice(0, -".malloy".length);
+      const entryFile = `dashboards/${file}`; // POSIX, relative to root — matches the stored files
+      const res = await runner.artifactForFile(entryFile, base);
+      if (!res.ok) throw new Error(`dashboard ${file}: ${res.error}`);
+      if (!res.artifact) continue; // a shared include with no `## artifact`
+      const a = res.artifact;
+      const manifest: Record<string, unknown> = { title: a.title, entryFile };
+      if (a.tiles) manifest.tiles = a.tiles;
+      if (a.dashboard_columns !== undefined) manifest.dashboard_columns = a.dashboard_columns;
+      if (a.description) manifest.description = a.description;
+      if (a.givens) manifest.givens = a.givens;
+      if (a.autorun === false) manifest.autorun = false;
+      const component = ["jsx", "tsx"]
+        .map((ext) => join(dashDir, `${base}.${ext}`))
+        .find((p) => existsSync(p));
+      payloads.push({
+        name: a.name || base,
+        manifest,
+        source: component ? readFileSync(component, "utf8") : "",
+      });
+    }
+    return payloads;
+  } finally {
+    await runner.dispose();
+  }
 }
 
 /** Best-effort git provenance for `dir`. Returns {} outside a git checkout. */

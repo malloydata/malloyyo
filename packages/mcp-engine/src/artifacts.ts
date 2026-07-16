@@ -255,9 +255,23 @@ export async function modelArtifact(
   defaultName: string,
 ): Promise<{ ok: true; artifact?: ArtifactInfo } | { ok: false; error: string }> {
   try {
-    const model = (await runtime.loadModel(entry).getModel()) as unknown as Tagged;
-    const info = readArtifactTag({ runExpr: '', defaultName }, model);
-    return { ok: true, artifact: info?.tiles ? info : undefined };
+    const model = (await runtime.loadModel(entry).getModel()) as unknown as ModelLike;
+    // 1. Model-level `## artifact { tiles }` — the multi-tile / cross-source form
+    //    (references tiles defined elsewhere).
+    const composite = readArtifactTag({ runExpr: '', defaultName }, model);
+    if (composite?.tiles) return { ok: true, artifact: composite };
+    // 2. A top-level `query:` tagged `# artifact` — the query IS the (single)
+    //    dashboard, defined inline in this file. It becomes a one-tile artifact
+    //    (tiles=[queryName]); single-tile passthrough keeps the query's own
+    //    render tags (`# dashboard {columns=…}`, `# bar_chart`, …) at the root.
+    for (const queryName of model.queries().named) {
+      const pq = model.getPreparedQueryByName(queryName) as unknown as Tagged;
+      const info = readArtifactTag({ runExpr: queryName, defaultName }, pq);
+      if (info && !info.tiles) {
+        return { ok: true, artifact: { ...info, query: '', tiles: [queryName] } };
+      }
+    }
+    return { ok: true, artifact: undefined };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }

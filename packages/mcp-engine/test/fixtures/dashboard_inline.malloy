@@ -1,0 +1,3 @@
+##! experimental.givens
+# dashboard {columns=3} artifact { title="Inline Dash" }
+query: my_dash is duckdb.sql("SELECT 1 as v UNION ALL SELECT 2 as v") -> { group_by: v }

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { artifactQueries, dashboardGivenSpecs, run } from '../src/index';
+import { artifactQueries, dashboardGivenSpecs, modelArtifact, run } from '../src/index';
 import { fixtureUrl, withFixtureRuntime } from './helpers';
 
 const MODEL = 'artifacts_model.malloy';
@@ -92,4 +92,27 @@ test('artifactQueries: discovers model-level ## and source-level # composites', 
   assert.equal(words.source, 'words');
   assert.equal(words.dashboard_columns, undefined); // unset → renderer default
   assert.equal(words.title, 'Words');
+});
+
+test('modelArtifact: an inline `query: … # artifact` is a single-tile dashboard', async () => {
+  const res = await withFixtureRuntime((rt) =>
+    modelArtifact(rt, fixtureUrl('dashboard_inline.malloy'), 'dashboard_inline'),
+  );
+  assert.equal(res.ok, true);
+  if (!res.ok) return;
+  assert.ok(res.artifact, 'the tagged inline query is discovered as the file dashboard');
+  assert.deepEqual(res.artifact!.tiles, ['my_dash']); // the query IS the one tile
+  assert.equal(res.artifact!.title, 'Inline Dash');
+  assert.equal(res.artifact!.query, ''); // composite-shaped: tiles drive it
+});
+
+test('modelArtifact: a model-level `## artifact { tiles }` is the composite', async () => {
+  const res = await withFixtureRuntime((rt) =>
+    modelArtifact(rt, fixtureUrl(COMPOSITE), 'composite_artifacts_model'),
+  );
+  assert.equal(res.ok, true);
+  if (!res.ok) return;
+  assert.ok(res.artifact, 'the model-level ## artifact is discovered');
+  assert.deepEqual(res.artifact!.tiles, ['nums -> by_v', 'words -> by_w']);
+  assert.equal(res.artifact!.dashboard_columns, 3);
 });

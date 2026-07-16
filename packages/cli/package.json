@@ -32,9 +32,9 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@malloydata/malloy": "0.0.420",
-    "@malloydata/malloy-connections": "0.0.420",
-    "@malloydata/malloy-filter": "0.0.420",
+    "@malloydata/malloy": "^0.0.423",
+    "@malloydata/malloy-connections": "^0.0.423",
+    "@malloydata/malloy-filter": "^0.0.423",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "commander": "^12.1.0"
   },

@@ -1,199 +1,160 @@
 ---
-description: How to author a dashboard — declared in the model via # artifact tags, surfaced through index.malloy; the entry point for dashboard how-to
+description: How to author a dashboard — a self-contained file in the dashboards/ directory that defines its own query; the entry point for dashboard how-to
 ---
 
 # Authoring dashboards
 
-A dashboard is DECLARED IN THE MODEL — there is no manifest file and, for the
-basic case, no JavaScript at all. Preview with `malloyyo dashboard dev`; check
-with `malloyyo lint`.
+A dashboard is a **self-contained `.malloy` file in the `dashboards/`
+directory**. The file IS the dashboard: it imports the model parts it needs,
+defines its query (with the filtering it applies), and tags it. No manifest, and
+for the basic case no JavaScript. Preview with `malloyyo dashboard dev`; check
+with `malloyyo lint`. Requires `@malloydata/malloy` 0.0.423+.
 
-Related topics: `yo_help dashboards/givens-and-controls` (the filter controls),
+Related: `yo_help dashboards/givens-and-controls` (filter controls),
 `dashboards/grid-layout` (columns/colspan/break), `dashboards/custom-components`
-(a custom `Dashboard.tsx`), `dashboards/vega-charts` (`<VegaChart>`).
+(a flat `<name>.jsx`), `dashboards/vega-charts` (`<VegaChart>`).
 
-> **Need a chart the `# bar_chart`/`# line_chart`/`# shape_map` renderer tags
-> can't do?** Use the `<VegaChart>` COMPONENT (a Vega-Lite spec over query
-> rows) in a custom `Dashboard.tsx` — NOT a `#` tag; there is no
-> `# vega_lite`. See `yo_help dashboards/vega-charts`.
+> **Need a chart the `# bar_chart`/`# line_chart`/`# shape_map` tags can't do?**
+> Use the `<VegaChart>` COMPONENT (a Vega-Lite spec over query rows) — NOT a `#`
+> tag; there is no `# vega_lite`. See `yo_help dashboards/vega-charts`.
 
-## Make dashboards discoverable: the entry model
+## The layout
 
-**The entry is `index.malloy`.** `dashboard dev`, `lint`, and the hosted
-server only see what that file EXPORTS. (No `index.malloy` yet? `malloyyo init`
-scaffolds one that re-exports the repo's models.) Three things must all be
-surfaced (imported AND exported) through it, or the feature looks broken:
-
-1. **Whatever holds each `# artifact` tag.** A tag on a `view:` rides along
-   with its SOURCE (export the source — you can't export a view on its own); a
-   tag on a top-level `query:` needs that query exported. Not surfaced →
-   `dashboard dev` says "No dashboards declared" and `lint` says "no dashboards
-   to lint", even though the model compiles clean.
-2. **Every filter given the dashboards reference.** An unexported given
-   silently resolves to its declaration default — the control still renders
-   but CAN'T CHANGE THE QUERY (the filter looks inert).
-3. **Whatever backs each `suggest`** — the named query (`suggest {query=…}`)
-   or source (`suggest {source=…}`). Suggestions run against the entry model;
-   an unexported one fails lint with "Reference to undefined object".
-
-```malloy
-##! experimental.givens
-import {
-  order_items,                      // the source — carries its # artifact views
-  BRAND, CATEGORY, PERIOD,          // the filter givens
-  brand_suggest                     // backs a suggest {query=…}
-} from 'ecommerce.malloy'
-export { order_items, BRAND, CATEGORY, PERIOD, brand_suggest }
+```
+model/
+  ecommerce.malloy     # sources, reusable views/measures, # drill tags
+  givens.malloy        # given: declarations (the filter controls)
+  index.malloy         # imports/exports sources — the MCP/data surface ONLY
+  dashboards/
+    overview.malloy    # one dashboard; the FILENAME is its name/slug
+    overview.jsx       # optional custom component for overview
 ```
 
-Exporting the source is often the whole job: its `# artifact` views, its
-dimensions (for `suggest {source=…}`), and its measures all travel with it.
+**The filename is the dashboard's name** — its URL slug, its `# drill` target,
+and the basename of its optional component. Discovery globs
+`dashboards/*.malloy` and compiles EACH as its own entry — so dashboards are NOT
+declared in, or exported through, `index.malloy` (`index.malloy` is just the
+`query`/`describe_source` data surface).
 
-## The model is the whole contract
+## Preferred: put the query IN the dashboard file
 
-**1. Tag a `view:` inside a source** with `# artifact` to declare a dashboard
-(the idiomatic form — a view is reusable, nestable, and explorable through the
-normal `query`/`describe_source` surface). For the common overview shape
-(top-level aggregates + nests), ALSO tag it `# dashboard` so the result
-renders as KPI tiles + a card grid instead of one flat table — they're
-partners: `# artifact` declares the dashboard, `# dashboard` is the renderer
-tag that draws it like one:
+Define the query right in `dashboards/<name>.malloy` and tag it `# artifact`, so
+the given mapping (the `where: … ~ $GIVEN`) is visible next to the dashboard:
 
 ```malloy
-source: order_items is … extend {
-  #" Business health at a glance — sales, margin, orders.
-  # artifact { title="Business Overview" } dashboard {columns=6}
-  view: overview_dashboard is {
-    where:
-      inventory_items.product_brand ~ $BRAND,     // multi-filter where: is
-      inventory_items.product_category ~ $CATEGORY,  // COMMA separated
-      created_at ~ $PERIOD
-    # colspan=2
-    aggregate: total_sales, total_gross_margin, order_count
-    # colspan=3
-    nest:
-      # line_chart
-      sales_trend is by_month
-      top_brands
-      # shape_map
-      sales_by_state
-  }
+// dashboards/overview.malloy
+##! experimental.givens
+import "../ecommerce.malloy"          // BARE import: source + givens in scope
+
+#" Business health at a glance — sales, margin, orders.
+# artifact { title="Business Overview" } dashboard {columns=6}
+query: overview is order_items -> {
+  where:                                            // the given mapping, HERE
+    inventory_items.product_brand ~ $BRAND,         // multi-filter where: is
+    inventory_items.product_category ~ $CATEGORY,   // COMMA separated
+    created_at ~ $PERIOD
+  # colspan=2
+  aggregate: total_sales, total_gross_margin, order_count
+  # colspan=3
+  nest:
+    # line_chart
+    sales_trend is by_month
+    top_brands
+    # shape_map
+    sales_by_state
 }
 ```
 
 That's a complete dashboard: the runtime auto-renders a title (the tag's
-`title`, else the `#"` doc comment), a control for every given the view
-references, and the result panel. It runs as `run: <source> -> <view>` (here
-`order_items -> overview_dashboard`). `name="slug"` overrides the
-URL/directory slug (default: the view name). Note the `where:` clauses
-applying givens are COMMA-separated — newline-separated conditions do not
-parse.
+`title`, else the `#"` doc), a control for every given the query references, and
+the result panel. `# artifact` DECLARES the dashboard; `# dashboard {columns=6}`
+is the renderer tag that draws it as KPI tiles + a card grid — partners, on the
+same line. Grid rules: `yo_help dashboards/grid-layout`.
 
-**Grid layout** — the `dashboard {columns=6}` + `# colspan` / `# break` tags
-above place the KPI tiles and cards on a grid. Full rules: `yo_help
-dashboards/grid-layout`.
+**You know you're doing it right when the `where: foo ~ $FOO` is in the DASHBOARD
+file, not the model.** Keep the model's sources/views reusable and given-free;
+each dashboard decides its own filtering.
 
-Tagging a **top-level `query:`** still works and behaves identically (it runs
-as `run: <name>`) — reach for it only when the dashboard query doesn't belong
-to any one source.
+**The bare import is required for controls.** A control renders only when the
+given's DECLARATION is in the dashboard file's scope — a bare
+`import "../ecommerce.malloy"` (or `import "../givens.malloy"`) brings them all;
+the runtime shows a control for exactly the givens the query references. A
+selective `import { order_items } from …` brings the filter but NOT the control.
 
-**Deep-link a cell** to an external system — tag any `group_by:`/`select:`
-field `# link` (the value is a full URL) or
-`# link { url_template="https://…/$$" }` (`$$` = the cell value; add
-`field=id` to link on a separate, usually `# hidden`, id column). Common in a
-nested detail table so each row jumps to its record. `# image { url_template=… }`
-renders a cell as an inline image. Links open in a new browser tab.
+Keep the FILENAME as the name — don't set `name=`, so the URL, the
+`# drill { to=… }`, and the component basename all agree (one source of truth).
 
-**Drill from a dimension** into another dashboard (or filter in place) with
-`# drill` on the DIMENSION — not `# link` (that's for external URLs). Drill is a
-property of the dimension, so it works everywhere that dimension is grouped:
+## Other forms
+
+- **A view of a source you extend in the file** — tag the dashboard `view:` with
+  `# artifact` (runs as `<source> -> <view>`). Good when the dashboard needs
+  helper views defined alongside it.
+- **Compose existing views**: a model-level `## artifact { tiles=["a -> b", "c -> d"]
+  dashboard_columns=6 }` (`##`, ONE line) names several views, run separately and
+  combined into one `# dashboard`. Use for multi-tile / cross-source; prefer the
+  inline query whenever a dashboard has its own filtering.
+- A `dashboards/*.malloy` with NO `# artifact`/`## artifact` is a shared INCLUDE
+  (skipped by discovery) — put helper sources/views there for several dashboards
+  to import.
+
+## Givens (filter controls)
+
+Declare givens as `filter<T>` in the MODEL (`givens.malloy` or the source file) —
+they're shared and used by the MCP surface too; each dashboard APPLIES them in
+its `where:`. Full control reference: `yo_help dashboards/givens-and-controls`.
+Per-dashboard starting values go in the tag:
+
+```malloy
+# artifact { title="Ford recalls" givens { MANUFACTURER=f'Ford Motor Company' } }
+```
+
+## Drill from a dimension
+
+`# drill` on a source `dimension:` (in the model) makes its cells clickable —
+opening another dashboard (seeding the value) or filtering in place:
 
 ```malloy
 dimension:
-  # drill { to=[category_dashboard, self] }
+  # drill { to=[category_explorer, self] }
   category is inventory_items.product_category
-  # drill { to=[brand_dashboard] }
-  brand is inventory_items.product_brand
 ```
 
-`to` is a list of destinations; each is either a target `# artifact` slug or the
-keyword **`self`**. Clicking a dimension cell:
-- **slug** → opens that dashboard, seeding the clicked value into its given named
-  like the dimension **upper-cased** (`category` → `CATEGORY`) as an exact-match
-  filter.
-- **`self`** → sets that same given on the CURRENT dashboard (filter in place, no
-  navigation). Offered only if this dashboard actually declares the given.
+`to` is a list; each is a **dashboard slug** (a `dashboards/<slug>.malloy`
+filename) → opens it, seeding the value into the given named like the dimension
+UPPER-cased (`category` → `CATEGORY`), or **`self`** → filter the current
+dashboard in place. Add `given=` when the target given differs. `lint` VERIFIES
+every `to=` slug resolves to a real dashboard file (a typo/renamed dashboard
+fails loudly, not at click time).
 
-Add **`given=`** when the destination's given is named differently from the
-dimension (upper-cased). It overrides the target given name for every `to` in
-this tag — including `self`:
+> **malloy#2979 (fixed in 0.0.423):** a `# drill` on a bare `group_by: name` was
+> dropped when nested through `+ {…}`. Put it on the source `dimension:`, or use
+> `group_by: name is concat(name,'')`.
 
-```malloy
-dimension:
-  # drill { to=[state_dashboard, self] given=STATE_CODE }
-  state is orders.ship_state
-```
+## Custom component (optional)
 
-Here clicking `state` seeds `STATE_CODE` (not `STATE`). One given per drill tag;
-to map several givens from one query, use separate `# drill` tags on separate
-dimensions.
-
-One destination acts immediately; two or more pop a small menu at the cursor.
-Drillable cells get a pointer cursor and turn the accent color on hover (the web
-app's clickable-item look) so users can see they're clickable. Measure/aggregate
-cells never drill. Navigation is SAME-tab (Back returns), and
-the runtime resolves the URL for wherever it runs — hosted
-`/datasets/:id/dashboard/:slug` or the local `dashboard dev` preview — so the
-model needs no host/dataset knowledge. Given values ride the URL `$`-prefixed
-(`?$CATEGORY=Books`); bare params are reserved for future dimension filters.
-
-> **malloy#2979 caveat:** a `# drill` written on a *bare* `group_by: name` is
-> dropped when that view is nested through a `+ {…}` refinement. Put it on the
-> source `dimension:` (survives refinement), or make the grouped field an
-> expression — `group_by: name is concat(name,'')`.
-
-Two dashboards can share a given but start on different values — a `givens`
-block in the tag sets PER-DASHBOARD defaults (given values, i.e. filter
-expressions; URL params still win):
-
-```malloy
-# artifact { name="manufacturer" title="Manufacturer Recall Profile" givens { MANUFACTURER="Ford Motor Company" } }
-```
-
-This replaces the "declare the given's default per dashboard" role the old
-manifests had: declare the given once with a neutral default (often `f''` =
-no filter), and let each tag pick its landing state.
-
-**2. Declare the filters as `filter<T>` givens** with their control tags — see
-`yo_help dashboards/givens-and-controls`. **3. (optional) Add a custom
-`Dashboard.tsx`** for bespoke layout/charts — see `yo_help
+For bespoke layout/charts, add a flat sibling `dashboards/<name>.jsx` (or
+`.tsx`). Only React + `@malloyyo/dashboard` importable (sandboxed). A bare
+`<Panel/>` renders the whole dashboard; a `<Panel query="…"/>` /
+`<VegaChart query="…"/>` runs a query DEFINED in this dashboard file (by name) or
+a `source -> view`. `lint` checks each `query="…"` still resolves. See `yo_help
 dashboards/custom-components`.
 
 ## Rules
-- Declare data in the model: givens are `filter<T>`, options come from
-  `# suggest {…}` declarations, dashboards are `# artifact` tags. If a query or given you
-  need is missing, add it to the `.malloy` file first (check with
-  `describe_source`).
-- Surface everything through the entry model (see "Make dashboards
-  discoverable" above).
-- Only React + `@malloyyo/dashboard` are importable in a `Dashboard.tsx`. No
-  other imports, no network — the runtime sandboxes the component.
-- Interactivity = setting given values (filter-expression strings), not
-  rewriting query text per interaction.
+- Each dashboard is one `dashboards/<name>.malloy`; the filename is the slug.
+  Prefer the inline `query: … # artifact` form — the `where: ~ $GIVEN` lives in
+  the dashboard file.
+- Bare-import the model (and/or `givens.malloy`) so the controls render.
+- Givens are `filter<T>` declared in the model; options come from `# suggest {…}`;
+  interactivity = setting given values, not rewriting query text.
+- `index.malloy` is the data surface, NOT where dashboards live.
+- If a query/given you need is missing, add it (check with `describe_source`).
 
 ## Preview & validate
-`malloyyo dashboard dev` → open the printed URL. Edits to `.malloy` (tags,
-givens, queries) and `Dashboard.tsx` hot-reload. `malloyyo lint` validates
-the tagged queries, given `suggest` declarations, and any Dashboard.tsx —
-but only for dashboards REACHABLE FROM THE ENTRY: "no dashboards to lint"
-usually means the `# artifact` queries aren't exported through
-`index.malloy`, not that they don't exist.
-
-Validation loop that works well: the local `malloyyo mcp --develop` server
-hot-reloads working-directory edits — `query(execute:false)` to compile-check,
-`execute:true` to run. A `# artifact` view runs as
-`run: <source> -> <view>`; a top-level `# artifact` query runs as
-`run: <name>`. Either is only visible once surfaced through the entry (export
-the source for a view, the query for a top-level query). Don't validate local
-edits against a hosted/claude.ai connector — that serves the PUBLISHED model,
-which is stale until `malloyyo publish`.
+`malloyyo dashboard dev` → open the URL; `.malloy`/`.jsx` edits hot-reload.
+`malloyyo lint` checks each dashboard file on its own: it compiles as its entry;
+each tile/query and `# suggest` compiles; `dashboard_columns` is a positive int;
+the component compiles and its `query="…"` resolve; no duplicate names, no
+orphaned component; every `# drill { to=… }` resolves. Tight loop: the local
+`malloyyo mcp --develop` server hot-reloads edits — `query(execute:false)` to
+compile-check, `execute:true` to run. Don't validate against a hosted/claude.ai
+connector — it serves the PUBLISHED model (stale until `malloyyo publish`).

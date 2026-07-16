@@ -48,6 +48,39 @@ function tileName(runExpr: string): string {
   return (arrow >= 0 ? runExpr.slice(arrow + 2) : runExpr).trim();
 }
 
+/** Compile-only check of `run: <runExpr>` against a loaded model — no data
+    fetch. A bad name/view/given surfaces as the compiler's own error. */
+async function validateQuery(
+  runtime: Runtime,
+  entry: URL,
+  runExpr: string,
+  givens?: Record<string, unknown>,
+): Promise<ValidateResult> {
+  try {
+    const q = runtime.loadModel(entry).loadQuery(`run: ${runExpr}`);
+    const has = givens && Object.keys(givens).length > 0;
+    await q.getSQL(has ? { givens: givens as Record<string, GivenValue> } : undefined);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** Compile-only check of restricted Malloy text against a loaded model. */
+async function validateRestrictedText(
+  runtime: Runtime,
+  entry: URL,
+  malloy: string,
+): Promise<ValidateResult> {
+  const v = await validateRestricted(runtime, entry, malloy);
+  if (v.ok) return { ok: true };
+  const msg = v.problems
+    .filter((p) => p.severity === "error")
+    .map((p) => p.message)
+    .join("; ");
+  return { ok: false, error: msg || "restricted query failed to compile" };
+}
+
 /** Local files only — the preview server serves THIS project, not the disk. */
 function fsReader(): URLReader {
   return {
@@ -82,10 +115,15 @@ export interface ModelRunner {
   runText(malloy: string, givens: Record<string, unknown>): Promise<RunResult>;
   /** Compile-only check of restricted query text (no execution). */
   validateText(malloy: string): Promise<ValidateResult>;
+  /** Same, compiled against a specific `entryFile` (a dashboard's own file). */
+  validateTextIn(entryFile: string, malloy: string): Promise<ValidateResult>;
   /** Compile-only: does the run-expression compile and do the givens bind? No
       data fetch — used by `lint` to catch drift (unknown given, missing
       query/view). */
   validate(runExpr: string, givens: Record<string, unknown>): Promise<ValidateResult>;
+  /** Same, compiled against a specific `entryFile` (a dashboard's own file) —
+      lint validates each tile against the dashboard file that declares it. */
+  validateIn(entryFile: string, runExpr: string, givens?: Record<string, unknown>): Promise<ValidateResult>;
   /** The given specs a dashboard's run-expression transitively references —
       read from the model's `given:` declarations (types, defaults, doc
       comments, tags). */
@@ -191,15 +229,10 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
       );
     },
     validateText(malloy) {
-      return lease(async (runtime, entry) => {
-        const v = await validateRestricted(runtime, entry, malloy);
-        if (v.ok) return { ok: true };
-        const msg = v.problems
-          .filter((p) => p.severity === "error")
-          .map((p) => p.message)
-          .join("; ");
-        return { ok: false, error: msg || "restricted query failed to compile" };
-      });
+      return lease((runtime, entry) => validateRestrictedText(runtime, entry, malloy));
+    },
+    validateTextIn(entryFile, malloy) {
+      return leaseIn(entryFile, (runtime, entry) => validateRestrictedText(runtime, entry, malloy));
     },
     givensForQuery(runExpr) {
       return lease((runtime, entry) => dashboardGivenSpecs(runtime, entry, runExpr));
@@ -256,18 +289,10 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
       });
     },
     validate(runExpr, givens) {
-      return lease(async (runtime, entry) => {
-        try {
-          // Compile `run: <runExpr>` — accepts a query name or `<source> ->
-          // <view>`. A bad name/view surfaces as the compiler's own error.
-          const q = runtime.loadModel(entry).loadQuery(`run: ${runExpr}`);
-          const has = givens && Object.keys(givens).length > 0;
-          await q.getSQL(has ? { givens: givens as Record<string, GivenValue> } : undefined);
-          return { ok: true };
-        } catch (e) {
-          return { ok: false, error: e instanceof Error ? e.message : String(e) };
-        }
-      });
+      return lease((runtime, entry) => validateQuery(runtime, entry, runExpr, givens));
+    },
+    validateIn(entryFile, runExpr, givens) {
+      return leaseIn(entryFile, (runtime, entry) => validateQuery(runtime, entry, runExpr, givens));
     },
   };
 }

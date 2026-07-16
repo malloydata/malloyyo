@@ -1,0 +1,4 @@
+##! experimental.givens
+import { sales } from "../sales.malloy"
+import "../givens.malloy"
+## artifact { title="Good" tiles=["sales -> by_state", "sales -> totals"] dashboard_columns=2 }

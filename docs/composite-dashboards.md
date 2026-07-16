@@ -5,7 +5,128 @@
 **Related:** `docs/repo-artifacts.md` (the artifact/dashboard system this
 extends), `packages/mcp-engine/src/artifacts.ts` (`# artifact` discovery),
 `packages/cli/src/frame-runtime/` (the render runtime + `<Panel>`),
-`packages/mcp-engine/src/given-specs.ts` (given/suggest specs).
+`packages/mcp-engine/src/given-specs.ts` (given/suggest specs),
+`docs/migrating-dashboards-to-files.md` (the publishable how-to for authors).
+
+---
+
+## 0. Structure v2 — dashboards are FILES (THE CURRENT PLAN)
+
+> This supersedes the discovery design in §2–3 below (model-level `## artifact`
+> in `index.malloy` + source-level `# artifact { tiles }`). The combiner (§4),
+> tile grammar (§2.3), givens-union, and render (§3) all carry over unchanged;
+> only *where a dashboard is declared and how it's discovered* changes.
+
+**The move:** a dashboard is a **self-contained Malloy file** under
+`dashboards/`, compiled **as its own entry** (the way `index.malloy` is for the
+MCP surface). It imports the model parts it needs and declares its own
+`## artifact`. `index.malloy` goes back to being purely the MCP/ltool surface.
+
+```
+model/
+  malloy-config.json
+  givens.malloy          # given: declarations + control tags (the knobs)
+  baby_names.malloy      # source + views + measures + # drill on dims; import "givens.malloy"
+  index.malloy           # import/export baby_names  →  MCP/ltool surface only
+  dashboards/
+    over-represented.malloy     # import source + givens; ## artifact { tiles=[…] }
+    name-explorer.malloy        (+ name-explorer.jsx if it has a custom component)
+    name-trend.malloy
+```
+
+**Why this is right (each verified during design):**
+
+- **`## artifact` just works** — model annotations don't cross imports, so
+  `## artifact` was only readable from `index.malloy`. When the dashboard file
+  *is* the entry, its own `## artifact` is read directly. (One `##`/file; a
+  `##` tag must be one line.)
+- **Unlimited cross-source dashboards** — N files = N dashboards. The
+  one-`##`-per-file merge-collapse stops mattering.
+- **No export-through-index** — the file `import`s exactly what it tiles; nothing
+  is re-exported from `index.malloy`.
+- **The peer-model given-visibility lint loop DELETES** — it only existed
+  because dashboards borrowed `index.malloy`'s scope. A self-contained file
+  imports/declares the givens it uses; a missing one is a **loud compile error at
+  the tile**, not a silent missing control. (This is also the O(artifacts×peers)
+  loop that made `lint` look like it hung — deleted, not just cached.)
+
+### 0.1 Givens — declaration in the model, starting value in the dashboard
+
+"Given" is two things:
+
+- **Declaration** (`given: STATE :: … ` + `# label`/`# control`/`# suggest`
+  tags) → lives in the **model**, best in a dedicated `givens.malloy`. Views
+  reference them and the MCP surface uses them, so they're a model concern, not
+  presentation. (Can't live in `index.malloy` — the source would need to import
+  index → cycle.)
+- **Per-dashboard starting value** (`## artifact { givens { STATE="CA" } }`) →
+  lives in the **dashboard file**.
+
+**Verified visibility rule (spiked 2026-07-15):** a control renders only when
+the given's *tagged declaration* is in the dashboard file's scope. Importing the
+source alone does NOT bring it (only the query *requirement* rides along). So the
+convention is: **every source AND every dashboard does a bare
+`import "…/givens.malloy"`** — the whole-file import puts all declarations in
+scope; `dashboardGivenSpecs` still surfaces only the givens the tiles actually
+reference, so controls = referenced givens automatically, with no enumeration.
+(Selective `import { STATE } from …` also works but makes authors list every
+given — the bare import is the best practice.)
+
+### 0.2 Drill
+
+`# drill { to=<slug> }` stays on the **root-source dimension** (drill annotates a
+data field). It names a dashboard **slug**, which Malloy treats as opaque text —
+so a typo is dead navigation, not a compile error. → **new lint check**: every
+`# drill` target must resolve to a discovered `dashboards/*.malloy`.
+
+**Requires `@malloydata/malloy` ≥ 0.0.423** — Michael's "Carry field annotations
+through a refined nest" (#2982) fixes tags (incl. `# drill`) not propagating onto
+refined nests. We bump 0.0.420 → 0.0.423 as part of this work.
+
+### 0.3 Discovery, runner, lint (the code changes)
+
+- **Discovery** — glob `dashboards/*.malloy`; compile **each as its own entry**;
+  read its `## artifact`. Replaces the `index.malloy` annotation scan and the
+  source-`# artifact { tiles }` scan (both DELETED). Name = file basename,
+  overridable by `name=`. Optional sibling `<name>.jsx` is the custom component.
+  Cheap now that the config/schema cache stays warm across the per-file compiles.
+- **Runner** — `runDashboard`/`dashboardGivens` already take an `entryFile` via
+  `leaseIn`; point them at `dashboards/<name>.malloy` instead of `index.malloy`.
+  No other change — tiles resolve in the dashboard file's own scope.
+- **Lint** — becomes local, loud, and cheap: (1) each `dashboards/*.malloy`
+  compiles as its entry; (2) each tile run-expression compiles/runs; (3) each
+  referenced given's `# suggest` compiles; (4) `dashboard_columns` is a positive
+  int; (5) optional `.jsx` compiles; (6) **NEW** every `# drill` target resolves
+  to a dashboard file; (7) **NEW** no orphaned `<name>.jsx` without a
+  `<name>.malloy`, no duplicate resolved `name=`. The peer-model loop and the
+  `""`-query special case are gone. Keep a standalone "does `index.malloy`
+  compile" check for the MCP surface.
+
+### 0.4 Existing single-view `# artifact` dashboards
+
+Decision (2026-07-15): **move them too.** A single-tile dashboard is just
+`## artifact { tiles=[one] }` in a `dashboards/*.malloy`. This lets us drop
+`index.malloy`/source scanning entirely — one discovery mechanism, one mental
+model. The shipped babynames/auto_recalls models get migrated (see the migration
+guide) as the reference conversion.
+
+### 0.5 Build order (v2)
+
+1. **Bump malloy 0.0.420 → 0.0.423** (`/malloy-update`) for the drill/nest fix.
+2. **Discovery** — glob `dashboards/*.malloy`, compile each as entry, read
+   `## artifact`; delete the index/source composite scans.
+3. **Runner/givens** — re-point `runDashboard`/`dashboardGivens` at the
+   dashboard file entry.
+4. **Component** — `dashboards/<name>.jsx` sibling replaces
+   `dashboards/<name>/Dashboard.tsx` (keep both during transition).
+5. **Publish/gather** — glob dashboards, compile each, bundle definition +
+   component.
+6. **Lint** — the local checks in §0.3 (incl. the two new ones).
+7. **Migrate babynames + auto_recalls**; ship the migration guide.
+8. **Docs/guidance** — `yo_help` topic for authoring a dashboard file.
+
+Everything below (§1–9) is the still-valid mechanics (combiner, tile grammar,
+render, given union) plus the now-superseded discovery design, kept for context.
 
 ---
 

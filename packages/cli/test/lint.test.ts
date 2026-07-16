@@ -38,6 +38,17 @@ test('lint v2: passes a good dashboard, catches a bad tile, bad columns, and an 
   assert.ok(ghost, 'orphaned component reported');
   assert.match(ghost!.errors[0], /no matching "ghost\.malloy"/);
 
+  // Link check: bad.jsx hard-codes query="nope", which doesn't resolve.
+  assert.ok(
+    bad!.errors.some((e) => /bad\.jsx: query "nope"/.test(e) && /doesn't resolve/.test(e)),
+    "flags a component's query= that doesn't resolve in the dashboard scope",
+  );
+
+  // Link check: a `# drill { to=[ghosttown] }` targets no dashboard file.
+  const drill = byName.get('drill → ghosttown');
+  assert.ok(drill, 'unresolved drill target reported');
+  assert.match(drill!.errors[0], /targets no dashboard/);
+
   // Any error fails the whole lint (publish is blocked).
   assert.equal(report.ok, false, 'lint fails when a dashboard has errors');
 });

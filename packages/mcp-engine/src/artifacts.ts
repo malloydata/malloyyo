@@ -243,6 +243,39 @@ export async function artifactQueries(runtime: Runtime, entry: URL): Promise<Art
   }
 }
 
+/** Every dashboard slug referenced by a `# drill { to=[…] }` tag on a source
+    dimension in the model (excluding the special `self` = filter-in-place). Lint
+    checks each of these resolves to a discovered `dashboards/<slug>.malloy`, so a
+    typo'd or renamed drill target fails loudly instead of dead-ending at
+    click-time (drill `to=` is opaque tag text Malloy never checks). */
+export async function collectDrillTargets(
+  runtime: Runtime,
+  entry: URL,
+): Promise<{ ok: true; targets: string[] } | { ok: false; error: string }> {
+  try {
+    const model = (await runtime.loadModel(entry).getModel()) as unknown as ModelLike;
+    const targets = new Set<string>();
+    for (const src of model.explores) {
+      for (const field of src.allFields) {
+        const tagged = field as unknown as Tagged;
+        let tag: TagLike;
+        try {
+          tag = tagged.annotations.parseAsTag().tag;
+        } catch {
+          continue;
+        }
+        const drill = tag.tag('drill');
+        if (!drill) continue;
+        const to = drill.textArray('to') ?? (drill.text('to') ? [drill.text('to') as string] : []);
+        for (const t of to) if (t && t !== 'self') targets.add(t);
+      }
+    }
+    return { ok: true, targets: [...targets] };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
 /** Structure v2: read the single dashboard declared by a `dashboards/<name>.malloy`
     file — its model-level `## artifact`, which (because the file is compiled AS
     the entry) is read directly with no import-crossing or one-per-file caveat.

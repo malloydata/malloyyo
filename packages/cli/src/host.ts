@@ -17,6 +17,7 @@ import {
 } from "@malloydata/malloy";
 import {
   artifactQueries,
+  collectDrillTargets,
   combineTiles,
   dashboardGivenSpecs,
   modelArtifact,
@@ -141,6 +142,10 @@ export interface ModelRunner {
   givensForQueryIn(entryFile: string, runExpr: string): Promise<GivenSpecsResult>;
   /** The model's `# artifact`-tagged queries — its declared dashboards. */
   artifacts(): Promise<ArtifactsResult>;
+  /** Dashboard slugs referenced by `# drill { to=[…] }` tags on the model's
+      source dimensions (compiled from index.malloy), excluding `self`. Lint
+      checks each resolves to a discovered dashboard. */
+  drillTargets(): Promise<{ ok: true; targets: string[] } | { ok: false; error: string }>;
   /** Structure v2: read the `## artifact` a `dashboards/<name>.malloy` file
       declares, compiling that file AS the entry. `entryFile` is relative to the
       project root; `defaultName` (the basename) names it when the tag omits
@@ -258,6 +263,9 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
     },
     artifacts() {
       return lease((runtime, entry) => artifactQueries(runtime, entry));
+    },
+    drillTargets() {
+      return lease((runtime, entry) => collectDrillTargets(runtime, entry));
     },
     artifactForFile(entryFile, defaultName) {
       return leaseIn(entryFile, (runtime, entry) => modelArtifact(runtime, entry, defaultName));

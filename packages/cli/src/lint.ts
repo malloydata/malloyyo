@@ -28,6 +28,18 @@ export interface LintReport {
  * the runtime uses when it builds the suggest query. */
 const quoteField = (f: string) => (/^[A-Za-z_]\w*$/.test(f) ? f : `\`${f}\``);
 
+/** The run-expressions a component hard-codes as `query="…"` string literals
+    (`<Panel query="…"/>`, `<VegaChart query="…"/>`). Only string literals — a
+    `query={expr}` is dynamic and skipped. Deduped. Lint checks each still
+    resolves, so a component pointing at a renamed/removed query fails loudly. */
+function componentQueryLiterals(source: string): string[] {
+  const out = new Set<string>();
+  const re = /\bquery\s*=\s*(["'])([^"'\n]+)\1/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(source)) !== null) out.add(m[2]!.trim());
+  return [...out];
+}
+
 export async function lintDashboards(root: string): Promise<LintReport> {
   const abs = resolve(root);
   const runner = await makeRunner(abs);
@@ -132,23 +144,46 @@ async function runLint(abs: string, runner: ModelRunner): Promise<LintReport> {
       }
     }
 
-    // The optional component (flat sibling) must at least compile (syntax).
+    // The optional component (flat sibling) must at least compile (syntax), and
+    // each `query="…"` it hard-codes must still resolve in the dashboard's scope.
     for (const ext of ["jsx", "tsx"] as const) {
       const cp = join(dir, `${base}.${ext}`);
       if (!existsSync(cp)) continue;
+      const source = readFileSync(cp, "utf8");
       try {
-        await esbuild.transform(readFileSync(cp, "utf8"), { loader: ext, jsx: "automatic" });
+        await esbuild.transform(source, { loader: ext, jsx: "automatic" });
       } catch (e) {
         const msg = (e as { errors?: Array<{ text: string }> }).errors?.map((x) => x.text).join("; ") ?? String(e);
         errors.push(`${base}.${ext}: ${msg}`);
+        continue;
+      }
+      for (const q of componentQueryLiterals(source)) {
+        const v = await runner.validateIn(entryFile, q, {});
+        if (!v.ok) errors.push(`${base}.${ext}: query "${q}" doesn't resolve — ${v.error}`);
       }
     }
 
     dashboards.push({ name: art.name, errors, warnings });
   }
 
-  // TODO(v2): validate `# drill { to=<slug> }` targets on source dimensions
-  // resolve to a discovered dashboard file (needs walking the model's dims).
+  // Link check: every `# drill { to=<slug> }` on a source dimension must point at
+  // a real dashboard (drill `to=` is opaque tag text Malloy never validates, so a
+  // typo or a renamed dashboard is silent dead navigation without this).
+  const drills = await runner.drillTargets();
+  if (drills.ok) {
+    for (const target of drills.targets) {
+      if (!seenNames.has(target)) {
+        dashboards.push({
+          name: `drill → ${target}`,
+          errors: [
+            `# drill { to=[${target}] } targets no dashboard — ` +
+              `add dashboards/${target}.malloy, or fix the slug to a real dashboard`,
+          ],
+          warnings: [],
+        });
+      }
+    }
+  }
 
   // Warnings never fail lint — only errors do (so publish isn't blocked).
   return { ok: dashboards.every((d) => d.errors.length === 0), dashboards };

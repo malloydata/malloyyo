@@ -74,6 +74,7 @@ export {
 } from './given-specs';
 export {
   artifactQueries,
+  collectDrillTargets,
   modelArtifact,
   readArtifactTag,
   type ArtifactInfo,

@@ -39,11 +39,11 @@ test('combineTiles: each tile becomes an array<record> nest field with its data 
 
   // Root is a # dashboard with the columns pass-through.
   assert.deepEqual(combined.annotations, [{ value: '# dashboard {columns=3}\n' }]);
-  assert.equal(combined.model_annotations?.[0].value, '##! experimental { givens }\n');
+  assert.equal(combined.model_annotations?.[0]?.value, '##! experimental { givens }\n');
 
   // Two nest fields, each an array<record> of the tile's columns.
   assert.equal(combined.schema.fields.length, 2);
-  const f0 = combined.schema.fields[0];
+  const f0 = combined.schema.fields[0]!;
   assert.equal(f0.kind, 'dimension');
   assert.equal(f0.name, 'by_decade');
   const ty = f0.type as { kind: string; element_type: { kind: string; fields: { name: string }[] } };
@@ -52,13 +52,13 @@ test('combineTiles: each tile becomes an array<record> nest field with its data 
   assert.deepEqual(ty.element_type.fields.map((f) => f.name), ['decade', 'total']);
 
   // Render tags are lifted onto the card; internal #(malloy) metadata is not.
-  assert.deepEqual(combined.schema.fields[1].annotations, [{ value: '# line_chart\n' }]);
-  assert.deepEqual(combined.schema.fields[0].annotations, []);
+  assert.deepEqual(combined.schema.fields[1]!.annotations, [{ value: '# line_chart\n' }]);
+  assert.deepEqual(combined.schema.fields[0]!.annotations, []);
 
   // One dashboard row; each column cell IS the tile's own data (verbatim).
   assert.equal(combined.data?.kind, 'array_cell');
   assert.equal(combined.data?.array_value?.length, 1);
-  const row = combined.data!.array_value![0];
+  const row = combined.data!.array_value![0]!;
   assert.equal(row.kind, 'record_cell');
   assert.equal(row.record_value?.length, 2);
   assert.strictEqual(row.record_value![0], t1.data); // same object, not a copy

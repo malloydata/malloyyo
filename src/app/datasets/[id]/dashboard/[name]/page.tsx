@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: MIT
 
 "use client";
-import { Suspense, use, useEffect, useRef, useState } from "react";
+import { Suspense, use, useEffect, useRef } from "react";
 import { useSearchParams } from "next/navigation";
-import Link from "next/link";
+import { DatasetNav } from "@/components/DatasetNav";
 
 // Trusted shell for a dashboard. Renders breadcrumbs + a sandboxed iframe, and
 // brokers the iframe's run requests to /api/dashboards/run (viewer-scoped).
@@ -32,21 +32,11 @@ function DashboardView({
 }) {
   const { id, name } = use(params);
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  const [datasetName, setDatasetName] = useState<string>("");
   // The iframe src carries the URL's givens so a shared link opens filtered.
   // Computed from the initial query; givens changes update the URL via
   // replaceState (below), which doesn't re-trigger this, so the iframe stays put.
   const qs = useSearchParams().toString();
   const frameSrc = `/api/dashboards/${id}/${encodeURIComponent(name)}/frame${qs ? `?${qs}` : ""}`;
-
-  useEffect(() => {
-    fetch(`/api/datasets/${id}`)
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => {
-        if (d?.name) setDatasetName(d.name);
-      })
-      .catch(() => {});
-  }, [id]);
 
   useEffect(() => {
     async function onMessage(e: MessageEvent) {
@@ -98,13 +88,7 @@ function DashboardView({
 
   return (
     <main className="w-full px-6 py-5">
-      <nav className="mb-3 flex items-center gap-2 font-mono text-xs text-gray-500 dark:text-gray-400">
-        <Link href="/" className="hover:underline">home</Link>
-        <span>/</span>
-        <Link href={`/datasets/${id}`} className="hover:underline">{datasetName || "dataset"}</Link>
-        <span>/</span>
-        <span className="text-gray-700 dark:text-gray-300">{name}</span>
-      </nav>
+      <DatasetNav datasetId={id} activeDashboard={name} />
       <iframe
         ref={iframeRef}
         // allow-popups lets a link mark (# link) open its target on click;

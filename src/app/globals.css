@@ -24,3 +24,15 @@ body {
   color: var(--foreground);
   font-family: var(--font-geist-sans), system-ui, sans-serif;
 }
+
+/* Drillable dimension cells inside a rendered Malloy result — marked .dash-drill
+   by the shared drill helper (packages/cli/src/frame-runtime/drill.ts). Normal
+   text until hovered, then they read as links. The Malloy renderer always draws
+   on a light surface, so this doesn't follow the app's dark mode. */
+.dash-drill {
+  cursor: pointer;
+}
+.dash-drill:hover > .cell-content {
+  color: #2563eb;
+  text-decoration: underline;
+}

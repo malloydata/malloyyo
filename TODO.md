@@ -6,10 +6,18 @@ closes it.
 
 ## Dashboards
 
-- [ ] **Drills in LTool results.** `# drill` navigation works only in the
-      dashboard renderer / frame runtime (`packages/cli/src/frame-runtime/runtime.tsx`,
-      `onCellClick`). Wire the same drill-link navigation into the LTool result
-      view so drilling works when LTool displays query results.
+- [ ] **New multi-tile dashboard layout.** Design a layout for dashboards that
+      show several tiles at once — beyond today's grid (`# dashboard` bounded-box
+      cards, 361px cap; `packages/cli/src/frame-runtime/`). Wants sizing/placement
+      that reads well when a dashboard is many panels rather than one or two.
+- [ ] **Drill into measures.** Clicking an aggregate should drill to the rows
+      behind it, not just the dimensional `# drill { to= }` navigation we have
+      today (`packages/cli/src/frame-runtime/runtime.tsx`, `onCellClick`).
+- [ ] **Maybe: better table visualization.** Make table results sortable
+      (click a column header to re-sort), and consider an alternative table
+      renderer. Today's tables are capped by `tableConfig.rowLimit` (PR #73) with
+      no sort — see `packages/cli/src/frame-runtime/runtime.tsx` and
+      `src/components/MalloyResultView.tsx`.
 - [ ] **Dashboard runs → history.** Record dashboard runs in query history like
       regular queries (so they show up alongside `run_query`/LTool history).
 - [ ] **Show all dashboards for a dataset while viewing one.** On the single
@@ -49,8 +57,19 @@ closes it.
       mid-page (~the "Refresh from GitHub" button + `RefreshModal`). Fold into the
       dataset-page redesign above.
 
+## Docs
+
+- [ ] **Add dashboards to the README.** `README.md` only mentions dashboards in
+      passing (the intro bullet and the `malloyyo test` paragraph). It needs a
+      real section: what a repo-authored dashboard is, the `# artifact` +
+      `givens` contract, and where the full authoring guide lives
+      (`docs/repo-artifacts.md`, `yo_help` topics under `dashboards/*`).
+
 ## Known issues / cleanup
 
+- [ ] **Thorough code review.** No focused review pass has been done across the
+      codebase since the v2 dashboard rework landed. Sweep for correctness bugs
+      and dead/duplicated code (`/code-review high` or an ultra review).
 - [ ] **Dual-install tsc error at `src/lib/mcp-host.ts:118`.** Pre-existing:
       npm root vs pnpm engine copy of `@malloydata/malloy` (two copies of the type).
 - [ ] **Remove dead v1 `artifactQueries` composite scans** (superseded by the v2

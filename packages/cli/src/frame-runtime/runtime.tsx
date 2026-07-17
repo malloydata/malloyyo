@@ -24,6 +24,9 @@ import React, {
 import { createRoot } from "react-dom/client";
 import { MalloyRenderer } from "@malloydata/render";
 import { filters } from "./filters";
+// The drill contract (which cells drill, to where, seeding which given) is shared
+// with the hosted app's ltool result view — see drill.ts.
+import { drillFieldNames, humanizeSlug, markDrillableCells, resolveDrill } from "./drill";
 
 export { filters };
 
@@ -228,62 +231,6 @@ function clientFilter(options, serverSide, term) {
   return options.filter((o) => String(o).toLowerCase().startsWith(lower)).slice(0, TYPEAHEAD_LIMIT);
 }
 
-// Slug → menu label: "category_dashboard"/"brand-explorer" → "Category dashboard".
-function humanizeSlug(s) {
-  const t = String(s).replace(/[-_]+/g, " ").trim();
-  return t.charAt(0).toUpperCase() + t.slice(1);
-}
-
-// The renderer gives no per-cell field id, but each cell carries an inline
-// `grid-column: N / …` and each table's header cells (.th) hold the field names.
-const gridColStart = (el) => {
-  const m = (el.style && el.style.gridColumn ? el.style.gridColumn : "").match(/^\s*(\d+)/);
-  return m ? m[1] : null;
-};
-
-// Names of the fields that declare `# drill`, from the renderer's metadata
-// (includes any `# label` so we can match either against the header text).
-function drillFieldNames(viz) {
-  const names = new Set();
-  try {
-    const fields = viz.getMetadata() ? viz.getMetadata().getAllFields() : [];
-    for (const f of fields) {
-      if (f && f.tag && f.tag.tag && f.tag.tag("drill")) {
-        names.add(String(f.name));
-        const label = f.tag.text && f.tag.text("label");
-        if (label) names.add(label);
-      }
-    }
-  } catch {
-    /* metadata unavailable — no affordance, clicks still work */
-  }
-  return names;
-}
-
-// Tag drillable cells with `dash-drill` (styled as links via THEME_CSS) so users
-// can see they're clickable. Per table: header .th cells at a drillable field →
-// that column's grid-column → mark this table's own body .td cells in that column.
-function markDrillableCells(container, names) {
-  if (!names.size) return;
-  for (const table of container.querySelectorAll(".malloy-table")) {
-    const mine = (el) => el.closest(".malloy-table") === table; // skip nested tables
-    const cols = new Set();
-    for (const th of table.querySelectorAll(".column-cell.th")) {
-      if (!mine(th)) continue;
-      const text = (th.textContent || "").replace(/​/g, "").trim();
-      const gc = gridColStart(th);
-      if (gc && names.has(text)) cols.add(gc);
-    }
-    if (!cols.size) continue;
-    for (const td of table.querySelectorAll(".column-cell.td")) {
-      // Only leaf value cells — never a cell that wraps a nested table.
-      if (mine(td) && cols.has(gridColStart(td)) && !td.querySelector(".malloy-table")) {
-        td.classList.add("dash-drill");
-      }
-    }
-  }
-}
-
 // ── Panel: run a query, render with Malloy's renderer ───────────────
 // Inputs (pick one): `query` (a model query name or `source -> view`), `malloy`
 // (restricted text), `dashboard` (run the current composite artifact's tiles),
@@ -322,19 +269,9 @@ export function Panel({ query, malloy, dashboard, result: presetResult, givens, 
   const drillNamesRef = useRef(new Set()); // drillable field names for the current result
   const observerRef = useRef(null);
   const onCellClick = useCallback((payload) => {
-    if (!payload || payload.isHeader) return;
-    const f = payload.field;
-    // Only dimensions drill — a measure/aggregate click shouldn't navigate.
-    if (!f || typeof f.wasDimension !== "function" || !f.wasDimension()) return;
-    const drillTag = f.tag && f.tag.tag("drill");
-    // `to=[a, self]` (array) or `to=x` (single) — a dest is a dashboard slug or `self`.
-    const dests = drillTag && (drillTag.textArray("to") ?? (drillTag.text("to") ? [drillTag.text("to")] : []));
-    if (!dests || !dests.length || payload.value == null) return;
-    // Target given defaults to the dimension name upper-cased (category → CATEGORY);
-    // `given=` names it explicitly when the destination's given differs. One given
-    // per drill today; a future syntax may map several from a single query.
-    const given = drillTag.text("given") || String(f.name).toUpperCase();
-    const filterExpr = filters.oneOf(String(payload.value)); // exact-match, escaped
+    const drill = resolveDrill(payload);
+    if (!drill) return;
+    const { dests, given, filterExpr } = drill;
     // `self` needs a matching given on THIS dashboard to filter in place (case-insensitive).
     const selfSpec = givenSpecs().find((s) => s.name.toUpperCase() === given.toUpperCase());
     const run = (dest) => {

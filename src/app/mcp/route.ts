@@ -80,7 +80,7 @@ export async function POST(req: Request) {
   // instance tagging, the mandatory question, recording, and open_share_link.
   // user_agent identifies the client; x-author-model (set by our LLM test
   // harness) is ground-truth model attribution — absent for organic traffic.
-  const hosted = buildHostedExploreSurface(user, originFromRequest(req), {
+  const hosted = await buildHostedExploreSurface(user, originFromRequest(req), {
     userAgent: req.headers.get("user-agent"),
     authorModel: req.headers.get("x-author-model"),
   });

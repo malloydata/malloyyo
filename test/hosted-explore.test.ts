@@ -91,7 +91,7 @@ function blockText(r: { content: Array<{ text: string }> }, i: number): string {
 }
 
 test("list_sources surfaces each model's sources with their annotations", async () => {
-  const r = await host().call("list_sources", {});
+  const r = await (await host()).call("list_sources", {});
   const data = JSON.parse(blockText(r, 0)) as {
     ok: boolean;
     // models keyed by model_ref; each model's sources keyed by source_ref.
@@ -112,7 +112,7 @@ test("describe_source resolves a bare source: schema (block 0) + verbatim text (
   // block 0 *looks like* a schema. The exact describe_source schema shape is the
   // engine's contract, pinned by its golden tests (packages/mcp-engine/test) —
   // don't re-pin it here, or every engine reshape breaks this test for nothing.
-  const r = await host().call("describe_source", { source: "sales" });
+  const r = await (await host()).call("describe_source", { source: "sales" });
   assert.equal(r.content.length, 2, "two content blocks: schema + source text");
   const schema = JSON.parse(blockText(r, 0)) as { ok: boolean; model_ref: string; source: string };
   assert.equal(schema.ok, true);
@@ -125,14 +125,14 @@ test("describe_source resolves a bare source: schema (block 0) + verbatim text (
 });
 
 test("describe_source on an unknown source fails cleanly (no throw)", async () => {
-  const r = await host().call("describe_source", { source: "nope" });
+  const r = await (await host()).call("describe_source", { source: "nope" });
   const out = JSON.parse(blockText(r, 0)) as { ok: boolean; problems: Array<{ code: string }> };
   assert.equal(out.ok, false);
   assert.ok(out.problems.some((p) => p.code === "source-not-found"));
 });
 
 test("query execute:false validates; execute:true runs on DuckDB + records a share link", async () => {
-  const v = await host().call("query", {
+  const v = await (await host()).call("query", {
     source: "sales",
     malloy: "run: sales -> by_animal",
     execute: false,
@@ -140,7 +140,7 @@ test("query execute:false validates; execute:true runs on DuckDB + records a sha
   });
   assert.equal((JSON.parse(blockText(v, 0)) as { ok: boolean }).ok, true, "compiles");
 
-  const run = await host().call("query", {
+  const run = await (await host()).call("query", {
     source: "sales",
     malloy: "run: sales -> { aggregate: total_qty }",
     execute: true,
@@ -180,8 +180,8 @@ test("query execute:false validates; execute:true runs on DuckDB + records a sha
 
 test("ChatGPT client (openai-mcp UA) gets a table in content and NO structuredContent", async () => {
   const args = { source: "sales", malloy: "run: sales -> by_animal", execute: true, question: "by animal, per client" };
-  const forChatgpt = await hostAs("openai-mcp/1.0.0").call("query", args);
-  const forDefault = await host().call("query", args);
+  const forChatgpt = await (await hostAs("openai-mcp/1.0.0")).call("query", args);
+  const forDefault = await (await host()).call("query", args);
 
   // ChatGPT's content is a rendered table carrying the actual rows + the link.
   const gptText = blockText(forChatgpt, 0);
@@ -202,7 +202,7 @@ test("ChatGPT client (openai-mcp UA) gets a table in content and NO structuredCo
 });
 
 test("query without a question is refused (host policy)", async () => {
-  const r = await host().call("query", {
+  const r = await (await host()).call("query", {
     source: "sales",
     malloy: "run: sales -> { aggregate: total_qty }",
     execute: true,
@@ -212,7 +212,7 @@ test("query without a question is refused (host policy)", async () => {
 });
 
 test("multi-file model: compiles across the import; block 1 slices the entry source", async () => {
-  const r = await host().call("describe_source", { source: "pets" });
+  const r = await (await host()).call("describe_source", { source: "pets" });
   assert.equal(r.content.length, 2, "two blocks even for a multi-file model");
   // Host-seam check only: the import resolved and `pets` was described. The exact
   // schema shape is the engine's contract (see the describe_source test above).
@@ -224,7 +224,7 @@ test("multi-file model: compiles across the import; block 1 slices the entry sou
   assert.match(blockText(r, 1), /source: pets is base extend/, "entry-source text sliced");
 
   // And it actually runs across the import boundary on DuckDB.
-  const run = await host().call("query", {
+  const run = await (await host()).call("query", {
     source: "pets",
     malloy: "run: pets -> by_animal",
     execute: true,
@@ -235,7 +235,7 @@ test("multi-file model: compiles across the import; block 1 slices the entry sou
 });
 
 test("an explicit unknown model_ref refuses without leaking existence", async () => {
-  const r = await host().call("describe_source", { source: "sales", model_ref: "ghost" });
+  const r = await (await host()).call("describe_source", { source: "sales", model_ref: "ghost" });
   const out = JSON.parse(blockText(r, 0)) as { ok: boolean; problems: Array<{ code: string }> };
   assert.equal(out.ok, false);
   assert.ok(out.problems.some((p) => p.code === "model-not-found"));
@@ -245,7 +245,7 @@ test("ltool round-trip: a shared query resolves AND replays (regression: broken 
   // Execute a query → it mints a share link (inquiry + tool_call carrying source
   // + dataset_id). This is the exact path that broke: a bad recorded source made
   // the link replay fail with "source not found".
-  const run = await host().call("query", {
+  const run = await (await host()).call("query", {
     source: "sales",
     malloy: "run: sales -> { aggregate: total_qty }",
     execute: true,
@@ -281,7 +281,7 @@ test("query refuses a source from the WRONG model_ref (write-side guard)", async
   // `sales` lives in petshop, `pets` in multimod. Querying `sales` against
   // multimod must refuse (source-not-in-model) — never silently run the wrong
   // model or record a wrong (source, model) pair.
-  const r = await host().call("query", {
+  const r = await (await host()).call("query", {
     source: "sales",
     model_ref: "multimod",
     malloy: "run: sales -> { aggregate: total_qty }",
@@ -294,7 +294,7 @@ test("query refuses a source from the WRONG model_ref (write-side guard)", async
 });
 
 test("every tool call is audited to tool_calls — non-query tools and failures included", async () => {
-  const h = host();
+  const h = await host();
 
   // B: a non-query tool logs a clean (error-null) audit row — previously these
   // never reached tool_calls at all.
@@ -345,7 +345,7 @@ test("a compile-only (execute:false) query is audited but records no run artifac
   // (for debugging), but there's no error, no compiled SQL, and no row count —
   // nothing actually ran. Marker string makes the row unambiguous to find.
   const marker = "run: sales -> { aggregate: total_qty } // compile-only-audit-marker";
-  const v = await host().call("query", { source: "sales", malloy: marker, execute: false, question: "compile-only marker" });
+  const v = await (await host()).call("query", { source: "sales", malloy: marker, execute: false, question: "compile-only marker" });
   assert.equal((JSON.parse(blockText(v, 0)) as { ok: boolean }).ok, true, "compiles");
 
   const [row] = await db

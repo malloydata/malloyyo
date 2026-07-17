@@ -487,6 +487,34 @@ export async function withModelRuntime<T>(
   });
 }
 
+// Run ONE raw SQL statement on the model's own connection (the raw-query
+// escape hatch — the ENGINE has already gated it read-only; this is pure
+// execution). Leases from the same per-version pool as queries. The connection
+// is the model's: its malloy-config.json's first named connection, or the
+// default MotherDuck DuckDB fallback when it has none.
+export async function runRawSQL(
+  files: Map<string, string>,
+  cacheKey: string | undefined,
+  sql: string,
+  rowLimit: number,
+): Promise<{ rows: Record<string, unknown>[]; total_rows?: number }> {
+  const { configJson } = splitFiles(files);
+  let connectionName: string | undefined;
+  if (configJson) {
+    try {
+      const names = Object.keys((JSON.parse(configJson) as { connections?: Record<string, unknown> }).connections ?? {});
+      connectionName = names[0];
+    } catch {
+      // malformed config — fall through to the default lookup
+    }
+  }
+  return withRuntime(files, cacheKey, async (runtime) => {
+    const conn = await runtime.connections.lookupConnection(connectionName);
+    const data = await conn.runSQL(sql, { rowLimit });
+    return { rows: data.rows as Record<string, unknown>[], total_rows: data.totalRows };
+  });
+}
+
 // ── Durable compiled-ModelDef cache ──────────────────────────────────────────
 // When MODEL_DEF_CACHE is on, a cold instance rehydrates a fully-compiled model
 // from Postgres (no schema fetch) instead of the per-source compile (worldcup:

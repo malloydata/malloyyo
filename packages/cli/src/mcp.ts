@@ -34,6 +34,7 @@ import {
   gateConfigProblems,
   mapProblems,
   modelCatalogEntry,
+  modelGuidanceTopics,
   prepareSource,
   renderInstructions,
   type BoundModel,
@@ -226,6 +227,33 @@ function makeDevelopHost(root: string, currentConfig: () => Promise<LoadedConfig
   return { withRuntime: makeWithRuntime(root, currentConfig) };
 }
 
+/** The model's own guidance topics (guidance/**\/*.md under root) — read once at
+    launch, the same files `publish` ships, so the local test window serves the
+    guidance a hosted consumer will get. No namespace: one model here. */
+function readGuidance(root: string): ReturnType<typeof modelGuidanceTopics> {
+  const base = path.join(root, "guidance");
+  const files: Array<[string, string]> = [];
+  const walk = (dir: string): void => {
+    let entries: string[];
+    try {
+      entries = fs.readdirSync(dir);
+    } catch {
+      return;
+    }
+    for (const name of entries) {
+      if (name.startsWith(".")) continue;
+      const full = path.join(dir, name);
+      if (fs.statSync(full).isDirectory()) walk(full);
+      else if (name.endsWith(".md")) {
+        const rel = path.relative(root, full).split(path.sep).join("/");
+        files.push([rel, fs.readFileSync(full, "utf8")]);
+      }
+    }
+  };
+  walk(base);
+  return modelGuidanceTopics(files);
+}
+
 export async function serveMcp(opts: {
   root?: string;
   version: string;
@@ -241,7 +269,7 @@ export async function serveMcp(opts: {
   const surface: ToolSurface =
     mode === "develop"
       ? developSurface(makeDevelopHost(root, currentConfig))
-      : exploreSurface(makeExploreHost(root, currentConfig));
+      : exploreSurface(makeExploreHost(root, currentConfig), { guidance: readGuidance(root) });
   // The local window has no env.INSTANCE_NAME; honor one if set so a fox can
   // preview a specific instance's name, else fall back to the product name.
   const instanceName = process.env.INSTANCE_NAME || "Malloyyo";

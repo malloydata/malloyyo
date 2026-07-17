@@ -21,21 +21,27 @@ import { db, datasets, type User } from "@/db";
 import {
   compile,
   exploreSurface,
+  mergeSurfaces,
   modelCatalogEntry,
+  modelGuidanceTopics,
+  rawQueryTool,
   renderInstructions,
   toContent,
   HOST_ONLY,
   type BoundModel,
   type ExploreHost,
+  type GuidanceTopic,
   type ModelEntry,
+  type RawQueryHost,
   type RunResult,
+  type ToolSurface,
   type WithHostOnly,
 } from "@malloyyo/mcp-engine";
 
 /** What the explore `query` tool returns on an executed run: the run result,
     the model it resolved to, and the host-only SQL channel. */
 type QueryRunResult = WithHostOnly<RunResult & { model_ref?: string }>;
-import { withModelRuntime } from "./malloy";
+import { runRawSQL, withModelRuntime } from "./malloy";
 import {
   latestModel,
   loadSharedQuery,
@@ -125,10 +131,58 @@ async function leaseDataset<T>(
   );
 }
 
+// What each visible model CONTRIBUTES beyond its Malloy: its guidance topics
+// (guidance/**.md, published with the model) and whether it opts into the
+// raw-query escape hatch (malloy-config.json `"rawQuery": true` — repo-
+// controlled, same precedent as poolSize). Loaded once per surface build.
+interface ModelExtras {
+  /** All visible models' topics, namespaced by dataset name. */
+  guidance: GuidanceTopic[];
+  /** Topic names per dataset — the list_sources pointer decoration. */
+  topicNamesByDataset: Map<string, string[]>;
+  /** Raw-query-enabled datasets: name → what runRawSQL needs. */
+  rawQueryable: Map<string, { modelId: string; files: Map<string, string> }>;
+}
+
+function rawQueryEnabled(files: Map<string, string>): boolean {
+  const config = files.get("malloy-config.json");
+  if (!config) return false;
+  try {
+    return (JSON.parse(config) as { rawQuery?: unknown }).rawQuery === true;
+  } catch {
+    return false;
+  }
+}
+
+async function loadModelExtras(userId: string): Promise<ModelExtras> {
+  const extras: ModelExtras = {
+    guidance: [],
+    topicNamesByDataset: new Map(),
+    rawQueryable: new Map(),
+  };
+  for (const ds of await visibleDatasets(userId)) {
+    const model = await latestModel(ds.id);
+    if (!model) continue;
+    const files = await modelFileMap(model);
+    const topics = modelGuidanceTopics(files, ds.name);
+    if (topics.length) {
+      extras.guidance.push(...topics);
+      extras.topicNamesByDataset.set(ds.name, topics.map((t) => t.name));
+    }
+    if (rawQueryEnabled(files)) {
+      extras.rawQueryable.set(ds.name, { modelId: model.id, files });
+    }
+  }
+  return extras;
+}
+
 // The engine's ExploreHost: withModel resolves + leases a pooled Runtime; list
 // compiles each visible model and renders it through the engine's ONE catalog
-// projection (modelCatalogEntry) — no per-host copy of the listing shape.
-function makeExploreHost(userId: string): ExploreHost {
+// projection (modelCatalogEntry) — no per-host copy of the listing shape. The
+// host owns model-level out-of-band metadata, so entries for models that ship
+// guidance get the read-first pointer (the tool-RESULT channel — the reliable
+// one; instructions may never be seen).
+function makeExploreHost(userId: string, extras: ModelExtras): ExploreHost {
   return {
     withModel: async (ref, fn) => {
       const found = await findModelByRef(userId, ref);
@@ -142,20 +196,53 @@ function makeExploreHost(userId: string): ExploreHost {
       for (const ds of await visibleDatasets(userId)) {
         const model = await latestModel(ds.id);
         if (!model) continue;
+        let entry: ModelEntry;
         try {
-          entries.push(
-            await leaseDataset(model, async (m) => {
-              const compiled = await compile(m.runtime, m.entry, { exportedOnly: true });
-              return compiled.ok && compiled.model
-                ? modelCatalogEntry(ds.name, compiled.model)
-                : { model_ref: ds.name };
-            }),
-          );
+          entry = await leaseDataset(model, async (m) => {
+            const compiled = await compile(m.runtime, m.entry, { exportedOnly: true });
+            return compiled.ok && compiled.model
+              ? modelCatalogEntry(ds.name, compiled.model)
+              : { model_ref: ds.name };
+          });
         } catch {
-          entries.push({ model_ref: ds.name }); // a model that won't compile lists as a bare ref
+          entry = { model_ref: ds.name }; // a model that won't compile lists as a bare ref
         }
+        const topicNames = extras.topicNamesByDataset.get(ds.name);
+        if (topicNames?.length) {
+          entry.instructions = [
+            entry.instructions,
+            `This model publishes guidance that changes the numbers — read the relevant topic with yo_help BEFORE querying: ${topicNames.join(", ")}.`,
+          ]
+            .filter(Boolean)
+            .join(" ");
+        }
+        entries.push(entry);
       }
       return { entries };
+    },
+  };
+}
+
+// The raw-query host: resolve which raw-query-enabled model the call means,
+// then execute on that model's own pooled connection. The engine has already
+// gated the SQL read-only.
+function makeRawQueryHost(extras: ModelExtras): RawQueryHost {
+  return {
+    runSQL: async (ref, sql, rowLimit) => {
+      const enabled = extras.rawQueryable;
+      const pick = ref
+        ? enabled.get(ref)
+        : enabled.size === 1
+          ? [...enabled.values()][0]
+          : undefined;
+      if (!pick) {
+        throw new Error(
+          ref
+            ? `model '${ref}' does not enable raw queries`
+            : `pass model_ref — raw-query-enabled models: ${[...enabled.keys()].join(", ")}`,
+        );
+      }
+      return runRawSQL(pick.files, pick.modelId, sql, rowLimit);
     },
   };
 }
@@ -250,12 +337,25 @@ export interface HostedSurface {
 // client user_agent and the request's author_model), and a successful run is
 // decorated with its freshly-minted share link. route.ts wires this into
 // initialize / tools/list / tools/call.
-export function buildHostedExploreSurface(
+export async function buildHostedExploreSurface(
   user: User,
   baseUrl: string,
   ctx: { userAgent?: string | null; authorModel?: string | null } = {},
-): HostedSurface {
-  const surface = exploreSurface(makeExploreHost(user.id));
+): Promise<HostedSurface> {
+  // Model-contributed extras (guidance topics + raw-query opt-ins) shape the
+  // surface itself — which topics yo_help serves, whether run_query exists —
+  // so they load before construction.
+  const extras = await loadModelExtras(user.id);
+  const explore = exploreSurface(makeExploreHost(user.id, extras), {
+    guidance: extras.guidance,
+  });
+  const surface: ToolSurface = extras.rawQueryable.size
+    ? mergeSurfaces(explore, {
+        tools: [rawQueryTool(makeRawQueryHost(extras))],
+        instructions: "",
+        skills: [],
+      })
+    : explore;
   const byName = new Map(surface.tools.map((t) => [t.name, t]));
   const userAgent = ctx.userAgent ?? null;
   // Presentation policy for THIS client (default = unchanged JSON). Only the
@@ -326,6 +426,25 @@ export function buildHostedExploreSurface(
         const msg = "'question' is required: a plain-English description of what this query answers.";
         await record({ malloyInput: strArg(args.malloy), question: null, executed: executing, error: msg });
         return errText(msg);
+      }
+
+      // run_query (raw SQL on the model's connection): record like an executed
+      // query — the SQL in the audit column, the dataset when resolvable. No
+      // share slug (ltool renders Malloy, and raw SQL has none).
+      if (name === "run_query") {
+        const result = (await tool.handler(toolArgs)) as Record<string, unknown>;
+        const succeeded = result.ok !== false;
+        const refArg = strArg(args.model_ref) ?? (extras.rawQueryable.size === 1 ? [...extras.rawQueryable.keys()][0] : undefined);
+        const found = refArg ? await findModelByRef(user.id, refArg) : null;
+        await record({
+          datasetId: found?.ds.id ?? null,
+          question: strArg(args.question) ?? null,
+          compiledSql: strArg(args.sql),
+          rowCount: typeof result.row_count === "number" ? result.row_count : undefined,
+          executed: true,
+          error: succeeded ? undefined : resultError(result),
+        });
+        return toContent(result) as ToolResult;
       }
 
       const result = (await tool.handler(toolArgs)) as Record<string, unknown>;

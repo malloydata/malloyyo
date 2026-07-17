@@ -8,8 +8,10 @@ const SKIP_DIRS = new Set(["node_modules", ".git"]);
 
 /**
  * Collect every *.malloy file under `dir` (recursively, skipping hidden dirs and
- * node_modules) plus malloy-config.json at the root. Paths are relative to `dir`,
- * POSIX-separated, so imports resolve the same way on the server.
+ * node_modules) plus malloy-config.json at the root, plus the model's own
+ * guidance topics (guidance/**\/*.md — served through yo_help on the consumer
+ * surfaces). Paths are relative to `dir`, POSIX-separated, so imports resolve
+ * the same way on the server.
  */
 export function gatherDirectory(dir: string): { files: ModelFile[]; config?: string } {
   const files: ModelFile[] = [];
@@ -18,13 +20,11 @@ export function gatherDirectory(dir: string): { files: ModelFile[]; config?: str
     for (const entry of readdirSync(cur)) {
       if (entry.startsWith(".") || SKIP_DIRS.has(entry)) continue;
       const full = join(cur, entry);
+      const rel = relative(dir, full).split(sep).join("/");
       if (statSync(full).isDirectory()) {
         walk(full);
-      } else if (entry.endsWith(".malloy")) {
-        files.push({
-          path: relative(dir, full).split(sep).join("/"),
-          content: readFileSync(full, "utf8"),
-        });
+      } else if (entry.endsWith(".malloy") || (rel.startsWith("guidance/") && entry.endsWith(".md"))) {
+        files.push({ path: rel, content: readFileSync(full, "utf8") });
       }
     }
   };

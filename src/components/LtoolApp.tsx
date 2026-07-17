@@ -781,7 +781,7 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
             {result?.stableResult && (
               <div className="space-y-2">
                 <p className="text-[11px] text-gray-500 dark:text-gray-400 uppercase tracking-wide font-semibold">Results</p>
-                <MalloyResultView stableResult={result.stableResult} />
+                <MalloyResultView stableResult={result.stableResult} datasetId={selected.datasetId} />
               </div>
             )}
 

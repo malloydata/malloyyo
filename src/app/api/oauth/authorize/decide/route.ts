@@ -24,6 +24,12 @@ export async function POST(request: Request): Promise<Response> {
   const session = await auth();
   if (!session?.user?.id) return plainError(401, "Not signed in — please retry");
 
+  // Bind the consent to the session that started the flow. A blob minted by one
+  // user cannot be approved by another's session — this closes consent CSRF
+  // (a lifted blob auto-POSTed from an attacker page) independently of the
+  // session cookie's SameSite behavior.
+  if (authz.userId !== session.user.id) return plainError(403, "Session mismatch — please retry from your client");
+
   const url = new URL(authz.redirectUri);
   if (authz.state) url.searchParams.set("state", authz.state);
 

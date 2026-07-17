@@ -7,9 +7,19 @@ const nextConfig: NextConfig = {
   // Emit .next/standalone (minimal server + traced node_modules) for the Docker image.
   output: "standalone",
   async rewrites() {
+    // Serve the discovery metadata at both the bare well-known path (older MCP
+    // spec, 2025-03-26) AND the resource-scoped path variant. Current Claude
+    // clients follow RFC 9728 / RFC 8414: for a resource served under a path
+    // (ours is /mcp) they insert the well-known segment *before* the path and
+    // fetch e.g. /.well-known/oauth-protected-resource/mcp. Without the :path*
+    // rewrites those 404, discovery fails, and OAuth never completes. The route
+    // handlers derive `resource`/`authorization_servers` from the origin, so the
+    // same handler returns the correct body for either form.
     return [
       { source: "/.well-known/oauth-authorization-server", destination: "/api/oauth/discovery/authorization-server" },
+      { source: "/.well-known/oauth-authorization-server/:path*", destination: "/api/oauth/discovery/authorization-server" },
       { source: "/.well-known/oauth-protected-resource", destination: "/api/oauth/discovery/protected-resource" },
+      { source: "/.well-known/oauth-protected-resource/:path*", destination: "/api/oauth/discovery/protected-resource" },
     ];
   },
   serverExternalPackages: [

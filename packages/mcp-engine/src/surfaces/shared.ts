@@ -178,11 +178,31 @@ export function argRecord(
 
 // ── the shared yo_help tool ──────────────────────────────────
 
-export function yoHelpTool(): ToolDef {
+/**
+ * The one help channel. `extra` folds MODEL-contributed topics (see
+ * model-guidance.ts) into the same index and lookup as the engine's own —
+ * listed first (they are the topics specific to what the caller is querying),
+ * resolved by the same rungs: exact name, then name substring (so a short
+ * `guidance/sales` finds a host-namespaced `mymodel/guidance/sales`), then
+ * engine body-token fallback.
+ */
+export function yoHelpTool(extra: HelpTopic[] = []): ToolDef {
+  const lookup = (query: string): HelpTopic | undefined => {
+    const q = query.toLowerCase().trim();
+    return (
+      extra.find((t) => t.name === q) ??
+      extra.find((t) => t.name.includes(q)) ??
+      getHelpTopic(query)
+    );
+  };
+  const list = (): string[] => [...extra.map((t) => t.name), ...listHelpTopics()];
+  const modelNote = extra.length
+    ? ' This model also publishes its own guidance topics — read them before querying.'
+    : '';
   return {
     name: 'yo_help',
     title: prompts.shared.tools.yo_help.title,
-    description: prompts.shared.tools.yo_help.description,
+    description: prompts.shared.tools.yo_help.description + modelNote,
     inputSchema: {
       type: 'object',
       properties: {
@@ -197,10 +217,10 @@ export function yoHelpTool(): ToolDef {
     },
     handler: async (args) => {
       const topic = argOptString(args, 'topic');
-      if (!topic) return { topics: listHelpTopics() };
-      const hit = getHelpTopic(topic);
+      if (!topic) return { topics: list() };
+      const hit = lookup(topic);
       if (!hit) {
-        return { error: `No topic matches '${topic}'.`, topics: listHelpTopics() };
+        return { error: `No topic matches '${topic}'.`, topics: list() };
       }
       return { name: hit.name, body: hit.body };
     },

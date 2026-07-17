@@ -133,6 +133,23 @@ export { applyResultBudget, fitsDescribeBudget } from './surfaces/budget';
 // Guidance — the free service (canon blocks for custom layer-2 surfaces)
 export { guidance, assembleInstructions } from './guidance';
 
+// Model-contributed guidance (guidance/**.md in the model repo → yo_help topics)
+export {
+  modelGuidanceTopics,
+  guidanceInstructionsBlock,
+  type GuidanceTopic,
+} from './model-guidance';
+
+// Raw-query escape hatch (model-author opt-in) + its read-only SQL gate
+export { checkSelectOnly } from './sql-guard';
+export {
+  rawQueryTool,
+  RAW_QUERY_DEFAULT_ROWS,
+  RAW_QUERY_MAX_ROWS,
+  type RawQueryHost,
+  type RawQueryRows,
+} from './surfaces/raw-query';
+
 // Prompt surfaces — the typed tree over the text in content/prompts/**.md
 // (tool titles/descriptions + server instructions).
 export { prompts } from './prompts';

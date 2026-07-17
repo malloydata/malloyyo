@@ -18,6 +18,7 @@ import { runRestricted, validateRestricted } from '../restricted';
 import { applyResultBudget } from './budget';
 import { DEFAULT_ROW_LIMIT } from '../run';
 import { assembleInstructions } from '../guidance';
+import { guidanceInstructionsBlock, type GuidanceTopic } from '../model-guidance';
 import { prompts } from '../prompts';
 import { codeProblem } from '../problems';
 import { HOST_ONLY } from '../types';
@@ -74,6 +75,9 @@ export interface ExploreHost {
 
 export interface ExploreSurfaceOptions {
   result?: ResultPolicy;
+  /** Model-contributed guidance topics (model-guidance.ts): folded into
+      yo_help and announced as an instructions lead-block. */
+  guidance?: GuidanceTopic[];
 }
 
 // ── the shared (develop-reused) query tool — model_ref based ──────────
@@ -540,10 +544,16 @@ export function exploreSurface(
   if (host.list) tools.push(listSourcesTool(host));
   tools.push(describeSourceTool(host));
   tools.push(exploreQueryTool(host, opts));
-  tools.push(yoHelpTool());
+  tools.push(yoHelpTool(opts.guidance));
+  // Model guidance LEADS the instructions (it changes how this model must be
+  // queried); the engine's shared canon trails, so mergeSurfaces still
+  // collapses the common tail when surfaces combine.
+  const guidanceBlock = guidanceInstructionsBlock(opts.guidance ?? []);
   return {
     tools: tools.map(withHelp),
-    instructions: assembleInstructions('explore'),
+    instructions: [guidanceBlock, assembleInstructions('explore')]
+      .filter(Boolean)
+      .join('\n\n'),
     skills: sharedSkills(),
   };
 }

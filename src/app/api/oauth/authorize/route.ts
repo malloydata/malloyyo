@@ -56,6 +56,7 @@ export async function GET(request: Request): Promise<Response> {
   }
 
   const token = signAuthz({
+    userId: session.user.id,
     clientId, redirectUri, scope, codeChallenge, codeChallengeMethod: "S256",
     resource: resource || null, state: state || null,
   });

@@ -69,10 +69,8 @@ export { validateRestricted, runRestricted } from './restricted';
 export {
   dashboardGivenSpecs,
   describeGivenSpec,
-  tileIntrospect,
   type DashboardGivenSpec,
   type DashboardGivenSpecsResult,
-  type TileRenderTags,
 } from './given-specs';
 export {
   artifactQueries,

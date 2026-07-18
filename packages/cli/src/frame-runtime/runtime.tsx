@@ -27,6 +27,7 @@ import { filters } from "./filters";
 // The drill contract (which cells drill, to where, seeding which given) is shared
 // with the hosted app's ltool result view — see drill.ts.
 import { drillFieldNames, humanizeSlug, markDrillableCells, resolveDrill } from "./drill";
+import { combineTiles } from "./combine";
 
 export { filters };
 
@@ -229,7 +230,7 @@ function clientFilter(options, serverSide, term) {
 // (restricted text), `dashboard` (run the current composite artifact's tiles),
 // or a pre-run `result` (render it as-is, fetch nothing — the composite simple
 // path hands the combined result straight in).
-export function Panel({ query, malloy, dashboard, result: presetResult, givens, style, onLoadingChange }) {
+export function Panel({ query, malloy, dashboard, result: presetResult, givens, style }) {
   // Input precedence: explicit malloy / dashboard / query prop wins. A BARE
   // <Panel/> (no input) renders "this dashboard": for a composite (tiles) that's
   // the whole thing (dashboard mode); for a single-query artifact it's that
@@ -245,7 +246,7 @@ export function Panel({ query, malloy, dashboard, result: presetResult, givens, 
   // so this early return never changes the hook count across renders.
   const isComposite = !query && !malloy && presetResult === undefined && (dashboard || info.tiles);
   if (isComposite && info.tiles) {
-    return <CompositeGrid givens={givens} style={style} />;
+    return <CompositeDashboard givens={givens} style={style} />;
   }
   // Past the composite early-return this is always a single query: an explicit
   // malloy / query prop, else the artifact's own query.
@@ -255,11 +256,6 @@ export function Panel({ query, malloy, dashboard, result: presetResult, givens, 
   const result = hasPreset ? presetResult : live.result;
   const loading = hasPreset ? false : live.loading;
   const error = hasPreset ? undefined : live.error;
-  // Surface loading to a wrapping card (e.g. TileCard's header spinner) without
-  // exposing the Panel's internals — no-op when no callback is passed.
-  useEffect(() => {
-    if (onLoadingChange) onLoadingChange(loading);
-  }, [loading, onLoadingChange]);
   const ref = useRef(null);
   // Drill: a dimension declared `# drill { to=[<slug>|self, …] }` makes clicking
   // its cell navigate to another dashboard (slug) and/or filter in place (self),
@@ -417,16 +413,18 @@ export function Panel({ query, malloy, dashboard, result: presetResult, givens, 
   );
 }
 
-// ── composite dashboards: an independent grid of tiles ──────────────
-// A composite artifact (`# artifact { tiles=[…] }`) is NOT run+merged into one
-// result server-side anymore — instead each tile is its OWN <Panel>, fetched and
-// rendered independently, so a card appears the moment its query returns (fast
-// tiles don't wait on slow ones, and a failed tile is just an error card).
+// ── composite dashboards ────────────────────────────────────────────
+// A composite artifact (`# artifact { tiles=[…] }`) runs each tile as its own
+// query and combines the results into ONE `# dashboard` result that Malloy's own
+// dashboard renderer lays out (colspan / break / card heights, and single-row
+// aggregate tiles merged as top-level KPIs — see combine.ts). Tiles fetch in
+// parallel; the dashboard paints once they've all settled, with a single early
+// paint if one tile straggles (see below) so a slow tile can't block the rest.
 //
 // The host injects `dashboardInfo().tileSpecs` = [{ run, name, givens:[names] }]
 // so each tile runs with ONLY the givens it references (binding a given a tile
 // doesn't reference fails the compile). Falls back to the raw `tiles` string
-// array (all givens) if the host didn't provide specs.
+// array (all givens) when the host didn't provide specs.
 function tileSpecs() {
   const info = dashboardInfo();
   if (Array.isArray(info.tileSpecs) && info.tileSpecs.length) return info.tileSpecs;
@@ -442,132 +440,83 @@ function pickGivens(givens, names) {
   return out;
 }
 
-// Card title for a tile: its declared name, else the view name from the
-// run-expression (`source -> view` → view), humanized.
-function tileTitle(spec) {
-  if (spec.name) return humanizeSlug(spec.name);
+// Card name for a tile: its declared name, else the view name from the
+// run-expression (`source -> view` → view).
+function tileName(spec) {
+  if (spec.name) return spec.name;
   const run = String(spec.run || "");
   const arrow = run.lastIndexOf("->");
-  return humanizeSlug((arrow >= 0 ? run.slice(arrow + 2) : run).trim());
+  return (arrow >= 0 ? run.slice(arrow + 2) : run).trim();
 }
 
-const clampSpan = (n, cols) => Math.max(1, Math.min(cols, Math.trunc(n)));
+// A tile is a "straggler" when it lags this far behind the FIRST tile to arrive.
+// Measuring the spread (not absolute time) auto-calibrates: whether tiles land at
+// ~0.5s (concurrent) or ~2s (serialized), a normal cluster settles within the
+// window and paints once; only a genuine outlier trips an early paint. On Vercel,
+// where a cold function instance can make one tile far slower than its siblings,
+// this is what keeps the whole dashboard from waiting on it.
+const STRAGGLER_MS = 700;
 
-export function CompositeGrid({ givens, style }) {
+export function CompositeDashboard({ givens, style }) {
   const specs = tileSpecs();
-  // A single-tile composite IS the dashboard — render it full-bleed so its own
-  // render tags govern (matches the old single-tile passthrough), no card chrome.
-  if (specs.length === 1) {
-    return <Panel query={specs[0].run} givens={pickGivens(givens, specs[0].givens)} style={style} />;
-  }
-  const info = dashboardInfo();
-  // Layout mirrors the single-query `# dashboard {columns=N}` renderer: when the
-  // author set `dashboard_columns` OR any tile carries a `# colspan`, lay tiles on
-  // a fixed N-column grid and honor each tile's colspan/break — so a `tiles=[…]`
-  // dashboard looks the same as the equivalent one-query dashboard. With no layout
-  // hints at all, fall back to a responsive auto-fill grid (nice zero-config default).
-  const anyColspan = specs.some((s) => typeof s.colspan === "number");
-  const fixed = typeof info.dashboard_columns === "number" || anyColspan;
-  const columns = typeof info.dashboard_columns === "number" ? info.dashboard_columns : 6;
-  return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: fixed
-          ? `repeat(${columns}, minmax(0, 1fr))`
-          : "repeat(auto-fill, minmax(340px, 1fr))",
-        gap: 16,
-        alignContent: "start",
-        // Size each card to its own content — cards in the same row DON'T stretch
-        // to a common height (a KPI tile stays short next to a chart), matching
-        // the Malloy dashboard renderer.
-        alignItems: "start",
-        overflow: "auto",
-        minHeight: 0,
-        ...style,
-      }}
-    >
-      {specs.map((t) => {
-        // Default an un-annotated tile to full width so it's readable; a `# break`
-        // forces the tile onto a fresh row (grid-column start line 1).
-        const span = fixed ? clampSpan(t.colspan ?? columns, columns) : 1;
-        const gridColumn = fixed ? (t.break ? `1 / span ${span}` : `span ${span}`) : undefined;
-        return (
-          <TileCard
-            key={t.run}
-            spec={t}
-            givens={pickGivens(givens, t.givens)}
-            style={gridColumn ? { gridColumn } : undefined}
-          />
-        );
-      })}
-    </div>
-  );
-}
+  const columns = dashboardInfo().dashboard_columns;
+  const gkey = JSON.stringify(givens ?? {});
+  // The result we render. It updates at most twice per load — an early paint if a
+  // tile straggles, then the final paint when all have settled — so there's never
+  // per-tile flicker (each splice would re-render the whole Malloy dashboard).
+  const [combined, setCombined] = useState(null);
 
-// One card in the composite grid: a titled box wrapping a <Panel query={tile}>.
-// The header shows a loading dot until the tile's query returns.
-function TileCard({ spec, givens, style }) {
-  const [loading, setLoading] = useState(true);
-  return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        minWidth: 0,
-        border: "1px solid var(--dash-border, #e5e7eb)",
-        borderRadius: "var(--dash-radius, 8px)",
-        background: "var(--dash-panel-bg, #fff)",
-        overflow: "hidden",
-        ...style,
-      }}
-    >
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          gap: 8,
-          padding: "8px 12px",
-          borderBottom: "1px solid var(--dash-border, #e5e7eb)",
-          font: "600 13px var(--dash-font, system-ui, sans-serif)",
-          color: "var(--dash-fg, #171717)",
-        }}
-      >
-        <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-          {tileTitle(spec)}
-        </span>
-        {loading && (
-          <span
-            aria-label="loading"
-            style={{
-              width: 8,
-              height: 8,
-              borderRadius: "50%",
-              background: "var(--dash-accent, #2563eb)",
-              animation: "dash-pulse 1s ease-in-out infinite",
-              flexShrink: 0,
-            }}
-          />
-        )}
-      </div>
-      <Panel
-        query={spec.run}
-        givens={givens}
-        onLoadingChange={setLoading}
-        style={
-          // A chart has no intrinsic height, so give it a fixed one. Everything
-          // else sizes to its content and only scrolls once it gets tall — so a
-          // KPI card is short and a big table is tall, instead of every card
-          // being one uniform height. The 150px floor keeps a `# dashboard`
-          // (KPI) render — which, like charts, measures its container — from
-          // collapsing to nothing; a plain table has real height and grows past it.
-          spec.chart
-            ? { border: "none", borderRadius: 0, margin: 0, minHeight: 260, maxHeight: 320 }
-            : { border: "none", borderRadius: 0, margin: 0, minHeight: 150, maxHeight: 460 }
+  useEffect(() => {
+    let cancelled = false;
+    setCombined(null);
+    const acc = {}; // run-expr -> result, accumulated locally (no per-tile state churn)
+    let settled = 0;
+    let straggler = null; // timer armed when the first tile arrives
+    const build = () => {
+      const arrived = specs.filter((t) => acc[t.run]);
+      return arrived.length
+        ? combineTiles(
+            arrived.map((t) => ({ name: tileName(t), result: acc[t.run] })),
+            { columns },
+          )
+        : null;
+    };
+    for (const t of specs) {
+      runQuery({ query: t.run }, pickGivens(givens, t.givens)).then((m) => {
+        if (cancelled) return;
+        if (m.ok && m.result) {
+          acc[t.run] = m.result;
+          // Arm the straggler timer on the FIRST arrival: an EARLY paint of what's
+          // ready if the rest lag more than STRAGGLER_MS behind it (once). If
+          // everything settles within the window the final paint fires first and
+          // this is a no-op; if nothing is ready when it fires (all tiles slow
+          // together — e.g. a cold connection) it paints nothing and waits.
+          if (straggler === null) {
+            straggler = setTimeout(() => {
+              if (cancelled || settled >= specs.length) return;
+              const c = build();
+              if (c) setCombined(c);
+            }, STRAGGLER_MS);
+          }
         }
-      />
-    </div>
-  );
+        settled++;
+        if (settled >= specs.length) {
+          if (straggler) clearTimeout(straggler);
+          setCombined(build()); // final paint: every tile has settled (arrived or errored)
+        }
+      });
+    }
+    return () => {
+      cancelled = true;
+      if (straggler) clearTimeout(straggler);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gkey]);
+
+  if (!combined) {
+    return <div style={{ padding: 24, color: "var(--dash-muted, #666)", ...style }}>Loading…</div>;
+  }
+  return <Panel result={combined} style={style} />;
 }
 
 // A small popup shown at the cursor when a drilled dimension offers more than one
@@ -794,8 +743,6 @@ html, body { margin: 0; background: var(--dash-bg); color: var(--dash-fg); font-
    accent color on hover + pointer — matching the web app's clickable-item look. */
 .dash-drill { cursor: pointer; }
 .dash-drill:hover > .cell-content { color: var(--dash-accent, #2563eb); }
-/* Composite-grid tile card: loading-dot pulse in the card header. */
-@keyframes dash-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
 `;
 
 function injectTheme() {

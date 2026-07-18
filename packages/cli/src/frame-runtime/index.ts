@@ -6,7 +6,7 @@
 
 export {
   Panel,
-  CompositeGrid,
+  CompositeDashboard,
   filters,
   runData,
   useGiven,

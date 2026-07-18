@@ -11,7 +11,6 @@
 import { and, eq, asc, desc } from "drizzle-orm";
 import {
   dashboardGivenSpecs,
-  tileIntrospect,
   runRestricted,
   type DashboardGivenSpec,
 } from "@malloyyo/mcp-engine";
@@ -158,14 +157,12 @@ export async function runDashboard(
   }
 }
 
-/** Per-tile render spec for the independent-grid renderer. */
+/** Per-tile spec the frame's renderer needs: run-expression, card name, and the
+    given NAMES the tile references. */
 export interface DashboardTileSpec {
   run: string;
   name: string;
   givens: string[];
-  colspan?: number;
-  break?: boolean;
-  chart?: boolean;
 }
 
 export type DashboardTilesResult =
@@ -190,20 +187,16 @@ export async function dashboardTileSpecs(
   const files = await modelFileMap(found.model);
   const entryFile = typeof dash.manifest.entryFile === "string" ? dash.manifest.entryFile : "index.malloy";
   const entry = fileUrl(entryFile);
-  type EngineRuntime = Parameters<typeof tileIntrospect>[0];
+  type EngineRuntime = Parameters<typeof dashboardGivenSpecs>[0];
   return withModelRuntime(files, found.model.id, async (runtime) => {
     const rt = runtime as unknown as EngineRuntime;
     const byName = new Map<string, DashboardGivenSpec>();
     const out: DashboardTileSpec[] = [];
     for (const tile of tiles) {
-      const info = await tileIntrospect(rt, entry, tile);
-      const gvs = info.ok ? info.givens : [];
+      const specs = await dashboardGivenSpecs(rt, entry, tile);
+      const gvs = specs.ok ? specs.givens : [];
       for (const s of gvs) if (!byName.has(s.name)) byName.set(s.name, s);
-      const spec: DashboardTileSpec = { run: tile, name: tileName(tile), givens: gvs.map((s) => s.name) };
-      if (info.ok && typeof info.colspan === "number") spec.colspan = info.colspan;
-      if (info.ok && info.break) spec.break = true;
-      if (info.ok && info.chart) spec.chart = true;
-      out.push(spec);
+      out.push({ run: tile, name: tileName(tile), givens: gvs.map((s) => s.name) });
     }
     return { ok: true, tiles: out, union: [...byName.values()] };
   });

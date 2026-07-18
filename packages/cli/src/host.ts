@@ -19,7 +19,6 @@ import {
   artifactQueries,
   collectDrillTargets,
   dashboardGivenSpecs,
-  tileIntrospect,
   modelArtifact,
   prepareSource,
   run,
@@ -39,17 +38,13 @@ export type ValidateResult = { ok: true } | { ok: false; error: string };
 export type GivenSpec = DashboardGivenSpec;
 export type GivenSpecsResult = DashboardGivenSpecsResult;
 
-/** One tile in a composite dashboard, as the independent-grid renderer needs it:
-    the run-expression, the card name, the given NAMES the tile references, and
-    its grid-placement tags (`# colspan` / `# break`) so the grid can mirror the
-    single-query `# dashboard {columns=N}` layout. */
+/** One tile in a composite dashboard, as the frame's renderer needs it: the
+    run-expression, the card name, and the given NAMES the tile references (so it
+    runs with only those — binding an unreferenced given fails the compile). */
 export interface TileSpec {
   run: string;
   name: string;
   givens: string[];
-  colspan?: number;
-  break?: boolean;
-  chart?: boolean;
 }
 
 const ENTRY = "index.malloy";
@@ -175,7 +170,7 @@ export interface ModelRunner {
   /** The UNION of given specs across a composite's tiles, resolved in the
       dashboard file's own scope — the controls the dashboard shows. */
   dashboardGivens(entryFile: string, tiles: string[]): Promise<GivenSpecsResult>;
-  /** Per-tile render specs for the INDEPENDENT-grid renderer: each tile's
+  /** Per-tile specs the frame's composite renderer needs: each tile's
       run-expression, card name, and the NAMES of the givens it references (so the
       frame runs each tile with only those — binding an unreferenced given fails
       the compile). `union` is the deduped given specs across all tiles (the
@@ -330,14 +325,10 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
         const byName = new Map<string, DashboardGivenSpec>();
         const out: TileSpec[] = [];
         for (const tile of tiles) {
-          const info = await tileIntrospect(runtime, entry, tile);
-          const gvs = info.ok ? info.givens : [];
+          const specs = await dashboardGivenSpecs(runtime, entry, tile);
+          const gvs = specs.ok ? specs.givens : [];
           for (const s of gvs) if (!byName.has(s.name)) byName.set(s.name, s);
-          const spec: TileSpec = { run: tile, name: tileName(tile), givens: gvs.map((s) => s.name) };
-          if (info.ok && typeof info.colspan === "number") spec.colspan = info.colspan;
-          if (info.ok && info.break) spec.break = true;
-          if (info.ok && info.chart) spec.chart = true;
-          out.push(spec);
+          out.push({ run: tile, name: tileName(tile), givens: gvs.map((s) => s.name) });
         }
         return { ok: true, tiles: out, union: [...byName.values()] };
       });

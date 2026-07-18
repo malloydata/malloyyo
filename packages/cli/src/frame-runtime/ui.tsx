@@ -11,7 +11,7 @@
 // whole no-code dashboard (title + controls + panel) used when a tagged query
 // ships no Dashboard.tsx.
 import React, { useEffect, useRef, useState } from "react";
-import { dashboardInfo, givenSpecs, filters, useGiven, useOptions, useDashboard, Panel } from "./runtime";
+import { dashboardInfo, givenSpecs, filters, useGiven, useOptions, useDashboard, Panel, CompositeDashboard } from "./runtime";
 
 const V = (name, fallback) => `var(--dash-${name}, ${fallback})`;
 const label_ = (spec) => spec?.tags?.label ?? spec?.name;
@@ -629,12 +629,16 @@ export function DefaultDashboard({ givens, theme }) {
         <p style={{ color: V("muted", "#666"), margin: "0 0 20px", lineHeight: 1.5, flexShrink: 0 }}>{dash.description}</p>
       )}
       <Controls style={{ flexShrink: 0 }} />
-      {/* A COMPOSITE artifact (tiles) renders as an INDEPENDENT grid — each tile
-          is its own Panel that fetches and paints on its own (a slow tile only
-          blocks its own card). A single artifact runs its one query. Either way
-          a bare <Panel/> does the right thing (it delegates composites to
-          CompositeGrid). */}
-      <Panel givens={givens} style={{ flex: 1, minHeight: 0, maxHeight: "none" }} />
+      {/* A COMPOSITE artifact (tiles) runs its tiles and combines them into one
+          `# dashboard` that Malloy's own renderer lays out (CompositeDashboard);
+          a single artifact runs its one query. A bare <Panel/> delegates a
+          composite to CompositeDashboard, so this branch is just an explicit
+          version of that. */}
+      {dashboardInfo().tiles ? (
+        <CompositeDashboard givens={givens} style={{ flex: 1, minHeight: 0, maxHeight: "none" }} />
+      ) : (
+        <Panel givens={givens} style={{ flex: 1, minHeight: 0, maxHeight: "none" }} />
+      )}
     </div>
   );
 }

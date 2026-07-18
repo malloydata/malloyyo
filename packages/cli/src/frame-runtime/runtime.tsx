@@ -236,7 +236,7 @@ function clientFilter(options, serverSide, term) {
 // (restricted text), `dashboard` (run the current composite artifact's tiles),
 // or a pre-run `result` (render it as-is, fetch nothing — the composite simple
 // path hands the combined result straight in).
-export function Panel({ query, malloy, dashboard, result: presetResult, givens, style }) {
+export function Panel({ query, malloy, dashboard, result: presetResult, givens, style, onLoadingChange }) {
   // Input precedence: explicit malloy / dashboard / query prop wins. A BARE
   // <Panel/> (no input) renders "this dashboard": for a composite (tiles) that's
   // the whole thing (dashboard mode); for a single-query artifact it's that
@@ -244,6 +244,16 @@ export function Panel({ query, malloy, dashboard, result: presetResult, givens, 
   // `tiles` and an empty query, so a bare Panel in a hand-written component must
   // fall through to dashboard mode rather than run an empty query.
   const info = dashboardInfo();
+  // A COMPOSITE dashboard (tiles) renders as an independent GRID — each tile is
+  // its own Panel that fetches and paints on its own (a slow tile only blocks its
+  // own card, not the whole dashboard). A bare <Panel/> or an explicit
+  // <Panel dashboard/> on a composite delegates here; an explicit query / malloy /
+  // preset does not. `info.tiles`/`isComposite` are stable for a given call site,
+  // so this early return never changes the hook count across renders.
+  const isComposite = !query && !malloy && presetResult === undefined && (dashboard || info.tiles);
+  if (isComposite && info.tiles) {
+    return <CompositeGrid givens={givens} style={style} />;
+  }
   const req = malloy
     ? { malloy }
     : dashboard
@@ -258,6 +268,11 @@ export function Panel({ query, malloy, dashboard, result: presetResult, givens, 
   const result = hasPreset ? presetResult : live.result;
   const loading = hasPreset ? false : live.loading;
   const error = hasPreset ? undefined : live.error;
+  // Surface loading to a wrapping card (e.g. TileCard's header spinner) without
+  // exposing the Panel's internals — no-op when no callback is passed.
+  useEffect(() => {
+    if (onLoadingChange) onLoadingChange(loading);
+  }, [loading, onLoadingChange]);
   const ref = useRef(null);
   // Drill: a dimension declared `# drill { to=[<slug>|self, …] }` makes clicking
   // its cell navigate to another dashboard (slug) and/or filter in place (self),
@@ -412,6 +427,128 @@ export function Panel({ query, malloy, dashboard, result: presetResult, givens, 
       />
       {menu && <DrillMenu menu={menu} onClose={() => setMenu(null)} />}
     </>
+  );
+}
+
+// ── composite dashboards: an independent grid of tiles ──────────────
+// A composite artifact (`# artifact { tiles=[…] }`) is NOT run+merged into one
+// result server-side anymore — instead each tile is its OWN <Panel>, fetched and
+// rendered independently, so a card appears the moment its query returns (fast
+// tiles don't wait on slow ones, and a failed tile is just an error card).
+//
+// The host injects `dashboardInfo().tileSpecs` = [{ run, name, givens:[names] }]
+// so each tile runs with ONLY the givens it references (binding a given a tile
+// doesn't reference fails the compile). Falls back to the raw `tiles` string
+// array (all givens) if the host didn't provide specs.
+function tileSpecs() {
+  const info = dashboardInfo();
+  if (Array.isArray(info.tileSpecs) && info.tileSpecs.length) return info.tileSpecs;
+  return (info.tiles || []).map((run) => ({ run, name: undefined, givens: null }));
+}
+
+// The controls hold the UNION of givens; a tile gets only the ones it declares.
+// `names === null` (fallback, no per-tile info) → pass everything through.
+function pickGivens(givens, names) {
+  if (!names) return givens;
+  const out = {};
+  for (const n of names) if (n in (givens || {})) out[n] = givens[n];
+  return out;
+}
+
+// Card title for a tile: its declared name, else the view name from the
+// run-expression (`source -> view` → view), humanized.
+function tileTitle(spec) {
+  if (spec.name) return humanizeSlug(spec.name);
+  const run = String(spec.run || "");
+  const arrow = run.lastIndexOf("->");
+  return humanizeSlug((arrow >= 0 ? run.slice(arrow + 2) : run).trim());
+}
+
+export function CompositeGrid({ givens, style }) {
+  const specs = tileSpecs();
+  // A single-tile composite IS the dashboard — render it full-bleed so its own
+  // render tags govern (matches the old single-tile passthrough), no card chrome.
+  if (specs.length === 1) {
+    return <Panel query={specs[0].run} givens={pickGivens(givens, specs[0].givens)} style={style} />;
+  }
+  return (
+    <div
+      style={{
+        display: "grid",
+        // Independent tiles → a responsive grid (each card ≥340px, wrapping to
+        // fill). The grid itself scrolls; cards cap their own height (TileCard).
+        gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))",
+        gap: 16,
+        alignContent: "start",
+        overflow: "auto",
+        minHeight: 0,
+        ...style,
+      }}
+    >
+      {specs.map((t) => (
+        <TileCard key={t.run} spec={t} givens={pickGivens(givens, t.givens)} />
+      ))}
+    </div>
+  );
+}
+
+// One card in the composite grid: a titled box wrapping a <Panel query={tile}>.
+// The header shows a loading dot until the tile's query returns.
+function TileCard({ spec, givens }) {
+  const [loading, setLoading] = useState(true);
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        minWidth: 0,
+        border: "1px solid var(--dash-border, #e5e7eb)",
+        borderRadius: "var(--dash-radius, 8px)",
+        background: "var(--dash-panel-bg, #fff)",
+        overflow: "hidden",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 8,
+          padding: "8px 12px",
+          borderBottom: "1px solid var(--dash-border, #e5e7eb)",
+          font: "600 13px var(--dash-font, system-ui, sans-serif)",
+          color: "var(--dash-fg, #171717)",
+        }}
+      >
+        <span style={{ minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {tileTitle(spec)}
+        </span>
+        {loading && (
+          <span
+            aria-label="loading"
+            style={{
+              width: 8,
+              height: 8,
+              borderRadius: "50%",
+              background: "var(--dash-accent, #2563eb)",
+              animation: "dash-pulse 1s ease-in-out infinite",
+              flexShrink: 0,
+            }}
+          />
+        )}
+      </div>
+      <Panel
+        query={spec.run}
+        givens={givens}
+        onLoadingChange={setLoading}
+        style={{
+          border: "none",
+          borderRadius: 0,
+          margin: 0,
+          minHeight: 180,
+          maxHeight: 360,
+        }}
+      />
+    </div>
   );
 }
 
@@ -639,6 +776,8 @@ html, body { margin: 0; background: var(--dash-bg); color: var(--dash-fg); font-
    accent color on hover + pointer — matching the web app's clickable-item look. */
 .dash-drill { cursor: pointer; }
 .dash-drill:hover > .cell-content { color: var(--dash-accent, #2563eb); }
+/* Composite-grid tile card: loading-dot pulse in the card header. */
+@keyframes dash-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
 `;
 
 function injectTheme() {

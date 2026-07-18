@@ -201,6 +201,50 @@ export async function runDashboard(
   }
 }
 
+/** Per-tile render spec for the independent-grid renderer. */
+export interface DashboardTileSpec {
+  run: string;
+  name: string;
+  givens: string[];
+}
+
+export type DashboardTilesResult =
+  | { ok: true; tiles: DashboardTileSpec[]; union: DashboardGivenSpec[] }
+  | { ok: false; error: string };
+
+/** Per-tile specs + the union of givens for a COMPOSITE dashboard's independent
+    grid: each tile carries the given NAMES it references (so the frame runs it
+    with only those — binding an unreferenced given fails the compile), and
+    `union` is the deduped control set. Mirrors the CLI runner's dashboardTiles. */
+export async function dashboardTileSpecs(
+  userId: string,
+  datasetId: string,
+  name: string,
+): Promise<DashboardTilesResult> {
+  const dash = await getDashboard(userId, datasetId, name);
+  if (!dash) return { ok: false, error: "dashboard not found" };
+  const found = await findByDatasetRef(userId, datasetId);
+  if (!found) return { ok: false, error: "dataset not found" };
+  const tiles = Array.isArray(dash.manifest.tiles) ? (dash.manifest.tiles as string[]) : null;
+  if (!tiles) return { ok: false, error: "dashboard is not composite" };
+  const files = await modelFileMap(found.model);
+  const entryFile = typeof dash.manifest.entryFile === "string" ? dash.manifest.entryFile : "index.malloy";
+  const entry = fileUrl(entryFile);
+  type EngineRuntime = Parameters<typeof dashboardGivenSpecs>[0];
+  return withModelRuntime(files, found.model.id, async (runtime) => {
+    const rt = runtime as unknown as EngineRuntime;
+    const byName = new Map<string, DashboardGivenSpec>();
+    const out: DashboardTileSpec[] = [];
+    for (const tile of tiles) {
+      const specs = await dashboardGivenSpecs(rt, entry, tile);
+      const gvs = specs.ok ? specs.givens : [];
+      for (const s of gvs) if (!byName.has(s.name)) byName.set(s.name, s);
+      out.push({ run: tile, name: tileName(tile), givens: gvs.map((s) => s.name) });
+    }
+    return { ok: true, tiles: out, union: [...byName.values()] };
+  });
+}
+
 export type DashboardGivensResult =
   | { ok: true; givens: DashboardGivenSpec[] }
   | { ok: false; error: string };

@@ -40,6 +40,14 @@ export type ValidateResult = { ok: true } | { ok: false; error: string };
 export type GivenSpec = DashboardGivenSpec;
 export type GivenSpecsResult = DashboardGivenSpecsResult;
 
+/** One tile in a composite dashboard, as the independent-grid renderer needs it:
+    the run-expression, the card name, and the given NAMES the tile references. */
+export interface TileSpec {
+  run: string;
+  name: string;
+  givens: string[];
+}
+
 const ENTRY = "index.malloy";
 
 /** Card name for a tile run-expression: the view name from `source -> view`,
@@ -167,6 +175,15 @@ export interface ModelRunner {
   /** The UNION of given specs across a composite's tiles, resolved in the
       dashboard file's own scope — the controls the dashboard shows. */
   dashboardGivens(entryFile: string, tiles: string[]): Promise<GivenSpecsResult>;
+  /** Per-tile render specs for the INDEPENDENT-grid renderer: each tile's
+      run-expression, card name, and the NAMES of the givens it references (so the
+      frame runs each tile with only those — binding an unreferenced given fails
+      the compile). `union` is the deduped given specs across all tiles (the
+      controls). One compile per tile; the model schema cache is reused. */
+  dashboardTiles(
+    entryFile: string,
+    tiles: string[],
+  ): Promise<{ ok: true; tiles: TileSpec[]; union: GivenSpec[] }>;
   entryExists(): boolean;
   /** Close the shared connections for good (release sockets/file locks, drop
       the schema cache). Call at end of a short-lived command (e.g. `lint`) so
@@ -317,6 +334,19 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
           if (specs.ok) for (const s of specs.givens) if (!byName.has(s.name)) byName.set(s.name, s);
         }
         return { ok: true, givens: [...byName.values()] };
+      });
+    },
+    dashboardTiles(entryFile, tiles) {
+      return leaseIn(entryFile, async (runtime, entry) => {
+        const byName = new Map<string, DashboardGivenSpec>();
+        const out: TileSpec[] = [];
+        for (const tile of tiles) {
+          const specs = await dashboardGivenSpecs(runtime, entry, tile);
+          const gvs = specs.ok ? specs.givens : [];
+          for (const s of gvs) if (!byName.has(s.name)) byName.set(s.name, s);
+          out.push({ run: tile, name: tileName(tile), givens: gvs.map((s) => s.name) });
+        }
+        return { ok: true, tiles: out, union: [...byName.values()] };
       });
     },
     validate(runExpr, givens) {

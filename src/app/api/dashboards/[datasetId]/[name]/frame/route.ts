@@ -10,7 +10,7 @@
 // §8, docs/dashboard-iframe-security.md).
 
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
-import { getDashboard, dashboardGivens } from "@/lib/dashboards";
+import { getDashboard, dashboardGivens, dashboardTileSpecs } from "@/lib/dashboards";
 import { mintFrameToken } from "@/lib/dashboards/frame-token";
 
 export const runtime = "nodejs";
@@ -26,8 +26,23 @@ export async function GET(req: Request, ctx: { params: Promise<{ datasetId: stri
     if (!dash) return new Response("dashboard not found", { status: 404 });
     // Given specs introspected from the MODEL's given: declarations (types,
     // defaults, labels, suggestion queries) — the runtime's control contract.
-    const specs = await dashboardGivens(user.id, datasetId, name);
-    const givenSpecs = specs.ok ? specs.givens : [];
+    // For a COMPOSITE dashboard, one pass yields both the union (controls) and
+    // each tile's given NAMES (so the independent grid runs each tile with only
+    // the givens it references). Single-query dashboards use dashboardGivens.
+    const composite = Array.isArray(dash.manifest.tiles)
+      ? await dashboardTileSpecs(user.id, datasetId, name)
+      : null;
+    let givenSpecs: unknown[] = [];
+    let tileSpecs: unknown[] | undefined;
+    if (composite) {
+      if (composite.ok) {
+        givenSpecs = composite.union;
+        tileSpecs = composite.tiles;
+      }
+    } else {
+      const specs = await dashboardGivens(user.id, datasetId, name);
+      if (specs.ok) givenSpecs = specs.givens;
+    }
     // Initial givens (filter values) from the query → the dashboard seeds from
     // these so a shared/deep link opens in that state.
     const initialGivens: Record<string, string> = {};
@@ -41,10 +56,11 @@ export async function GET(req: Request, ctx: { params: Promise<{ datasetId: stri
     const info = {
       name: dash.name,
       query: dash.manifest.query,
-      // Structure v2: tiles/dashboard_columns drive the composite render path
-      // (a tag-only dashboard renders the runtime's DefaultDashboard when tiles
-      // is present — see frame-runtime ui.tsx `dash.tiles ? …`).
+      // Structure v2: a composite dashboard is a list of tiles, each rendered
+      // as its own card by the runtime's CompositeGrid (see tileSpecs below).
       tiles: dash.manifest.tiles,
+      // Per-tile run/name/given-names for the independent-grid renderer.
+      tileSpecs,
       dashboard_columns: dash.manifest.dashboard_columns,
       title: dash.title,
       description: dash.manifest.description,

@@ -421,28 +421,25 @@ export async function serveDashboard(opts: {
         return send(200, "text/html; charset=utf-8", parentShell(pick(url), frameBase, dashboards, givensFromUrl(url)));
       }
       if (url.pathname === "/api/run" && req.method === "POST") {
-        const { d, query, malloy, givens, dashboard } = JSON.parse(await readBody(req));
+        const { d, query, malloy, givens } = JSON.parse(await readBody(req));
         const dash = byName.get(d);
         if (!dash) return send(404, "application/json", JSON.stringify({ ok: false, problems: [{ message: `no dashboard '${d}'` }] }));
-        // Governance: a dashboard may run (a) the whole COMPOSITE (its declared
-        // tiles), (b) any named query the model publishes, or (c) restricted
-        // Malloy text — core's restricted mode (no import / given: / connection.*
-        // / raw SQL / ##! flags) is the gate, the contract the explore MCP
-        // surface runs under. A `dashboard` request runs only the tiles the
-        // model declared, never arbitrary tiles from the frame.
+        // Governance: a dashboard may run (a) any named query the model publishes
+        // (composite dashboards run each declared tile as one of these), or (b)
+        // restricted Malloy text — core's restricted mode (no import / given: /
+        // connection.* / raw SQL / ##! flags) is the gate, the contract the
+        // explore MCP surface runs under.
         // A v2 dashboard runs everything against its OWN file (its inline query /
         // imports live there, not index.malloy); v1 falls back to index.malloy.
         const entry = dash.entryFile;
         const out =
-          dashboard && dash.tiles && entry
-            ? await runner.runDashboard(entry, dash.tiles, { columns: dash.dashboard_columns, givens: givens ?? {} })
-            : typeof malloy === "string"
-              ? entry
-                ? await runner.runTextIn(entry, malloy, givens ?? {})
-                : await runner.runText(malloy, givens ?? {})
-              : entry
-                ? await runner.runIn(entry, String(query ?? ""), givens ?? {})
-                : await runner.run(String(query ?? dash.query), givens ?? {});
+          typeof malloy === "string"
+            ? entry
+              ? await runner.runTextIn(entry, malloy, givens ?? {})
+              : await runner.runText(malloy, givens ?? {})
+            : entry
+              ? await runner.runIn(entry, String(query ?? ""), givens ?? {})
+              : await runner.run(String(query ?? dash.query), givens ?? {});
         return send(200, "application/json", JSON.stringify(out));
       }
       send(404, "text/plain", "not found");

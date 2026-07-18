@@ -172,9 +172,26 @@ export async function dashboardGivenSpecs(
 export interface TileRenderTags {
   colspan?: number;
   break?: boolean;
+  /** True when the tile's top-level render is a chart (`# line_chart`,
+      `# bar_chart`, …). Charts have no intrinsic height (the render web component
+      collapses), so the grid gives them a fixed one; KPI/table tiles size to
+      their content, as the Malloy dashboard renderer does. */
+  chart?: boolean;
 }
 
 type RenderTagLike = { has(key: string): boolean; numeric(key: string): number | undefined };
+
+// Render tags whose viz needs an explicit height. `# dashboard` (KPI tiles) and
+// plain tables are content-sized, so they're deliberately NOT here.
+const CHART_TAGS = [
+  'line_chart',
+  'bar_chart',
+  'column_chart',
+  'scatter_chart',
+  'shape_map',
+  'segment_map',
+  'point_map',
+];
 
 /** Introspect a composite tile in ONE compile pass: the given specs it
     references (the controls) AND its grid-placement tags (`# colspan`, `# break`).
@@ -201,6 +218,7 @@ export async function tileIntrospect(
       const cs = tag.numeric('colspan');
       if (typeof cs === 'number' && Number.isFinite(cs)) render.colspan = Math.trunc(cs);
       if (tag.has('break')) render.break = true;
+      if (CHART_TAGS.some((t) => tag.has(t))) render.chart = true;
     } catch {
       /* no readable tags → no placement hints */
     }

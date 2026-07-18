@@ -18,7 +18,6 @@ import {
 import {
   artifactQueries,
   collectDrillTargets,
-  combineTiles,
   dashboardGivenSpecs,
   tileIntrospect,
   modelArtifact,
@@ -28,7 +27,6 @@ import {
   validateRestricted,
   type ArtifactInfo,
   type ArtifactsResult,
-  type CombinableResult,
   type DashboardGivenSpec,
   type DashboardGivenSpecsResult,
   type RunResult,
@@ -51,6 +49,7 @@ export interface TileSpec {
   givens: string[];
   colspan?: number;
   break?: boolean;
+  chart?: boolean;
 }
 
 const ENTRY = "index.malloy";
@@ -62,7 +61,7 @@ const ENTRY = "index.malloy";
 const IDLE_SHUTDOWN_MS = 60_000;
 
 /** Card name for a tile run-expression: the view name from `source -> view`,
-    else the query name. Collisions are deduped downstream by `combineTiles`. */
+    else the query name. */
 function tileName(runExpr: string): string {
   const arrow = runExpr.lastIndexOf("->");
   return (arrow >= 0 ? runExpr.slice(arrow + 2) : runExpr).trim();
@@ -173,16 +172,6 @@ export interface ModelRunner {
     entryFile: string,
     defaultName: string,
   ): Promise<{ ok: true; artifact?: ArtifactInfo } | { ok: false; error: string }>;
-  /** Run a COMPOSITE dashboard: compile `entryFile` (the dashboard's own file)
-      and run each tile run-expression separately in its scope (each with only
-      the givens it references, so an unused filter never errors a tile), then
-      combine into one `# dashboard` result on `stable_result`. A failed tile's
-      problems ride along; the dashboard still renders the tiles that ran. */
-  runDashboard(
-    entryFile: string,
-    tiles: string[],
-    opts: { columns?: number; givens?: Record<string, unknown> },
-  ): Promise<RunResult>;
   /** The UNION of given specs across a composite's tiles, resolved in the
       dashboard file's own scope — the controls the dashboard shows. */
   dashboardGivens(entryFile: string, tiles: string[]): Promise<GivenSpecsResult>;
@@ -324,43 +313,6 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
     artifactForFile(entryFile, defaultName) {
       return leaseIn(entryFile, (runtime, entry) => modelArtifact(runtime, entry, defaultName));
     },
-    runDashboard(entryFile, tiles, opts) {
-      return leaseIn(entryFile, async (runtime, entry) => {
-        const givens = opts.givens ?? {};
-        const ran: { name: string; result: RunResult }[] = [];
-        for (const tile of tiles) {
-          // Only the givens this tile references — an unused filter binding a
-          // tile that doesn't declare it would fail the compile.
-          const specs = await dashboardGivenSpecs(runtime, entry, tile);
-          const names = specs.ok ? new Set(specs.givens.map((s) => s.name)) : null;
-          const tileGivens = names
-            ? Object.fromEntries(Object.entries(givens).filter(([k]) => names.has(k)))
-            : givens;
-          const result = await run(runtime, entry, {
-            runExpr: tile,
-            givens: tileGivens,
-            stableResult: true,
-            rowLimit: 5000,
-          });
-          ran.push({ name: tileName(tile), result });
-        }
-        const problems = ran.flatMap((t) => t.result.problems ?? []);
-        const good = ran.filter((t) => t.result.ok && t.result.stable_result);
-        if (good.length === 0) return { ok: false, problems };
-        // A SINGLE tile IS the dashboard — pass its result through untouched so
-        // the tile's own render tags govern (a `# dashboard {columns}` view, a
-        // `# bar_chart`, …). Wrapping it as one nest of a synthetic dashboard
-        // would add a redundant layer and bury those tags.
-        if (good.length === 1) {
-          return { ok: true, stable_result: good[0].result.stable_result, problems };
-        }
-        const combined = combineTiles(
-          good.map((t) => ({ name: t.name, result: t.result.stable_result as CombinableResult })),
-          { columns: opts.columns },
-        );
-        return { ok: true, stable_result: combined, problems };
-      });
-    },
     dashboardGivens(entryFile, tiles) {
       return leaseIn(entryFile, async (runtime, entry) => {
         // Union by name — a given is declared once at model scope, so the first
@@ -384,6 +336,7 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
           const spec: TileSpec = { run: tile, name: tileName(tile), givens: gvs.map((s) => s.name) };
           if (info.ok && typeof info.colspan === "number") spec.colspan = info.colspan;
           if (info.ok && info.break) spec.break = true;
+          if (info.ok && info.chart) spec.chart = true;
           out.push(spec);
         }
         return { ok: true, tiles: out, union: [...byName.values()] };

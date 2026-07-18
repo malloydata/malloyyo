@@ -47,19 +47,16 @@ if (typeof window !== "undefined") {
   });
 }
 
-// req: { query } (a named query the model publishes), { malloy } (restricted
-// Malloy text — the server's restricted mode is the gate), or { dashboard } (run
-// the current COMPOSITE artifact's declared tiles, combined into one dashboard
-// result). The result shape is normalized across hosts (dev server:
-// {stable_result, problems[]}; hosted: {stableResult, error}).
+// req: { query } (a named query the model publishes) or { malloy } (restricted
+// Malloy text — the server's restricted mode is the gate). A composite dashboard
+// is rendered as an independent grid of per-tile { query } runs (CompositeGrid),
+// not a single combined request. The result shape is normalized across hosts
+// (dev server: {stable_result, problems[]}; hosted: {stableResult, error}).
 export function runQuery(req, givens) {
   const id = ++seq;
   return new Promise((resolve) => {
     pending.set(id, resolve);
-    parent.postMessage(
-      { type: "run", id, query: req.query, malloy: req.malloy, dashboard: req.dashboard, givens },
-      "*",
-    );
+    parent.postMessage({ type: "run", id, query: req.query, malloy: req.malloy, givens }, "*");
   }).then((m) => ({
     ok: !!m.ok,
     rows: m.rows || [],
@@ -109,11 +106,7 @@ export function useGiven(name) {
     req: { query?: string, malloy?: string, givens?: object }. For charting
     with your own components — Panel is the same thing plus Malloy's renderer. */
 export function useQuery(req) {
-  const wire = req.dashboard
-    ? { dashboard: true }
-    : req.malloy
-      ? { malloy: asRunText(req.malloy) }
-      : { query: req.query };
+  const wire = req.malloy ? { malloy: asRunText(req.malloy) } : { query: req.query };
   const skip = !!req.skip; // a Panel handed a pre-run result fetches nothing
   const givens = req.givens ?? {};
   const key = JSON.stringify([wire, givens, skip]);
@@ -254,15 +247,9 @@ export function Panel({ query, malloy, dashboard, result: presetResult, givens, 
   if (isComposite && info.tiles) {
     return <CompositeGrid givens={givens} style={style} />;
   }
-  const req = malloy
-    ? { malloy }
-    : dashboard
-      ? { dashboard: true }
-      : query
-        ? { query }
-        : info.tiles
-          ? { dashboard: true }
-          : { query: info.query };
+  // Past the composite early-return this is always a single query: an explicit
+  // malloy / query prop, else the artifact's own query.
+  const req = malloy ? { malloy } : query ? { query } : { query: info.query };
   const hasPreset = presetResult !== undefined;
   const live = useQuery(hasPreset ? { skip: true } : { ...req, givens });
   const result = hasPreset ? presetResult : live.result;
@@ -491,6 +478,10 @@ export function CompositeGrid({ givens, style }) {
           : "repeat(auto-fill, minmax(340px, 1fr))",
         gap: 16,
         alignContent: "start",
+        // Size each card to its own content — cards in the same row DON'T stretch
+        // to a common height (a KPI tile stays short next to a chart), matching
+        // the Malloy dashboard renderer.
+        alignItems: "start",
         overflow: "auto",
         minHeight: 0,
         ...style,
@@ -563,13 +554,17 @@ function TileCard({ spec, givens, style }) {
         query={spec.run}
         givens={givens}
         onLoadingChange={setLoading}
-        style={{
-          border: "none",
-          borderRadius: 0,
-          margin: 0,
-          minHeight: 180,
-          maxHeight: 360,
-        }}
+        style={
+          // A chart has no intrinsic height, so give it a fixed one. Everything
+          // else sizes to its content and only scrolls once it gets tall — so a
+          // KPI card is short and a big table is tall, instead of every card
+          // being one uniform height. The 150px floor keeps a `# dashboard`
+          // (KPI) render — which, like charts, measures its container — from
+          // collapsing to nothing; a plain table has real height and grows past it.
+          spec.chart
+            ? { border: "none", borderRadius: 0, margin: 0, minHeight: 260, maxHeight: 320 }
+            : { border: "none", borderRadius: 0, margin: 0, minHeight: 150, maxHeight: 460 }
+        }
       />
     </div>
   );

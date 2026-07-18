@@ -55,6 +55,12 @@ export interface TileSpec {
 
 const ENTRY = "index.malloy";
 
+// How long the runner stays quiet (no leases) before releasing connections to
+// 'idle'. Long enough to keep a network connection (MotherDuck/BigQuery) warm
+// across a dashboard's tile fan-out and rapid reloads; short enough that a
+// walked-away server eventually frees its sockets.
+const IDLE_SHUTDOWN_MS = 60_000;
+
 /** Card name for a tile run-expression: the view name from `source -> view`,
     else the query name. Collisions are deduped downstream by `combineTiles`. */
 function tileName(runExpr: string): string {
@@ -219,7 +225,31 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
   // process can exit) while PRESERVING the schema cache on the reused config;
   // gating on inFlight keeps a concurrent lease from idling connections another
   // is mid-compile on.
+  //
+  // But 'idle' also tears down a NETWORK connection (MotherDuck/BigQuery/…), and
+  // re-attaching it on the next request is expensive — for MotherDuck a cold
+  // reconnect is many seconds. A dashboard with N tiles fires N requests, and any
+  // gap between loads would pay that reconnect again. So we DEBOUNCE the idle
+  // release: only shut down after a quiet period with no leases, which keeps the
+  // connection warm across a dashboard's tile fan-out and rapid reloads while
+  // still releasing sockets when the server is genuinely idle.
   let inFlight = 0;
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+  const clearIdleTimer = () => {
+    if (idleTimer) {
+      clearTimeout(idleTimer);
+      idleTimer = null;
+    }
+  };
+  const scheduleIdleShutdown = () => {
+    clearIdleTimer();
+    idleTimer = setTimeout(() => {
+      idleTimer = null;
+      if (inFlight === 0) void getConfig().then((c) => c.shutdown("idle").catch(() => {}));
+    }, IDLE_SHUTDOWN_MS);
+    // Don't let the debounce timer keep the process alive on its own.
+    idleTimer.unref?.();
+  };
 
   // Per-call lease: fresh runtime over the shared config. `entryFile` is the
   // model file compiled against — index.malloy for the real serving surface, or
@@ -232,11 +262,12 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
     const { reader: prepared, entry } = prepareSource(reader, { url: path.join(abs, entryFile) });
     const runtime = new Runtime({ config, urlReader: prepared });
     inFlight++;
+    clearIdleTimer();
     try {
       return await fn(runtime, entry);
     } finally {
       inFlight--;
-      if (inFlight === 0) await config.shutdown("idle").catch(() => {});
+      if (inFlight === 0) scheduleIdleShutdown();
     }
   }
   const lease = <T>(fn: (runtime: Runtime, entry: URL) => Promise<T>): Promise<T> =>
@@ -246,6 +277,7 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
     root: abs,
     entryExists: () => fs.existsSync(path.join(abs, ENTRY)),
     async dispose() {
+      clearIdleTimer();
       if (!configPromise) return;
       const config = await configPromise.catch(() => null);
       configPromise = null;

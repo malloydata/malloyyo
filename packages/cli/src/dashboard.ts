@@ -290,8 +290,8 @@ function frameDoc(
     title: dash.title,
     description: dash.description,
     tiles: dash.tiles,
-    // Per-tile run/name/given-names for the independent-grid renderer (composite
-    // only). Each tile runs with just the givens it references.
+    // Per-tile run/name/given-names for the composite renderer (composite only).
+    // Each tile runs with just the givens it references.
     tileSpecs,
     dashboard_columns: dash.dashboard_columns,
     givens: dash.givens,

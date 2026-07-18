@@ -27,8 +27,8 @@ export async function GET(req: Request, ctx: { params: Promise<{ datasetId: stri
     // Given specs introspected from the MODEL's given: declarations (types,
     // defaults, labels, suggestion queries) — the runtime's control contract.
     // For a COMPOSITE dashboard, one pass yields both the union (controls) and
-    // each tile's given NAMES (so the independent grid runs each tile with only
-    // the givens it references). Single-query dashboards use dashboardGivens.
+    // each tile's given NAMES (so the frame runs each tile with only the givens it
+    // references). Single-query dashboards use dashboardGivens.
     const composite = Array.isArray(dash.manifest.tiles)
       ? await dashboardTileSpecs(user.id, datasetId, name)
       : null;
@@ -56,10 +56,11 @@ export async function GET(req: Request, ctx: { params: Promise<{ datasetId: stri
     const info = {
       name: dash.name,
       query: dash.manifest.query,
-      // Structure v2: a composite dashboard is a list of tiles, each rendered
-      // as its own card by the runtime's CompositeGrid (see tileSpecs below).
+      // Structure v2: a composite dashboard is a list of tiles the runtime's
+      // CompositeDashboard runs and combines into one Malloy dashboard (see
+      // tileSpecs below).
       tiles: dash.manifest.tiles,
-      // Per-tile run/name/given-names for the independent-grid renderer.
+      // Per-tile run/name/given-names for the composite renderer.
       tileSpecs,
       dashboard_columns: dash.manifest.dashboard_columns,
       title: dash.title,

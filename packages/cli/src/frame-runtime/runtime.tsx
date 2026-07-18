@@ -50,9 +50,10 @@ if (typeof window !== "undefined") {
 
 // req: { query } (a named query the model publishes) or { malloy } (restricted
 // Malloy text — the server's restricted mode is the gate). A composite dashboard
-// is rendered as an independent grid of per-tile { query } runs (CompositeGrid),
-// not a single combined request. The result shape is normalized across hosts
-// (dev server: {stable_result, problems[]}; hosted: {stableResult, error}).
+// runs one { query } per tile and combines the results client-side (see
+// CompositeDashboard), so there's no single "run the whole dashboard" request.
+// The result shape is normalized across hosts (dev server: {stable_result,
+// problems[]}; hosted: {stableResult, error}).
 export function runQuery(req, givens) {
   const id = ++seq;
   return new Promise((resolve) => {
@@ -238,12 +239,12 @@ export function Panel({ query, malloy, dashboard, result: presetResult, givens, 
   // `tiles` and an empty query, so a bare Panel in a hand-written component must
   // fall through to dashboard mode rather than run an empty query.
   const info = dashboardInfo();
-  // A COMPOSITE dashboard (tiles) renders as an independent GRID — each tile is
-  // its own Panel that fetches and paints on its own (a slow tile only blocks its
-  // own card, not the whole dashboard). A bare <Panel/> or an explicit
-  // <Panel dashboard/> on a composite delegates here; an explicit query / malloy /
-  // preset does not. `info.tiles`/`isComposite` are stable for a given call site,
-  // so this early return never changes the hook count across renders.
+  // A COMPOSITE dashboard (tiles) is rendered by CompositeDashboard, which runs
+  // its tiles and combines them into one Malloy-rendered `# dashboard`. A bare
+  // <Panel/> or an explicit <Panel dashboard/> on a composite delegates here; an
+  // explicit query / malloy / preset does not. `info.tiles`/`isComposite` are
+  // stable for a given call site, so this early return never changes the hook
+  // count across renders.
   const isComposite = !query && !malloy && presetResult === undefined && (dashboard || info.tiles);
   if (isComposite && info.tiles) {
     return <CompositeDashboard givens={givens} style={style} />;
@@ -461,15 +462,18 @@ export function CompositeDashboard({ givens, style }) {
   const specs = tileSpecs();
   const columns = dashboardInfo().dashboard_columns;
   const gkey = JSON.stringify(givens ?? {});
-  // The result we render. It updates at most twice per load — an early paint if a
-  // tile straggles, then the final paint when all have settled — so there's never
-  // per-tile flicker (each splice would re-render the whole Malloy dashboard).
-  const [combined, setCombined] = useState(null);
+  // What we render. `combined` (the Malloy result) updates at most twice per load
+  // — an early paint if a tile straggles, then the final paint when all have
+  // settled — so there's never per-tile flicker. `failed` collects the tiles
+  // whose query errored; `done` flips true once every tile has settled so we can
+  // tell "still loading" apart from "all tiles failed / no data".
+  const [state, setState] = useState({ combined: null, failed: [], done: false });
 
   useEffect(() => {
     let cancelled = false;
-    setCombined(null);
+    setState({ combined: null, failed: [], done: false });
     const acc = {}; // run-expr -> result, accumulated locally (no per-tile state churn)
+    const errs = []; // { name, message } for tiles whose query failed
     let settled = 0;
     let straggler = null; // timer armed when the first tile arrives
     const build = () => {
@@ -480,6 +484,9 @@ export function CompositeDashboard({ givens, style }) {
             { columns },
           )
         : null;
+    };
+    const paint = (done) => {
+      if (!cancelled) setState({ combined: build(), failed: [...errs], done });
     };
     for (const t of specs) {
       runQuery({ query: t.run }, pickGivens(givens, t.givens)).then((m) => {
@@ -494,15 +501,16 @@ export function CompositeDashboard({ givens, style }) {
           if (straggler === null) {
             straggler = setTimeout(() => {
               if (cancelled || settled >= specs.length) return;
-              const c = build();
-              if (c) setCombined(c);
+              if (build()) paint(false);
             }, STRAGGLER_MS);
           }
+        } else {
+          errs.push({ name: tileName(t), message: m.error || "query failed" });
         }
         settled++;
         if (settled >= specs.length) {
           if (straggler) clearTimeout(straggler);
-          setCombined(build()); // final paint: every tile has settled (arrived or errored)
+          paint(true); // final paint: every tile has settled (arrived or errored)
         }
       });
     }
@@ -513,10 +521,51 @@ export function CompositeDashboard({ givens, style }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gkey]);
 
+  const { combined, failed, done } = state;
+  // Nothing rendered yet: still loading, unless every tile has settled — then it's
+  // an all-failed dashboard (show the errors) or genuinely empty (no data), never
+  // a perpetual spinner.
   if (!combined) {
-    return <div style={{ padding: 24, color: "var(--dash-muted, #666)", ...style }}>Loading…</div>;
+    if (!done) return <div style={{ padding: 24, color: "var(--dash-muted, #666)", ...style }}>Loading…</div>;
+    return (
+      <div style={{ padding: 24, color: "var(--dash-danger, #dc2626)", ...style }}>
+        {failed.length ? (
+          <>
+            <div style={{ fontWeight: 600, marginBottom: 8 }}>This dashboard failed to load.</div>
+            {failed.map((f) => (
+              <div key={f.name} style={{ fontSize: 13, marginTop: 4 }}>
+                <b>{f.name}:</b> {f.message}
+              </div>
+            ))}
+          </>
+        ) : (
+          "No data."
+        )}
+      </div>
+    );
   }
-  return <Panel result={combined} style={style} />;
+  // Some tiles rendered; if others failed, note them above the dashboard rather
+  // than dropping them silently.
+  return (
+    <div style={{ display: "flex", flexDirection: "column", minHeight: 0, ...style }}>
+      {failed.length > 0 && (
+        <div
+          style={{
+            flexShrink: 0,
+            marginBottom: 12,
+            padding: "8px 12px",
+            borderRadius: "var(--dash-radius, 8px)",
+            background: "color-mix(in srgb, var(--dash-danger, #dc2626) 10%, transparent)",
+            color: "var(--dash-danger, #dc2626)",
+            fontSize: 13,
+          }}
+        >
+          {failed.map((f) => `${f.name}: ${f.message}`).join(" · ")}
+        </div>
+      )}
+      <Panel result={combined} style={{ flex: 1, minHeight: 0 }} />
+    </div>
+  );
 }
 
 // A small popup shown at the cursor when a drilled dimension offers more than one

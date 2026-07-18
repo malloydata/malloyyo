@@ -45,10 +45,11 @@ function aggTile(measures: string[], values: number[], annotations: string[] = [
   };
 }
 
-test("isAggregateRow: single row of scalars is aggregate; grouped/nested is not", () => {
-  assert.equal(isAggregateRow(aggTile(["a", "b"], [1, 2])), true);
+test("isAggregateRow: single row of MEASURES is aggregate; grouped, multi-row, or dimension tiles are not", () => {
+  assert.equal(isAggregateRow(aggTile(["a", "b"], [1, 2])), true); // one row of measures → yes
   assert.equal(isAggregateRow(cardTile(["x", "y"], [[1, 2], [3, 4]])), false); // multiple rows
-  assert.equal(isAggregateRow(cardTile(["x", "y"], [[1, 2]])), true); // one row, scalar → yes
+  // one row but NOT measures (a 1-row detail table) → card, not scattered KPIs
+  assert.equal(isAggregateRow(cardTile(["id", "name"], [[1, 2]])), false);
   // a nested field (array_type) → card, even with one row
   const nested: CombinableResult = {
     schema: { fields: [{ kind: "dimension", name: "n", type: { kind: "array_type" } }] },

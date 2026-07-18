@@ -3,16 +3,16 @@
 
 // Combine N separately-run tile results into ONE `# dashboard` result that the
 // Malloy renderer lays out as a grid of cards — the same structural trick the
-// engine once did server-side, but here in the browser so the frame can splice
-// tiles in as they arrive (progressive) while Malloy owns the layout.
+// engine once did server-side, but run client-side so the composite renderer can
+// combine whatever tiles have arrived (Malloy owns the layout).
 //
 // The trick (interfaces format): a `nest:` and a standalone tile result are
 // STRUCTURALLY IDENTICAL — a nest is an `array<record>` whose cell is an
 // `array_cell` of `record_cell`s, which is exactly a tile's `data`/`schema`. So
 // each tile drops into a dashboard card verbatim. Additionally, a tile that is a
-// SINGLE ROW OF SCALARS (an aggregate view, no group-by / no nesting) is merged
-// straight into the outer dashboard as top-level KPI tiles instead of a named
-// sub-card — matching how a native single-query dashboard renders top-level
+// SINGLE ROW OF MEASURES (an aggregate view, no group-by / no dimensions) is
+// merged straight into the outer dashboard as top-level KPI tiles instead of a
+// named sub-card — matching how a native single-query dashboard renders top-level
 // `aggregate:`. Its `# colspan` is distributed across those KPIs so they sum to
 // the tile's width, and a `# break` lands on the first KPI.
 //
@@ -88,18 +88,23 @@ function uniqueName(name: string, taken: Set<string>): string {
   return out;
 }
 
-/** A tile is an "aggregate row" when its result is a single row of scalar fields
-    (no nesting) — an aggregate view with no group-by. Those merge as top-level
-    KPI tiles rather than a card. */
+/** A field is a measure when its `#(malloy) …` annotation carries the
+    `calculation` marker (that's what makes the renderer draw it as a big value).
+    Dimensions (group_by / select columns) don't have it. */
+function isMeasure(field: ResultField): boolean {
+  return (field.annotations ?? []).some((a) => /(^|\s)calculation(\s|$)/.test(a.value));
+}
+
+/** A tile is an "aggregate row" when its result is a SINGLE row of MEASURES (an
+    aggregate view with no group-by / no dimensions). Those merge as top-level KPI
+    tiles rather than a card. Requiring measures — not just any scalar — keeps a
+    1-row detail table (e.g. `select … limit 1`) rendering as a table card instead
+    of scattering its columns into big-value tiles. */
 export function isAggregateRow(res: CombinableResult): boolean {
   const fields = res.schema?.fields ?? [];
   if (!fields.length) return false;
-  const scalar = fields.every((f) => {
-    const kind = (f.type as { kind?: string } | undefined)?.kind;
-    return kind !== "array_type" && kind !== "record_type";
-  });
   const rows = res.data?.array_value ?? [];
-  return scalar && rows.length === 1;
+  return rows.length === 1 && fields.every(isMeasure);
 }
 
 function readNumericTag(annotations: ResultAnnotation[] | undefined, key: string): number | undefined {

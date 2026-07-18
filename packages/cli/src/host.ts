@@ -18,7 +18,6 @@ import {
 import {
   artifactQueries,
   collectDrillTargets,
-  combineTiles,
   dashboardGivenSpecs,
   modelArtifact,
   prepareSource,
@@ -27,7 +26,6 @@ import {
   validateRestricted,
   type ArtifactInfo,
   type ArtifactsResult,
-  type CombinableResult,
   type DashboardGivenSpec,
   type DashboardGivenSpecsResult,
   type RunResult,
@@ -40,10 +38,25 @@ export type ValidateResult = { ok: true } | { ok: false; error: string };
 export type GivenSpec = DashboardGivenSpec;
 export type GivenSpecsResult = DashboardGivenSpecsResult;
 
+/** One tile in a composite dashboard, as the frame's renderer needs it: the
+    run-expression, the card name, and the given NAMES the tile references (so it
+    runs with only those — binding an unreferenced given fails the compile). */
+export interface TileSpec {
+  run: string;
+  name: string;
+  givens: string[];
+}
+
 const ENTRY = "index.malloy";
 
+// How long the runner stays quiet (no leases) before releasing connections to
+// 'idle'. Long enough to keep a network connection (MotherDuck/BigQuery) warm
+// across a dashboard's tile fan-out and rapid reloads; short enough that a
+// walked-away server eventually frees its sockets.
+const IDLE_SHUTDOWN_MS = 60_000;
+
 /** Card name for a tile run-expression: the view name from `source -> view`,
-    else the query name. Collisions are deduped downstream by `combineTiles`. */
+    else the query name. */
 function tileName(runExpr: string): string {
   const arrow = runExpr.lastIndexOf("->");
   return (arrow >= 0 ? runExpr.slice(arrow + 2) : runExpr).trim();
@@ -154,19 +167,18 @@ export interface ModelRunner {
     entryFile: string,
     defaultName: string,
   ): Promise<{ ok: true; artifact?: ArtifactInfo } | { ok: false; error: string }>;
-  /** Run a COMPOSITE dashboard: compile `entryFile` (the dashboard's own file)
-      and run each tile run-expression separately in its scope (each with only
-      the givens it references, so an unused filter never errors a tile), then
-      combine into one `# dashboard` result on `stable_result`. A failed tile's
-      problems ride along; the dashboard still renders the tiles that ran. */
-  runDashboard(
-    entryFile: string,
-    tiles: string[],
-    opts: { columns?: number; givens?: Record<string, unknown> },
-  ): Promise<RunResult>;
   /** The UNION of given specs across a composite's tiles, resolved in the
       dashboard file's own scope — the controls the dashboard shows. */
   dashboardGivens(entryFile: string, tiles: string[]): Promise<GivenSpecsResult>;
+  /** Per-tile specs the frame's composite renderer needs: each tile's
+      run-expression, card name, and the NAMES of the givens it references (so the
+      frame runs each tile with only those — binding an unreferenced given fails
+      the compile). `union` is the deduped given specs across all tiles (the
+      controls). One compile per tile; the model schema cache is reused. */
+  dashboardTiles(
+    entryFile: string,
+    tiles: string[],
+  ): Promise<{ ok: true; tiles: TileSpec[]; union: GivenSpec[] }>;
   entryExists(): boolean;
   /** Close the shared connections for good (release sockets/file locks, drop
       the schema cache). Call at end of a short-lived command (e.g. `lint`) so
@@ -197,7 +209,31 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
   // process can exit) while PRESERVING the schema cache on the reused config;
   // gating on inFlight keeps a concurrent lease from idling connections another
   // is mid-compile on.
+  //
+  // But 'idle' also tears down a NETWORK connection (MotherDuck/BigQuery/…), and
+  // re-attaching it on the next request is expensive — for MotherDuck a cold
+  // reconnect is many seconds. A dashboard with N tiles fires N requests, and any
+  // gap between loads would pay that reconnect again. So we DEBOUNCE the idle
+  // release: only shut down after a quiet period with no leases, which keeps the
+  // connection warm across a dashboard's tile fan-out and rapid reloads while
+  // still releasing sockets when the server is genuinely idle.
   let inFlight = 0;
+  let idleTimer: ReturnType<typeof setTimeout> | null = null;
+  const clearIdleTimer = () => {
+    if (idleTimer) {
+      clearTimeout(idleTimer);
+      idleTimer = null;
+    }
+  };
+  const scheduleIdleShutdown = () => {
+    clearIdleTimer();
+    idleTimer = setTimeout(() => {
+      idleTimer = null;
+      if (inFlight === 0) void getConfig().then((c) => c.shutdown("idle").catch(() => {}));
+    }, IDLE_SHUTDOWN_MS);
+    // Don't let the debounce timer keep the process alive on its own.
+    idleTimer.unref?.();
+  };
 
   // Per-call lease: fresh runtime over the shared config. `entryFile` is the
   // model file compiled against — index.malloy for the real serving surface, or
@@ -210,11 +246,12 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
     const { reader: prepared, entry } = prepareSource(reader, { url: path.join(abs, entryFile) });
     const runtime = new Runtime({ config, urlReader: prepared });
     inFlight++;
+    clearIdleTimer();
     try {
       return await fn(runtime, entry);
     } finally {
       inFlight--;
-      if (inFlight === 0) await config.shutdown("idle").catch(() => {});
+      if (inFlight === 0) scheduleIdleShutdown();
     }
   }
   const lease = <T>(fn: (runtime: Runtime, entry: URL) => Promise<T>): Promise<T> =>
@@ -224,6 +261,7 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
     root: abs,
     entryExists: () => fs.existsSync(path.join(abs, ENTRY)),
     async dispose() {
+      clearIdleTimer();
       if (!configPromise) return;
       const config = await configPromise.catch(() => null);
       configPromise = null;
@@ -270,43 +308,6 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
     artifactForFile(entryFile, defaultName) {
       return leaseIn(entryFile, (runtime, entry) => modelArtifact(runtime, entry, defaultName));
     },
-    runDashboard(entryFile, tiles, opts) {
-      return leaseIn(entryFile, async (runtime, entry) => {
-        const givens = opts.givens ?? {};
-        const ran: { name: string; result: RunResult }[] = [];
-        for (const tile of tiles) {
-          // Only the givens this tile references — an unused filter binding a
-          // tile that doesn't declare it would fail the compile.
-          const specs = await dashboardGivenSpecs(runtime, entry, tile);
-          const names = specs.ok ? new Set(specs.givens.map((s) => s.name)) : null;
-          const tileGivens = names
-            ? Object.fromEntries(Object.entries(givens).filter(([k]) => names.has(k)))
-            : givens;
-          const result = await run(runtime, entry, {
-            runExpr: tile,
-            givens: tileGivens,
-            stableResult: true,
-            rowLimit: 5000,
-          });
-          ran.push({ name: tileName(tile), result });
-        }
-        const problems = ran.flatMap((t) => t.result.problems ?? []);
-        const good = ran.filter((t) => t.result.ok && t.result.stable_result);
-        if (good.length === 0) return { ok: false, problems };
-        // A SINGLE tile IS the dashboard — pass its result through untouched so
-        // the tile's own render tags govern (a `# dashboard {columns}` view, a
-        // `# bar_chart`, …). Wrapping it as one nest of a synthetic dashboard
-        // would add a redundant layer and bury those tags.
-        if (good.length === 1) {
-          return { ok: true, stable_result: good[0].result.stable_result, problems };
-        }
-        const combined = combineTiles(
-          good.map((t) => ({ name: t.name, result: t.result.stable_result as CombinableResult })),
-          { columns: opts.columns },
-        );
-        return { ok: true, stable_result: combined, problems };
-      });
-    },
     dashboardGivens(entryFile, tiles) {
       return leaseIn(entryFile, async (runtime, entry) => {
         // Union by name — a given is declared once at model scope, so the first
@@ -317,6 +318,19 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
           if (specs.ok) for (const s of specs.givens) if (!byName.has(s.name)) byName.set(s.name, s);
         }
         return { ok: true, givens: [...byName.values()] };
+      });
+    },
+    dashboardTiles(entryFile, tiles) {
+      return leaseIn(entryFile, async (runtime, entry) => {
+        const byName = new Map<string, DashboardGivenSpec>();
+        const out: TileSpec[] = [];
+        for (const tile of tiles) {
+          const specs = await dashboardGivenSpecs(runtime, entry, tile);
+          const gvs = specs.ok ? specs.givens : [];
+          for (const s of gvs) if (!byName.has(s.name)) byName.set(s.name, s);
+          out.push({ run: tile, name: tileName(tile), givens: gvs.map((s) => s.name) });
+        }
+        return { ok: true, tiles: out, union: [...byName.values()] };
       });
     },
     validate(runExpr, givens) {

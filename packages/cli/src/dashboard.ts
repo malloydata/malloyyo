@@ -26,7 +26,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import * as esbuild from "esbuild";
-import { makeRunner, type GivenSpec, type ModelRunner } from "./host.js";
+import { makeRunner, type GivenSpec, type ModelRunner, type TileSpec } from "./host.js";
 
 // The dashboard's Dashboard.tsx lives in the user's model repo, which may be
 // anywhere on disk (outside this monorepo). Its `react` / automatic-JSX imports
@@ -279,6 +279,7 @@ function frameDoc(
   dash: Dashboard,
   givenSpecs: GivenSpec[],
   initialGivens: Record<string, string>,
+  tileSpecs?: TileSpec[],
 ): string {
   // NOTE (prototype): the `sandbox` attribute is the containment here. A
   // production build would also send a strict CSP (connect-src 'none',
@@ -289,6 +290,9 @@ function frameDoc(
     title: dash.title,
     description: dash.description,
     tiles: dash.tiles,
+    // Per-tile run/name/given-names for the composite renderer (composite only).
+    // Each tile runs with just the givens it references.
+    tileSpecs,
     dashboard_columns: dash.dashboard_columns,
     givens: dash.givens,
     autorun: dash.autorun,
@@ -385,12 +389,14 @@ export async function serveDashboard(opts: {
           // Given specs are introspected from the model PER LOAD, so an edit to
           // a `given:` declaration (type, default, tags) shows up on reload.
           const dash = pick(url);
-          // Composite controls = the UNION of givens across its tiles; a single
-          // artifact = the one query's givens.
-          const specs =
-            dash.tiles && dash.entryFile
-              ? await runner.dashboardGivens(dash.entryFile, dash.tiles)
-              : await runner.givensForQuery(dash.query);
+          // Composite: the controls are the UNION of givens across its tiles, and
+          // each tile carries the given NAMES it references so the grid runs it
+          // in isolation. A single artifact = the one query's givens.
+          if (dash.tiles && dash.entryFile) {
+            const t = await runner.dashboardTiles(dash.entryFile, dash.tiles);
+            return send(200, "text/html; charset=utf-8", frameDoc(dash, t.union, givensFromUrl(url), t.tiles));
+          }
+          const specs = await runner.givensForQuery(dash.query);
           if (!specs.ok) {
             return send(200, "text/html; charset=utf-8",
               html(`<pre style="color:crimson;padding:16px">model error: ${esc(specs.error)}</pre>`, dash.title));
@@ -415,28 +421,25 @@ export async function serveDashboard(opts: {
         return send(200, "text/html; charset=utf-8", parentShell(pick(url), frameBase, dashboards, givensFromUrl(url)));
       }
       if (url.pathname === "/api/run" && req.method === "POST") {
-        const { d, query, malloy, givens, dashboard } = JSON.parse(await readBody(req));
+        const { d, query, malloy, givens } = JSON.parse(await readBody(req));
         const dash = byName.get(d);
         if (!dash) return send(404, "application/json", JSON.stringify({ ok: false, problems: [{ message: `no dashboard '${d}'` }] }));
-        // Governance: a dashboard may run (a) the whole COMPOSITE (its declared
-        // tiles), (b) any named query the model publishes, or (c) restricted
-        // Malloy text — core's restricted mode (no import / given: / connection.*
-        // / raw SQL / ##! flags) is the gate, the contract the explore MCP
-        // surface runs under. A `dashboard` request runs only the tiles the
-        // model declared, never arbitrary tiles from the frame.
+        // Governance: a dashboard may run (a) any named query the model publishes
+        // (composite dashboards run each declared tile as one of these), or (b)
+        // restricted Malloy text — core's restricted mode (no import / given: /
+        // connection.* / raw SQL / ##! flags) is the gate, the contract the
+        // explore MCP surface runs under.
         // A v2 dashboard runs everything against its OWN file (its inline query /
         // imports live there, not index.malloy); v1 falls back to index.malloy.
         const entry = dash.entryFile;
         const out =
-          dashboard && dash.tiles && entry
-            ? await runner.runDashboard(entry, dash.tiles, { columns: dash.dashboard_columns, givens: givens ?? {} })
-            : typeof malloy === "string"
-              ? entry
-                ? await runner.runTextIn(entry, malloy, givens ?? {})
-                : await runner.runText(malloy, givens ?? {})
-              : entry
-                ? await runner.runIn(entry, String(query ?? ""), givens ?? {})
-                : await runner.run(String(query ?? dash.query), givens ?? {});
+          typeof malloy === "string"
+            ? entry
+              ? await runner.runTextIn(entry, malloy, givens ?? {})
+              : await runner.runText(malloy, givens ?? {})
+            : entry
+              ? await runner.runIn(entry, String(query ?? ""), givens ?? {})
+              : await runner.run(String(query ?? dash.query), givens ?? {});
         return send(200, "application/json", JSON.stringify(out));
       }
       send(404, "text/plain", "not found");

@@ -90,9 +90,16 @@ Keep the FILENAME as the name — don't set `name=`, so the URL, the
   `# artifact` (runs as `<source> -> <view>`). Good when the dashboard needs
   helper views defined alongside it.
 - **Compose existing views**: a model-level `## artifact { tiles=["a -> b", "c -> d"]
-  dashboard_columns=6 }` (`##`, ONE line) names several views, run separately and
-  combined into one `# dashboard`. Use for multi-tile / cross-source; prefer the
-  inline query whenever a dashboard has its own filtering.
+  dashboard_columns=6 }` (`##`, ONE line) names several views. Each tile runs as
+  its own query (in parallel), and the results are combined into ONE
+  `# dashboard` that Malloy's dashboard renderer lays out — so it looks exactly
+  like the equivalent single-query dashboard: `dashboard_columns=N` sets the grid
+  and `# colspan=N` / `# break` on the tile VIEWS place them. A tile that returns
+  a SINGLE ROW with no group-by (an aggregate view) is merged in as top-level KPI
+  tiles rather than a card (its `# colspan` is spread across those KPIs). The
+  dashboard paints once the tiles are ready, with a single early paint if one tile
+  straggles so a slow tile can't hold up the rest. Use for multi-tile /
+  cross-source; prefer the inline query whenever a dashboard has its own filtering.
 - A `dashboards/*.malloy` with NO `# artifact`/`## artifact` is a shared INCLUDE
   (skipped by discovery) — put helper sources/views there for several dashboards
   to import.

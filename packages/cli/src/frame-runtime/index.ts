@@ -6,6 +6,7 @@
 
 export {
   Panel,
+  CompositeDashboard,
   filters,
   runData,
   useGiven,

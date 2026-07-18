@@ -33,8 +33,8 @@ export interface ArtifactInfo {
       `<source> -> <view>` path), in declaration order. Present iff this is a
       composite artifact — declared `## artifact { tiles=[…] }` at model scope
       (cross-source) or `# artifact { tiles=[…] }` on a source (its own views).
-      When set, `query` is "" and the tiles are run separately and combined into
-      one `# dashboard` result. */
+      When set, `query` is "" and each tile is rendered independently (its own
+      card in a grid, painting as its query returns). */
   tiles?: string[];
   /** Composite only: pass-through to the dashboard nest's `columns`; omitted
       lets the renderer choose. `## artifact { dashboard_columns=3 }`. */

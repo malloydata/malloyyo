@@ -27,6 +27,7 @@ import { filters } from "./filters";
 // The drill contract (which cells drill, to where, seeding which given) is shared
 // with the hosted app's ltool result view — see drill.ts.
 import { drillFieldNames, humanizeSlug, markDrillableCells, resolveDrill } from "./drill";
+import { combineTiles } from "./combine";
 
 export { filters };
 
@@ -47,19 +48,17 @@ if (typeof window !== "undefined") {
   });
 }
 
-// req: { query } (a named query the model publishes), { malloy } (restricted
-// Malloy text — the server's restricted mode is the gate), or { dashboard } (run
-// the current COMPOSITE artifact's declared tiles, combined into one dashboard
-// result). The result shape is normalized across hosts (dev server:
-// {stable_result, problems[]}; hosted: {stableResult, error}).
+// req: { query } (a named query the model publishes) or { malloy } (restricted
+// Malloy text — the server's restricted mode is the gate). A composite dashboard
+// runs one { query } per tile and combines the results client-side (see
+// CompositeDashboard), so there's no single "run the whole dashboard" request.
+// The result shape is normalized across hosts (dev server: {stable_result,
+// problems[]}; hosted: {stableResult, error}).
 export function runQuery(req, givens) {
   const id = ++seq;
   return new Promise((resolve) => {
     pending.set(id, resolve);
-    parent.postMessage(
-      { type: "run", id, query: req.query, malloy: req.malloy, dashboard: req.dashboard, givens },
-      "*",
-    );
+    parent.postMessage({ type: "run", id, query: req.query, malloy: req.malloy, givens }, "*");
   }).then((m) => ({
     ok: !!m.ok,
     rows: m.rows || [],
@@ -109,11 +108,7 @@ export function useGiven(name) {
     req: { query?: string, malloy?: string, givens?: object }. For charting
     with your own components — Panel is the same thing plus Malloy's renderer. */
 export function useQuery(req) {
-  const wire = req.dashboard
-    ? { dashboard: true }
-    : req.malloy
-      ? { malloy: asRunText(req.malloy) }
-      : { query: req.query };
+  const wire = req.malloy ? { malloy: asRunText(req.malloy) } : { query: req.query };
   const skip = !!req.skip; // a Panel handed a pre-run result fetches nothing
   const givens = req.givens ?? {};
   const key = JSON.stringify([wire, givens, skip]);
@@ -244,15 +239,19 @@ export function Panel({ query, malloy, dashboard, result: presetResult, givens, 
   // `tiles` and an empty query, so a bare Panel in a hand-written component must
   // fall through to dashboard mode rather than run an empty query.
   const info = dashboardInfo();
-  const req = malloy
-    ? { malloy }
-    : dashboard
-      ? { dashboard: true }
-      : query
-        ? { query }
-        : info.tiles
-          ? { dashboard: true }
-          : { query: info.query };
+  // A COMPOSITE dashboard (tiles) is rendered by CompositeDashboard, which runs
+  // its tiles and combines them into one Malloy-rendered `# dashboard`. A bare
+  // <Panel/> or an explicit <Panel dashboard/> on a composite delegates here; an
+  // explicit query / malloy / preset does not. `info.tiles`/`isComposite` are
+  // stable for a given call site, so this early return never changes the hook
+  // count across renders.
+  const isComposite = !query && !malloy && presetResult === undefined && (dashboard || info.tiles);
+  if (isComposite && info.tiles) {
+    return <CompositeDashboard givens={givens} style={style} />;
+  }
+  // Past the composite early-return this is always a single query: an explicit
+  // malloy / query prop, else the artifact's own query.
+  const req = malloy ? { malloy } : query ? { query } : { query: info.query };
   const hasPreset = presetResult !== undefined;
   const live = useQuery(hasPreset ? { skip: true } : { ...req, givens });
   const result = hasPreset ? presetResult : live.result;
@@ -412,6 +411,160 @@ export function Panel({ query, malloy, dashboard, result: presetResult, givens, 
       />
       {menu && <DrillMenu menu={menu} onClose={() => setMenu(null)} />}
     </>
+  );
+}
+
+// ── composite dashboards ────────────────────────────────────────────
+// A composite artifact (`# artifact { tiles=[…] }`) runs each tile as its own
+// query and combines the results into ONE `# dashboard` result that Malloy's own
+// dashboard renderer lays out (colspan / break / card heights, and single-row
+// aggregate tiles merged as top-level KPIs — see combine.ts). Tiles fetch in
+// parallel; the dashboard paints once they've all settled, with a single early
+// paint if one tile straggles (see below) so a slow tile can't block the rest.
+//
+// The host injects `dashboardInfo().tileSpecs` = [{ run, name, givens:[names] }]
+// so each tile runs with ONLY the givens it references (binding a given a tile
+// doesn't reference fails the compile). Falls back to the raw `tiles` string
+// array (all givens) when the host didn't provide specs.
+function tileSpecs() {
+  const info = dashboardInfo();
+  if (Array.isArray(info.tileSpecs) && info.tileSpecs.length) return info.tileSpecs;
+  return (info.tiles || []).map((run) => ({ run, name: undefined, givens: null }));
+}
+
+// The controls hold the UNION of givens; a tile gets only the ones it declares.
+// `names === null` (fallback, no per-tile info) → pass everything through.
+function pickGivens(givens, names) {
+  if (!names) return givens;
+  const out = {};
+  for (const n of names) if (n in (givens || {})) out[n] = givens[n];
+  return out;
+}
+
+// Card name for a tile: its declared name, else the view name from the
+// run-expression (`source -> view` → view).
+function tileName(spec) {
+  if (spec.name) return spec.name;
+  const run = String(spec.run || "");
+  const arrow = run.lastIndexOf("->");
+  return (arrow >= 0 ? run.slice(arrow + 2) : run).trim();
+}
+
+// A tile is a "straggler" when it lags this far behind the FIRST tile to arrive.
+// Measuring the spread (not absolute time) auto-calibrates: whether tiles land at
+// ~0.5s (concurrent) or ~2s (serialized), a normal cluster settles within the
+// window and paints once; only a genuine outlier trips an early paint. On Vercel,
+// where a cold function instance can make one tile far slower than its siblings,
+// this is what keeps the whole dashboard from waiting on it.
+const STRAGGLER_MS = 700;
+
+export function CompositeDashboard({ givens, style }) {
+  const specs = tileSpecs();
+  const columns = dashboardInfo().dashboard_columns;
+  const gkey = JSON.stringify(givens ?? {});
+  // What we render. `combined` (the Malloy result) updates at most twice per load
+  // — an early paint if a tile straggles, then the final paint when all have
+  // settled — so there's never per-tile flicker. `failed` collects the tiles
+  // whose query errored; `done` flips true once every tile has settled so we can
+  // tell "still loading" apart from "all tiles failed / no data".
+  const [state, setState] = useState({ combined: null, failed: [], done: false });
+
+  useEffect(() => {
+    let cancelled = false;
+    setState({ combined: null, failed: [], done: false });
+    const acc = {}; // run-expr -> result, accumulated locally (no per-tile state churn)
+    const errs = []; // { name, message } for tiles whose query failed
+    let settled = 0;
+    let straggler = null; // timer armed when the first tile arrives
+    const build = () => {
+      const arrived = specs.filter((t) => acc[t.run]);
+      return arrived.length
+        ? combineTiles(
+            arrived.map((t) => ({ name: tileName(t), result: acc[t.run] })),
+            { columns },
+          )
+        : null;
+    };
+    const paint = (done) => {
+      if (!cancelled) setState({ combined: build(), failed: [...errs], done });
+    };
+    for (const t of specs) {
+      runQuery({ query: t.run }, pickGivens(givens, t.givens)).then((m) => {
+        if (cancelled) return;
+        if (m.ok && m.result) {
+          acc[t.run] = m.result;
+          // Arm the straggler timer on the FIRST arrival: an EARLY paint of what's
+          // ready if the rest lag more than STRAGGLER_MS behind it (once). If
+          // everything settles within the window the final paint fires first and
+          // this is a no-op; if nothing is ready when it fires (all tiles slow
+          // together — e.g. a cold connection) it paints nothing and waits.
+          if (straggler === null) {
+            straggler = setTimeout(() => {
+              if (cancelled || settled >= specs.length) return;
+              if (build()) paint(false);
+            }, STRAGGLER_MS);
+          }
+        } else {
+          errs.push({ name: tileName(t), message: m.error || "query failed" });
+        }
+        settled++;
+        if (settled >= specs.length) {
+          if (straggler) clearTimeout(straggler);
+          paint(true); // final paint: every tile has settled (arrived or errored)
+        }
+      });
+    }
+    return () => {
+      cancelled = true;
+      if (straggler) clearTimeout(straggler);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gkey]);
+
+  const { combined, failed, done } = state;
+  // Nothing rendered yet: still loading, unless every tile has settled — then it's
+  // an all-failed dashboard (show the errors) or genuinely empty (no data), never
+  // a perpetual spinner.
+  if (!combined) {
+    if (!done) return <div style={{ padding: 24, color: "var(--dash-muted, #666)", ...style }}>Loading…</div>;
+    return (
+      <div style={{ padding: 24, color: "var(--dash-danger, #dc2626)", ...style }}>
+        {failed.length ? (
+          <>
+            <div style={{ fontWeight: 600, marginBottom: 8 }}>This dashboard failed to load.</div>
+            {failed.map((f) => (
+              <div key={f.name} style={{ fontSize: 13, marginTop: 4 }}>
+                <b>{f.name}:</b> {f.message}
+              </div>
+            ))}
+          </>
+        ) : (
+          "No data."
+        )}
+      </div>
+    );
+  }
+  // Some tiles rendered; if others failed, note them above the dashboard rather
+  // than dropping them silently.
+  return (
+    <div style={{ display: "flex", flexDirection: "column", minHeight: 0, ...style }}>
+      {failed.length > 0 && (
+        <div
+          style={{
+            flexShrink: 0,
+            marginBottom: 12,
+            padding: "8px 12px",
+            borderRadius: "var(--dash-radius, 8px)",
+            background: "color-mix(in srgb, var(--dash-danger, #dc2626) 10%, transparent)",
+            color: "var(--dash-danger, #dc2626)",
+            fontSize: 13,
+          }}
+        >
+          {failed.map((f) => `${f.name}: ${f.message}`).join(" · ")}
+        </div>
+      )}
+      <Panel result={combined} style={{ flex: 1, minHeight: 0 }} />
+    </div>
   );
 }
 

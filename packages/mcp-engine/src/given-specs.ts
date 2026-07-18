@@ -164,3 +164,48 @@ export async function dashboardGivenSpecs(
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
 }
+
+/** The grid-placement tags a composite tile carries — read from the tile's
+    compiled query annotations (the SAME `# colspan` / `# break` the old combined
+    `# dashboard` renderer honored). Lets the independent grid mirror the
+    single-query `# dashboard {columns=N}` layout. */
+export interface TileRenderTags {
+  colspan?: number;
+  break?: boolean;
+}
+
+type RenderTagLike = { has(key: string): boolean; numeric(key: string): number | undefined };
+
+/** Introspect a composite tile in ONE compile pass: the given specs it
+    references (the controls) AND its grid-placement tags (`# colspan`, `# break`).
+    Never throws on user input — compile failure comes back as {ok:false}. */
+export async function tileIntrospect(
+  runtime: Runtime,
+  entry: URL,
+  runExpr: string,
+): Promise<
+  ({ ok: true; givens: DashboardGivenSpec[] } & TileRenderTags) | { ok: false; error: string }
+> {
+  try {
+    const mm = runtime.loadModel(entry);
+    const pq = await mm.loadQuery(`run: ${runExpr}`).getPreparedQuery();
+    const givens: DashboardGivenSpec[] = [];
+    for (const [name, g] of (pq as unknown as { givens: ReadonlyMap<string, unknown> }).givens) {
+      givens.push(describeGivenSpec(name, g as GivenLike));
+    }
+    const render: TileRenderTags = {};
+    try {
+      const tag = (
+        pq as unknown as { annotations: { parseAsTag(): { tag: RenderTagLike } } }
+      ).annotations.parseAsTag().tag;
+      const cs = tag.numeric('colspan');
+      if (typeof cs === 'number' && Number.isFinite(cs)) render.colspan = Math.trunc(cs);
+      if (tag.has('break')) render.break = true;
+    } catch {
+      /* no readable tags → no placement hints */
+    }
+    return { ok: true, givens, ...render };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}

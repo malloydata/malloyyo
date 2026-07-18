@@ -20,6 +20,7 @@ import {
   collectDrillTargets,
   combineTiles,
   dashboardGivenSpecs,
+  tileIntrospect,
   modelArtifact,
   prepareSource,
   run,
@@ -41,11 +42,15 @@ export type GivenSpec = DashboardGivenSpec;
 export type GivenSpecsResult = DashboardGivenSpecsResult;
 
 /** One tile in a composite dashboard, as the independent-grid renderer needs it:
-    the run-expression, the card name, and the given NAMES the tile references. */
+    the run-expression, the card name, the given NAMES the tile references, and
+    its grid-placement tags (`# colspan` / `# break`) so the grid can mirror the
+    single-query `# dashboard {columns=N}` layout. */
 export interface TileSpec {
   run: string;
   name: string;
   givens: string[];
+  colspan?: number;
+  break?: boolean;
 }
 
 const ENTRY = "index.malloy";
@@ -341,10 +346,13 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
         const byName = new Map<string, DashboardGivenSpec>();
         const out: TileSpec[] = [];
         for (const tile of tiles) {
-          const specs = await dashboardGivenSpecs(runtime, entry, tile);
-          const gvs = specs.ok ? specs.givens : [];
+          const info = await tileIntrospect(runtime, entry, tile);
+          const gvs = info.ok ? info.givens : [];
           for (const s of gvs) if (!byName.has(s.name)) byName.set(s.name, s);
-          out.push({ run: tile, name: tileName(tile), givens: gvs.map((s) => s.name) });
+          const spec: TileSpec = { run: tile, name: tileName(tile), givens: gvs.map((s) => s.name) };
+          if (info.ok && typeof info.colspan === "number") spec.colspan = info.colspan;
+          if (info.ok && info.break) spec.break = true;
+          out.push(spec);
         }
         return { ok: true, tiles: out, union: [...byName.values()] };
       });

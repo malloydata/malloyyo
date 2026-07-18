@@ -464,6 +464,8 @@ function tileTitle(spec) {
   return humanizeSlug((arrow >= 0 ? run.slice(arrow + 2) : run).trim());
 }
 
+const clampSpan = (n, cols) => Math.max(1, Math.min(cols, Math.trunc(n)));
+
 export function CompositeGrid({ givens, style }) {
   const specs = tileSpecs();
   // A single-tile composite IS the dashboard — render it full-bleed so its own
@@ -471,13 +473,22 @@ export function CompositeGrid({ givens, style }) {
   if (specs.length === 1) {
     return <Panel query={specs[0].run} givens={pickGivens(givens, specs[0].givens)} style={style} />;
   }
+  const info = dashboardInfo();
+  // Layout mirrors the single-query `# dashboard {columns=N}` renderer: when the
+  // author set `dashboard_columns` OR any tile carries a `# colspan`, lay tiles on
+  // a fixed N-column grid and honor each tile's colspan/break — so a `tiles=[…]`
+  // dashboard looks the same as the equivalent one-query dashboard. With no layout
+  // hints at all, fall back to a responsive auto-fill grid (nice zero-config default).
+  const anyColspan = specs.some((s) => typeof s.colspan === "number");
+  const fixed = typeof info.dashboard_columns === "number" || anyColspan;
+  const columns = typeof info.dashboard_columns === "number" ? info.dashboard_columns : 6;
   return (
     <div
       style={{
         display: "grid",
-        // Independent tiles → a responsive grid (each card ≥340px, wrapping to
-        // fill). The grid itself scrolls; cards cap their own height (TileCard).
-        gridTemplateColumns: "repeat(auto-fill, minmax(340px, 1fr))",
+        gridTemplateColumns: fixed
+          ? `repeat(${columns}, minmax(0, 1fr))`
+          : "repeat(auto-fill, minmax(340px, 1fr))",
         gap: 16,
         alignContent: "start",
         overflow: "auto",
@@ -485,16 +496,27 @@ export function CompositeGrid({ givens, style }) {
         ...style,
       }}
     >
-      {specs.map((t) => (
-        <TileCard key={t.run} spec={t} givens={pickGivens(givens, t.givens)} />
-      ))}
+      {specs.map((t) => {
+        // Default an un-annotated tile to full width so it's readable; a `# break`
+        // forces the tile onto a fresh row (grid-column start line 1).
+        const span = fixed ? clampSpan(t.colspan ?? columns, columns) : 1;
+        const gridColumn = fixed ? (t.break ? `1 / span ${span}` : `span ${span}`) : undefined;
+        return (
+          <TileCard
+            key={t.run}
+            spec={t}
+            givens={pickGivens(givens, t.givens)}
+            style={gridColumn ? { gridColumn } : undefined}
+          />
+        );
+      })}
     </div>
   );
 }
 
 // One card in the composite grid: a titled box wrapping a <Panel query={tile}>.
 // The header shows a loading dot until the tile's query returns.
-function TileCard({ spec, givens }) {
+function TileCard({ spec, givens, style }) {
   const [loading, setLoading] = useState(true);
   return (
     <div
@@ -506,6 +528,7 @@ function TileCard({ spec, givens }) {
         borderRadius: "var(--dash-radius, 8px)",
         background: "var(--dash-panel-bg, #fff)",
         overflow: "hidden",
+        ...style,
       }}
     >
       <div

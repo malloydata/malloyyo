@@ -12,6 +12,7 @@ import { and, eq, asc, desc } from "drizzle-orm";
 import {
   combineTiles,
   dashboardGivenSpecs,
+  tileIntrospect,
   run,
   runRestricted,
   type CombinableResult,
@@ -206,6 +207,8 @@ export interface DashboardTileSpec {
   run: string;
   name: string;
   givens: string[];
+  colspan?: number;
+  break?: boolean;
 }
 
 export type DashboardTilesResult =
@@ -230,16 +233,19 @@ export async function dashboardTileSpecs(
   const files = await modelFileMap(found.model);
   const entryFile = typeof dash.manifest.entryFile === "string" ? dash.manifest.entryFile : "index.malloy";
   const entry = fileUrl(entryFile);
-  type EngineRuntime = Parameters<typeof dashboardGivenSpecs>[0];
+  type EngineRuntime = Parameters<typeof tileIntrospect>[0];
   return withModelRuntime(files, found.model.id, async (runtime) => {
     const rt = runtime as unknown as EngineRuntime;
     const byName = new Map<string, DashboardGivenSpec>();
     const out: DashboardTileSpec[] = [];
     for (const tile of tiles) {
-      const specs = await dashboardGivenSpecs(rt, entry, tile);
-      const gvs = specs.ok ? specs.givens : [];
+      const info = await tileIntrospect(rt, entry, tile);
+      const gvs = info.ok ? info.givens : [];
       for (const s of gvs) if (!byName.has(s.name)) byName.set(s.name, s);
-      out.push({ run: tile, name: tileName(tile), givens: gvs.map((s) => s.name) });
+      const spec: DashboardTileSpec = { run: tile, name: tileName(tile), givens: gvs.map((s) => s.name) };
+      if (info.ok && typeof info.colspan === "number") spec.colspan = info.colspan;
+      if (info.ok && info.break) spec.break = true;
+      out.push(spec);
     }
     return { ok: true, tiles: out, union: [...byName.values()] };
   });

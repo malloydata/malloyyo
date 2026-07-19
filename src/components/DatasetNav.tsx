@@ -78,9 +78,10 @@ export function DatasetNav({
       seen.set(s.datasetId, {
         datasetId: s.datasetId,
         name: s.model,
+        // Link by dataset NAME (readable, resolves via findByDatasetRef), not the slug.
         href: dash
-          ? `/datasets/${s.datasetId}/dashboard/${encodeURIComponent(dash)}`
-          : `/datasets/${s.datasetId}/questions`,
+          ? `/datasets/${encodeURIComponent(s.model)}/dashboard/${encodeURIComponent(dash)}`
+          : `/datasets/${encodeURIComponent(s.model)}/questions`,
       });
     }
     return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));
@@ -165,7 +166,9 @@ export function DatasetNav({
         {dashboards.map((d) => (
           <Link
             key={d.name}
-            href={`/datasets/${datasetId}/dashboard/${encodeURIComponent(d.name)}`}
+            // Link by dataset NAME (readable, resolves via findByDatasetRef) once
+            // known; fall back to the incoming ref until the name loads.
+            href={`/datasets/${encodeURIComponent(datasetName || datasetId)}/dashboard/${encodeURIComponent(d.name)}`}
             title={d.title ?? d.name}
             className={pill(d.name === activeDashboard)}
           >
@@ -173,7 +176,7 @@ export function DatasetNav({
           </Link>
         ))}
         <Link
-          href={`/datasets/${datasetId}/questions`}
+          href={`/datasets/${encodeURIComponent(datasetName || datasetId)}/questions`}
           title="Questions asked and answered on this dataset"
           className={`inline-flex items-center gap-1 ${pill(questionsActive)}`}
         >

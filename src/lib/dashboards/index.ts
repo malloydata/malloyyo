@@ -11,7 +11,6 @@
 import { and, eq, asc, desc } from "drizzle-orm";
 import {
   dashboardGivenSpecs,
-  tileSchema,
   runRestricted,
   type DashboardGivenSpec,
 } from "@malloyyo/mcp-engine";
@@ -158,14 +157,12 @@ export async function runDashboard(
   }
 }
 
-/** Per-tile spec the frame's renderer needs: run-expression, card name, the given
-    NAMES the tile references, and its schema-only result (compiled, no data) so the
-    frame can reserve the tile's slot in the layout before its data arrives. */
+/** Per-tile spec the frame's renderer needs: run-expression, card name, and the
+    given NAMES the tile references. */
 export interface DashboardTileSpec {
   run: string;
   name: string;
   givens: string[];
-  schema?: unknown;
 }
 
 export type DashboardTilesResult =
@@ -199,12 +196,10 @@ export async function dashboardTileSpecs(
       const specs = await dashboardGivenSpecs(rt, entry, tile);
       const gvs = specs.ok ? specs.givens : [];
       for (const s of gvs) if (!byName.has(s.name)) byName.set(s.name, s);
-      const schema = await tileSchema(rt, entry, tile);
       out.push({
         run: tile,
         name: tileName(tile),
         givens: gvs.map((s) => s.name),
-        ...(schema ? { schema } : {}),
       });
     }
     return { ok: true, tiles: out, union: [...byName.values()] };

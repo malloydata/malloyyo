@@ -472,27 +472,41 @@ export function CompositeDashboard({ givens, style }) {
   // in its reserved slot; each tile's real result then splices into its slot as it
   // arrives. Every tile's fields are identical whether we have its schema or its
   // full result, so the dashboard STRUCTURE never changes — only data fills in.
-  // Data is accumulated in a ref and painted in BATCHES (see redrawMs) so the fill
-  // is one clean transition per interval, not a flicker per tile.
+  // Data is accumulated in a ref and painted in BATCHES (see redrawMs). Crucially,
+  // the composited result is (re)built ONLY at paint time and held in state, so its
+  // object identity is stable between paints — Panel re-renders its Malloy viz only
+  // when `combined` actually changes (once per batch), never on an incidental
+  // re-render (a tile failing, a re-mount). That's what keeps the fill from
+  // flashing as elements insert: one atomic redraw per batch, with every tile in
+  // hand inserted together.
   const dataRef = useRef({}); // run-expr -> full result; accumulates without re-rendering
-  const [, redraw] = useState(0); // bumped to trigger a batched repaint
-  const [shown, setShown] = useState(false); // first-paint gate: hold until 1500ms or all-settled
+  const [combined, setCombined] = useState(null); // composited result; set ONLY at paint time
   const [failed, setFailed] = useState([]); // { name, message } per failed tile
 
   useEffect(() => {
     let cancelled = false;
     dataRef.current = {};
     setFailed([]);
-    setShown(false);
+    setCombined(null);
     let settled = 0;
     let firstDone = false; // has the held first paint happened yet?
     let flushTimer = null; // a batch repaint is pending while non-null
+    // Build the composited result from whatever data is in hand and hand it to the
+    // renderer as ONE new object — every arrived tile inserted together.
     const paint = () => {
       if (cancelled) return;
       flushTimer = null;
       firstDone = true;
-      setShown(true); // reveal on the first paint (no-op thereafter)
-      redraw((n) => n + 1);
+      const data = dataRef.current;
+      const usable = specs.filter((t) => data[t.run] || t.schema);
+      setCombined(
+        usable.length
+          ? combineTiles(
+              usable.map((t) => ({ name: tileName(t), result: data[t.run] ?? t.schema })),
+              { columns },
+            )
+          : null,
+      );
     };
     const scheduleBatch = () => {
       if (flushTimer) return; // a paint is already pending; this arrival rides it
@@ -528,18 +542,10 @@ export function CompositeDashboard({ givens, style }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gkey]);
 
-  // Each tile uses its accumulated data if present, else its schema-only result
-  // (a reserved, empty slot). Same fields either way, so data fills fixed slots.
+  // Tiles still awaiting data (for the progress affordance). Read from the ref at
+  // render time; the bar advances on the next paint.
   const data = dataRef.current;
   const pending = specs.filter((t) => !data[t.run] && !failed.some((f) => f.name === tileName(t)));
-  const usable = specs.filter((t) => data[t.run] || t.schema);
-  const combined =
-    shown && usable.length
-      ? combineTiles(
-          usable.map((t) => ({ name: tileName(t), result: data[t.run] ?? t.schema })),
-          { columns },
-        )
-      : null;
 
   if (!combined) {
     // Held first paint (nothing revealed yet), no schemas + nothing arrived, or

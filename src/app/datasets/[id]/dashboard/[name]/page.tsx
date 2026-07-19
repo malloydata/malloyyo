@@ -3,7 +3,6 @@
 
 "use client";
 import { Suspense, use, useEffect, useRef } from "react";
-import { useSearchParams } from "next/navigation";
 import { DatasetNav } from "@/components/DatasetNav";
 
 // Trusted shell for a dashboard. Renders breadcrumbs + a sandboxed iframe, and
@@ -17,7 +16,7 @@ import { DatasetNav } from "@/components/DatasetNav";
 export default function DashboardViewPage(props: {
   params: Promise<{ id: string; name: string }>;
 }) {
-  // useSearchParams needs a Suspense boundary at build time.
+  // use(params) suspends until the route params resolve — needs a Suspense boundary.
   return (
     <Suspense fallback={null}>
       <DashboardView {...props} />
@@ -32,13 +31,20 @@ function DashboardView({
 }) {
   const { id, name } = use(params);
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  // The iframe src carries the URL's givens so a shared link opens filtered.
-  // Computed from the initial query; givens changes update the URL via
-  // replaceState (below), which doesn't re-trigger this, so the iframe stays put.
-  const qs = useSearchParams().toString();
-  const frameSrc = `/api/dashboards/${id}/${encodeURIComponent(name)}/frame${qs ? `?${qs}` : ""}`;
 
   useEffect(() => {
+    // Set the iframe src ONCE, imperatively, from the actual URL (so a shared
+    // link's `?$NAME=…` givens survive). NOT a reactive `src` prop derived from
+    // useSearchParams(): that value settles once during the initial client
+    // render, and rewriting a live <iframe src> reloads the frame — remounting
+    // the whole dashboard (the "double paint" seen only on the hosted app; the
+    // CLI dev server bakes a static src and never reloads). After load the frame
+    // owns its givens and syncs the URL via replaceState (below), which must NOT
+    // reload the iframe.
+    const frame = iframeRef.current;
+    if (frame && !frame.src) {
+      frame.src = `/api/dashboards/${id}/${encodeURIComponent(name)}/frame${window.location.search}`;
+    }
     async function onMessage(e: MessageEvent) {
       const frame = iframeRef.current;
       if (!frame || e.source !== frame.contentWindow) return;
@@ -97,7 +103,7 @@ function DashboardView({
         // opaque-origin sandbox. Without these, deep links are silently blocked
         // ("...sandboxed frame whose 'allow-popups' permission is not set").
         sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
-        src={frameSrc}
+        // No `src` prop — set once imperatively in the effect above (see why).
         className="w-full rounded border border-gray-200 dark:border-gray-800"
         style={{ height: "calc(100vh - 96px)" }}
       />

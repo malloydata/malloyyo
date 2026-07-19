@@ -111,8 +111,10 @@ async function runLint(abs: string, runner: ModelRunner): Promise<LintReport> {
       errors.push(`dashboard_columns must be a positive integer (got ${JSON.stringify(art.dashboard_columns)})`);
     }
 
-    const tiles = art.tiles ?? [];
-    if (tiles.length === 0) errors.push(`\`## artifact\` declares no tiles`);
+    // Composite → its tiles; single-query artifact → its one run-expression.
+    // Both get compiled/introspected the same way below.
+    const tiles = art.tiles ?? (art.query ? [art.query] : []);
+    if (tiles.length === 0) errors.push(`\`# artifact\` declares neither a query nor tiles`);
     // Each tile must compile against THIS dashboard file's scope.
     for (const tile of tiles) {
       const v = await runner.validateIn(entryFile, tile, {});

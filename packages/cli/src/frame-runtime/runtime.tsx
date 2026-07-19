@@ -233,11 +233,10 @@ function clientFilter(options, serverSide, term) {
 // path hands the combined result straight in).
 export function Panel({ query, malloy, dashboard, result: presetResult, givens, style }) {
   // Input precedence: explicit malloy / dashboard / query prop wins. A BARE
-  // <Panel/> (no input) renders "this dashboard": for a composite (tiles) that's
-  // the whole thing (dashboard mode); for a single-query artifact it's that
-  // query. In v1 a bare Panel meant `dashboardInfo().query`; v2 dashboards carry
-  // `tiles` and an empty query, so a bare Panel in a hand-written component must
-  // fall through to dashboard mode rather than run an empty query.
+  // <Panel/> (no input) renders "this dashboard": a COMPOSITE artifact (tiles,
+  // empty query) delegates to CompositeDashboard; a single-query artifact runs
+  // its own `dashboardInfo().query`. So a composite must fall through to
+  // dashboard mode rather than run an empty query.
   const info = dashboardInfo();
   // A COMPOSITE dashboard (tiles) is rendered by CompositeDashboard, which runs
   // its tiles and combines them into one Malloy-rendered `# dashboard`. A bare
@@ -456,7 +455,11 @@ function tileName(spec) {
 const DEFAULT_WAIT_MS = 2000;
 function waitMs() {
   if (typeof window === "undefined") return DEFAULT_WAIT_MS;
-  const v = Number(new URLSearchParams(window.location.search).get("wait"));
+  // get() → null when absent, and Number(null) === 0 — so guard explicitly, else
+  // the status list shows on EVERY load instead of only after the wait window.
+  const raw = new URLSearchParams(window.location.search).get("wait");
+  if (raw == null || raw === "") return DEFAULT_WAIT_MS;
+  const v = Number(raw);
   return Number.isFinite(v) && v >= 0 ? v : DEFAULT_WAIT_MS;
 }
 

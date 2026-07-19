@@ -31,23 +31,20 @@ function DashboardView({
 }) {
   const { id, name } = use(params);
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  // The iframe src carries the URL's givens so a shared link opens filtered.
-  // FREEZE it at the first client value, read from the actual URL — NOT the
-  // reactive useSearchParams(), whose value settles once during the initial
-  // client render. Rewriting a live <iframe src> reloads the frame, remounting
-  // the whole dashboard: the "double paint" seen only on the hosted app (the CLI
-  // dev server bakes a static src, so it never reloads). After load the frame
-  // owns its givens and syncs the URL via replaceState (below), which must NOT
-  // reload the iframe — so a stable, one-time src is correct. Reading
-  // window.location.search (not the possibly-empty first hook value) preserves a
-  // shared link's givens.
-  const frameSrcRef = useRef<string | null>(null);
-  if (frameSrcRef.current === null && typeof window !== "undefined") {
-    frameSrcRef.current = `/api/dashboards/${id}/${encodeURIComponent(name)}/frame${window.location.search}`;
-  }
-  const frameSrc = frameSrcRef.current ?? undefined;
 
   useEffect(() => {
+    // Set the iframe src ONCE, imperatively, from the actual URL (so a shared
+    // link's `?$NAME=…` givens survive). NOT a reactive `src` prop derived from
+    // useSearchParams(): that value settles once during the initial client
+    // render, and rewriting a live <iframe src> reloads the frame — remounting
+    // the whole dashboard (the "double paint" seen only on the hosted app; the
+    // CLI dev server bakes a static src and never reloads). After load the frame
+    // owns its givens and syncs the URL via replaceState (below), which must NOT
+    // reload the iframe.
+    const frame = iframeRef.current;
+    if (frame && !frame.src) {
+      frame.src = `/api/dashboards/${id}/${encodeURIComponent(name)}/frame${window.location.search}`;
+    }
     async function onMessage(e: MessageEvent) {
       const frame = iframeRef.current;
       if (!frame || e.source !== frame.contentWindow) return;
@@ -106,10 +103,7 @@ function DashboardView({
         // opaque-origin sandbox. Without these, deep links are silently blocked
         // ("...sandboxed frame whose 'allow-popups' permission is not set").
         sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"
-        // Server renders no src (window unavailable); the client sets it on first
-        // render — suppress the hydration diff for this one attribute.
-        src={frameSrc}
-        suppressHydrationWarning
+        // No `src` prop — set once imperatively in the effect above (see why).
         className="w-full rounded border border-gray-200 dark:border-gray-800"
         style={{ height: "calc(100vh - 96px)" }}
       />

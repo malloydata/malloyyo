@@ -69,7 +69,6 @@ export { validateRestricted, runRestricted } from './restricted';
 export {
   dashboardGivenSpecs,
   describeGivenSpec,
-  tileSchema,
   type DashboardGivenSpec,
   type DashboardGivenSpecsResult,
 } from './given-specs';

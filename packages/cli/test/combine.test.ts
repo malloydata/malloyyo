@@ -45,8 +45,9 @@ function aggTile(measures: string[], values: number[], annotations: string[] = [
   };
 }
 
-/** A schema-only tile (compiled, no data) — what `tileSchema` ships to reserve a
-    slot before the tile's real result arrives. Measures make it an aggregate. */
+/** A tile result with NO `data` (schema only) — combineTiles must still lay out
+    its slot from the schema alone (defensive: a tile with an empty/absent result
+    reserves a slot rather than throwing). Measures make it an aggregate. */
 function schemaOnly(measures: string[]): CombinableResult {
   return {
     annotations: [],

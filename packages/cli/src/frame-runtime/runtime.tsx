@@ -310,13 +310,19 @@ export function Panel({ query, malloy, dashboard, result: presetResult, givens, 
       clearTimeout(st.hard);
       st.soft = 0;
       st.hard = 0;
-      if (ref.current) ref.current.style.opacity = "1";
+      const c = ref.current;
+      if (!c) return;
+      // Fade IN only — reveal the finished, fully-reflowed frame.
+      c.style.transition = "opacity .15s ease-in";
+      c.style.opacity = "1";
     };
     revealCtl.current = {
       hide() {
         const c = ref.current;
         if (!c) return;
-        c.style.transition = "opacity .12s ease";
+        // Hide INSTANTLY (no transition) so the just-rendered build never shows —
+        // a transition here would fade the progressive build out, defeating the point.
+        c.style.transition = "none";
         c.style.opacity = "0";
         clearTimeout(st.hard);
         clearTimeout(st.soft);
@@ -378,7 +384,14 @@ export function Panel({ query, malloy, dashboard, result: presetResult, givens, 
           cancelAnimationFrame(raf);
           raf = requestAnimationFrame(() => markDrillableCells(container, drillNamesRef.current));
         });
-        observerRef.current.observe(container, { childList: true, subtree: true });
+        // attributes too: Vega's resize-redraw mutates existing SVG attributes
+        // (not childList), so without this the reveal fires before the chart
+        // reflows to its final size — the residual "flash while reflowing".
+        observerRef.current.observe(container, {
+          childList: true,
+          subtree: true,
+          attributes: true,
+        });
       }
     } catch (err) {
       // Drop the viz so the next good result rebuilds cleanly from scratch.

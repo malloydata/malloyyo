@@ -450,151 +450,219 @@ function tileName(spec) {
   return (arrow >= 0 ? run.slice(arrow + 2) : run).trim();
 }
 
-// How long to batch tile data before (re)drawing. Each draw re-renders the whole
-// Malloy dashboard, so coalescing arrivals into ~1 draw per interval keeps the
-// fill smooth instead of flickering once per tile. This also gates the FIRST
-// draw: nothing paints until this window elapses OR every tile has settled —
-// a warm load (all tiles fast) paints exactly once, with full data, never
-// flashing the empty skeleton. Overridable live with `?redraw=<ms>`.
-const DEFAULT_REDRAW_MS = 1500;
-function redrawMs() {
-  if (typeof window === "undefined") return DEFAULT_REDRAW_MS;
-  const v = Number(new URLSearchParams(window.location.search).get("redraw"));
-  return Number.isFinite(v) && v >= 0 ? v : DEFAULT_REDRAW_MS;
+// If the dashboard hasn't fully loaded within this window, show a per-tile status
+// list (state + load time) so a slow/hung tile is visible, plus a "Show
+// incomplete" button to render whatever HAS loaded. Overridable with `?wait=<ms>`.
+const DEFAULT_WAIT_MS = 2000;
+function waitMs() {
+  if (typeof window === "undefined") return DEFAULT_WAIT_MS;
+  const v = Number(new URLSearchParams(window.location.search).get("wait"));
+  return Number.isFinite(v) && v >= 0 ? v : DEFAULT_WAIT_MS;
+}
+
+function tileStatusColor(status) {
+  if (status === "ok") return "var(--dash-accent, #2563eb)";
+  if (status === "error") return "var(--dash-danger, #dc2626)";
+  return "var(--dash-muted, #666)";
+}
+function tileStatusGlyph(status) {
+  return status === "ok" ? "✓" : status === "error" ? "✕" : "⋯";
 }
 
 export function CompositeDashboard({ givens, style }) {
   const specs = tileSpecs();
   const columns = dashboardInfo().dashboard_columns;
   const gkey = JSON.stringify(givens ?? {});
-  // Schema-up-front. Each tile ships a schema-only result (`t.schema`, compiled
-  // with no data), so the WHOLE layout renders on the first paint with every card
-  // in its reserved slot; each tile's real result then splices into its slot as it
-  // arrives. Every tile's fields are identical whether we have its schema or its
-  // full result, so the dashboard STRUCTURE never changes — only data fills in.
-  // Data is accumulated in a ref and painted in BATCHES (see redrawMs). Crucially,
-  // the composited result is (re)built ONLY at paint time and held in state, so its
-  // object identity is stable between paints — Panel re-renders its Malloy viz only
-  // when `combined` actually changes (once per batch), never on an incidental
-  // re-render (a tile failing, a re-mount). That's what keeps the fill from
-  // flashing as elements insert: one atomic redraw per batch, with every tile in
-  // hand inserted together.
-  const dataRef = useRef({}); // run-expr -> full result; accumulates without re-rendering
-  const [combined, setCombined] = useState(null); // composited result; set ONLY at paint time
-  const [failed, setFailed] = useState([]); // { name, message } per failed tile
+  // NO incremental rendering. Run every tile, WAIT for all of them, then combine
+  // and render the Malloy dashboard exactly ONCE — no skeleton, no batched fill,
+  // no per-tile flashing. If loading runs long (waitMs), a per-tile status list
+  // (state + load time) appears with a "Show incomplete" button that renders
+  // whatever HAS loaded — so a slow or hung tile is diagnosable, not an endless
+  // spinner.
+  const dataRef = useRef({}); // run -> full result (loaded tiles)
+  const startsRef = useRef({}); // run -> perf.now() when the query fired
+  const [states, setStates] = useState({}); // run -> { status:'pending'|'ok'|'error', ms?, error? }
+  const [combined, setCombined] = useState(null); // the rendered dashboard; set once (all-done or forced)
+  const [showList, setShowList] = useState(false); // long-load per-tile status list
+  const [, tick] = useState(0); // ticks the live elapsed clock for pending rows
+
+  // Combine whatever has loaded into ONE dashboard result and render it.
+  const renderRef = useRef(null);
+  renderRef.current = () => {
+    const data = dataRef.current;
+    const usable = specs.filter((t) => data[t.run]);
+    setCombined(
+      usable.length
+        ? combineTiles(
+            usable.map((t) => ({ name: tileName(t), result: data[t.run] })),
+            { columns },
+          )
+        : null,
+    );
+  };
 
   useEffect(() => {
     let cancelled = false;
     dataRef.current = {};
-    setFailed([]);
+    startsRef.current = {};
+    setStates(Object.fromEntries(specs.map((t) => [t.run, { status: "pending" }])));
     setCombined(null);
+    setShowList(false);
     let settled = 0;
-    let firstDone = false; // has the held first paint happened yet?
-    let flushTimer = null; // a batch repaint is pending while non-null
-    // Build the composited result from whatever data is in hand and hand it to the
-    // renderer as ONE new object — every arrived tile inserted together.
-    const paint = () => {
-      if (cancelled) return;
-      flushTimer = null;
-      firstDone = true;
-      const data = dataRef.current;
-      const usable = specs.filter((t) => data[t.run] || t.schema);
-      setCombined(
-        usable.length
-          ? combineTiles(
-              usable.map((t) => ({ name: tileName(t), result: data[t.run] ?? t.schema })),
-              { columns },
-            )
-          : null,
-      );
-    };
-    const scheduleBatch = () => {
-      if (flushTimer) return; // a paint is already pending; this arrival rides it
-      flushTimer = setTimeout(paint, redrawMs());
-    };
-    // Hold the FIRST paint until 1500ms or all tiles settle — don't flash the
-    // empty skeleton. A warm load (all tiles arrive fast) then paints exactly
-    // once, with full data; a slow load reveals the skeleton at 1500ms and fills
-    // in subsequent batches.
-    scheduleBatch();
+    // Long-load escape hatch: after waitMs, if not everything is in, show the list.
+    const listTimer = setTimeout(() => {
+      if (!cancelled && settled < specs.length) setShowList(true);
+    }, waitMs());
     for (const t of specs) {
+      startsRef.current[t.run] = performance.now();
       runQuery({ query: t.run }, pickGivens(givens, t.givens)).then((m) => {
         if (cancelled) return;
+        const ms = Math.round(performance.now() - (startsRef.current[t.run] ?? performance.now()));
         if (m.ok && m.result) {
           dataRef.current[t.run] = m.result;
-          if (firstDone) scheduleBatch(); // after the first paint, batch later arrivals
+          setStates((s) => ({ ...s, [t.run]: { status: "ok", ms } }));
         } else {
-          setFailed((prev) => [...prev, { name: tileName(t), message: m.error || "query failed" }]);
+          setStates((s) => ({ ...s, [t.run]: { status: "error", ms, error: m.error || "query failed" } }));
         }
         settled++;
-        // Everything has settled → paint now rather than waiting out the timer, so a
-        // warm load doesn't sit on a stale batch (and never over-draws).
         if (settled >= specs.length) {
-          if (flushTimer) clearTimeout(flushTimer);
-          paint();
+          clearTimeout(listTimer);
+          setShowList(false);
+          renderRef.current(); // ALL settled → render the dashboard once
         }
       });
     }
     return () => {
       cancelled = true;
-      if (flushTimer) clearTimeout(flushTimer);
+      clearTimeout(listTimer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gkey]);
 
-  // Tiles still awaiting data (for the progress affordance). Read from the ref at
-  // render time; the bar advances on the next paint.
-  const data = dataRef.current;
-  const pending = specs.filter((t) => !data[t.run] && !failed.some((f) => f.name === tileName(t)));
+  // While the status list is up with pending tiles, tick so their elapsed clocks advance.
+  const statusOf = (t) => states[t.run]?.status ?? "pending";
+  const anyPending = specs.some((t) => statusOf(t) === "pending");
+  useEffect(() => {
+    if (!showList || !anyPending) return;
+    const id = setInterval(() => tick((n) => n + 1), 400);
+    return () => clearInterval(id);
+  }, [showList, anyPending]);
 
-  if (!combined) {
-    // Held first paint (nothing revealed yet), no schemas + nothing arrived, or
-    // every tile failed.
-    if (specs.length > 0 && failed.length >= specs.length) {
-      return (
-        <div style={{ padding: 24, color: "var(--dash-danger, #dc2626)", ...style }}>
-          <div style={{ fontWeight: 600, marginBottom: 8 }}>This dashboard failed to load.</div>
-          {failed.map((f) => (
-            <div key={f.name} style={{ fontSize: 13, marginTop: 4 }}>
-              <b>{f.name}:</b> {f.message}
-            </div>
-          ))}
-        </div>
-      );
-    }
-    return <div style={{ padding: 24, color: "var(--dash-muted, #666)", ...style }}>Loading…</div>;
-  }
-  return (
-    <div style={{ display: "flex", flexDirection: "column", minHeight: 0, ...style }}>
-      {failed.length > 0 && (
-        <div
-          style={{
-            flexShrink: 0,
-            marginBottom: 12,
-            padding: "8px 12px",
-            borderRadius: "var(--dash-radius, 8px)",
-            background: "color-mix(in srgb, var(--dash-danger, #dc2626) 10%, transparent)",
-            color: "var(--dash-danger, #dc2626)",
-            fontSize: 13,
-          }}
-        >
-          {failed.map((f) => `${f.name}: ${f.message}`).join(" · ")}
-        </div>
-      )}
-      {/* Spike loading affordance: a thin top bar until every tile's data is in. */}
-      {pending.length > 0 && (
-        <div style={{ flexShrink: 0, height: 2, marginBottom: 6, background: "var(--dash-border, #e5e7eb)" }}>
+  const total = specs.length;
+  const doneCount = specs.filter((t) => statusOf(t) !== "pending").length;
+  const okCount = specs.filter((t) => statusOf(t) === "ok").length;
+  const failedTiles = specs
+    .filter((t) => statusOf(t) === "error")
+    .map((t) => ({ name: tileName(t), message: states[t.run].error }));
+
+  // "Show incomplete" → render whatever has loaded now.
+  const showIncomplete = () => {
+    setShowList(false);
+    renderRef.current();
+  };
+
+  const ProgressBar = ({ h = 4 }) => (
+    <div style={{ height: h, borderRadius: h / 2, background: "var(--dash-border, #e5e7eb)", overflow: "hidden" }}>
+      <div
+        style={{
+          height: "100%",
+          width: `${total ? (doneCount / total) * 100 : 0}%`,
+          background: "var(--dash-accent, #2563eb)",
+          transition: "width .2s",
+        }}
+      />
+    </div>
+  );
+
+  // 1) Rendered dashboard (all tiles settled, or the user forced it).
+  if (combined) {
+    return (
+      <div style={{ display: "flex", flexDirection: "column", minHeight: 0, ...style }}>
+        {failedTiles.length > 0 && (
           <div
             style={{
-              height: "100%",
-              width: `${((specs.length - pending.length) / specs.length) * 100}%`,
-              background: "var(--dash-accent, #2563eb)",
-              transition: "width .2s",
+              flexShrink: 0,
+              marginBottom: 12,
+              padding: "8px 12px",
+              borderRadius: "var(--dash-radius, 8px)",
+              background: "color-mix(in srgb, var(--dash-danger, #dc2626) 10%, transparent)",
+              color: "var(--dash-danger, #dc2626)",
+              fontSize: 13,
             }}
-          />
+          >
+            {failedTiles.map((f) => `${f.name}: ${f.message}`).join(" · ")}
+          </div>
+        )}
+        <Panel result={combined} style={{ flex: 1, minHeight: 0 }} />
+      </div>
+    );
+  }
+
+  // 2) Long load (or everything settled with nothing renderable): per-tile status list.
+  if (showList || (total > 0 && doneCount >= total)) {
+    return (
+      <div style={{ padding: 24, maxWidth: 640, ...style }}>
+        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, marginBottom: 12 }}>
+          <div style={{ fontWeight: 600 }}>
+            {doneCount >= total ? "Dashboard loaded with errors" : "Loading dashboard…"} ({doneCount}/{total})
+          </div>
+          {doneCount < total && (
+            <button
+              onClick={showIncomplete}
+              disabled={okCount === 0}
+              style={{
+                padding: "4px 10px",
+                fontSize: 12,
+                fontWeight: 500,
+                cursor: okCount === 0 ? "not-allowed" : "pointer",
+                opacity: okCount === 0 ? 0.5 : 1,
+                borderRadius: "var(--dash-radius, 6px)",
+                border: "1px solid var(--dash-border, #e5e7eb)",
+                background: "var(--dash-control-bg, #fff)",
+                color: "var(--dash-fg, #171717)",
+              }}
+            >
+              Show incomplete
+            </button>
+          )}
         </div>
-      )}
-      <Panel result={combined} style={{ flex: 1, minHeight: 0 }} />
+        <div style={{ marginBottom: 16 }}>
+          <ProgressBar />
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {specs.map((t) => {
+            const st = states[t.run] ?? { status: "pending" };
+            const elapsed =
+              st.status === "pending"
+                ? (performance.now() - (startsRef.current[t.run] ?? performance.now())) / 1000
+                : (st.ms ?? 0) / 1000;
+            return (
+              <div key={t.run}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+                  <span style={{ width: 14, textAlign: "center", color: tileStatusColor(st.status) }}>
+                    {tileStatusGlyph(st.status)}
+                  </span>
+                  <span style={{ flex: 1, fontWeight: 500 }}>{tileName(t)}</span>
+                  <span style={{ color: "var(--dash-muted, #666)", fontVariantNumeric: "tabular-nums" }}>
+                    {st.status === "pending" ? `${elapsed.toFixed(1)}s…` : `${elapsed.toFixed(2)}s`}
+                  </span>
+                </div>
+                {st.status === "error" && (
+                  <div style={{ marginLeft: 22, fontSize: 12, color: "var(--dash-danger, #dc2626)" }}>{st.error}</div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  }
+
+  // 3) Fast path (under waitMs): just the progress bar.
+  return (
+    <div style={{ padding: 24, ...style }}>
+      <div style={{ color: "var(--dash-muted, #666)", marginBottom: 12 }}>Loading…</div>
+      <ProgressBar />
     </div>
   );
 }

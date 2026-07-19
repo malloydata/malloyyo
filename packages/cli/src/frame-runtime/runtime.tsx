@@ -450,10 +450,12 @@ function tileName(spec) {
   return (arrow >= 0 ? run.slice(arrow + 2) : run).trim();
 }
 
-// How long to batch newly-arrived tile data before redrawing. Each redraw
-// re-renders the whole Malloy dashboard, so coalescing arrivals into ~1 redraw
-// per interval keeps the fill smooth (one clean skeleton→data transition per
-// batch) instead of flickering once per tile. Overridable live with `?redraw=<ms>`.
+// How long to batch tile data before (re)drawing. Each draw re-renders the whole
+// Malloy dashboard, so coalescing arrivals into ~1 draw per interval keeps the
+// fill smooth instead of flickering once per tile. This also gates the FIRST
+// draw: nothing paints until this window elapses OR every tile has settled —
+// a warm load (all tiles fast) paints exactly once, with full data, never
+// flashing the empty skeleton. Overridable live with `?redraw=<ms>`.
 const DEFAULT_REDRAW_MS = 1500;
 function redrawMs() {
   if (typeof window === "undefined") return DEFAULT_REDRAW_MS;
@@ -474,42 +476,47 @@ export function CompositeDashboard({ givens, style }) {
   // is one clean transition per interval, not a flicker per tile.
   const dataRef = useRef({}); // run-expr -> full result; accumulates without re-rendering
   const [, redraw] = useState(0); // bumped to trigger a batched repaint
+  const [shown, setShown] = useState(false); // first-paint gate: hold until 1500ms or all-settled
   const [failed, setFailed] = useState([]); // { name, message } per failed tile
 
   useEffect(() => {
     let cancelled = false;
     dataRef.current = {};
     setFailed([]);
-    redraw((n) => n + 1);
+    setShown(false);
     let settled = 0;
+    let firstDone = false; // has the held first paint happened yet?
     let flushTimer = null; // a batch repaint is pending while non-null
     const paint = () => {
-      if (!cancelled) redraw((n) => n + 1);
+      if (cancelled) return;
+      flushTimer = null;
+      firstDone = true;
+      setShown(true); // reveal on the first paint (no-op thereafter)
+      redraw((n) => n + 1);
     };
     const scheduleBatch = () => {
-      if (flushTimer) return; // already batching; this arrival rides the pending flush
-      flushTimer = setTimeout(() => {
-        flushTimer = null;
-        paint();
-      }, redrawMs());
+      if (flushTimer) return; // a paint is already pending; this arrival rides it
+      flushTimer = setTimeout(paint, redrawMs());
     };
+    // Hold the FIRST paint until 1500ms or all tiles settle — don't flash the
+    // empty skeleton. A warm load (all tiles arrive fast) then paints exactly
+    // once, with full data; a slow load reveals the skeleton at 1500ms and fills
+    // in subsequent batches.
+    scheduleBatch();
     for (const t of specs) {
       runQuery({ query: t.run }, pickGivens(givens, t.givens)).then((m) => {
         if (cancelled) return;
         if (m.ok && m.result) {
           dataRef.current[t.run] = m.result;
-          scheduleBatch();
+          if (firstDone) scheduleBatch(); // after the first paint, batch later arrivals
         } else {
           setFailed((prev) => [...prev, { name: tileName(t), message: m.error || "query failed" }]);
         }
         settled++;
-        // Everything has settled → paint the final batch now rather than waiting out
-        // the timer, so a warm load (all tiles arrive fast) doesn't sit on a stale batch.
+        // Everything has settled → paint now rather than waiting out the timer, so a
+        // warm load doesn't sit on a stale batch (and never over-draws).
         if (settled >= specs.length) {
-          if (flushTimer) {
-            clearTimeout(flushTimer);
-            flushTimer = null;
-          }
+          if (flushTimer) clearTimeout(flushTimer);
           paint();
         }
       });
@@ -526,15 +533,17 @@ export function CompositeDashboard({ givens, style }) {
   const data = dataRef.current;
   const pending = specs.filter((t) => !data[t.run] && !failed.some((f) => f.name === tileName(t)));
   const usable = specs.filter((t) => data[t.run] || t.schema);
-  const combined = usable.length
-    ? combineTiles(
-        usable.map((t) => ({ name: tileName(t), result: data[t.run] ?? t.schema })),
-        { columns },
-      )
-    : null;
+  const combined =
+    shown && usable.length
+      ? combineTiles(
+          usable.map((t) => ({ name: tileName(t), result: data[t.run] ?? t.schema })),
+          { columns },
+        )
+      : null;
 
   if (!combined) {
-    // No schemas shipped and nothing has arrived — or every tile failed.
+    // Held first paint (nothing revealed yet), no schemas + nothing arrived, or
+    // every tile failed.
     if (specs.length > 0 && failed.length >= specs.length) {
       return (
         <div style={{ padding: 24, color: "var(--dash-danger, #dc2626)", ...style }}>

@@ -396,7 +396,12 @@ export async function serveDashboard(opts: {
             const t = await runner.dashboardTiles(dash.entryFile, dash.tiles);
             return send(200, "text/html; charset=utf-8", frameDoc(dash, t.union, givensFromUrl(url), t.tiles));
           }
-          const specs = await runner.givensForQuery(dash.query);
+          // Single-query artifact: introspect givens against the dashboard's OWN
+          // entry file (its query lives there, not in index.malloy) — same scope
+          // its /api/run uses (runIn), else `run: <query>` is undefined at load.
+          const specs = dash.entryFile
+            ? await runner.givensForQueryIn(dash.entryFile, dash.query)
+            : await runner.givensForQuery(dash.query);
           if (!specs.ok) {
             return send(200, "text/html; charset=utf-8",
               html(`<pre style="color:crimson;padding:16px">model error: ${esc(specs.error)}</pre>`, dash.title));

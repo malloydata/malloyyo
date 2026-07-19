@@ -293,15 +293,18 @@ export async function modelArtifact(
     //    (references tiles defined elsewhere).
     const composite = readArtifactTag({ runExpr: '', defaultName }, model);
     if (composite?.tiles) return { ok: true, artifact: composite };
-    // 2 & 3. A single tagged declaration IS the (single-tile) dashboard, defined
-    //    inline in this file — either a top-level `query: … # artifact`, or a
-    //    `view: … # artifact` inside a source the file defines/extends. Either
-    //    becomes tiles=[<run-expression>]; single-tile passthrough keeps the
-    //    declaration's own render tags (`# dashboard {columns=…}`, …) at the root.
+    // 2 & 3. A single tagged declaration IS the dashboard, defined inline in this
+    //    file — either a top-level `query: … # artifact`, or a `view: … # artifact`
+    //    inside a source the file defines/extends. It stays a SINGLE-QUERY artifact
+    //    (`query=<run-expression>`, no tiles): the frame runs the one query and hands
+    //    the result straight to Malloy's renderer, honoring the declaration's own
+    //    render tags (`# dashboard {columns=…}`, plain table, chart, …). Do NOT turn
+    //    it into a one-tile composite — the composite path nests the result inside a
+    //    dashboard CARD, collapsing e.g. a `# dashboard {columns=6}` to one column.
     for (const queryName of model.queries().named) {
       const pq = model.getPreparedQueryByName(queryName) as unknown as Tagged;
       const info = readArtifactTag({ runExpr: queryName, defaultName }, pq);
-      if (info && !info.tiles) return { ok: true, artifact: { ...info, tiles: [info.query], query: '' } };
+      if (info && !info.tiles) return { ok: true, artifact: info };
     }
     for (const src of model.explores) {
       for (const field of src.allFields) {
@@ -311,7 +314,7 @@ export async function modelArtifact(
           { runExpr: `${src.name} -> ${view.name}`, defaultName, source: src.name, view: view.name },
           view,
         );
-        if (info && !info.tiles) return { ok: true, artifact: { ...info, tiles: [info.query], query: '' } };
+        if (info && !info.tiles) return { ok: true, artifact: info };
       }
     }
     return { ok: true, artifact: undefined };

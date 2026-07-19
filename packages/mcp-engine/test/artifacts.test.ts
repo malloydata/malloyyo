@@ -94,16 +94,20 @@ test('artifactQueries: discovers model-level ## and source-level # composites', 
   assert.equal(words.title, 'Words');
 });
 
-test('modelArtifact: an inline `query: … # artifact` is a single-tile dashboard', async () => {
+test('modelArtifact: an inline `query: … # artifact` is a single-QUERY dashboard (not a composite)', async () => {
   const res = await withFixtureRuntime((rt) =>
     modelArtifact(rt, fixtureUrl('dashboard_inline.malloy'), 'dashboard_inline'),
   );
   assert.equal(res.ok, true);
   if (!res.ok) return;
   assert.ok(res.artifact, 'the tagged inline query is discovered as the file dashboard');
-  assert.deepEqual(res.artifact!.tiles, ['my_dash']); // the query IS the one tile
+  // A single tagged query stays a single-query artifact: `query` = the run-expression,
+  // NO tiles. The frame runs the one query and hands its result straight to the
+  // renderer (honoring the query's own `# dashboard`/table/chart tags) — it is NOT
+  // wrapped into a one-tile composite (which would nest it inside a dashboard card).
+  assert.equal(res.artifact!.query, 'my_dash');
+  assert.equal(res.artifact!.tiles, undefined);
   assert.equal(res.artifact!.title, 'Inline Dash');
-  assert.equal(res.artifact!.query, ''); // composite-shaped: tiles drive it
 });
 
 test('modelArtifact: a model-level `## artifact { tiles }` is the composite', async () => {

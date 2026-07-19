@@ -296,47 +296,6 @@ export function Panel({ query, malloy, dashboard, result: presetResult, givens, 
   // remove()s the previous render, so the whole panel blanks and flashes on every
   // control change. render() disposes only the prior render, not the renderer.
   const vizRef = useRef(null);
-  // Double-buffer each paint. The renderer builds the dashboard and its charts
-  // draw ASYNC (Vega runs on rAF), so the panel would otherwise fill in
-  // progressively — cards/charts popping in over several frames. Instead we hide
-  // the container the instant we (re)render, then reveal it once the DOM settles
-  // (no mutations for a beat, i.e. charts done), so each paint appears fully
-  // formed. A hard cap always reveals, even if something keeps mutating.
-  const revealCtl = useRef(null);
-  if (!revealCtl.current) {
-    const st = { soft: 0, hard: 0 };
-    const reveal = () => {
-      clearTimeout(st.soft);
-      clearTimeout(st.hard);
-      st.soft = 0;
-      st.hard = 0;
-      const c = ref.current;
-      if (!c) return;
-      // Fade IN only — reveal the finished, fully-reflowed frame.
-      c.style.transition = "opacity .15s ease-in";
-      c.style.opacity = "1";
-    };
-    revealCtl.current = {
-      hide() {
-        const c = ref.current;
-        if (!c) return;
-        // Hide INSTANTLY (no transition) so the just-rendered build never shows —
-        // a transition here would fade the progressive build out, defeating the point.
-        c.style.transition = "none";
-        c.style.opacity = "0";
-        clearTimeout(st.hard);
-        clearTimeout(st.soft);
-        st.hard = window.setTimeout(reveal, 2000); // always reveal within 2s
-        st.soft = window.setTimeout(reveal, 300); // reveal if nothing mutates (chartless)
-      },
-      settle() {
-        if (!st.hard) return; // not currently hidden
-        clearTimeout(st.soft);
-        st.soft = window.setTimeout(reveal, 120); // reveal 120ms after the last mutation
-      },
-      reveal,
-    };
-  }
   useEffect(() => {
     if (!ref.current || !result) return;
     const container = ref.current;
@@ -369,9 +328,6 @@ export function Panel({ query, malloy, dashboard, result: presetResult, givens, 
       }
       vizRef.current.setResult(result);
       vizRef.current.render(container);
-      // Hide until the async build settles (see revealCtl) so the paint doesn't
-      // fill in progressively.
-      revealCtl.current.hide();
       // Flag drillable cells so they read as links (see .dash-drill in THEME_CSS).
       // `# dashboard` cards render progressively, so a one-shot mark right after
       // render() misses tables that appear a frame later — re-mark on DOM changes.
@@ -380,18 +336,10 @@ export function Panel({ query, malloy, dashboard, result: presetResult, givens, 
       if (!observerRef.current && typeof MutationObserver !== "undefined") {
         let raf = 0;
         observerRef.current = new MutationObserver(() => {
-          revealCtl.current.settle(); // charts still drawing → push the reveal out
           cancelAnimationFrame(raf);
           raf = requestAnimationFrame(() => markDrillableCells(container, drillNamesRef.current));
         });
-        // attributes too: Vega's resize-redraw mutates existing SVG attributes
-        // (not childList), so without this the reveal fires before the chart
-        // reflows to its final size — the residual "flash while reflowing".
-        observerRef.current.observe(container, {
-          childList: true,
-          subtree: true,
-          attributes: true,
-        });
+        observerRef.current.observe(container, { childList: true, subtree: true });
       }
     } catch (err) {
       // Drop the viz so the next good result rebuilds cleanly from scratch.
@@ -401,7 +349,6 @@ export function Panel({ query, malloy, dashboard, result: presetResult, givens, 
         /* ignore */
       }
       vizRef.current = null;
-      revealCtl.current.reveal(); // don't leave the error hidden behind opacity:0
       container.innerHTML = "";
       const pre = document.createElement("pre");
       pre.style.cssText = "color:crimson;white-space:pre-wrap;font:12px ui-monospace,monospace";
@@ -414,7 +361,6 @@ export function Panel({ query, malloy, dashboard, result: presetResult, givens, 
     () => () => {
       try {
         observerRef.current && observerRef.current.disconnect();
-        revealCtl.current && revealCtl.current.reveal(); // clear pending reveal timers
         vizRef.current && vizRef.current.remove();
       } catch {
         /* ignore */

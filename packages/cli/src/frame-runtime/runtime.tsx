@@ -449,20 +449,6 @@ function tileName(spec) {
   return (arrow >= 0 ? run.slice(arrow + 2) : run).trim();
 }
 
-// If the dashboard hasn't fully loaded within this window, show a per-tile status
-// list (state + load time) so a slow/hung tile is visible, plus a "Show
-// incomplete" button to render whatever HAS loaded. Overridable with `?wait=<ms>`.
-const DEFAULT_WAIT_MS = 2000;
-function waitMs() {
-  if (typeof window === "undefined") return DEFAULT_WAIT_MS;
-  // get() → null when absent, and Number(null) === 0 — so guard explicitly, else
-  // the status list shows on EVERY load instead of only after the wait window.
-  const raw = new URLSearchParams(window.location.search).get("wait");
-  if (raw == null || raw === "") return DEFAULT_WAIT_MS;
-  const v = Number(raw);
-  return Number.isFinite(v) && v >= 0 ? v : DEFAULT_WAIT_MS;
-}
-
 function tileStatusColor(status) {
   if (status === "ok") return "var(--dash-accent, #2563eb)";
   if (status === "error") return "var(--dash-danger, #dc2626)";
@@ -478,15 +464,13 @@ export function CompositeDashboard({ givens, style }) {
   const gkey = JSON.stringify(givens ?? {});
   // NO incremental rendering. Run every tile, WAIT for all of them, then combine
   // and render the Malloy dashboard exactly ONCE — no skeleton, no batched fill,
-  // no per-tile flashing. If loading runs long (waitMs), a per-tile status list
-  // (state + load time) appears with a "Show incomplete" button that renders
-  // whatever HAS loaded — so a slow or hung tile is diagnosable, not an endless
-  // spinner.
+  // no per-tile flashing. While loading, show a per-tile status list (state +
+  // load time) with a "Show incomplete" button that renders whatever HAS loaded —
+  // so a slow or hung tile is diagnosable, not an endless spinner.
   const dataRef = useRef({}); // run -> full result (loaded tiles)
   const startsRef = useRef({}); // run -> perf.now() when the query fired
   const [states, setStates] = useState({}); // run -> { status:'pending'|'ok'|'error', ms?, error? }
   const [combined, setCombined] = useState(null); // the rendered dashboard; set once (all-done or forced)
-  const [showList, setShowList] = useState(false); // long-load per-tile status list
   const [, tick] = useState(0); // ticks the live elapsed clock for pending rows
 
   // Combine whatever has loaded into ONE dashboard result and render it.
@@ -510,12 +494,7 @@ export function CompositeDashboard({ givens, style }) {
     startsRef.current = {};
     setStates(Object.fromEntries(specs.map((t) => [t.run, { status: "pending" }])));
     setCombined(null);
-    setShowList(false);
     let settled = 0;
-    // Long-load escape hatch: after waitMs, if not everything is in, show the list.
-    const listTimer = setTimeout(() => {
-      if (!cancelled && settled < specs.length) setShowList(true);
-    }, waitMs());
     for (const t of specs) {
       startsRef.current[t.run] = performance.now();
       runQuery({ query: t.run }, pickGivens(givens, t.givens)).then((m) => {
@@ -528,28 +507,23 @@ export function CompositeDashboard({ givens, style }) {
           setStates((s) => ({ ...s, [t.run]: { status: "error", ms, error: m.error || "query failed" } }));
         }
         settled++;
-        if (settled >= specs.length) {
-          clearTimeout(listTimer);
-          setShowList(false);
-          renderRef.current(); // ALL settled → render the dashboard once
-        }
+        if (settled >= specs.length) renderRef.current(); // ALL settled → render the dashboard once
       });
     }
     return () => {
       cancelled = true;
-      clearTimeout(listTimer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gkey]);
 
-  // While the status list is up with pending tiles, tick so their elapsed clocks advance.
+  // While loading (status list up) with pending tiles, tick so elapsed clocks advance.
   const statusOf = (t) => states[t.run]?.status ?? "pending";
   const anyPending = specs.some((t) => statusOf(t) === "pending");
   useEffect(() => {
-    if (!showList || !anyPending) return;
+    if (combined || !anyPending) return;
     const id = setInterval(() => tick((n) => n + 1), 400);
     return () => clearInterval(id);
-  }, [showList, anyPending]);
+  }, [combined, anyPending]);
 
   const total = specs.length;
   const doneCount = specs.filter((t) => statusOf(t) !== "pending").length;
@@ -560,7 +534,6 @@ export function CompositeDashboard({ givens, style }) {
 
   // "Show incomplete" → render whatever has loaded now.
   const showIncomplete = () => {
-    setShowList(false);
     renderRef.current();
   };
 
@@ -601,10 +574,9 @@ export function CompositeDashboard({ givens, style }) {
     );
   }
 
-  // 2) Long load (or everything settled with nothing renderable): per-tile status list.
-  if (showList || (total > 0 && doneCount >= total)) {
-    return (
-      <div style={{ padding: 24, maxWidth: 640, ...style }}>
+  // 2) Loading (or everything settled with nothing renderable): per-tile status list.
+  return (
+    <div style={{ padding: 24, maxWidth: 640, ...style }}>
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, marginBottom: 12 }}>
           <div style={{ fontWeight: 600 }}>
             {doneCount >= total ? "Dashboard loaded with errors" : "Loading dashboard…"} ({doneCount}/{total})
@@ -659,15 +631,6 @@ export function CompositeDashboard({ givens, style }) {
         </div>
       </div>
     );
-  }
-
-  // 3) Fast path (under waitMs): just the progress bar.
-  return (
-    <div style={{ padding: 24, ...style }}>
-      <div style={{ color: "var(--dash-muted, #666)", marginBottom: 12 }}>Loading…</div>
-      <ProgressBar />
-    </div>
-  );
 }
 
 // A small popup shown at the cursor when a drilled dimension offers more than one

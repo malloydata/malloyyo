@@ -90,6 +90,24 @@ export async function findByDatasetRef(userId: string, ref: string) {
   return { ds, model, description: null as string | null };
 }
 
+/** Admin-scoped dataset resolution for the publish API (push/status): by id (uuid)
+    OR by name — the ready dataset with that name, which is unique per server
+    (`datasets_name_ready_unique`). NOT user-scoped: the caller has already
+    authorized with an admin bearer. Lets `malloy-config.json` target a dataset by
+    its readable name instead of a per-instance slug. Returns the dataset row or null. */
+export async function resolveDatasetByRef(ref: string) {
+  if (UUID_RE.test(ref)) {
+    const [ds] = await db.select().from(datasets).where(eq(datasets.id, ref)).limit(1);
+    return ds ?? null;
+  }
+  const [ds] = await db
+    .select()
+    .from(datasets)
+    .where(and(eq(datasets.name, ref), eq(datasets.status, "ready")))
+    .limit(1);
+  return ds ?? null;
+}
+
 export async function latestModel(datasetId: string) {
   const [row] = await db
     .select()

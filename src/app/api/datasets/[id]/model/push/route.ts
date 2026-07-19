@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import { desc, eq } from "drizzle-orm";
 import { db, datasets, malloyModels, malloyModelFiles, malloyArtifacts } from "@/db";
 import { requireAdminBearer } from "@/lib/bearer-auth";
+import { resolveDatasetByRef } from "@/lib/mcp-tools";
 import { introspectModelFiles } from "@/lib/malloy";
 import { logger, serializeErr } from "@/lib/logger";
 
@@ -59,8 +60,10 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   if (!auth.ok) return json(auth.status, { ok: false, error: auth.error });
 
   const { id } = await ctx.params;
-  // Datasets must pre-exist — publish never auto-creates (design §4.5).
-  const [ds] = await db.select().from(datasets).where(eq(datasets.id, id)).limit(1);
+  // Datasets must pre-exist — publish never auto-creates (design §4.5). `id` may be
+  // a dataset uuid OR a readable name (the ready dataset with that name, unique per
+  // server) — so malloy-config.json can target by name instead of a slug.
+  const ds = await resolveDatasetByRef(id);
   if (!ds) return json(404, { ok: false, error: `dataset "${id}" not found` });
 
   let body: PushBody;
@@ -93,7 +96,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
 
   if (!result.ok) {
     const kind = classifyCompileError(result.error, new Set(fileMap.keys()));
-    logger.info("model push rejected", { datasetId: id, kind, dryRun, error: result.error });
+    logger.info("model push rejected", { datasetId: ds.id, kind, dryRun, error: result.error });
     // Record the failed attempt on the dataset — but never as a model version (§4.4).
     if (!dryRun) {
       await db
@@ -104,7 +107,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
           lastPublishBranch: git.branch ?? null,
           lastPublishError: result.error,
         })
-        .where(eq(datasets.id, id));
+        .where(eq(datasets.id, ds.id));
     }
     return json(400, { ok: false, kind, error: result.error });
   }
@@ -177,7 +180,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     });
 
     logger.info("model push ok", {
-      datasetId: id,
+      datasetId: ds.id,
       version: created.version,
       sourceCount: result.sources.length,
       fileCount: fileMap.size,
@@ -193,7 +196,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       git,
     });
   } catch (err) {
-    logger.error("model push persist failed", { datasetId: id, ...serializeErr(err) });
+    logger.error("model push persist failed", { datasetId: ds.id, ...serializeErr(err) });
     return json(500, { ok: false, error: "failed to persist model" });
   }
 }

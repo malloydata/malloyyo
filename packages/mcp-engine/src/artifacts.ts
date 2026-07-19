@@ -57,6 +57,9 @@ export interface ArtifactInfo {
       dashboard into the staged/Apply model; omitted or `autorun=true` = live.
       Only carried when explicitly `false` (the runtime treats absent as live). */
   autorun?: boolean;
+  /** Non-fatal authoring issues surfaced by `lint` (e.g. `dashboard_columns` on a
+      single-tile artifact, which is ignored). Never blocks; absent when clean. */
+  warnings?: string[];
 }
 
 /** How a candidate declaration identifies itself to `readArtifactTag`. */
@@ -145,22 +148,35 @@ export function readArtifactTag(ident: ArtifactIdent, q: Tagged): ArtifactInfo |
     nested?.text('title') ?? tag.text('title') ?? description?.split('\n')[0] ?? ident.defaultName;
 
   // Composite: `tiles=[…]`. Each tile resolves to a run-expression (bare views
-  // scoped to the declaring source); `query` is empty — there is no single one.
+  // scoped to the declaring source).
   const rawTiles = nested?.textArray('tiles') ?? tag.textArray('tiles');
   if (rawTiles && rawTiles.length) {
-    const info: ArtifactInfo = {
-      name,
-      query: '',
-      title,
-      tiles: rawTiles.map((t) => resolveTile(t, ident.source)),
-    };
+    const resolved = rawTiles.map((t) => resolveTile(t, ident.source));
+    const cols = nested?.numeric('dashboard_columns') ?? tag.numeric('dashboard_columns');
+    const autorunText = nested?.text('autorun') ?? tag.text('autorun');
+    const givens = readGivens(tag);
+    // A SINGLE tile is just a single-query artifact — identical to `# artifact`
+    // on a query: `query` = the one run-expression, no `tiles`. Its layout comes
+    // from the tile query's OWN `# dashboard` tag, so an artifact-level
+    // dashboard_columns is meaningless here — ignore it (and warn in lint).
+    if (resolved.length === 1) {
+      const info: ArtifactInfo = { name, query: resolved[0]!, title };
+      if (ident.source) info.source = ident.source;
+      if (description) info.description = description;
+      if (autorunText === 'false') info.autorun = false;
+      if (givens) info.givens = givens;
+      if (typeof cols === 'number')
+        info.warnings = [
+          'dashboard_columns is ignored on a single-tile artifact (one tile renders like a single-query `# artifact`, laid out by the tile query’s own `# dashboard` tag)',
+        ];
+      return info;
+    }
+    // 2+ tiles: a real composite grid.
+    const info: ArtifactInfo = { name, query: '', title, tiles: resolved };
     if (ident.source) info.source = ident.source;
     if (description) info.description = description;
-    const cols = nested?.numeric('dashboard_columns') ?? tag.numeric('dashboard_columns');
     if (typeof cols === 'number') info.dashboard_columns = cols;
-    const autorunText = nested?.text('autorun') ?? tag.text('autorun');
     if (autorunText === 'false') info.autorun = false;
-    const givens = readGivens(tag);
     if (givens) info.givens = givens;
     return info;
   }
@@ -205,7 +221,10 @@ export async function artifactQueries(runtime: Runtime, entry: URL): Promise<Art
     // cross-source dashboard declared in index.malloy. Ignored unless composite
     // (a bare `## artifact` with no tiles isn't a dashboard).
     const modelComposite = readArtifactTag({ runExpr: '', defaultName: 'dashboard' }, model);
-    if (modelComposite?.tiles) artifacts.push(modelComposite);
+    // A model-level artifact is a dashboard when it has tiles (composite) OR a
+    // run-expression (a single-tile `tiles=[X]` normalized to single-query). A
+    // bare `## artifact` (no tiles, empty query) isn't a dashboard.
+    if (modelComposite && (modelComposite.tiles || modelComposite.query)) artifacts.push(modelComposite);
     // Top-level `query: … # artifact` declarations.
     for (const queryName of model.queries().named) {
       const pq = model.getPreparedQueryByName(queryName) as unknown as Tagged;
@@ -219,7 +238,7 @@ export async function artifactQueries(runtime: Runtime, entry: URL): Promise<Art
         { runExpr: '', defaultName: src.name, source: src.name },
         src,
       );
-      if (srcComposite?.tiles) artifacts.push(srcComposite);
+      if (srcComposite && (srcComposite.tiles || srcComposite.query)) artifacts.push(srcComposite);
       // `view: … # artifact` declarations inside each source. The run-expression
       // is `<source> -> <view>`, which `run:` accepts just like a query name.
       for (const field of src.allFields) {
@@ -289,19 +308,23 @@ export async function modelArtifact(
 ): Promise<{ ok: true; artifact?: ArtifactInfo } | { ok: false; error: string }> {
   try {
     const model = (await runtime.loadModel(entry).getModel()) as unknown as ModelLike;
-    // 1. Model-level `## artifact { tiles }` — the multi-tile / cross-source form
-    //    (references tiles defined elsewhere).
+    // 1. Model-level `## artifact` — a multi-tile composite, or a single-tile
+    //    `tiles=[X]` normalized to single-query (query set, no tiles). A bare
+    //    `## artifact` (no tiles, empty query) is not a dashboard.
     const composite = readArtifactTag({ runExpr: '', defaultName }, model);
-    if (composite?.tiles) return { ok: true, artifact: composite };
-    // 2 & 3. A single tagged declaration IS the (single-tile) dashboard, defined
-    //    inline in this file — either a top-level `query: … # artifact`, or a
-    //    `view: … # artifact` inside a source the file defines/extends. Either
-    //    becomes tiles=[<run-expression>]; single-tile passthrough keeps the
-    //    declaration's own render tags (`# dashboard {columns=…}`, …) at the root.
+    if (composite && (composite.tiles || composite.query)) return { ok: true, artifact: composite };
+    // 2 & 3. A single tagged declaration IS the dashboard, defined inline in this
+    //    file — either a top-level `query: … # artifact`, or a `view: … # artifact`
+    //    inside a source the file defines/extends. It stays a SINGLE-QUERY artifact
+    //    (`query=<run-expression>`, no tiles): the frame runs the one query and hands
+    //    the result straight to Malloy's renderer, honoring the declaration's own
+    //    render tags (`# dashboard {columns=…}`, plain table, chart, …). Do NOT turn
+    //    it into a one-tile composite — the composite path nests the result inside a
+    //    dashboard CARD, collapsing e.g. a `# dashboard {columns=6}` to one column.
     for (const queryName of model.queries().named) {
       const pq = model.getPreparedQueryByName(queryName) as unknown as Tagged;
       const info = readArtifactTag({ runExpr: queryName, defaultName }, pq);
-      if (info && !info.tiles) return { ok: true, artifact: { ...info, tiles: [info.query], query: '' } };
+      if (info && !info.tiles) return { ok: true, artifact: info };
     }
     for (const src of model.explores) {
       for (const field of src.allFields) {
@@ -311,7 +334,7 @@ export async function modelArtifact(
           { runExpr: `${src.name} -> ${view.name}`, defaultName, source: src.name, view: view.name },
           view,
         );
-        if (info && !info.tiles) return { ok: true, artifact: { ...info, tiles: [info.query], query: '' } };
+        if (info && !info.tiles) return { ok: true, artifact: info };
       }
     }
     return { ok: true, artifact: undefined };

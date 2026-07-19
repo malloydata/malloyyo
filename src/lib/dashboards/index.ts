@@ -196,7 +196,11 @@ export async function dashboardTileSpecs(
       const specs = await dashboardGivenSpecs(rt, entry, tile);
       const gvs = specs.ok ? specs.givens : [];
       for (const s of gvs) if (!byName.has(s.name)) byName.set(s.name, s);
-      out.push({ run: tile, name: tileName(tile), givens: gvs.map((s) => s.name) });
+      out.push({
+        run: tile,
+        name: tileName(tile),
+        givens: gvs.map((s) => s.name),
+      });
     }
     return { ok: true, tiles: out, union: [...byName.values()] };
   });

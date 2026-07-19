@@ -233,11 +233,10 @@ function clientFilter(options, serverSide, term) {
 // path hands the combined result straight in).
 export function Panel({ query, malloy, dashboard, result: presetResult, givens, style }) {
   // Input precedence: explicit malloy / dashboard / query prop wins. A BARE
-  // <Panel/> (no input) renders "this dashboard": for a composite (tiles) that's
-  // the whole thing (dashboard mode); for a single-query artifact it's that
-  // query. In v1 a bare Panel meant `dashboardInfo().query`; v2 dashboards carry
-  // `tiles` and an empty query, so a bare Panel in a hand-written component must
-  // fall through to dashboard mode rather than run an empty query.
+  // <Panel/> (no input) renders "this dashboard": a COMPOSITE artifact (tiles,
+  // empty query) delegates to CompositeDashboard; a single-query artifact runs
+  // its own `dashboardInfo().query`. So a composite must fall through to
+  // dashboard mode rather than run an empty query.
   const info = dashboardInfo();
   // A COMPOSITE dashboard (tiles) is rendered by CompositeDashboard, which runs
   // its tiles and combines them into one Malloy-rendered `# dashboard`. A bare
@@ -450,122 +449,190 @@ function tileName(spec) {
   return (arrow >= 0 ? run.slice(arrow + 2) : run).trim();
 }
 
-// A tile is a "straggler" when it lags this far behind the FIRST tile to arrive.
-// Measuring the spread (not absolute time) auto-calibrates: whether tiles land at
-// ~0.5s (concurrent) or ~2s (serialized), a normal cluster settles within the
-// window and paints once; only a genuine outlier trips an early paint. On Vercel,
-// where a cold function instance can make one tile far slower than its siblings,
-// this is what keeps the whole dashboard from waiting on it.
-const STRAGGLER_MS = 700;
+function tileStatusColor(status) {
+  if (status === "ok") return "var(--dash-accent, #2563eb)";
+  if (status === "error") return "var(--dash-danger, #dc2626)";
+  return "var(--dash-muted, #666)";
+}
+function tileStatusGlyph(status) {
+  return status === "ok" ? "✓" : status === "error" ? "✕" : "⋯";
+}
 
 export function CompositeDashboard({ givens, style }) {
   const specs = tileSpecs();
   const columns = dashboardInfo().dashboard_columns;
   const gkey = JSON.stringify(givens ?? {});
-  // What we render. `combined` (the Malloy result) updates at most twice per load
-  // — an early paint if a tile straggles, then the final paint when all have
-  // settled — so there's never per-tile flicker. `failed` collects the tiles
-  // whose query errored; `done` flips true once every tile has settled so we can
-  // tell "still loading" apart from "all tiles failed / no data".
-  const [state, setState] = useState({ combined: null, failed: [], done: false });
+  // NO incremental rendering. Run every tile, WAIT for all of them, then combine
+  // and render the Malloy dashboard exactly ONCE — no skeleton, no batched fill,
+  // no per-tile flashing. While loading, show a per-tile status list (state +
+  // load time) with a "Show incomplete" button that renders whatever HAS loaded —
+  // so a slow or hung tile is diagnosable, not an endless spinner.
+  const dataRef = useRef({}); // run -> full result (loaded tiles)
+  const startsRef = useRef({}); // run -> perf.now() when the query fired
+  const [states, setStates] = useState({}); // run -> { status:'pending'|'ok'|'error', ms?, error? }
+  const [combined, setCombined] = useState(null); // the rendered dashboard; set once (all-done or forced)
+  const [, tick] = useState(0); // ticks the live elapsed clock for pending rows
+
+  // Combine whatever has loaded into ONE dashboard result and render it. (A
+  // single-tile `tiles=[X]` is normalized upstream to a single-query artifact, so
+  // it never reaches here — CompositeDashboard only handles genuine 2+ composites.)
+  const renderRef = useRef(null);
+  renderRef.current = () => {
+    const data = dataRef.current;
+    const usable = specs.filter((t) => data[t.run]);
+    setCombined(
+      usable.length
+        ? combineTiles(
+            usable.map((t) => ({ name: tileName(t), result: data[t.run] })),
+            { columns },
+          )
+        : null,
+    );
+  };
 
   useEffect(() => {
     let cancelled = false;
-    setState({ combined: null, failed: [], done: false });
-    const acc = {}; // run-expr -> result, accumulated locally (no per-tile state churn)
-    const errs = []; // { name, message } for tiles whose query failed
+    dataRef.current = {};
+    startsRef.current = {};
+    setStates(Object.fromEntries(specs.map((t) => [t.run, { status: "pending" }])));
+    setCombined(null);
     let settled = 0;
-    let straggler = null; // timer armed when the first tile arrives
-    const build = () => {
-      const arrived = specs.filter((t) => acc[t.run]);
-      return arrived.length
-        ? combineTiles(
-            arrived.map((t) => ({ name: tileName(t), result: acc[t.run] })),
-            { columns },
-          )
-        : null;
-    };
-    const paint = (done) => {
-      if (!cancelled) setState({ combined: build(), failed: [...errs], done });
-    };
     for (const t of specs) {
+      startsRef.current[t.run] = performance.now();
       runQuery({ query: t.run }, pickGivens(givens, t.givens)).then((m) => {
         if (cancelled) return;
+        const ms = Math.round(performance.now() - (startsRef.current[t.run] ?? performance.now()));
         if (m.ok && m.result) {
-          acc[t.run] = m.result;
-          // Arm the straggler timer on the FIRST arrival: an EARLY paint of what's
-          // ready if the rest lag more than STRAGGLER_MS behind it (once). If
-          // everything settles within the window the final paint fires first and
-          // this is a no-op; if nothing is ready when it fires (all tiles slow
-          // together — e.g. a cold connection) it paints nothing and waits.
-          if (straggler === null) {
-            straggler = setTimeout(() => {
-              if (cancelled || settled >= specs.length) return;
-              if (build()) paint(false);
-            }, STRAGGLER_MS);
-          }
+          dataRef.current[t.run] = m.result;
+          setStates((s) => ({ ...s, [t.run]: { status: "ok", ms } }));
         } else {
-          errs.push({ name: tileName(t), message: m.error || "query failed" });
+          setStates((s) => ({ ...s, [t.run]: { status: "error", ms, error: m.error || "query failed" } }));
         }
         settled++;
-        if (settled >= specs.length) {
-          if (straggler) clearTimeout(straggler);
-          paint(true); // final paint: every tile has settled (arrived or errored)
-        }
+        if (settled >= specs.length) renderRef.current(); // ALL settled → render the dashboard once
       });
     }
     return () => {
       cancelled = true;
-      if (straggler) clearTimeout(straggler);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gkey]);
 
-  const { combined, failed, done } = state;
-  // Nothing rendered yet: still loading, unless every tile has settled — then it's
-  // an all-failed dashboard (show the errors) or genuinely empty (no data), never
-  // a perpetual spinner.
-  if (!combined) {
-    if (!done) return <div style={{ padding: 24, color: "var(--dash-muted, #666)", ...style }}>Loading…</div>;
+  // While loading (status list up) with pending tiles, tick so elapsed clocks advance.
+  const statusOf = (t) => states[t.run]?.status ?? "pending";
+  const anyPending = specs.some((t) => statusOf(t) === "pending");
+  useEffect(() => {
+    if (combined || !anyPending) return;
+    const id = setInterval(() => tick((n) => n + 1), 400);
+    return () => clearInterval(id);
+  }, [combined, anyPending]);
+
+  const total = specs.length;
+  const doneCount = specs.filter((t) => statusOf(t) !== "pending").length;
+  const okCount = specs.filter((t) => statusOf(t) === "ok").length;
+  const failedTiles = specs
+    .filter((t) => statusOf(t) === "error")
+    .map((t) => ({ name: tileName(t), message: states[t.run].error }));
+
+  // "Show incomplete" → render whatever has loaded now.
+  const showIncomplete = () => {
+    renderRef.current();
+  };
+
+  const ProgressBar = ({ h = 4 }) => (
+    <div style={{ height: h, borderRadius: h / 2, background: "var(--dash-border, #e5e7eb)", overflow: "hidden" }}>
+      <div
+        style={{
+          height: "100%",
+          width: `${total ? (doneCount / total) * 100 : 0}%`,
+          background: "var(--dash-accent, #2563eb)",
+          transition: "width .2s",
+        }}
+      />
+    </div>
+  );
+
+  // 1) Rendered dashboard (all tiles settled, or the user forced it).
+  if (combined) {
     return (
-      <div style={{ padding: 24, color: "var(--dash-danger, #dc2626)", ...style }}>
-        {failed.length ? (
-          <>
-            <div style={{ fontWeight: 600, marginBottom: 8 }}>This dashboard failed to load.</div>
-            {failed.map((f) => (
-              <div key={f.name} style={{ fontSize: 13, marginTop: 4 }}>
-                <b>{f.name}:</b> {f.message}
-              </div>
-            ))}
-          </>
-        ) : (
-          "No data."
+      <div style={{ display: "flex", flexDirection: "column", minHeight: 0, ...style }}>
+        {failedTiles.length > 0 && (
+          <div
+            style={{
+              flexShrink: 0,
+              marginBottom: 12,
+              padding: "8px 12px",
+              borderRadius: "var(--dash-radius, 8px)",
+              background: "color-mix(in srgb, var(--dash-danger, #dc2626) 10%, transparent)",
+              color: "var(--dash-danger, #dc2626)",
+              fontSize: 13,
+            }}
+          >
+            {failedTiles.map((f) => `${f.name}: ${f.message}`).join(" · ")}
+          </div>
         )}
+        <Panel result={combined} style={{ flex: 1, minHeight: 0 }} />
       </div>
     );
   }
-  // Some tiles rendered; if others failed, note them above the dashboard rather
-  // than dropping them silently.
+
+  // 2) Loading (or everything settled with nothing renderable): per-tile status list.
   return (
-    <div style={{ display: "flex", flexDirection: "column", minHeight: 0, ...style }}>
-      {failed.length > 0 && (
-        <div
-          style={{
-            flexShrink: 0,
-            marginBottom: 12,
-            padding: "8px 12px",
-            borderRadius: "var(--dash-radius, 8px)",
-            background: "color-mix(in srgb, var(--dash-danger, #dc2626) 10%, transparent)",
-            color: "var(--dash-danger, #dc2626)",
-            fontSize: 13,
-          }}
-        >
-          {failed.map((f) => `${f.name}: ${f.message}`).join(" · ")}
+    <div style={{ padding: 24, maxWidth: 640, ...style }}>
+        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", gap: 12, marginBottom: 12 }}>
+          <div style={{ fontWeight: 600 }}>
+            {doneCount >= total ? "Dashboard loaded with errors" : "Loading dashboard…"} ({doneCount}/{total})
+          </div>
+          {doneCount < total && (
+            <button
+              onClick={showIncomplete}
+              disabled={okCount === 0}
+              style={{
+                padding: "4px 10px",
+                fontSize: 12,
+                fontWeight: 500,
+                cursor: okCount === 0 ? "not-allowed" : "pointer",
+                opacity: okCount === 0 ? 0.5 : 1,
+                borderRadius: "var(--dash-radius, 6px)",
+                border: "1px solid var(--dash-border, #e5e7eb)",
+                background: "var(--dash-control-bg, #fff)",
+                color: "var(--dash-fg, #171717)",
+              }}
+            >
+              Show incomplete
+            </button>
+          )}
         </div>
-      )}
-      <Panel result={combined} style={{ flex: 1, minHeight: 0 }} />
-    </div>
-  );
+        <div style={{ marginBottom: 16 }}>
+          <ProgressBar />
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {specs.map((t) => {
+            const st = states[t.run] ?? { status: "pending" };
+            const elapsed =
+              st.status === "pending"
+                ? (performance.now() - (startsRef.current[t.run] ?? performance.now())) / 1000
+                : (st.ms ?? 0) / 1000;
+            return (
+              <div key={t.run}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+                  <span style={{ width: 14, textAlign: "center", color: tileStatusColor(st.status) }}>
+                    {tileStatusGlyph(st.status)}
+                  </span>
+                  <span style={{ flex: 1, fontWeight: 500 }}>{tileName(t)}</span>
+                  <span style={{ color: "var(--dash-muted, #666)", fontVariantNumeric: "tabular-nums" }}>
+                    {st.status === "pending" ? `${elapsed.toFixed(1)}s…` : `${elapsed.toFixed(2)}s`}
+                  </span>
+                </div>
+                {st.status === "error" && (
+                  <div style={{ marginLeft: 22, fontSize: 12, color: "var(--dash-danger, #dc2626)" }}>{st.error}</div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
 }
 
 // A small popup shown at the cursor when a drilled dimension offers more than one

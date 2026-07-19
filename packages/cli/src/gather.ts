@@ -75,6 +75,9 @@ export async function gatherDashboards(dir: string): Promise<DashboardPayload[]>
       const a = res.artifact;
       const manifest: Record<string, unknown> = { title: a.title, entryFile };
       if (a.tiles) manifest.tiles = a.tiles;
+      // Single-query artifact (no tiles): the run-expression IS the dashboard.
+      // Persist it — the hosted app needs manifest.query to run/introspect it.
+      else if (a.query) manifest.query = a.query;
       if (a.dashboard_columns !== undefined) manifest.dashboard_columns = a.dashboard_columns;
       if (a.description) manifest.description = a.description;
       if (a.givens) manifest.givens = a.givens;

@@ -94,16 +94,20 @@ test('artifactQueries: discovers model-level ## and source-level # composites', 
   assert.equal(words.title, 'Words');
 });
 
-test('modelArtifact: an inline `query: … # artifact` is a single-tile dashboard', async () => {
+test('modelArtifact: an inline `query: … # artifact` is a single-QUERY dashboard (not a composite)', async () => {
   const res = await withFixtureRuntime((rt) =>
     modelArtifact(rt, fixtureUrl('dashboard_inline.malloy'), 'dashboard_inline'),
   );
   assert.equal(res.ok, true);
   if (!res.ok) return;
   assert.ok(res.artifact, 'the tagged inline query is discovered as the file dashboard');
-  assert.deepEqual(res.artifact!.tiles, ['my_dash']); // the query IS the one tile
+  // A single tagged query stays a single-query artifact: `query` = the run-expression,
+  // NO tiles. The frame runs the one query and hands its result straight to the
+  // renderer (honoring the query's own `# dashboard`/table/chart tags) — it is NOT
+  // wrapped into a one-tile composite (which would nest it inside a dashboard card).
+  assert.equal(res.artifact!.query, 'my_dash');
+  assert.equal(res.artifact!.tiles, undefined);
   assert.equal(res.artifact!.title, 'Inline Dash');
-  assert.equal(res.artifact!.query, ''); // composite-shaped: tiles drive it
 });
 
 test('modelArtifact: a model-level `## artifact { tiles }` is the composite', async () => {
@@ -115,4 +119,22 @@ test('modelArtifact: a model-level `## artifact { tiles }` is the composite', as
   assert.ok(res.artifact, 'the model-level ## artifact is discovered');
   assert.deepEqual(res.artifact!.tiles, ['nums -> by_v', 'words -> by_w']);
   assert.equal(res.artifact!.dashboard_columns, 3);
+});
+
+test('modelArtifact: a single-tile `## artifact { tiles=[X] }` is a single-query artifact; dashboard_columns is ignored with a warning', async () => {
+  const res = await withFixtureRuntime((rt) =>
+    modelArtifact(rt, fixtureUrl('single_tile_artifact.malloy'), 'single_tile_artifact'),
+  );
+  assert.equal(res.ok, true);
+  if (!res.ok) return;
+  assert.ok(res.artifact, 'the single-tile artifact is still discovered as a dashboard');
+  // Normalized to single-query — identical shape to `# artifact` on a query.
+  assert.equal(res.artifact!.query, 'nums -> by_v');
+  assert.equal(res.artifact!.tiles, undefined);
+  // dashboard_columns is ignored (not carried) and surfaced as a lint warning.
+  assert.equal(res.artifact!.dashboard_columns, undefined);
+  assert.ok(
+    (res.artifact!.warnings ?? []).some((w) => /dashboard_columns/.test(w)),
+    'warns that dashboard_columns is ignored on a single-tile artifact',
+  );
 });

@@ -121,6 +121,9 @@ export async function refreshGitHubModel(datasetId: string): Promise<RefreshResu
       }
       const manifest: Record<string, unknown> = { title: a.title, entryFile: `dashboards/${base}.malloy` };
       if (a.tiles) manifest.tiles = a.tiles;
+      // Single-query artifact (no tiles): persist its run-expression — the app
+      // needs manifest.query to run/introspect it.
+      else if (a.query) manifest.query = a.query;
       if (a.dashboard_columns !== undefined) manifest.dashboard_columns = a.dashboard_columns;
       if (a.description) manifest.description = a.description;
       if (a.givens) manifest.givens = a.givens;

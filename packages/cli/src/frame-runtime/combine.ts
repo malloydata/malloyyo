@@ -95,16 +95,16 @@ function isMeasure(field: ResultField): boolean {
   return (field.annotations ?? []).some((a) => /(^|\s)calculation(\s|$)/.test(a.value));
 }
 
-/** A tile is an "aggregate row" when its result is a SINGLE row of MEASURES (an
-    aggregate view with no group-by / no dimensions). Those merge as top-level KPI
-    tiles rather than a card. Requiring measures — not just any scalar — keeps a
-    1-row detail table (e.g. `select … limit 1`) rendering as a table card instead
-    of scattering its columns into big-value tiles. */
+/** A tile is an "aggregate row" when every field is a MEASURE (an aggregate view
+    with no group-by / no dimensions / no nesting — which always yields a single
+    row). Those merge as top-level KPI tiles rather than a card. This is decided
+    from the SCHEMA alone (not the data), so a tile's slot is the same whether we
+    have its schema-only result or its full result — the layout doesn't shift when
+    data arrives. Requiring measures — not just any scalar — keeps a 1-row detail
+    table (`select … limit 1`) rendering as a table card. */
 export function isAggregateRow(res: CombinableResult): boolean {
   const fields = res.schema?.fields ?? [];
-  if (!fields.length) return false;
-  const rows = res.data?.array_value ?? [];
-  return rows.length === 1 && fields.every(isMeasure);
+  return fields.length > 0 && fields.every(isMeasure);
 }
 
 function readNumericTag(annotations: ResultAnnotation[] | undefined, key: string): number | undefined {
@@ -146,8 +146,10 @@ export function combineTiles(tiles: DashboardTile[], opts: CombineOptions = {}):
       // Splice the tile's measures in as top-level fields (→ KPI tiles). Keep each
       // field's own annotations (the `#(malloy) … calculation` marker is what makes
       // it render as a big-value KPI), and re-apply the tile's colspan (distributed)
-      // and `# break` (on the first KPI, so the group starts a fresh row).
-      const row = (res.data as ResultCell).array_value?.[0]?.record_value ?? [];
+      // and `# break` (on the first KPI, so the group starts a fresh row). When the
+      // tile is still schema-only (no data yet), each KPI cell is null — the slot
+      // is reserved; the value fills in when the tile's real result arrives.
+      const row = res.data?.array_value?.[0]?.record_value ?? [];
       const defs = res.schema.fields ?? [];
       const tileColspan = readNumericTag(res.annotations, "colspan");
       const spans = tileColspan ? distributeColspan(tileColspan, defs.length) : null;
@@ -157,11 +159,13 @@ export function combineTiles(tiles: DashboardTile[], opts: CombineOptions = {}):
         if (spans) ann.push({ value: `# colspan=${spans[i]}\n` });
         if (tileBreak && i === 0) ann.push({ value: `# break\n` });
         fields.push({ ...f, name: uniqueName(f.name, taken), annotations: ann });
-        cells.push(row[i]);
+        cells.push(row[i] ?? { kind: "null_cell" });
       });
     } else {
       fields.push(tileAsNestField(uniqueName(t.name, taken), res));
-      cells.push(res.data as ResultCell);
+      // A schema-only tile (no data yet) reserves an EMPTY card; its rows fill in
+      // when the tile's real result arrives.
+      cells.push((res.data as ResultCell) ?? { kind: "array_cell", array_value: [] });
     }
   }
   return {

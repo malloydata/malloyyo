@@ -120,3 +120,21 @@ test('modelArtifact: a model-level `## artifact { tiles }` is the composite', as
   assert.deepEqual(res.artifact!.tiles, ['nums -> by_v', 'words -> by_w']);
   assert.equal(res.artifact!.dashboard_columns, 3);
 });
+
+test('modelArtifact: a single-tile `## artifact { tiles=[X] }` is a single-query artifact; dashboard_columns is ignored with a warning', async () => {
+  const res = await withFixtureRuntime((rt) =>
+    modelArtifact(rt, fixtureUrl('single_tile_artifact.malloy'), 'single_tile_artifact'),
+  );
+  assert.equal(res.ok, true);
+  if (!res.ok) return;
+  assert.ok(res.artifact, 'the single-tile artifact is still discovered as a dashboard');
+  // Normalized to single-query — identical shape to `# artifact` on a query.
+  assert.equal(res.artifact!.query, 'nums -> by_v');
+  assert.equal(res.artifact!.tiles, undefined);
+  // dashboard_columns is ignored (not carried) and surfaced as a lint warning.
+  assert.equal(res.artifact!.dashboard_columns, undefined);
+  assert.ok(
+    (res.artifact!.warnings ?? []).some((w) => /dashboard_columns/.test(w)),
+    'warns that dashboard_columns is ignored on a single-tile artifact',
+  );
+});

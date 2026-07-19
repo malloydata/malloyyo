@@ -473,7 +473,9 @@ export function CompositeDashboard({ givens, style }) {
   const [combined, setCombined] = useState(null); // the rendered dashboard; set once (all-done or forced)
   const [, tick] = useState(0); // ticks the live elapsed clock for pending rows
 
-  // Combine whatever has loaded into ONE dashboard result and render it.
+  // Combine whatever has loaded into ONE dashboard result and render it. (A
+  // single-tile `tiles=[X]` is normalized upstream to a single-query artifact, so
+  // it never reaches here — CompositeDashboard only handles genuine 2+ composites.)
   const renderRef = useRef(null);
   renderRef.current = () => {
     const data = dataRef.current;

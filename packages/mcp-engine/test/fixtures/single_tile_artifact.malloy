@@ -1,0 +1,11 @@
+##! experimental.givens
+
+// A model-level `## artifact` with exactly ONE tile — this is just a single-query
+// artifact (identical to `# artifact` on a query). `dashboard_columns` here is
+// meaningless (one tile is laid out by its own `# dashboard` tag) → ignored,
+// lint warns.
+## artifact { name="one" title="One" tiles=["nums -> by_v"] dashboard_columns=4 }
+
+source: nums is duckdb.sql("SELECT 1 as v UNION ALL SELECT 2 as v") extend {
+  view: by_v is { group_by: v }
+}

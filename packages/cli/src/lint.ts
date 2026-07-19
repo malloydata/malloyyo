@@ -97,6 +97,7 @@ async function runLint(abs: string, runner: ModelRunner): Promise<LintReport> {
     // A `.malloy` with no `## artifact` is a shared include, not a dashboard.
     if (!res.artifact) continue;
     const art = res.artifact;
+    if (art.warnings) warnings.push(...art.warnings); // non-fatal authoring issues (e.g. dashboard_columns on a single-tile artifact)
 
     if (seenNames.has(art.name)) {
       errors.push(`duplicate dashboard name "${art.name}" (also declared by ${seenNames.get(art.name)})`);

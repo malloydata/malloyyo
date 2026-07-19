@@ -1,0 +1,5 @@
+##! experimental.givens
+import { sales } from "../sales.malloy"
+// A SINGLE-tile artifact is a single-query dashboard — dashboard_columns is
+// meaningless here, so lint warns (not errors) and it's otherwise clean.
+## artifact { title="Single" tiles=["sales -> totals"] dashboard_columns=4 }

@@ -33,6 +33,16 @@ test('lint v2: passes a good dashboard, catches a bad tile, bad columns, and an 
     'flags the undefined tile, naming it',
   );
 
+  // A single-tile `tiles=[X]` is a single-query dashboard: it compiles cleanly,
+  // and dashboard_columns is ignored with a WARNING (not an error).
+  const single = byName.get('single');
+  assert.ok(single, 'single-tile dashboard discovered');
+  assert.deepEqual(single!.errors, [], 'single-tile dashboard has no errors');
+  assert.ok(
+    single!.warnings.some((w) => /dashboard_columns/.test(w)),
+    'warns that dashboard_columns is ignored on a single-tile artifact',
+  );
+
   // The orphaned component (no matching .malloy) is a fatal finding.
   const ghost = byName.get('ghost.jsx');
   assert.ok(ghost, 'orphaned component reported');

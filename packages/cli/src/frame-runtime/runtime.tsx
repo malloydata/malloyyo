@@ -450,102 +450,105 @@ function tileName(spec) {
   return (arrow >= 0 ? run.slice(arrow + 2) : run).trim();
 }
 
-// A tile is a "straggler" when it lags this far behind the FIRST tile to arrive.
-// Measuring the spread (not absolute time) auto-calibrates: whether tiles land at
-// ~0.5s (concurrent) or ~2s (serialized), a normal cluster settles within the
-// window and paints once; only a genuine outlier trips an early paint. On Vercel,
-// where a cold function instance can make one tile far slower than its siblings,
-// this is what keeps the whole dashboard from waiting on it.
-const STRAGGLER_MS = 700;
+// How long to batch newly-arrived tile data before redrawing. Each redraw
+// re-renders the whole Malloy dashboard, so coalescing arrivals into ~1 redraw
+// per interval keeps the fill smooth (one clean skeleton→data transition per
+// batch) instead of flickering once per tile. Overridable live with `?redraw=<ms>`.
+const DEFAULT_REDRAW_MS = 1500;
+function redrawMs() {
+  if (typeof window === "undefined") return DEFAULT_REDRAW_MS;
+  const v = Number(new URLSearchParams(window.location.search).get("redraw"));
+  return Number.isFinite(v) && v >= 0 ? v : DEFAULT_REDRAW_MS;
+}
 
 export function CompositeDashboard({ givens, style }) {
   const specs = tileSpecs();
   const columns = dashboardInfo().dashboard_columns;
   const gkey = JSON.stringify(givens ?? {});
-  // What we render. `combined` (the Malloy result) updates at most twice per load
-  // — an early paint if a tile straggles, then the final paint when all have
-  // settled — so there's never per-tile flicker. `failed` collects the tiles
-  // whose query errored; `done` flips true once every tile has settled so we can
-  // tell "still loading" apart from "all tiles failed / no data".
-  const [state, setState] = useState({ combined: null, failed: [], done: false });
+  // Schema-up-front. Each tile ships a schema-only result (`t.schema`, compiled
+  // with no data), so the WHOLE layout renders on the first paint with every card
+  // in its reserved slot; each tile's real result then splices into its slot as it
+  // arrives. Every tile's fields are identical whether we have its schema or its
+  // full result, so the dashboard STRUCTURE never changes — only data fills in.
+  // Data is accumulated in a ref and painted in BATCHES (see redrawMs) so the fill
+  // is one clean transition per interval, not a flicker per tile.
+  const dataRef = useRef({}); // run-expr -> full result; accumulates without re-rendering
+  const [, redraw] = useState(0); // bumped to trigger a batched repaint
+  const [failed, setFailed] = useState([]); // { name, message } per failed tile
 
   useEffect(() => {
     let cancelled = false;
-    setState({ combined: null, failed: [], done: false });
-    const acc = {}; // run-expr -> result, accumulated locally (no per-tile state churn)
-    const errs = []; // { name, message } for tiles whose query failed
+    dataRef.current = {};
+    setFailed([]);
+    redraw((n) => n + 1);
     let settled = 0;
-    let straggler = null; // timer armed when the first tile arrives
-    const build = () => {
-      const arrived = specs.filter((t) => acc[t.run]);
-      return arrived.length
-        ? combineTiles(
-            arrived.map((t) => ({ name: tileName(t), result: acc[t.run] })),
-            { columns },
-          )
-        : null;
+    let flushTimer = null; // a batch repaint is pending while non-null
+    const paint = () => {
+      if (!cancelled) redraw((n) => n + 1);
     };
-    const paint = (done) => {
-      if (!cancelled) setState({ combined: build(), failed: [...errs], done });
+    const scheduleBatch = () => {
+      if (flushTimer) return; // already batching; this arrival rides the pending flush
+      flushTimer = setTimeout(() => {
+        flushTimer = null;
+        paint();
+      }, redrawMs());
     };
     for (const t of specs) {
       runQuery({ query: t.run }, pickGivens(givens, t.givens)).then((m) => {
         if (cancelled) return;
         if (m.ok && m.result) {
-          acc[t.run] = m.result;
-          // Arm the straggler timer on the FIRST arrival: an EARLY paint of what's
-          // ready if the rest lag more than STRAGGLER_MS behind it (once). If
-          // everything settles within the window the final paint fires first and
-          // this is a no-op; if nothing is ready when it fires (all tiles slow
-          // together — e.g. a cold connection) it paints nothing and waits.
-          if (straggler === null) {
-            straggler = setTimeout(() => {
-              if (cancelled || settled >= specs.length) return;
-              if (build()) paint(false);
-            }, STRAGGLER_MS);
-          }
+          dataRef.current[t.run] = m.result;
+          scheduleBatch();
         } else {
-          errs.push({ name: tileName(t), message: m.error || "query failed" });
+          setFailed((prev) => [...prev, { name: tileName(t), message: m.error || "query failed" }]);
         }
         settled++;
+        // Everything has settled → paint the final batch now rather than waiting out
+        // the timer, so a warm load (all tiles arrive fast) doesn't sit on a stale batch.
         if (settled >= specs.length) {
-          if (straggler) clearTimeout(straggler);
-          paint(true); // final paint: every tile has settled (arrived or errored)
+          if (flushTimer) {
+            clearTimeout(flushTimer);
+            flushTimer = null;
+          }
+          paint();
         }
       });
     }
     return () => {
       cancelled = true;
-      if (straggler) clearTimeout(straggler);
+      if (flushTimer) clearTimeout(flushTimer);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [gkey]);
 
-  const { combined, failed, done } = state;
-  // Nothing rendered yet: still loading, unless every tile has settled — then it's
-  // an all-failed dashboard (show the errors) or genuinely empty (no data), never
-  // a perpetual spinner.
+  // Each tile uses its accumulated data if present, else its schema-only result
+  // (a reserved, empty slot). Same fields either way, so data fills fixed slots.
+  const data = dataRef.current;
+  const pending = specs.filter((t) => !data[t.run] && !failed.some((f) => f.name === tileName(t)));
+  const usable = specs.filter((t) => data[t.run] || t.schema);
+  const combined = usable.length
+    ? combineTiles(
+        usable.map((t) => ({ name: tileName(t), result: data[t.run] ?? t.schema })),
+        { columns },
+      )
+    : null;
+
   if (!combined) {
-    if (!done) return <div style={{ padding: 24, color: "var(--dash-muted, #666)", ...style }}>Loading…</div>;
-    return (
-      <div style={{ padding: 24, color: "var(--dash-danger, #dc2626)", ...style }}>
-        {failed.length ? (
-          <>
-            <div style={{ fontWeight: 600, marginBottom: 8 }}>This dashboard failed to load.</div>
-            {failed.map((f) => (
-              <div key={f.name} style={{ fontSize: 13, marginTop: 4 }}>
-                <b>{f.name}:</b> {f.message}
-              </div>
-            ))}
-          </>
-        ) : (
-          "No data."
-        )}
-      </div>
-    );
+    // No schemas shipped and nothing has arrived — or every tile failed.
+    if (specs.length > 0 && failed.length >= specs.length) {
+      return (
+        <div style={{ padding: 24, color: "var(--dash-danger, #dc2626)", ...style }}>
+          <div style={{ fontWeight: 600, marginBottom: 8 }}>This dashboard failed to load.</div>
+          {failed.map((f) => (
+            <div key={f.name} style={{ fontSize: 13, marginTop: 4 }}>
+              <b>{f.name}:</b> {f.message}
+            </div>
+          ))}
+        </div>
+      );
+    }
+    return <div style={{ padding: 24, color: "var(--dash-muted, #666)", ...style }}>Loading…</div>;
   }
-  // Some tiles rendered; if others failed, note them above the dashboard rather
-  // than dropping them silently.
   return (
     <div style={{ display: "flex", flexDirection: "column", minHeight: 0, ...style }}>
       {failed.length > 0 && (
@@ -561,6 +564,19 @@ export function CompositeDashboard({ givens, style }) {
           }}
         >
           {failed.map((f) => `${f.name}: ${f.message}`).join(" · ")}
+        </div>
+      )}
+      {/* Spike loading affordance: a thin top bar until every tile's data is in. */}
+      {pending.length > 0 && (
+        <div style={{ flexShrink: 0, height: 2, marginBottom: 6, background: "var(--dash-border, #e5e7eb)" }}>
+          <div
+            style={{
+              height: "100%",
+              width: `${((specs.length - pending.length) / specs.length) * 100}%`,
+              background: "var(--dash-accent, #2563eb)",
+              transition: "width .2s",
+            }}
+          />
         </div>
       )}
       <Panel result={combined} style={{ flex: 1, minHeight: 0 }} />

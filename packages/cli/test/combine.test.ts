@@ -45,6 +45,23 @@ function aggTile(measures: string[], values: number[], annotations: string[] = [
   };
 }
 
+/** A schema-only tile (compiled, no data) — what `tileSchema` ships to reserve a
+    slot before the tile's real result arrives. Measures make it an aggregate. */
+function schemaOnly(measures: string[]): CombinableResult {
+  return {
+    annotations: [],
+    schema: {
+      fields: measures.map((name) => ({
+        kind: "dimension",
+        name,
+        type: { kind: "number_type" },
+        annotations: [{ value: "#(malloy) calculation\n" }],
+      })),
+    },
+    // no `data` — that's the point
+  };
+}
+
 test("isAggregateRow: single row of MEASURES is aggregate; grouped, multi-row, or dimension tiles are not", () => {
   assert.equal(isAggregateRow(aggTile(["a", "b"], [1, 2])), true); // one row of measures → yes
   assert.equal(isAggregateRow(cardTile(["x", "y"], [[1, 2], [3, 4]])), false); // multiple rows
@@ -56,6 +73,49 @@ test("isAggregateRow: single row of MEASURES is aggregate; grouped, multi-row, o
     data: { kind: "array_cell", array_value: [{ kind: "record_cell", record_value: [{ kind: "array_cell" }] }] },
   };
   assert.equal(isAggregateRow(nested), false);
+  // decided from the SCHEMA alone — works on a schema-only tile (no data yet)
+  assert.equal(isAggregateRow(schemaOnly(["revenue", "orders"])), true);
+});
+
+test("combineTiles: a schema-only tile reserves the same slot as its full result (stable layout)", () => {
+  const columns = 6;
+  // Full result: a KPI tile (measures) + a chart tile (dimension + measure, 2 rows).
+  const full = [
+    { name: "kpis", result: aggTile(["revenue", "orders"], [100, 5]) },
+    { name: "by_year", result: cardTile(["year", "total"], [[2000, 3], [2001, 8]], ["# line_chart\n"]) },
+  ];
+  // Schema-only: same tiles, no data.
+  const skel = [
+    { name: "kpis", result: schemaOnly(["revenue", "orders"]) },
+    {
+      name: "by_year",
+      result: {
+        annotations: [{ value: "# line_chart\n" }],
+        schema: {
+          fields: [
+            { kind: "dimension", name: "year", type: { kind: "number_type" } },
+            { kind: "dimension", name: "total", type: { kind: "number_type" }, annotations: [{ value: "#(malloy) calculation\n" }] },
+          ],
+        },
+      } as CombinableResult,
+    },
+  ];
+  const fieldsOf = (tiles: { name: string; result: CombinableResult }[]) =>
+    combineTiles(tiles, { columns }).schema.fields.map((f) => ({ name: f.name, kind: (f.type as { kind: string }).kind }));
+
+  // Identical top-level structure whether we have data or only schemas → the slow
+  // tile's slot is reserved and data fills in without the layout shifting.
+  assert.deepEqual(fieldsOf(skel), fieldsOf(full));
+
+  // The schema-only KPI cells are reserved (null), not real values yet.
+  const skelCombined = combineTiles(skel, { columns });
+  const cells = skelCombined.data?.array_value?.[0]?.record_value ?? [];
+  assert.equal((cells[0] as { kind: string }).kind, "null_cell"); // revenue KPI: reserved
+  assert.equal((cells[1] as { kind: string }).kind, "null_cell"); // orders KPI: reserved
+  // by_year is still a card; its reserved cell is an empty array (0 rows).
+  const card = cells[2] as { kind: string; array_value?: unknown[] };
+  assert.equal(card.kind, "array_cell");
+  assert.deepEqual(card.array_value, []);
 });
 
 test("distributeColspan: spans sum to the total, first fields take the remainder", () => {

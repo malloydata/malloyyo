@@ -19,6 +19,7 @@ import {
   artifactQueries,
   collectDrillTargets,
   dashboardGivenSpecs,
+  tileSchema,
   modelArtifact,
   prepareSource,
   run,
@@ -39,12 +40,15 @@ export type GivenSpec = DashboardGivenSpec;
 export type GivenSpecsResult = DashboardGivenSpecsResult;
 
 /** One tile in a composite dashboard, as the frame's renderer needs it: the
-    run-expression, the card name, and the given NAMES the tile references (so it
-    runs with only those — binding an unreferenced given fails the compile). */
+    run-expression, the card name, the given NAMES the tile references (so it runs
+    with only those — binding an unreferenced given fails the compile), and its
+    schema-only result (compiled, no data) so the frame can reserve the tile's slot
+    in the layout before its data arrives. */
 export interface TileSpec {
   run: string;
   name: string;
   givens: string[];
+  schema?: unknown;
 }
 
 const ENTRY = "index.malloy";
@@ -328,7 +332,13 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
           const specs = await dashboardGivenSpecs(runtime, entry, tile);
           const gvs = specs.ok ? specs.givens : [];
           for (const s of gvs) if (!byName.has(s.name)) byName.set(s.name, s);
-          out.push({ run: tile, name: tileName(tile), givens: gvs.map((s) => s.name) });
+          const schema = await tileSchema(runtime, entry, tile);
+          out.push({
+            run: tile,
+            name: tileName(tile),
+            givens: gvs.map((s) => s.name),
+            ...(schema ? { schema } : {}),
+          });
         }
         return { ok: true, tiles: out, union: [...byName.values()] };
       });

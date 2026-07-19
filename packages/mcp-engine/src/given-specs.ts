@@ -164,3 +164,25 @@ export async function dashboardGivenSpecs(
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
 }
+
+/**
+ * A composite tile's interfaces-format result SCHEMA — compiled, not run. The
+ * PreparedResult's `toStableResult()` (no data argument) yields the schema-only
+ * stable Result: the same `{schema, annotations}` shape a real run produces (the
+ * render tags `# colspan` / `# break` / chart, the fields with their measure
+ * markers) but with no data. Shipping this lets the frame build the WHOLE
+ * dashboard layout on first paint and splice each tile's data into its reserved
+ * slot as it arrives. Never throws on user input — returns null on compile
+ * failure (the tile still runs; it just has no reserved slot).
+ */
+export async function tileSchema(runtime: Runtime, entry: URL, runExpr: string): Promise<unknown | null> {
+  try {
+    const mm = runtime.loadModel(entry);
+    const pr = await mm
+      .loadQuery(`run: ${runExpr}`)
+      .getPreparedResult();
+    return (pr as unknown as { toStableResult(data?: unknown): unknown }).toStableResult();
+  } catch {
+    return null;
+  }
+}

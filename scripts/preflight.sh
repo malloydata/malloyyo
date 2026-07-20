@@ -85,6 +85,9 @@ run "cli: build + tests"           npm test -w packages/cli
 
 # --- 3. server -------------------------------------------------------------
 run "server: lint"                 npm run lint
+# Guard: no app PAGE may statically import the DuckDB path — a page render
+# function can't load libduckdb.so and 500s in prod (reference_ssr_page_duckdb_500).
+run "server: no DuckDB in pages"   node scripts/check-page-no-duckdb.mjs
 if [ -f "$ENV_FILE" ]; then
   run "server: next build"         npx dotenv-cli -e "$ENV_FILE" -- npm run build
 else

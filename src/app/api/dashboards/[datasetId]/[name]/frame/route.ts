@@ -10,7 +10,7 @@
 // §8, docs/dashboard-iframe-security.md).
 
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
-import { dashboardViewData } from "@/lib/dashboards";
+import { dashboardViewData } from "@/lib/dashboards/engine";
 import { mintFrameToken } from "@/lib/dashboards/frame-token";
 
 export const runtime = "nodejs";

@@ -59,10 +59,10 @@ export function mountInPage(opts: {
   run: (req: { query?: string; malloy?: string }, givens: Record<string, unknown>) => Promise<unknown>;
   navigate: (dashboard: string, givens: Record<string, unknown>) => void;
   syncGivens: (givens: Record<string, unknown>) => void;
-}): void {
+}): { unmount: () => void } {
   setHost({ run: opts.run, navigate: opts.navigate, syncGivens: opts.syncGivens });
   // bodyReset:false — the dashboard is one element in the app shell, so it must
   // not restyle <body> (the iframe host DOES own the whole document, so it keeps
-  // the reset).
-  mount(DefaultDashboard, WIDGETS, opts.root, { bodyReset: false });
+  // the reset). Returns the React root so the caller can unmount() on teardown.
+  return mount(DefaultDashboard, WIDGETS, opts.root, { bodyReset: false });
 }

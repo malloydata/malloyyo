@@ -68,13 +68,10 @@ export function TagOnlyDashboard({
   givenSpecs: unknown[];
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
-  const mountedRef = useRef(false);
 
   useEffect(() => {
-    if (mountedRef.current) return; // one createRoot per mount (StrictMode-safe)
     const root = rootRef.current;
     if (!root) return;
-    mountedRef.current = true;
 
     const w = window as unknown as Record<string, unknown>;
     // The runtime reads these globals (dashboardInfo()/givenSpecs()/seed).
@@ -82,11 +79,16 @@ export function TagOnlyDashboard({
     w.__GIVENS__ = givenSpecs;
     w.__INITIAL_GIVENS__ = initialGivensFromUrl();
 
-    let cancelled = false;
+    // Disposed = the effect was torn down (StrictMode re-run, or client
+    // navigation to another dashboard) — skip a not-yet-started mount, and
+    // unmount the vendor React root if it already mounted, so the next mount
+    // starts clean instead of stacking a second root on the same node.
+    let disposed = false;
+    let reactRoot: { unmount: () => void } | null = null;
     loadVendor()
       .then((rt) => {
-        if (cancelled) return;
-        (rt.mountInPage as (o: unknown) => void)({
+        if (disposed) return;
+        reactRoot = (rt.mountInPage as (o: unknown) => { unmount: () => void })({
           root,
           // Governed query — the same viewer-scoped endpoint the iframe broker
           // calls. Returns the raw result the runtime normalizes.
@@ -113,11 +115,18 @@ export function TagOnlyDashboard({
         });
       })
       .catch((err) => {
-        if (!cancelled && root) root.textContent = `Dashboard failed to load: ${String(err)}`;
+        if (!disposed && root) root.textContent = `Dashboard failed to load: ${String(err)}`;
       });
 
     return () => {
-      cancelled = true;
+      disposed = true;
+      if (reactRoot) {
+        try {
+          reactRoot.unmount();
+        } catch {
+          /* already gone */
+        }
+      }
     };
   }, [id, name, info, givenSpecs]);
 

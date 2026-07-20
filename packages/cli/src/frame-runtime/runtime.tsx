@@ -927,9 +927,13 @@ export function mount(Dashboard, extraProps, rootEl: any = null, opts: any = {})
     if (isBenign(r && r.message)) return;
     showFatal(String((r && (r.stack || r.message)) || r));
   });
-  createRoot(rootEl || document.getElementById("root")).render(
+  const root = createRoot(rootEl || document.getElementById("root"));
+  root.render(
     <ErrorBoundary>
       <Root Dashboard={Dashboard} extraProps={extraProps} />
     </ErrorBoundary>,
   );
+  // Returned so an in-page host can unmount on teardown (client navigation
+  // between dashboards); the iframe host discards it — the frame unloads whole.
+  return root;
 }

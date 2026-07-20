@@ -41,9 +41,11 @@ export default async function DashboardViewPage({
     <main className="w-full px-6 py-5">
       <DatasetNav datasetId={id} activeDashboard={name} />
       {isCustomDashboard(view.dash) ? (
-        <CustomDashboardFrame id={id} name={name} />
+        <CustomDashboardFrame key={`${id}/${name}`} id={id} name={name} />
       ) : (
-        <TagOnlyDashboard id={id} name={name} info={view.info} givenSpecs={view.givenSpecs} />
+        // key per dashboard: switching via the nav fully remounts the island, so
+        // the vendor React root is torn down and rebuilt cleanly.
+        <TagOnlyDashboard key={`${id}/${name}`} id={id} name={name} info={view.info} givenSpecs={view.givenSpecs} />
       )}
     </main>
   );

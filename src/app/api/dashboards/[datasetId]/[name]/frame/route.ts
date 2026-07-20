@@ -10,7 +10,7 @@
 // §8, docs/dashboard-iframe-security.md).
 
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
-import { getDashboard, dashboardGivens, dashboardTileSpecs } from "@/lib/dashboards";
+import { dashboardViewData } from "@/lib/dashboards";
 import { mintFrameToken } from "@/lib/dashboards/frame-token";
 
 export const runtime = "nodejs";
@@ -22,27 +22,11 @@ export async function GET(req: Request, ctx: { params: Promise<{ datasetId: stri
   try {
     const user = await getSessionUser();
     const { datasetId, name } = await ctx.params;
-    const dash = await getDashboard(user.id, datasetId, name);
-    if (!dash) return new Response("dashboard not found", { status: 404 });
-    // Given specs introspected from the MODEL's given: declarations (types,
-    // defaults, labels, suggestion queries) — the runtime's control contract.
-    // For a COMPOSITE dashboard, one pass yields both the union (controls) and
-    // each tile's given NAMES (so the frame runs each tile with only the givens it
-    // references). Single-query dashboards use dashboardGivens.
-    const composite = Array.isArray(dash.manifest.tiles)
-      ? await dashboardTileSpecs(user.id, datasetId, name)
-      : null;
-    let givenSpecs: unknown[] = [];
-    let tileSpecs: unknown[] | undefined;
-    if (composite) {
-      if (composite.ok) {
-        givenSpecs = composite.union;
-        tileSpecs = composite.tiles;
-      }
-    } else {
-      const specs = await dashboardGivens(user.id, datasetId, name);
-      if (specs.ok) givenSpecs = specs.givens;
-    }
+    // info + given specs are assembled by the shared helper, so this sandboxed
+    // path and the in-page tag-only renderer stay in lockstep.
+    const view = await dashboardViewData(user.id, datasetId, name);
+    if (!view) return new Response("dashboard not found", { status: 404 });
+    const { dash, info, givenSpecs } = view;
     // Initial givens (filter values) from the query → the dashboard seeds from
     // these so a shared/deep link opens in that state.
     const initialGivens: Record<string, string> = {};
@@ -51,23 +35,6 @@ export async function GET(req: Request, ctx: { params: Promise<{ datasetId: stri
     // session cookie (see frame-token.ts). Scoped to this viewer + dashboard.
     const token = mintFrameToken({ userId: user.id, datasetId, name });
     const bundleUrl = `/api/dashboards/${datasetId}/${encodeURIComponent(name)}/bundle?t=${encodeURIComponent(token)}`;
-    // __DASHBOARD__ mirrors the model's `# artifact` tag (the stored manifest
-    // is synthesized from it at publish/refresh time).
-    const info = {
-      name: dash.name,
-      query: dash.manifest.query,
-      // Structure v2: a composite dashboard is a list of tiles the runtime's
-      // CompositeDashboard runs and combines into one Malloy dashboard (see
-      // tileSpecs below).
-      tiles: dash.manifest.tiles,
-      // Per-tile run/name/given-names for the composite renderer.
-      tileSpecs,
-      dashboard_columns: dash.manifest.dashboard_columns,
-      title: dash.title,
-      description: dash.manifest.description,
-      givens: dash.manifest.givens,
-      autorun: dash.manifest.autorun,
-    };
     const html =
       `<!doctype html><html><head><meta charset="utf-8"><title>${esc(dash.title)}</title>` +
       `<meta name="viewport" content="width=device-width,initial-scale=1"></head>` +

@@ -3,7 +3,7 @@
 
 import { NextResponse } from "next/server";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
-import { runDashboard } from "@/lib/dashboards";
+import { runDashboard } from "@/lib/dashboards/engine";
 
 export const runtime = "nodejs";
 

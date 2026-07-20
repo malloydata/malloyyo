@@ -13,7 +13,11 @@
 import { redirect, notFound } from "next/navigation";
 import { DatasetNav } from "@/components/DatasetNav";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
-import { dashboardViewData, isCustomDashboard } from "@/lib/dashboards";
+// Only DB-backed helpers here (no Malloy/DuckDB) — a page render function can't
+// load libduckdb.so and 500s. The tag-only info + given specs (which DO need
+// Malloy) are fetched by TagOnlyDashboard from the /view API route. See
+// reference_ssr_page_duckdb_500.
+import { getDashboard, isCustomDashboard } from "@/lib/dashboards";
 import { CustomDashboardFrame } from "./CustomDashboardFrame";
 import { TagOnlyDashboard } from "./TagOnlyDashboard";
 
@@ -34,18 +38,20 @@ export default async function DashboardViewPage({
     throw err;
   }
 
-  const view = await dashboardViewData(user.id, id, name);
-  if (!view) notFound();
+  // DB read only (no DuckDB) — enough to branch custom (sandboxed iframe) vs
+  // tag-only (in-page). The tag-only view data is fetched client-side.
+  const dash = await getDashboard(user.id, id, name);
+  if (!dash) notFound();
 
   return (
     <main className="w-full px-6 py-5">
       <DatasetNav datasetId={id} activeDashboard={name} />
-      {isCustomDashboard(view.dash) ? (
+      {isCustomDashboard(dash) ? (
         <CustomDashboardFrame key={`${id}/${name}`} id={id} name={name} />
       ) : (
         // key per dashboard: switching via the nav fully remounts the island, so
         // the vendor React root is torn down and rebuilt cleanly.
-        <TagOnlyDashboard key={`${id}/${name}`} id={id} name={name} info={view.info} givenSpecs={view.givenSpecs} />
+        <TagOnlyDashboard key={`${id}/${name}`} id={id} name={name} />
       )}
     </main>
   );

@@ -56,28 +56,12 @@ function givensToUrl(givens: Record<string, unknown>): string {
   return u.pathname + u.search;
 }
 
-export function TagOnlyDashboard({
-  id,
-  name,
-  info,
-  givenSpecs,
-}: {
-  id: string;
-  name: string;
-  info: Record<string, unknown>;
-  givenSpecs: unknown[];
-}) {
+export function TagOnlyDashboard({ id, name }: { id: string; name: string }) {
   const rootRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const root = rootRef.current;
     if (!root) return;
-
-    const w = window as unknown as Record<string, unknown>;
-    // The runtime reads these globals (dashboardInfo()/givenSpecs()/seed).
-    w.__DASHBOARD__ = info;
-    w.__GIVENS__ = givenSpecs;
-    w.__INITIAL_GIVENS__ = initialGivensFromUrl();
 
     // Disposed = the effect was torn down (StrictMode re-run, or client
     // navigation to another dashboard) — skip a not-yet-started mount, and
@@ -85,9 +69,22 @@ export function TagOnlyDashboard({
     // starts clean instead of stacking a second root on the same node.
     let disposed = false;
     let reactRoot: { unmount: () => void } | null = null;
-    loadVendor()
-      .then((rt) => {
+
+    // Fetch the view data (info + given specs) from the API route, NOT the page:
+    // assembling it needs Malloy/DuckDB, which can't run in a page render fn (it
+    // would 500 — reference_ssr_page_duckdb_500). Then load the vendor and mount.
+    Promise.all([
+      fetch(`/api/dashboards/${id}/${encodeURIComponent(name)}/view`).then((r) => r.json()),
+      loadVendor(),
+    ])
+      .then(([view, rt]) => {
         if (disposed) return;
+        if (!view?.ok) throw new Error(view?.error || "failed to load dashboard");
+        const w = window as unknown as Record<string, unknown>;
+        // The runtime reads these globals (dashboardInfo()/givenSpecs()/seed).
+        w.__DASHBOARD__ = view.info;
+        w.__GIVENS__ = view.givenSpecs;
+        w.__INITIAL_GIVENS__ = initialGivensFromUrl();
         reactRoot = (rt.mountInPage as (o: unknown) => { unmount: () => void })({
           root,
           // Governed query — the same viewer-scoped endpoint the iframe broker
@@ -128,7 +125,7 @@ export function TagOnlyDashboard({
         }
       }
     };
-  }, [id, name, info, givenSpecs]);
+  }, [id, name]);
 
   // Empty container React never fills — the vendor's own React createRoot()s into
   // it. min-height keeps the page from collapsing before the first result paints.

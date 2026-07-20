@@ -34,7 +34,16 @@ export { filters };
 export const dashboardInfo = () => window.__DASHBOARD__ || {};
 export const givenSpecs = () => window.__GIVENS__ || [];
 
-// ── bridge to the trusted parent ────────────────────────────────────
+// ── host bridge ─────────────────────────────────────────────────────
+// The runtime performs three privileged actions it can't do itself: run a
+// governed query, navigate to a sibling dashboard, and mirror the committed
+// givens into the shareable URL. It delegates all three to a HOST. Two hosts
+// implement the contract:
+//   • postMessage host (default) — the sandboxed iframe: posts to the trusted
+//     parent shell, which holds the runner. This is the CUSTOM-dashboard path.
+//   • in-page host — a tag-only dashboard mounted directly in the trusted page
+//     with NO iframe (see index.ts mountInPage): fetches the run endpoint and
+//     drives the URL itself. The parent installs it via setHost().
 let seq = 0;
 const pending = new Map();
 if (typeof window !== "undefined") {
@@ -48,18 +57,39 @@ if (typeof window !== "undefined") {
   });
 }
 
+// Default host: the postMessage bridge to the trusted parent (iframe path).
+// `run` resolves with the RAW result message ({ok, rows, stable_result|
+// stableResult, problems|error}); runQuery normalizes it below.
+let host = {
+  run(req, givens) {
+    const id = ++seq;
+    return new Promise((resolve) => {
+      pending.set(id, resolve);
+      parent.postMessage({ type: "run", id, query: req.query, malloy: req.malloy, givens }, "*");
+    });
+  },
+  navigate(dashboard, givens) {
+    parent.postMessage({ type: "navigate", dashboard, givens }, "*");
+  },
+  syncGivens(givens) {
+    parent.postMessage({ type: "givens", givens }, "*");
+  },
+};
+
+/** Swap the host — a tag-only dashboard mounted in the trusted page (mountInPage)
+    installs a direct-fetch host instead of the postMessage bridge. */
+export function setHost(h) {
+  host = h;
+}
+
 // req: { query } (a named query the model publishes) or { malloy } (restricted
 // Malloy text — the server's restricted mode is the gate). A composite dashboard
 // runs one { query } per tile and combines the results client-side (see
 // CompositeDashboard), so there's no single "run the whole dashboard" request.
-// The result shape is normalized across hosts (dev server: {stable_result,
-// problems[]}; hosted: {stableResult, error}).
+// The host resolves the request; the result shape is normalized across hosts
+// (dev server: {stable_result, problems[]}; hosted: {stableResult, error}).
 export function runQuery(req, givens) {
-  const id = ++seq;
-  return new Promise((resolve) => {
-    pending.set(id, resolve);
-    parent.postMessage({ type: "run", id, query: req.query, malloy: req.malloy, givens }, "*");
-  }).then((m) => ({
+  return Promise.resolve(host.run(req, givens)).then((m) => ({
     ok: !!m.ok,
     rows: m.rows || [],
     result: m.stable_result ?? m.stableResult,
@@ -276,7 +306,7 @@ export function Panel({ query, malloy, dashboard, result: presetResult, givens, 
       if (dest === "self") {
         if (selfSpec) setGivenRef.current(selfSpec.name, filterExpr);
       } else {
-        parent.postMessage({ type: "navigate", dashboard: dest, givens: { [given]: filterExpr } }, "*");
+        host.navigate(dest, { [given]: filterExpr });
       }
     };
     const valid = dests.filter((d) => d !== "self" || selfSpec);
@@ -555,11 +585,10 @@ export function CompositeDashboard({ givens, style }) {
   // 1) Rendered dashboard (all tiles settled, or the user forced it).
   if (combined) {
     return (
-      <div style={{ display: "flex", flexDirection: "column", minHeight: 0, ...style }}>
+      <div style={{ ...style }}>
         {failedTiles.length > 0 && (
           <div
             style={{
-              flexShrink: 0,
               marginBottom: 12,
               padding: "8px 12px",
               borderRadius: "var(--dash-radius, 8px)",
@@ -571,7 +600,12 @@ export function CompositeDashboard({ givens, style }) {
             {failedTiles.map((f) => `${f.name}: ${f.message}`).join(" · ")}
           </div>
         )}
-        <Panel result={combined} style={{ flex: 1, minHeight: 0 }} />
+        {/* Page-scroll layout (DefaultDashboard has no fixed height): the Panel
+            grows with the combined dashboard's content and the PAGE scrolls.
+            maxHeight:"none" removes the Panel's default 100vh cap; it keeps its
+            own minHeight floor. (An earlier flex:1/minHeight:0 here collapsed the
+            Panel to ~0px once DefaultDashboard stopped being a 100vh column.) */}
+        <Panel result={combined} style={{ maxHeight: "none" }} />
       </div>
     );
   }
@@ -785,7 +819,7 @@ function Root({ Dashboard, extraProps }) {
   // Reflect the COMMITTED givens up to the trusted parent so it mirrors the
   // applied state (not half-typed drafts) into the shareable URL.
   useEffect(() => {
-    parent.postMessage({ type: "givens", givens: committed }, "*");
+    host.syncGivens(committed);
   }, [committed]);
   const ctx = useMemo(
     () => ({ givens: committed, draft, setGiven, apply, reset, dirty, autorun }),
@@ -854,18 +888,25 @@ const THEME_CSS = `
     --dash-danger: #f87171;
   }
 }
-html, body { margin: 0; background: var(--dash-bg); color: var(--dash-fg); font-family: var(--dash-font); }
 /* Drillable dimension cells (marked .dash-drill by the runtime): normal text,
    accent color on hover + pointer — matching the web app's clickable-item look. */
 .dash-drill { cursor: pointer; }
 .dash-drill:hover > .cell-content { color: var(--dash-accent, #2563eb); }
 `;
 
-function injectTheme() {
+// Owns the whole document background/font — right for the iframe (the dashboard
+// IS the page) but wrong in-page, where the dashboard is one element inside the
+// app shell and must not restyle <body>. So it's split off and injected only for
+// the iframe host (mountInPage passes bodyReset:false).
+const BODY_RESET_CSS = `
+html, body { margin: 0; background: var(--dash-bg); color: var(--dash-fg); font-family: var(--dash-font); }
+`;
+
+function injectTheme(bodyReset) {
   if (typeof document === "undefined" || document.getElementById("dash-theme")) return;
   const style = document.createElement("style");
   style.id = "dash-theme";
-  style.textContent = THEME_CSS;
+  style.textContent = THEME_CSS + (bodyReset ? BODY_RESET_CSS : "");
   document.head.appendChild(style);
 }
 
@@ -875,9 +916,12 @@ function injectTheme() {
 // environment's dashboard shape: hosted /datasets/:id/dashboard/:slug vs local
 // /?d=slug) from the structured {dashboard, givens} we post.
 
-/** Frame entry point: mount a Dashboard component (custom or default). */
-export function mount(Dashboard, extraProps) {
-  injectTheme();
+/** Frame entry point: mount a Dashboard component (custom or default) into
+    `rootEl` (defaults to #root, the sandboxed iframe's mount node). The tag-only
+    in-page host passes its own container so the dashboard mounts directly in the
+    trusted page — no iframe. */
+export function mount(Dashboard, extraProps, rootEl: any = null, opts: any = {}) {
+  injectTheme(opts.bodyReset !== false);
   window.addEventListener("error", (e) => {
     if (isBenign(e && e.message)) return;
     showFatal((e.error && e.error.stack) || e.message);
@@ -887,9 +931,13 @@ export function mount(Dashboard, extraProps) {
     if (isBenign(r && r.message)) return;
     showFatal(String((r && (r.stack || r.message)) || r));
   });
-  createRoot(document.getElementById("root")).render(
+  const root = createRoot(rootEl || document.getElementById("root"));
+  root.render(
     <ErrorBoundary>
       <Root Dashboard={Dashboard} extraProps={extraProps} />
     </ErrorBoundary>,
   );
+  // Returned so an in-page host can unmount on teardown (client navigation
+  // between dashboards); the iframe host discards it — the frame unloads whole.
+  return root;
 }

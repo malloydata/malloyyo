@@ -599,10 +599,12 @@ export function Controls({ style, children }) {
 /** The whole no-code dashboard: title + doc comment + controls + panel. Used
     when a `# artifact`-tagged query ships no Dashboard.tsx.
 
-    App-like layout: the frame page itself never scrolls (both hosts embed it
-    in a fixed-height iframe) — title and controls stay pinned and the Panel
-    is the ONE scroll container, so the renderer's virtualizer (bound to the
-    panel via scrollEl) sees real scroll events instead of fighting the page. */
+    Full-width, page-scrolling layout: a tag-only dashboard mounts DIRECTLY in
+    the trusted page (no iframe — see mountInPage), so it spans the full width
+    and the document itself scrolls, running like the VSCode/Composer preview.
+    Title and controls sit at the top of normal flow; the Panel grows to its
+    natural height (individual result cards keep their own bounded scroll +
+    row caps, so the page stays responsive). */
 export function DefaultDashboard({ givens, theme }) {
   const dash = dashboardInfo();
   // theme={{ accent:"#e11d48", controlsBg:"#fff", … }} → --dash-accent etc. on
@@ -613,31 +615,28 @@ export function DefaultDashboard({ givens, theme }) {
     <div
       style={{
         fontFamily: V("font", "system-ui, sans-serif"),
-        height: "100vh",
-        display: "flex",
-        flexDirection: "column",
         boxSizing: "border-box",
         padding: 24,
-        maxWidth: 960,
-        margin: "0 auto",
+        width: "100%",
         color: V("fg", "#1a1a1a"),
         ...vars,
       }}
     >
-      <h1 style={{ fontSize: 22, margin: "0 0 4px", flexShrink: 0 }}>{dash.title}</h1>
+      <h1 style={{ fontSize: 22, margin: "0 0 4px" }}>{dash.title}</h1>
       {dash.description && (
-        <p style={{ color: V("muted", "#666"), margin: "0 0 20px", lineHeight: 1.5, flexShrink: 0 }}>{dash.description}</p>
+        <p style={{ color: V("muted", "#666"), margin: "0 0 20px", lineHeight: 1.5 }}>{dash.description}</p>
       )}
-      <Controls style={{ flexShrink: 0 }} />
+      <Controls />
       {/* A COMPOSITE artifact (tiles) runs its tiles and combines them into one
           `# dashboard` that Malloy's own renderer lays out (CompositeDashboard);
           a single artifact runs its one query. A bare <Panel/> delegates a
           composite to CompositeDashboard, so this branch is just an explicit
-          version of that. */}
+          version of that. maxHeight:"none" lets the result grow into the page's
+          own scroll rather than an inner fixed-height box. */}
       {dashboardInfo().tiles ? (
-        <CompositeDashboard givens={givens} style={{ flex: 1, minHeight: 0, maxHeight: "none" }} />
+        <CompositeDashboard givens={givens} style={{ maxHeight: "none" }} />
       ) : (
-        <Panel givens={givens} style={{ flex: 1, minHeight: 0, maxHeight: "none" }} />
+        <Panel givens={givens} style={{ maxHeight: "none" }} />
       )}
     </div>
   );

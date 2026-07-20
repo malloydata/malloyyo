@@ -206,6 +206,58 @@ export async function dashboardTileSpecs(
   });
 }
 
+/** Everything a host needs to render a dashboard: the stored artifact plus the
+    `__DASHBOARD__` info object (mirrors the model's `# artifact` tag) and the
+    given specs (the control contract). Shared by the sandboxed-iframe frame
+    route (custom dashboards) and the in-page trusted renderer (tag-only) so the
+    two paths can never drift. `view.info` is JSON-serializable for injection. */
+export interface DashboardViewData {
+  dash: DashboardDetail;
+  info: Record<string, unknown>;
+  givenSpecs: unknown[];
+}
+
+export async function dashboardViewData(
+  userId: string,
+  datasetId: string,
+  name: string,
+): Promise<DashboardViewData | null> {
+  const dash = await getDashboard(userId, datasetId, name);
+  if (!dash) return null;
+  // For a COMPOSITE dashboard, one pass yields both the union (controls) and
+  // each tile's given NAMES; single-query dashboards use dashboardGivens.
+  const composite = Array.isArray(dash.manifest.tiles) ? await dashboardTileSpecs(userId, datasetId, name) : null;
+  let givenSpecs: unknown[] = [];
+  let tileSpecs: unknown[] | undefined;
+  if (composite) {
+    if (composite.ok) {
+      givenSpecs = composite.union;
+      tileSpecs = composite.tiles;
+    }
+  } else {
+    const specs = await dashboardGivens(userId, datasetId, name);
+    if (specs.ok) givenSpecs = specs.givens;
+  }
+  const info = {
+    name: dash.name,
+    query: dash.manifest.query,
+    tiles: dash.manifest.tiles,
+    tileSpecs,
+    dashboard_columns: dash.manifest.dashboard_columns,
+    title: dash.title,
+    description: dash.manifest.description,
+    givens: dash.manifest.givens,
+    autorun: dash.manifest.autorun,
+  };
+  return { dash, info, givenSpecs };
+}
+
+/** A dashboard is TAG-ONLY (no custom Dashboard.tsx) iff its stored source is
+    empty. Tag-only dashboards render full-width in the trusted page with no
+    iframe; a non-empty source is a custom dashboard that runs sandboxed. */
+export const isCustomDashboard = (dash: Pick<DashboardDetail, "source">): boolean =>
+  (dash.source ?? "").trim().length > 0;
+
 export type DashboardGivensResult =
   | { ok: true; givens: DashboardGivenSpec[] }
   | { ok: false; error: string };

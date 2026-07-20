@@ -21,6 +21,7 @@ const eslintConfig = defineConfig([
     // not part of the app/CLI TS build (needs @ts-nocheck, different React
     // constraints). Includes the CLI frame runtime and example dashboards.
     "packages/cli/src/frame-entry.tsx",
+    "packages/cli/src/frame-inpage-entry.tsx",
     "packages/cli/src/frame-runtime/**",
     "examples/**",
     // Generated at build time (react + renderer vendor bundle for dashboards).

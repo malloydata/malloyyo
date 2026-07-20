@@ -45,14 +45,20 @@ export const jsx = J.jsx, jsxs = J.jsxs, Fragment = J.Fragment;
 // `import { Controls, useGiven, … } from "@malloyyo/dashboard"` → the runtime
 // bundled in the vendor asset. Explicit re-exports (not export*) because the
 // shim's exports must be static for esbuild.
+//
+// A custom dashboard renders ITSELF (VegaChart + its own React), so the Malloy
+// renderer surface — Panel / CompositeDashboard / DefaultDashboard — is
+// deliberately absent here. Importing one from a Dashboard.tsx fails the bundle
+// with "No matching export": the signal to make it tag-only (which renders
+// full-width in the trusted page) or draw it with VegaChart.
 const RUNTIME_SHIM = `
 const D = window.__DASH_RUNTIME__;
-export const Panel = D.Panel, filters = D.filters, runData = D.runData,
+export const filters = D.filters, runData = D.runData,
   useGiven = D.useGiven, useOptions = D.useOptions, useQuery = D.useQuery,
   mount = D.mount, mountDashboard = D.mountDashboard,
   dashboardInfo = D.dashboardInfo, givenSpecs = D.givenSpecs,
   Controls = D.Controls, Given = D.Given, Select = D.Select, Search = D.Search,
-  Range = D.Range, Checkbox = D.Checkbox, Field = D.Field, DefaultDashboard = D.DefaultDashboard,
+  Range = D.Range, Checkbox = D.Checkbox, Field = D.Field,
   VegaChart = D.VegaChart;
 export default D;
 `;

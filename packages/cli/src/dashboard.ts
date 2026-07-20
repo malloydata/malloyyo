@@ -91,6 +91,19 @@ function resolveRuntimeDir(): string {
   return found;
 }
 const resolveFrameEntry = (): string => path.join(resolveRuntimeDir(), "..", "frame-entry.tsx");
+const resolveInPageEntry = (): string => path.join(resolveRuntimeDir(), "..", "frame-inpage-entry.tsx");
+
+/** esbuild plugin: force react / renderer / filter-parser imports to the CLI's
+    OWN copies, whatever directory the (possibly external) model repo lives in. */
+const hostAliasPlugin: esbuild.Plugin = {
+  name: "host-alias",
+  setup(b) {
+    b.onResolve(
+      { filter: /^(react($|\/)|react-dom($|\/)|@malloydata\/(render|malloy-filter)$)/ },
+      (args) => (HOST_ALIAS[args.path] ? { path: HOST_ALIAS[args.path] } : undefined),
+    );
+  },
+};
 
 /** Structure v2: each `dashboards/<name>.malloy` is one dashboard, compiled AS
     its own entry to read its `## artifact`. The optional custom component is a
@@ -155,6 +168,9 @@ function makeBundler() {
           setup(b) {
             // The tagged query may ship no component — mount the runtime's
             // DefaultDashboard (mountDashboard treats null as "use default").
+            // NOTE: tag-only dashboards no longer reach this bundle — they render
+            // in-page (see makeInPageBundler / the shell's `/` handler). This
+            // branch stays as a harmless fallback.
             if (dash.tsxPath) {
               const tsxPath = dash.tsxPath;
               b.onResolve({ filter: /^virtual:dashboard$/ }, () => ({ path: tsxPath }));
@@ -170,14 +186,9 @@ function makeBundler() {
             }
             // A Dashboard.tsx imports the runtime as "@malloyyo/dashboard".
             b.onResolve({ filter: /^@malloyyo\/dashboard$/ }, () => ({ path: runtimeIndex }));
-            // Force react / renderer / filter-parser imports to the CLI's
-            // copies, whatever directory the dashboard file lives in.
-            b.onResolve(
-              { filter: /^(react($|\/)|react-dom($|\/)|@malloydata\/(render|malloy-filter)$)/ },
-              (args) => (HOST_ALIAS[args.path] ? { path: HOST_ALIAS[args.path] } : undefined),
-            );
           },
         },
+        hostAliasPlugin,
       ],
     });
     const js = result.outputFiles[0].text;
@@ -186,10 +197,99 @@ function makeBundler() {
   };
 }
 
+/** Bundle the in-page (no-iframe) entry ONCE — it's dashboard-independent: it
+    reads window.__DASHBOARD__ / __GIVENS__ at runtime and mounts the runtime's
+    DefaultDashboard. Cached by the runtime source mtimes (hot reload on edit). */
+function makeInPageBundler() {
+  let cached: { stamp: number; js: string } | undefined;
+  const entry = resolveInPageEntry();
+  const runtimeDir = resolveRuntimeDir();
+  const stampOf = () =>
+    fs.statSync(entry).mtimeMs +
+    fs
+      .readdirSync(runtimeDir)
+      .map((f) => fs.statSync(path.join(runtimeDir, f)).mtimeMs)
+      .reduce((a, b) => a + b, 0);
+  return async function bundle(): Promise<string> {
+    const stamp = stampOf();
+    if (cached && cached.stamp === stamp) return cached.js;
+    const result = await esbuild.build({
+      entryPoints: [entry],
+      bundle: true,
+      format: "iife",
+      platform: "browser",
+      jsx: "automatic",
+      write: false,
+      logLevel: "silent",
+      loader: { ".css": "empty" },
+      define: { "process.env.NODE_ENV": '"production"' },
+      plugins: [hostAliasPlugin],
+    });
+    const js = result.outputFiles[0].text;
+    cached = { stamp, js };
+    return js;
+  };
+}
+
 const html = (body: string, title: string) =>
   `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>` +
   `<meta name="viewport" content="width=device-width,initial-scale=1"></head>` +
   `<body style="margin:0">${body}</body></html>`;
+
+/** The dashboard switcher nav (shown when a repo declares more than one). */
+function navHtml(dash: Dashboard, all: Dashboard[]): string {
+  if (all.length <= 1) return "";
+  return (
+    `<nav style="display:flex;gap:4px;align-items:center;padding:8px 12px;` +
+    `background:#f6f7f9;border-bottom:1px solid #e2e4e8;font:13px system-ui,sans-serif">` +
+    `<span style="color:#888;margin-right:8px">Dashboards</span>` +
+    all
+      .map((x) => {
+        const on = x.name === dash.name;
+        return (
+          `<a href="/?d=${encodeURIComponent(x.name)}" style="padding:4px 10px;` +
+          `border-radius:6px;text-decoration:none;${on ? "background:#1a1a1a;color:#fff" : "color:#333"}">` +
+          `${esc(x.title || x.name)}</a>`
+        );
+      })
+      .join("") +
+    `</nav>`
+  );
+}
+
+/** Shell for a TAG-ONLY dashboard: NO iframe. The runtime's DefaultDashboard
+    mounts directly in this trusted page (full-width, page-scrolling) with a
+    direct-fetch host — see frame-inpage-entry.tsx. There's no untrusted author
+    code, so nothing needs sandboxing; the iframe just caused lifecycle pain. */
+function inPageShell(
+  dash: Dashboard,
+  all: Dashboard[],
+  givenSpecs: GivenSpec[],
+  initialGivens: Record<string, string>,
+  tileSpecs?: TileSpec[],
+): string {
+  const info = {
+    name: dash.name,
+    query: dash.query,
+    title: dash.title,
+    description: dash.description,
+    tiles: dash.tiles,
+    tileSpecs,
+    dashboard_columns: dash.dashboard_columns,
+    givens: dash.givens,
+    autorun: dash.autorun,
+  };
+  return html(
+    navHtml(dash, all) +
+      `<div id="root"></div>` +
+      `<script>window.__DASHBOARD__=${JSON.stringify(info)};` +
+      `window.__GIVENS__=${JSON.stringify(givenSpecs)};` +
+      `window.__INITIAL_GIVENS__=${JSON.stringify(initialGivens)}</script>` +
+      `<script>try{new EventSource('/events').onmessage=()=>location.reload();}catch(e){}</script>` +
+      `<script src="/inpage.js?d=${encodeURIComponent(dash.name)}"></script>`,
+    dash.title,
+  );
+}
 
 function parentShell(
   dash: Dashboard,
@@ -208,23 +308,7 @@ function parentShell(
   // call /api/run directly, only postMessage. See docs/repo-artifacts.md §7/§8.
   const d = JSON.stringify(dash.name);
   const fb = JSON.stringify(frameBase);
-  const nav =
-    all.length > 1
-      ? `<nav style="display:flex;gap:4px;align-items:center;padding:8px 12px;` +
-        `background:#f6f7f9;border-bottom:1px solid #e2e4e8;font:13px system-ui,sans-serif">` +
-        `<span style="color:#888;margin-right:8px">Dashboards</span>` +
-        all
-          .map((x) => {
-            const on = x.name === dash.name;
-            return (
-              `<a href="/?d=${encodeURIComponent(x.name)}" style="padding:4px 10px;` +
-              `border-radius:6px;text-decoration:none;${on ? "background:#1a1a1a;color:#fff" : "color:#333"}">` +
-              `${esc(x.title || x.name)}</a>`
-            );
-          })
-          .join("") +
-        `</nav>`
-      : "";
+  const nav = navHtml(dash, all);
   return html(
     `<div style="display:flex;flex-direction:column;height:100vh">` +
       nav +
@@ -339,9 +423,27 @@ export async function serveDashboard(opts: {
   }
   let byName = new Map(dashboards.map((d) => [d.name, d]));
   const bundle = makeBundler();
+  const inPageBundle = makeInPageBundler();
 
   const pick = (url: URL): Dashboard =>
     byName.get(url.searchParams.get("d") ?? dashboards[0].name) ?? dashboards[0];
+
+  /** Introspect a dashboard's given specs (+ per-tile specs for composites) from
+      the model, PER LOAD — an edit to a `given:` decl shows up on reload. Shared
+      by the sandboxed /frame route and the in-page tag-only shell. */
+  async function resolveGivens(
+    dash: Dashboard,
+  ): Promise<{ ok: true; union: GivenSpec[]; tiles?: TileSpec[] } | { ok: false; error: string }> {
+    if (dash.tiles && dash.entryFile) {
+      const t = await runner.dashboardTiles(dash.entryFile, dash.tiles);
+      return { ok: true, union: t.union, tiles: t.tiles };
+    }
+    const specs = dash.entryFile
+      ? await runner.givensForQueryIn(dash.entryFile, dash.query)
+      : await runner.givensForQuery(dash.query);
+    if (!specs.ok) return { ok: false, error: specs.error };
+    return { ok: true, union: specs.givens };
+  }
 
   // Live reload: watch the model + dashboards and tell the browser to reload on
   // any change. The runner reads model files fresh per run, the bundle cache is
@@ -389,24 +491,12 @@ export async function serveDashboard(opts: {
           // Given specs are introspected from the model PER LOAD, so an edit to
           // a `given:` declaration (type, default, tags) shows up on reload.
           const dash = pick(url);
-          // Composite: the controls are the UNION of givens across its tiles, and
-          // each tile carries the given NAMES it references so the grid runs it
-          // in isolation. A single artifact = the one query's givens.
-          if (dash.tiles && dash.entryFile) {
-            const t = await runner.dashboardTiles(dash.entryFile, dash.tiles);
-            return send(200, "text/html; charset=utf-8", frameDoc(dash, t.union, givensFromUrl(url), t.tiles));
-          }
-          // Single-query artifact: introspect givens against the dashboard's OWN
-          // entry file (its query lives there, not in index.malloy) — same scope
-          // its /api/run uses (runIn), else `run: <query>` is undefined at load.
-          const specs = dash.entryFile
-            ? await runner.givensForQueryIn(dash.entryFile, dash.query)
-            : await runner.givensForQuery(dash.query);
-          if (!specs.ok) {
+          const g = await resolveGivens(dash);
+          if (!g.ok) {
             return send(200, "text/html; charset=utf-8",
-              html(`<pre style="color:crimson;padding:16px">model error: ${esc(specs.error)}</pre>`, dash.title));
+              html(`<pre style="color:crimson;padding:16px">model error: ${esc(g.error)}</pre>`, dash.title));
           }
-          return send(200, "text/html; charset=utf-8", frameDoc(dash, specs.givens, givensFromUrl(url)));
+          return send(200, "text/html; charset=utf-8", frameDoc(dash, g.union, givensFromUrl(url), g.tiles));
         }
         if (url.pathname === "/bundle.js") {
           return send(200, "application/javascript; charset=utf-8", await bundle(pick(url)));
@@ -423,7 +513,25 @@ export async function serveDashboard(opts: {
         return;
       }
       if (url.pathname === "/") {
-        return send(200, "text/html; charset=utf-8", parentShell(pick(url), frameBase, dashboards, givensFromUrl(url)));
+        const dash = pick(url);
+        // Tag-only (no Dashboard.tsx) → in-page, NO iframe: mount the runtime's
+        // DefaultDashboard directly in this trusted page, full-width. Custom
+        // dashboards keep the sandboxed iframe (parentShell).
+        if (!dash.tsxPath) {
+          const g = await resolveGivens(dash);
+          if (!g.ok) {
+            return send(200, "text/html; charset=utf-8",
+              html(`<pre style="color:crimson;padding:16px">model error: ${esc(g.error)}</pre>`, dash.title));
+          }
+          return send(200, "text/html; charset=utf-8", inPageShell(dash, dashboards, g.union, givensFromUrl(url), g.tiles));
+        }
+        return send(200, "text/html; charset=utf-8", parentShell(dash, frameBase, dashboards, givensFromUrl(url)));
+      }
+      // The in-page bundle (tag-only): served SAME-ORIGIN as the trusted shell —
+      // it IS trusted (no untrusted author code), so it may fetch /api/run
+      // directly. Custom dashboards' bundle stays on the frame origin (/bundle.js).
+      if (url.pathname === "/inpage.js") {
+        return send(200, "application/javascript; charset=utf-8", await inPageBundle());
       }
       if (url.pathname === "/api/run" && req.method === "POST") {
         const { d, query, malloy, givens } = JSON.parse(await readBody(req));
@@ -460,7 +568,7 @@ export async function serveDashboard(opts: {
   console.error(`\n  malloyyo dashboard dev — model: ${root}`);
   console.error(`  http://localhost:${port}/   (artifact origin: ${frameBase})`);
   for (const d of dashboards) {
-    const kind = d.tsxPath ? "custom" : "default UI";
+    const kind = d.tsxPath ? "custom (iframe)" : "tag-only (in-page)";
     console.error(`    • ${d.name} (${kind})  →  http://localhost:${port}/?d=${d.name}`);
   }
   console.error(`  Ctrl-C to stop.\n`);

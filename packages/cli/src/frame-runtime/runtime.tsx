@@ -585,11 +585,10 @@ export function CompositeDashboard({ givens, style }) {
   // 1) Rendered dashboard (all tiles settled, or the user forced it).
   if (combined) {
     return (
-      <div style={{ display: "flex", flexDirection: "column", minHeight: 0, ...style }}>
+      <div style={{ ...style }}>
         {failedTiles.length > 0 && (
           <div
             style={{
-              flexShrink: 0,
               marginBottom: 12,
               padding: "8px 12px",
               borderRadius: "var(--dash-radius, 8px)",
@@ -601,7 +600,12 @@ export function CompositeDashboard({ givens, style }) {
             {failedTiles.map((f) => `${f.name}: ${f.message}`).join(" · ")}
           </div>
         )}
-        <Panel result={combined} style={{ flex: 1, minHeight: 0 }} />
+        {/* Page-scroll layout (DefaultDashboard has no fixed height): the Panel
+            grows with the combined dashboard's content and the PAGE scrolls.
+            maxHeight:"none" removes the Panel's default 100vh cap; it keeps its
+            own minHeight floor. (An earlier flex:1/minHeight:0 here collapsed the
+            Panel to ~0px once DefaultDashboard stopped being a 100vh column.) */}
+        <Panel result={combined} style={{ maxHeight: "none" }} />
       </div>
     );
   }

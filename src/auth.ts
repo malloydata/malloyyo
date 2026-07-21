@@ -17,11 +17,15 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     sessionsTable: sessions,
     verificationTokensTable: verificationTokens,
   }),
+  // Every provider is opt-in via its own env vars — configure any subset. If
+  // none are set, sign-in is disabled entirely. See docs/authentication.md.
   providers: [
-    Google({
-      clientId: process.env.AUTH_GOOGLE_ID,
-      clientSecret: process.env.AUTH_GOOGLE_SECRET,
-    }),
+    ...(process.env.AUTH_GOOGLE_ID ? [
+      Google({
+        clientId: process.env.AUTH_GOOGLE_ID,
+        clientSecret: process.env.AUTH_GOOGLE_SECRET,
+      }),
+    ] : []),
     ...(process.env.AUTH_OKTA_CLIENT_ID ? [
       Okta({
         clientId: process.env.AUTH_OKTA_CLIENT_ID,

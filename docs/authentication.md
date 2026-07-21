@@ -4,14 +4,14 @@ Malloyyo signs users in with [Auth.js (NextAuth v5)](https://authjs.dev), backed
 by the Drizzle Postgres adapter (`src/auth.ts`). Three OAuth / OIDC providers are
 supported:
 
-| Provider | Status | Enable with |
-|---|---|---|
-| **Google** | always on | `AUTH_GOOGLE_ID` + `AUTH_GOOGLE_SECRET` |
-| **Okta** | optional | `AUTH_OKTA_CLIENT_ID` (+ secret, issuer) |
-| **Microsoft Entra ID** (Azure AD) | optional | `AUTH_MICROSOFT_ENTRA_ID_ID` (+ secret, optional issuer) |
+| Provider | Enable with |
+|---|---|
+| **Google** | `AUTH_GOOGLE_ID` + `AUTH_GOOGLE_SECRET` |
+| **Okta** | `AUTH_OKTA_CLIENT_ID` (+ secret, issuer) |
+| **Microsoft Entra ID** (Azure AD) | `AUTH_MICROSOFT_ENTRA_ID_ID` (+ secret, optional issuer) |
 
-Each provider is **off until its env vars are set**, so you only configure the
-ones you want. Sign-in is disabled entirely until at least one provider is
+Every provider is **opt-in and off until its env vars are set** — configure any
+subset you want. Sign-in is disabled entirely until at least one provider is
 configured.
 
 ## How it fits together
@@ -44,7 +44,8 @@ configured.
 
 ## Google
 
-Always available. Create an OAuth client in the Google Cloud Console.
+Enabled when `AUTH_GOOGLE_ID` is set. Create an OAuth client in the Google Cloud
+Console.
 
 1. **Google Cloud Console → APIs & Services → Credentials → Create OAuth client
    ID → Web application.**

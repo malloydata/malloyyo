@@ -23,7 +23,7 @@
   },
   "scripts": {
     "build:engine": "cd ../mcp-engine && npm run build",
-    "build": "npm run build:engine && esbuild src/index.ts --bundle --platform=node --format=esm --external:commander --external:esbuild --external:@malloydata/* --external:@modelcontextprotocol/* --outfile=dist/index.js",
+    "build": "npm run build:engine && esbuild src/index.ts --bundle --platform=node --format=esm --external:commander --external:esbuild --external:@malloydata/* --external:@modelcontextprotocol/* --outfile=dist/index.js && node scripts/copy-frame-src.mjs",
     "dev": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "pretest": "npm run build",
@@ -35,13 +35,19 @@
     "@malloydata/malloy": "^0.0.423",
     "@malloydata/malloy-connections": "^0.0.423",
     "@malloydata/malloy-filter": "^0.0.423",
+    "@malloydata/render": "^0.0.423",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "commander": "^12.1.0"
+    "commander": "^12.1.0",
+    "esbuild": "^0.24.0",
+    "react": "19.2.4",
+    "react-dom": "19.2.4",
+    "vega": "^5.33.1",
+    "vega-interpreter": "^2.2.1",
+    "vega-lite": "^5.23.0"
   },
   "devDependencies": {
     "@malloyyo/mcp-engine": "*",
     "@types/node": "^20",
-    "esbuild": "^0.24.0",
     "tsx": "^4.21.0",
     "typescript": "^5"
   }

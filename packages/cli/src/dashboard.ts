@@ -74,18 +74,20 @@ interface Dashboard {
   tsxPath?: string;
 }
 
-/** Runtime source files, resolved whether we're running from src/ (tsx dev) or
-    from the built dist/ next to a sibling src/ (local checkout). */
+/** Runtime source files, resolved whether we're running from src/ (tsx dev),
+    the built dist/ (published install — copy-frame-src.mjs ships it alongside
+    index.js), or a built dist/ next to a sibling src/ (local checkout). */
 function resolveRuntimeDir(): string {
   const candidates = [
-    new URL("./frame-runtime/", import.meta.url), // dev: src/dashboard.ts
-    new URL("../src/frame-runtime/", import.meta.url), // built: dist/index.js
+    new URL("./frame-runtime/", import.meta.url), // src/dashboard.ts (tsx) OR dist/index.js (published)
+    new URL("../src/frame-runtime/", import.meta.url), // built dist/ next to sibling src/ (checkout)
   ].map((u) => fileURLToPath(u));
   const found = candidates.find((c) => fs.existsSync(c));
   if (!found) {
     throw new Error(
-      "frame-runtime/ not found — `dashboard dev` currently needs the CLI source " +
-        "checkout (looked in ./ and ../src). See docs/repo-artifacts.md packaging note.",
+      "frame-runtime/ not found next to the CLI (looked in ./frame-runtime and " +
+        "../src/frame-runtime). A published install should ship it in dist/; " +
+        "reinstall the CLI, or rebuild with `npm run build`.",
     );
   }
   return found;

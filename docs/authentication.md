@@ -116,12 +116,18 @@ types** you picked during registration:
 | You want to allow | Registration account type | `AUTH_MICROSOFT_ENTRA_ID_ISSUER` |
 |---|---|---|
 | **One specific organization** (recommended for a known customer) | Single tenant | `https://login.microsoftonline.com/<tenant-id>/v2.0/` |
-| **Any work/school (Azure AD) org** | Multitenant | leave unset (defaults to `organizations`/`common`) or set to the `organizations` authority |
+| **Any work/school (Azure AD) org, but not personal accounts** | Multitenant | `https://login.microsoftonline.com/organizations/v2.0/` |
 | **Any Microsoft account, including personal** | Multitenant + personal | leave unset (defaults to `common`) |
 
-- Leaving the issuer **unset** defaults to `common` — any Microsoft account
-  (personal, work, or school) can sign in. Pair with `EMAIL_ALLOW_LIST` if you
-  need to limit that.
+- The issuer and the registration's **Supported account types** must agree, and
+  the *more restrictive* of the two wins: a single-tenant registration rejects
+  outsiders at Microsoft even if the issuer is `common`, and a narrow issuer
+  restricts a multitenant registration. Set both to the audience you want.
+- Leaving the issuer **unset** defaults to `common` (not `organizations`) — with
+  a multitenant+personal registration this admits **any** Microsoft account,
+  personal included. To allow work/school orgs but *not* personal accounts, set
+  the issuer to the `.../organizations/v2.0/` authority. Pair with
+  `EMAIL_ALLOW_LIST` to narrow further.
 - Setting the issuer to your **Directory (tenant) ID** locks sign-in to that one
   organization — the equivalent of the single-Okta-org setup. The tenant ID is
   on the Entra **Overview** page. Note the trailing `/v2.0/`.

@@ -73,6 +73,7 @@ The ones that matter for a container deploy:
 | `AUTH_SECRET` | ✅ | Signs session tokens. `openssl rand -base64 32`. |
 | `APP_BASE_URL` | ✅ | The public URL the instance is served at; used for OAuth redirects. |
 | `AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET` | for sign-in | Google OAuth client. Sign-in is disabled until both are set. |
+| Okta / Microsoft Entra ID vars | optional | Additional sign-in providers. See [Authentication](authentication.md). |
 | `APP_ADMIN_EMAILS` | recommended | Comma-separated emails that are auto-admins (create datasets, publish). |
 | `INSTANCE_NAME` / `INSTANCE_CODE` | optional | Display name + short slug; default `Malloyyo` / `main`. |
 | Analytical DB secret | per model | e.g. `MOTHERDUCK_TOKEN`, `BQ_JSON_KEY` — referenced by your model's `malloy-config.json`. |

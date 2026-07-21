@@ -8,6 +8,7 @@ import { eq, and, isNull, gt } from "drizzle-orm";
 import { isAdmin } from "@/lib/admin";
 import { getSettings } from "@/lib/settings";
 import { env } from "@/lib/env";
+import { configuredAuthProviders, partialAuthProviders } from "@/lib/auth-providers";
 
 export const runtime = "nodejs";
 
@@ -33,7 +34,14 @@ async function hasActiveClaudeConnection(userId: string): Promise<boolean> {
 export async function GET() {
   const session = await auth();
   const { tagline, signinNotice } = await getSettings();
-  if (!session?.user?.id) return NextResponse.json({ user: null, instanceName: env.INSTANCE_NAME, tagline, signinNotice });
+  if (!session?.user?.id) {
+    // Provider info is only needed to render the signed-out sign-in UI.
+    // `authMisconfigured` is a bare boolean — it never exposes which vars are
+    // missing; the specifics go to the server logs (warnAuthConfig()).
+    const providers = configuredAuthProviders();
+    const authMisconfigured = partialAuthProviders().length > 0;
+    return NextResponse.json({ user: null, instanceName: env.INSTANCE_NAME, tagline, signinNotice, providers, authMisconfigured });
+  }
   const [u] = await db.select().from(users).where(eq(users.id, session.user.id));
   const claudeConnected = u ? await hasActiveClaudeConnection(u.id) : false;
   return NextResponse.json({

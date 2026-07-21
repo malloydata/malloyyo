@@ -265,10 +265,18 @@ async function main(): Promise<void> {
   let version = inRepo;
   let bumped = false;
   if (isPublished(name, inRepo)) {
-    run('npm', ['version', '--no-git-tag-version', 'patch']);
-    version = readPkg().version;
+    // Routine merge: the PR didn't bump. Patch-bump to the next AVAILABLE
+    // version, skipping any already on npm. A version can be "taken but not in
+    // the repo" if a prior run published it but then failed before pushing the
+    // bump commit (e.g. the old rebase-on-dirty-tree bug that stranded 0.2.17):
+    // a plain single bump would land on that hole and get skipped at publish,
+    // stalling every release. Looping past it self-heals.
+    do {
+      run('npm', ['version', '--no-git-tag-version', 'patch']);
+      version = readPkg().version;
+    } while (isPublished(name, version));
     bumped = true;
-    ok(`${name}@${inRepo} is already on npm → routine patch bump to ${green(version)}.`);
+    ok(`${name}@${inRepo} is already on npm → patch bump to first free version ${green(version)}.`);
   } else {
     ok(`${name}@${inRepo} is not on npm → publishing ${green(version)} as-is.`);
   }
@@ -358,7 +366,11 @@ async function main(): Promise<void> {
       warn('--no-push: leaving the commit + tag local. Push them yourself when ready.');
     } else {
       if (committed) {
-        run('git', ['pull', '--rebase', 'origin', 'main']);
+        // --autostash: `npm version` also rewrites the root package-lock.json,
+        // which we intentionally don't commit — it's left unstaged and would
+        // otherwise abort the rebase ("cannot pull with rebase: You have
+        // unstaged changes"). Stash it across the rebase and restore after.
+        run('git', ['pull', '--rebase', '--autostash', 'origin', 'main']);
         run('git', ['push', 'origin', 'HEAD:main']);
       }
       run('git', ['push', 'origin', tag]);

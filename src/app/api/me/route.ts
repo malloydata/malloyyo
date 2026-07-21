@@ -8,7 +8,7 @@ import { eq, and, isNull, gt } from "drizzle-orm";
 import { isAdmin } from "@/lib/admin";
 import { getSettings } from "@/lib/settings";
 import { env } from "@/lib/env";
-import { configuredAuthProviders } from "@/lib/auth-providers";
+import { configuredAuthProviders, partialAuthProviders } from "@/lib/auth-providers";
 
 export const runtime = "nodejs";
 
@@ -35,7 +35,11 @@ export async function GET() {
   const session = await auth();
   const { tagline, signinNotice } = await getSettings();
   const providers = configuredAuthProviders();
-  if (!session?.user?.id) return NextResponse.json({ user: null, instanceName: env.INSTANCE_NAME, tagline, signinNotice, providers });
+  // True when a provider is half-configured (some vars set, not all). Lets the
+  // signed-out UI point the operator at the server logs instead of a dead page.
+  // Only a boolean is exposed — never which vars are missing.
+  const authMisconfigured = partialAuthProviders().length > 0;
+  if (!session?.user?.id) return NextResponse.json({ user: null, instanceName: env.INSTANCE_NAME, tagline, signinNotice, providers, authMisconfigured });
   const [u] = await db.select().from(users).where(eq(users.id, session.user.id));
   const claudeConnected = u ? await hasActiveClaudeConnection(u.id) : false;
   return NextResponse.json({

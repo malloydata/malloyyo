@@ -145,3 +145,20 @@ types** you picked during registration:
 Set `APP_BASE_URL` to the public URL the instance is served at — it's what OAuth
 redirects resolve against. Behind a reverse proxy, use the external `https://…`
 URL.
+
+## Troubleshooting
+
+A provider is only enabled once **all** its required env vars are set — a
+half-configured provider is not registered and shows no button (rather than a
+button that fails at the identity provider). On startup the server logs which
+providers are live and, for any half-configured one, exactly which var is
+missing:
+
+```
+[auth] Okta sign-in is disabled — set the missing env var(s): AUTH_OKTA_ISSUER. See docs/authentication.md.
+[auth] Sign-in enabled: Google, Microsoft.
+```
+
+If a provider's button doesn't appear, check that log line first. If **no**
+provider is configured, sign-in is disabled and the landing page says so.
+

@@ -86,6 +86,7 @@ export default function HomePage() {
   const [tagline, setTagline] = useState("");
   const [signinNotice, setSigninNotice] = useState("");
   const [providers, setProviders] = useState<AuthProvider[]>([]);
+  const [authMisconfigured, setAuthMisconfigured] = useState(false);
   const [claudeConnected, setClaudeConnected] = useState(false);
   const [sources, setSources] = useState<SourceSummary[] | null>(null);
   const [favQueries, setFavQueries] = useState<FavQuery[]>([]);
@@ -106,6 +107,7 @@ export default function HomePage() {
     if (typeof meJson.tagline === "string") setTagline(meJson.tagline);
     if (typeof meJson.signinNotice === "string") setSigninNotice(meJson.signinNotice);
     if (Array.isArray(meJson.providers)) setProviders(meJson.providers);
+    if (typeof meJson.authMisconfigured === "boolean") setAuthMisconfigured(meJson.authMisconfigured);
     if (typeof meJson.claudeConnected === "boolean") setClaudeConnected(meJson.claudeConnected);
     if (meJson.user) {
       const [srcRes, favRes, dashRes] = await Promise.all([
@@ -190,8 +192,10 @@ export default function HomePage() {
             <p className="text-gray-500 dark:text-gray-400 text-xs leading-relaxed">{signinNotice}</p>
           )}
           {/* One button per provider configured in the environment (from /api/me,
-              which reads configuredAuthProviders()). If none are advertised, fall
-              back to the built-in Auth.js sign-in page. */}
+              which reads configuredAuthProviders()). When none are ready we show
+              a helpful message rather than a button that would fail — a partial
+              config points the operator at the server logs, which name the exact
+              missing env var. */}
           {providers.length > 0 ? (
             <div className="flex flex-col items-center gap-2">
               {providers.map((p) => (
@@ -204,12 +208,15 @@ export default function HomePage() {
                 </button>
               ))}
             </div>
+          ) : authMisconfigured ? (
+            <p className="text-amber-600 dark:text-amber-400 text-xs leading-relaxed">
+              Sign-in isn&rsquo;t fully configured on this instance. Check the server
+              logs for the exact missing setting, or see the authentication guide.
+            </p>
           ) : (
-            /* NextAuth API endpoint, not a page route — a full-page nav is intended, so <Link> doesn't apply. */
-            /* eslint-disable-next-line @next/next/no-html-link-for-pages */
-            <a href="/api/auth/signin" className="inline-block rounded bg-black text-white dark:bg-white dark:text-black px-4 py-2">
-              Sign in
-            </a>
+            <p className="text-gray-500 dark:text-gray-400 text-xs leading-relaxed">
+              No sign-in method is configured on this instance.
+            </p>
           )}
         </section>
       ) : (

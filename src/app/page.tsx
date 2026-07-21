@@ -3,7 +3,10 @@
 
 "use client";
 import { useEffect, useState } from "react";
+import { signIn } from "next-auth/react";
 import Link from "next/link";
+
+type AuthProvider = { id: string; name: string };
 
 type SourceSummary = {
   source: string;
@@ -82,6 +85,7 @@ export default function HomePage() {
   const [instanceName, setInstanceName] = useState("malloyyo");
   const [tagline, setTagline] = useState("");
   const [signinNotice, setSigninNotice] = useState("");
+  const [providers, setProviders] = useState<AuthProvider[]>([]);
   const [claudeConnected, setClaudeConnected] = useState(false);
   const [sources, setSources] = useState<SourceSummary[] | null>(null);
   const [favQueries, setFavQueries] = useState<FavQuery[]>([]);
@@ -101,6 +105,7 @@ export default function HomePage() {
     if (meJson.instanceName) setInstanceName(meJson.instanceName);
     if (typeof meJson.tagline === "string") setTagline(meJson.tagline);
     if (typeof meJson.signinNotice === "string") setSigninNotice(meJson.signinNotice);
+    if (Array.isArray(meJson.providers)) setProviders(meJson.providers);
     if (typeof meJson.claudeConnected === "boolean") setClaudeConnected(meJson.claudeConnected);
     if (meJson.user) {
       const [srcRes, favRes, dashRes] = await Promise.all([
@@ -180,15 +185,32 @@ export default function HomePage() {
 
       {!me ? (
         <section className="border border-gray-200 dark:border-gray-800 rounded p-6 text-center space-y-3">
-          <p className="text-gray-700 dark:text-gray-300">Sign in with Google to view datasets.</p>
+          <p className="text-gray-700 dark:text-gray-300">Sign in to view datasets.</p>
           {signinNotice && (
             <p className="text-gray-500 dark:text-gray-400 text-xs leading-relaxed">{signinNotice}</p>
           )}
-          {/* NextAuth API endpoint, not a page route — a full-page nav is intended, so <Link> doesn't apply. */}
-          {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
-          <a href="/api/auth/signin" className="inline-block rounded bg-black text-white dark:bg-white dark:text-black px-4 py-2">
-            Sign in with Google
-          </a>
+          {/* One button per provider configured in the environment (from /api/me,
+              which reads configuredAuthProviders()). If none are advertised, fall
+              back to the built-in Auth.js sign-in page. */}
+          {providers.length > 0 ? (
+            <div className="flex flex-col items-center gap-2">
+              {providers.map((p) => (
+                <button
+                  key={p.id}
+                  onClick={() => void signIn(p.id)}
+                  className="inline-block w-full max-w-xs rounded bg-black text-white dark:bg-white dark:text-black px-4 py-2 hover:opacity-90"
+                >
+                  Sign in with {p.name}
+                </button>
+              ))}
+            </div>
+          ) : (
+            /* NextAuth API endpoint, not a page route — a full-page nav is intended, so <Link> doesn't apply. */
+            /* eslint-disable-next-line @next/next/no-html-link-for-pages */
+            <a href="/api/auth/signin" className="inline-block rounded bg-black text-white dark:bg-white dark:text-black px-4 py-2">
+              Sign in
+            </a>
+          )}
         </section>
       ) : (
         <>

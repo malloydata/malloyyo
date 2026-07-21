@@ -16,10 +16,12 @@ configured.
 
 ## How it fits together
 
-- **Sign-in page.** There is no custom sign-in UI — the app links to Auth.js's
-  built-in page at `/api/auth/signin`, which renders one button per configured
-  provider automatically. Adding a provider's env vars makes its button appear;
-  no code or UI change is needed.
+- **Sign-in buttons.** The landing page renders one "Sign in with …" button per
+  provider that's configured in the environment (it reads the list from
+  `/api/me`, which calls `configuredAuthProviders()` in
+  `src/lib/auth-providers.ts`). Adding a provider's env vars makes its button
+  appear — no code or UI change is needed. Auth.js's built-in page at
+  `/api/auth/signin` is the fallback and also lists every configured provider.
 - **Redirect (callback) URI.** Every provider posts back to
   `<APP_BASE_URL>/api/auth/callback/<provider-id>`. The provider IDs are
   `google`, `okta`, and `microsoft-entra-id`. You must register the exact URI —

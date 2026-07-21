@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 import { auth } from "@/auth";
 import { logger } from "@/lib/logger";
+import { isEmailAllowed } from "@/lib/allowlist";
 
 // Routes that must never be blocked — OAuth discovery, MCP, and auth itself.
 const ALWAYS_ALLOW = /^\/(api\/auth|api\/oauth|\.well-known|mcp|oauth\/consent)/;
@@ -40,18 +41,14 @@ export async function proxy(req: NextRequest) {
     return NextResponse.redirect(signInUrl);
   }
 
-  // Authorization: the email allow-list. Fail-open by design — an unset list
-  // means any authenticated user is allowed.
-  const allowList = process.env.EMAIL_ALLOW_LIST;
-  if (allowList) {
-    const allowed = allowList.split(",").map((e) => e.trim().toLowerCase());
-    if (!allowed.includes(session.user.email.toLowerCase())) {
-      // Signed in but not allowed — sign them out and redirect to home.
-      logger.warn("access denied", { requestId, userId: session.user.id });
-      const signOutUrl = new URL("/api/auth/signout", req.url);
-      signOutUrl.searchParams.set("callbackUrl", "/");
-      return NextResponse.redirect(signOutUrl);
-    }
+  // Authorization: the shared allow-list check (lib/allowlist — fail-open when
+  // the list is unset; "@domain" entries admit the whole domain).
+  if (!isEmailAllowed(session.user.email)) {
+    // Signed in but not allowed — sign them out and redirect to home.
+    logger.warn("access denied", { requestId, userId: session.user.id });
+    const signOutUrl = new URL("/api/auth/signout", req.url);
+    signOutUrl.searchParams.set("callbackUrl", "/");
+    return NextResponse.redirect(signOutUrl);
   }
 
   return next();

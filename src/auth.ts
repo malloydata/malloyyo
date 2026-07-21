@@ -8,6 +8,7 @@ import { DrizzleAdapter } from "@auth/drizzle-adapter";
 import { eq } from "drizzle-orm";
 import { db, users, accounts, sessions, verificationTokens } from "@/db";
 import { newUserSlug } from "@/lib/slug";
+import { isEmailAllowed } from "@/lib/allowlist";
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   adapter: DrizzleAdapter(db, {
@@ -34,10 +35,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   trustHost: true,
   callbacks: {
     async signIn({ user }) {
-      const allowList = process.env.EMAIL_ALLOW_LIST;
-      if (!allowList) return true;
-      const allowed = allowList.split(",").map((e) => e.trim().toLowerCase());
-      return allowed.includes((user.email ?? "").toLowerCase());
+      return isEmailAllowed(user.email);
     },
   },
   events: {

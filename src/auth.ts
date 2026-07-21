@@ -4,6 +4,7 @@
 import NextAuth from "next-auth";
 import Google from "next-auth/providers/google";
 import Okta from "next-auth/providers/okta";
+import MicrosoftEntraID from "next-auth/providers/microsoft-entra-id";
 import { DrizzleAdapter } from "@auth/drizzle-adapter";
 import { eq } from "drizzle-orm";
 import { db, users, accounts, sessions, verificationTokens } from "@/db";
@@ -26,6 +27,17 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         clientId: process.env.AUTH_OKTA_CLIENT_ID,
         clientSecret: process.env.AUTH_OKTA_CLIENT_SECRET,
         issuer: process.env.AUTH_OKTA_ISSUER,
+      }),
+    ] : []),
+    // Microsoft Entra ID (Azure AD) — optional, enabled when the client ID is set.
+    // Omit AUTH_MICROSOFT_ENTRA_ID_ISSUER to allow any Microsoft account (the
+    // "common" tenant); set it to https://login.microsoftonline.com/<tenant>/v2.0/
+    // to restrict sign-in to a single organization. See docs/authentication.md.
+    ...(process.env.AUTH_MICROSOFT_ENTRA_ID_ID ? [
+      MicrosoftEntraID({
+        clientId: process.env.AUTH_MICROSOFT_ENTRA_ID_ID,
+        clientSecret: process.env.AUTH_MICROSOFT_ENTRA_ID_SECRET,
+        issuer: process.env.AUTH_MICROSOFT_ENTRA_ID_ISSUER,
       }),
     ] : []),
   ],

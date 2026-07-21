@@ -169,6 +169,9 @@ Credentials → Web application), set its authorized redirect URI to
 `https://<your-domain>/api/auth/callback/google`, put the client ID/secret + your
 `APP_BASE_URL` into the project's env vars, and redeploy.
 
+> Prefer Okta or Microsoft Entra ID (Azure AD) sign-in, or want the full
+> details? See **[Authentication](docs/authentication.md)**.
+
 After that, sign in with the admin email and add a dataset.
 
 > Your model's `malloy-config.json` references your analytical database's secret from an
@@ -203,6 +206,9 @@ http://localhost:3000/api/auth/callback/google
 ```
 
 (Miss this and Google rejects sign-in with `redirect_uri_mismatch`.)
+
+Okta and Microsoft Entra ID (Azure AD) sign-in are also supported — see
+**[Authentication](docs/authentication.md)** for all three.
 
 ```bash
 npm install

@@ -78,8 +78,10 @@ export function partialAuthProviders(): ProviderStatus[] {
 
 let warned = false;
 
-// Logged once per server process (from src/auth.ts). Names exactly which env
-// var is missing for any half-configured provider, and confirms which are live.
+// Logged once per module instance — i.e. once per server runtime (the node
+// route runtime and the edge/middleware runtime each get one line), and again
+// on a cold start. Called from src/auth.ts. Names exactly which env var is
+// missing for any half-configured provider, and confirms which are live.
 export function warnAuthConfig(): void {
   if (warned) return;
   warned = true;

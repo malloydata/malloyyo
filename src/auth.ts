@@ -13,8 +13,19 @@ import { isProviderReady, warnAuthConfig } from "@/lib/auth-providers";
 
 // Log which providers are enabled, and name the missing env var for any that
 // are half-configured, so a misconfiguration is obvious in the server logs
-// instead of surfacing as a cryptic OAuth error. Runs once per process.
+// instead of surfacing as a cryptic OAuth error. Runs once per runtime.
 warnAuthConfig();
+
+// next-auth's setEnvDefaults reads AUTH_<PROVIDER>_ISSUER straight from the
+// environment and assigns it with `finalProvider.issuer ?? (= env)`. A
+// present-but-empty issuer var therefore becomes a top-level `issuer: ""`,
+// which fails Auth.js's endpoint assertion (`"" ?? default` keeps "") and
+// invalidates the ENTIRE sign-in config — not just this provider. Normalize
+// empty issuer vars to unset so the provider falls back to its default
+// authority (Microsoft → "common"). See docs/authentication.md.
+for (const k of ["AUTH_MICROSOFT_ENTRA_ID_ISSUER", "AUTH_OKTA_ISSUER"]) {
+  if (process.env[k] !== undefined && process.env[k]!.trim() === "") delete process.env[k];
+}
 
 export const { handlers, auth, signIn, signOut } = NextAuth({
   adapter: DrizzleAdapter(db, {
@@ -49,6 +60,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       MicrosoftEntraID({
         clientId: process.env.AUTH_MICROSOFT_ENTRA_ID_ID,
         clientSecret: process.env.AUTH_MICROSOFT_ENTRA_ID_SECRET,
+        // Empty values are normalized to unset above; unset falls back to the
+        // "common" authority (any Microsoft account).
         issuer: process.env.AUTH_MICROSOFT_ENTRA_ID_ISSUER,
       }),
     ] : []),

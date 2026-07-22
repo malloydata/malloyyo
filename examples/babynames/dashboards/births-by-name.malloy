@@ -1,0 +1,16 @@
+##! experimental.givens
+// A dashboard with a custom component: ./births-by-name.jsx (a FLAT sibling,
+// same basename). The .malloy file still owns the query and the filtering;
+// the .jsx only decides how it's drawn.
+import "../index.malloy"
+
+#" Total births per name in the selected state and decades.
+// autorun=false: the NAMES multi-select and decade edits are staged, and the
+// Controls bar grows Apply/Reset — nothing re-runs until Apply.
+# artifact { title="Births by name (Vega-Lite)" autorun=false }
+query: births_by_name is names -> {
+  where: state ~ $STATE, decade ~ $DECADES, name ~ $NAMES
+  group_by: name
+  aggregate: births
+  order_by: births desc
+}

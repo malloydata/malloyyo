@@ -1,11 +1,17 @@
 ##! experimental.givens
 
-// Filter inputs the dashboard drives — declared ONCE, here. Each given is a
+// The data surface: the source consumers query, the filter declarations the
+// dashboards apply, and the query that backs a suggestion control.
+//
+// Dashboards do NOT live here — they are one file each under ./dashboards,
+// discovered by filename. index.malloy is what `query` / `describe_source`
+// (and ltool) see, and nothing more.
+
+// Filter inputs the dashboards drive — declared ONCE, here. Each given is a
 // filter<T> (a whole filter expression, not a single value): STATE can be
 // 'CA', 'CA, NY', or '-TX'; DECADES can be '1980' or '[1980 to 1990]'. The
-// # tags are the dashboard control metadata (label, control, suggestion
-// query); the dashboard runtime introspects them — nothing is redeclared in
-// JavaScript.
+// # tags are the control metadata (label, control, suggestion query); the
+// dashboard runtime introspects them — nothing is redeclared in JavaScript.
 given:
   # label="State" control=select suggest { source=names dimension=state }
   STATE :: filter<string> is f'CA'
@@ -47,40 +53,6 @@ source: names is duckdb.sql("""
   ) AS t(name, state, decade, ct)
 """) extend {
   measure: births is ct.sum()
-
-  #" Names most over-represented in the selected state vs. the nation, for the decades.
-  // The `# artifact` tag on a VIEW IS the dashboard declaration (no manifest
-  // file): it runs as `run: names -> over_represented`.
-  // ./dashboards/over-represented/Dashboard.tsx optionally customizes the
-  // component; delete it and the runtime auto-renders controls + panel.
-  // pct_in_state = share of a name's births that happened in STATE. Higher =
-  // more concentrated in the selected state. Filter givens apply with `~`.
-  # artifact name="over-represented" title="Over-represented baby names"
-  view: over_represented is {
-    where: decade ~ $DECADES
-    group_by: name
-    aggregate:
-      state_births is births { where: state ~ $STATE }
-      national_births is births
-      pct_in_state is births { where: state ~ $STATE } / births
-    order_by: pct_in_state desc
-    limit: 20
-  }
-
-  #" Total births per name in the selected state and decades.
-  // A second dashboard, this one custom-drawn with <VegaChart>: the same
-  // governed query surface, rendered by a Vega-Lite spec instead of the Malloy
-  // renderer. See ./dashboards/births-by-name/Dashboard.tsx — the view returns
-  // flat (name, births) rows and the spec's encodings point at those columns.
-  // autorun=false: the NAMES multi-select + decade edits are staged, and the
-  // Controls bar shows Apply/Reset — nothing re-runs until Apply.
-  # artifact name="births-by-name" title="Births by name (Vega-Lite)" autorun=false
-  view: births_by_name is {
-    where: state ~ $STATE, decade ~ $DECADES, name ~ $NAMES
-    group_by: name
-    aggregate: births
-    order_by: births desc
-  }
 }
 
 // Backs the NAMES suggest. Referencing $STATE/$DECADES is what makes the name

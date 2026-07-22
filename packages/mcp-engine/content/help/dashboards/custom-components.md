@@ -13,9 +13,10 @@ and theming; the `.malloy` file still owns every query and filter. See also
 
 ```tsx
 import React from "react";
-import { Controls, Given, Search, Select, TimeRange, Panel, filters, useGiven } from "@malloyyo/dashboard";
+import { Controls, Given, Search, Select, TimeRange, filters, useGiven } from "@malloyyo/dashboard";
 
-export default function Dashboard({ dashboard, givens }) {
+// `Panel` is NOT importable — it arrives as a PROP (importing it fails to bundle).
+export default function Dashboard({ dashboard, givens, Panel }) {
   return (
     <div style={{ maxWidth: 860, margin: "0 auto", padding: 24 }}>
       <h1>{dashboard.title}</h1>
@@ -68,7 +69,10 @@ From `@malloyyo/dashboard` (also handed to the component as props):
   `filters.values(src)`. The stock `<Select/>` does this automatically;
   `<Search/>` deliberately commits raw text (its input IS a filter
   expression).
-- `<Panel/>` runs against the DASHBOARD's own file: a bare `<Panel/>` renders
+- `<Panel/>` is **prop-only — do NOT import it** (it is deliberately not in the
+  `@malloyyo/dashboard` export surface, so `import { Panel }` fails to bundle);
+  take it from props: `function Dashboard({ Panel, givens })`.
+  It runs against the DASHBOARD's own file: a bare `<Panel/>` renders
   the whole dashboard (its tiles); `<Panel query="…"/>` runs a query defined in
   the dashboard file (by name) or a `source -> view`; `<Panel malloy="…"/>` and
   `runData(text, givens)` run arbitrary Malloy as a RESTRICTED query (no import /

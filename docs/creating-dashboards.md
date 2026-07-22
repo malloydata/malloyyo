@@ -1,5 +1,10 @@
 # Creating dashboards in Malloyyo
 
+> **Superseded by [Dashboards](guide/dashboards.md)** in the user guide, which
+> is the maintained version. This page is still accurate on the current
+> structure and goes deeper in places (the full `# artifact` tag options); keep
+> it for reference, but make edits to the guide.
+
 A Malloyyo dashboard is a **self-contained `.malloy` file in the `dashboards/`
 directory**. The file *is* the dashboard: it imports the parts of your model it
 needs, defines its query (with the filtering it applies), and tags it. There's
@@ -258,9 +263,10 @@ runtime sandboxes it):
 
 ```jsx
 // dashboards/overview.jsx
-import { Controls, Search, Panel, VegaChart } from "@malloyyo/dashboard";
+import { Controls, Search, VegaChart } from "@malloyyo/dashboard";
 
-export default function Dashboard({ dashboard, givens }) {
+// `Panel` is prop-only — it is NOT exported, so importing it fails to bundle.
+export default function Dashboard({ dashboard, givens, Panel }) {
   return (
     <>
       <Controls><Search given="BRAND" /></Controls>

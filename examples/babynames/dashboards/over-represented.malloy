@@ -1,0 +1,23 @@
+##! experimental.givens
+// A tag-only dashboard: no JavaScript at all. The runtime draws the title, a
+// control for every given this query references, and the result panel.
+//
+// The BARE import is what brings the given DECLARATIONS into scope — without
+// it the filters would still apply, but no controls would render.
+import "../index.malloy"
+
+#" Names most over-represented in the selected state vs. the nation, for the decades.
+// pct_in_state = share of a name's births that happened in STATE. Higher =
+// more concentrated in the selected state. Filter givens apply with `~`, and
+// the `where:` mapping lives HERE, in the dashboard — not in the model.
+# artifact { title="Over-represented baby names" }
+query: over_represented is names -> {
+  where: decade ~ $DECADES
+  group_by: name
+  aggregate:
+    state_births is births { where: state ~ $STATE }
+    national_births is births
+    pct_in_state is births { where: state ~ $STATE } / births
+  order_by: pct_in_state desc
+  limit: 20
+}

@@ -2,7 +2,7 @@
 
 The `query` tool runs your Malloy against a **published model**. You have that
 model's entire published surface to work with — and you can build on it. The
-model is an inentionally curated subset of the data available in the
+model is an intentionally curated subset of the data available in the
 database.
 
 ## You can

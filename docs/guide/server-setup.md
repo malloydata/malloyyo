@@ -202,7 +202,7 @@ instead of a literal:
 {
   "connections": {
     "warehouse": {
-      "type": "postgres",
+      "is": "postgres",
       "host": "db.example.com",
       "password": { "env": "PG_PASSWORD" }
     }

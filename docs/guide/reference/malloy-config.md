@@ -84,8 +84,8 @@ The CLI registers every backend Malloy ships:
 | `mysql` | MySQL | `host`, `port`, `user`, `password`, `database` |
 | `snowflake` | Snowflake | `account`, `username`, `password`, `role`, `warehouse`, `database`, `schema`, `privateKey`, `privateKeyPath`, `privateKeyPass` |
 | `databricks` | Databricks SQL | `host`, `path`, `token`, `oauthClientId`, `oauthClientSecret`, `defaultCatalog`, `defaultSchema` |
-| `trino` | Trino | `server`, `port`, `catalog`, `schema`, `user`, `password`, `ssl`, `session` |
-| `presto` | Presto | same as `trino` |
+| `trino` | Trino | `server`, `port`, `catalog`, `schema`, `user`, `password`, `ssl`, `session`, `extraCredential`, `extraHeaders`, `source` |
+| `presto` | Presto | `server`, `port`, `catalog`, `schema`, `user`, `password` |
 
 Every type also accepts `setupSQL`, run when the connection opens. The upstream
 [configuration reference](https://docs.malloydata.dev/documentation/setup/config)

@@ -179,7 +179,7 @@ Other behavior worth knowing:
   warm.
 - **In explore mode, only `index.malloy` is reachable.** Any other model
   reference is refused, and if the file doesn't exist the catalog is empty.
-- The server owns stdout for the protocol. Diagnostics go to stderr.
+- **The MCP protocol owns stdout.** Nothing else is written there.
 - `INSTANCE_NAME`, if set in the environment, is used in the rendered
   instructions; otherwise it's `Malloyyo`.
 
@@ -401,7 +401,7 @@ target from the config in the **current** directory.
 
 ## Token precedence
 
-Every server-facing command resolves its bearer token the same way, first match
+`publish` and `status` resolve their bearer token the same way, first match
 wins:
 
 | Order | Source | Use it for |

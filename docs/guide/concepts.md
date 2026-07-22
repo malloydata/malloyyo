@@ -118,7 +118,7 @@ which is why any value can be an env-var reference instead of a secret:
 ```jsonc
 {
   "connections": {
-    "warehouse": { "type": "postgres", "password": { "env": "PG_PASSWORD" } }
+    "warehouse": { "is": "postgres", "password": { "env": "PG_PASSWORD" } }
   }
 }
 ```

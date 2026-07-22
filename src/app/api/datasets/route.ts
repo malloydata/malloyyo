@@ -8,7 +8,7 @@ import { db, datasets, malloyModels, malloyModelFiles, users } from "@/db";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
 import { nameToSlug } from "@/lib/slug";
-import { GitHubURLReader, fetchGitHubFile, parseGitHubRepo } from "@/lib/github";
+import { GitHubURLReader, fetchGitHubFile, parseGitHubRepo, normalizeGitHubPath, joinRepoPath } from "@/lib/github";
 import { introspectModelWithReader } from "@/lib/malloy";
 import { logger, serializeErr } from "@/lib/logger";
 
@@ -17,6 +17,8 @@ export const runtime = "nodejs";
 const GitHubBody = z.object({
   githubRepo: z.string().min(1),
   githubBranch: z.string().min(1).default("main"),
+  // Subdirectory holding the model; "" = repo root.
+  githubPath: z.string().default(""),
   name: z.string().min(1).max(64),
   useToken: z.boolean().default(true),
 });
@@ -57,6 +59,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: String(err) }, { status: 400 });
   }
   const branch = body.githubBranch;
+  const basePath = normalizeGitHubPath(body.githubPath);
 
   const id = crypto.randomUUID();
   const [row] = await db
@@ -67,17 +70,18 @@ export async function POST(req: Request) {
       name,
       githubRepo: body.githubRepo,
       githubBranch: branch,
+      githubPath: basePath,
       githubUseToken: body.useToken,
       status: "modeling",
     })
     .returning();
 
   try {
-    const reader = new GitHubURLReader(owner, repo, branch, body.useToken);
+    const reader = new GitHubURLReader(owner, repo, branch, body.useToken, basePath);
 
     let malloyConfig: string | undefined;
     try {
-      malloyConfig = await fetchGitHubFile(owner, repo, branch, "malloy-config.json", {
+      malloyConfig = await fetchGitHubFile(owner, repo, branch, joinRepoPath(basePath, "malloy-config.json"), {
         useToken: body.useToken,
       });
     } catch { /* Not present — fine. */ }
@@ -97,7 +101,7 @@ export async function POST(req: Request) {
         datasetId: id,
         version: 1,
         source: indexContent,
-        generatedBy: `github:${body.githubRepo}@${branch}`,
+        generatedBy: `github:${body.githubRepo}@${branch}${basePath ? `/${basePath}` : ""}`,
         compiledAt: new Date(),
         sources: result.sources,
       })

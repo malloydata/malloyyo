@@ -29,6 +29,17 @@ async function githubFetch(url: string, headers: Record<string, string>): Promis
   }
 }
 
+/** Normalize a repo subdirectory path: trim whitespace and slashes. Empty
+    string = repo root. */
+export function normalizeGitHubPath(path: string | null | undefined): string {
+  return (path ?? "").trim().replace(/^\/+|\/+$/g, "");
+}
+
+/** Join a normalized base path and a repo-relative file path. */
+export function joinRepoPath(basePath: string, path: string): string {
+  return basePath ? `${basePath}/${path}` : path;
+}
+
 export async function fetchGitHubFile(
   owner: string,
   repo: string,
@@ -59,7 +70,7 @@ export async function fetchGitHubFile(
     if (res.status === 404) {
       throw new Error(
         `Not found: ${path} in ${owner}/${repo}@${branch}.\n` +
-        `Check the repo name, branch, and that index.malloy exists at the root.`
+        `Check the repo name, branch, and path — index.malloy must exist there.`
       );
     }
     throw new Error(
@@ -71,6 +82,9 @@ export async function fetchGitHubFile(
 }
 
 export class GitHubURLReader {
+  /** Model-relative path → content. Keys are relative to `basePath` (e.g.
+      "index.malloy", "dashboards/x.malloy") so Malloy import resolution and
+      downstream storage are independent of where the model sits in the repo. */
   readonly fetched = new Map<string, string>();
 
   constructor(
@@ -78,14 +92,20 @@ export class GitHubURLReader {
     private repo: string,
     private branch: string,
     private useToken: boolean = true,
+    /** Normalized subdirectory holding the model; "" = repo root. */
+    private basePath: string = "",
   ) {}
 
   async readURL(url: URL): Promise<string> {
     const path = url.pathname.replace(/^\//, "");
     if (this.fetched.has(path)) return this.fetched.get(path)!;
-    const content = await fetchGitHubFile(this.owner, this.repo, this.branch, path, {
-      useToken: this.useToken,
-    });
+    const content = await fetchGitHubFile(
+      this.owner,
+      this.repo,
+      this.branch,
+      joinRepoPath(this.basePath, path),
+      { useToken: this.useToken },
+    );
     this.fetched.set(path, content);
     return content;
   }

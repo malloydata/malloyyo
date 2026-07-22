@@ -73,14 +73,39 @@ closes it.
 
 ## Docs
 
-- [ ] **Add dashboards to the README.** `README.md` only mentions dashboards in
-      passing (the intro bullet and the `malloyyo test` paragraph). It needs a
-      real section: what a repo-authored dashboard is, the `# artifact` +
-      `givens` contract, and where the full authoring guide lives
-      (`docs/repo-artifacts.md`, `yo_help` topics under `dashboards/*`).
+- [ ] **Trim `README.md` down to a pointer.** The user-facing set now lives in
+      `docs/guide/` (PR #111), so the README's architecture diagram, authoring
+      walkthrough, deploy checklist, and local-dev section are duplicated — and
+      duplicated docs drift. Cut it to the pitch, the diagram, and links into the
+      guide. (This supersedes the old "add dashboards to the README" item: the
+      dashboards story is now `docs/guide/dashboards.md`.)
+- [ ] **`docs/explore-surface.md` lists `open_share_link` as an explore-surface
+      tool.** It's host-added in `src/lib/mcp-host.ts`, not part of
+      `exploreSurface` — the engine doesn't ship it. Minor, but the doc is the
+      design home for that surface.
+- [ ] **The `malloyyo-babynames` reference repo README is stale.** It lists
+      `Panel` among the importable widgets (it isn't — see the dashboards items
+      above), calls the components `Dashboard.tsx` (they're flat
+      `<name>.jsx` siblings now), and uses slugs that don't match the filenames
+      (`name-explorer` vs `name_explorer`). Separate repo; needs its own pass.
 
 ## Known issues / cleanup
 
+- [ ] **Decide whether `export {}` should be an access boundary.** Today it
+      curates *discovery* only: `exportedOnly: true` is applied on the
+      `list_sources` catalog path (`src/lib/mcp-host.ts:148`), but
+      `describe_source` / `query` with an explicit `model_ref` still reach a
+      NON-exported source — `explore.ts:195` says so outright and calls it the
+      back door. Verified empirically. The `develop/getting-started` help topic
+      told authors the opposite ("exactly what consumers can query, nothing
+      more"), so a model author may be relying on it to hide a staging source.
+      Either enforce it on the describe/query paths or keep it as curation —
+      but it should be a decision, not an artifact. (Docs corrected in PR #111.)
+- [ ] **No way to create a dataset except from a GitHub repo.**
+      `POST /api/datasets` requires `githubRepo` and compiles `index.malloy`
+      from the repo as version 1, so even a push-first (`malloyyo publish`)
+      workflow has to push to GitHub once to bootstrap. Consider an empty-dataset
+      create path (CLI or UI) so the CLI loop stands on its own.
 - [ ] **Thorough code review.** No focused review pass has been done across the
       codebase since the v2 dashboard rework landed. Sweep for correctness bugs
       and dead/duplicated code (`/code-review high` or an ultra review).

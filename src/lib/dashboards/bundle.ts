@@ -51,15 +51,25 @@ export const jsx = J.jsx, jsxs = J.jsxs, Fragment = J.Fragment;
 // deliberately absent here. Importing one from a Dashboard.tsx fails the bundle
 // with "No matching export": the signal to make it tag-only (which renders
 // full-width in the trusted page) or draw it with VegaChart.
+// MUST re-export every name `packages/cli/src/frame-runtime/index.ts` exports.
+// The vendor build puts that module's whole namespace on window.__DASH_RUNTIME__,
+// so anything missing HERE still exists at runtime but can't be imported: esbuild
+// needs the names statically, and a dashboard importing one that's absent fails
+// to bundle with "No matching export in vruntime:runtime" — at VIEW time, in
+// production only (the CLI preview aliases to the real source, so it works
+// locally, and `lint` transpiles without resolving imports, so it passes too).
+// `dashboard-runtime-shim.test.ts` fails if this list drifts. Keep it complete.
 const RUNTIME_SHIM = `
 const D = window.__DASH_RUNTIME__;
 export const filters = D.filters, runData = D.runData,
   useGiven = D.useGiven, useOptions = D.useOptions, useQuery = D.useQuery,
-  mount = D.mount, mountDashboard = D.mountDashboard,
+  mount = D.mount, setHost = D.setHost,
+  mountDashboard = D.mountDashboard, mountInPage = D.mountInPage,
   dashboardInfo = D.dashboardInfo, givenSpecs = D.givenSpecs,
   Controls = D.Controls, Given = D.Given, Select = D.Select, Search = D.Search,
-  Range = D.Range, Checkbox = D.Checkbox, Field = D.Field,
-  VegaChart = D.VegaChart;
+  MultiSelect = D.MultiSelect, Range = D.Range, Checkbox = D.Checkbox,
+  TimeRange = D.TimeRange, DEFAULT_TIME_PRESETS = D.DEFAULT_TIME_PRESETS,
+  Field = D.Field, VegaChart = D.VegaChart;
 export default D;
 `;
 

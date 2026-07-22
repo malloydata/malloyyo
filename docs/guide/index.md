@@ -1,54 +1,65 @@
 # Malloyyo
 
-**An 'agentic-native' workflow for data.**
+**An agentic-native workflow for data.**
 
 You describe your data once, in a semantic model. An agent helps you write it,
-tests it against the real thing, and publishes it. From then on, every
-agent — and every human — asks questions through that model instead of writing
-SQL from scratch.
+tests it against real data, and publishes it — and from then on every agent, and
+every human, asks questions through that model instead of writing SQL from
+scratch.
 
-*Agentic-native* means rethinking the workflow to put agents where they're most
-helpful — and removing the interfaces that are no longer necessary once they're
-there. Dashboards are the clearest case: in Malloyyo a dashboard is **code**, and
-there is no visual designer. You don't need one. You ask an agent to make the
-change, and you work alongside it in a test environment until the result is
-exactly what you wanted.
-
-**Agentic-native** and **conversational** are the two drivers of Malloyyo's
-design. Everything below follows from them.
+*Agentic-native* is the idea behind that: put agents where they're most helpful,
+and drop the interfaces that stop being necessary once they're there. Dashboards
+are the clearest case — a Malloyyo dashboard is **code**, so you ask an agent to
+change it and work alongside it in a test environment until it's exactly what you
+wanted. There is no visual designer, because you no longer need one.
+Agentic-native and **conversational** are the two drivers of the design; everything
+below follows from them.
 
 ---
 
 ## The problem
 
-Point an AI at a raw database and it writes SQL from scratch, every time. The
-same question next week produces a different query and a different number.
-Wrong joins, invented columns, fan-out double-counts — and the answer still
-*looks* right, which is the part that hurts.
+**AI plus SQL is not deterministic.** Point an agent at a raw database and it
+writes the query from scratch, every time — reconstructing your business logic
+from documentation and inference as it goes. Ask the same question next week and
+you get a different query and a different number.
 
-// AI + SQL is not deterministic.  When agents have to write complex equations from 
-//  documentation, they make mistakes.  A semantic layer encodes the calculations deterministicly.
+The reconstruction is where it breaks. Anything with a real calculation behind
+it — net revenue, margin, active user, churn — is a formula the agent is
+re-deriving from prose. Wrong joins, invented columns, fan-out double-counts. And
+the answer still *looks* right, which is the part that hurts.
 
-The fix isn't a better prompt. It's giving the AI something to compose against.
+**The fix isn't a better prompt.** A semantic layer encodes those calculations
+once, deterministically, so the agent composes against them instead of
+re-deriving them.
 
-## The shape
+## How it works
 
-Malloyyo is a **semantic model** — measures, dimensions, joins, defined once and
-correctly — plus the workflow around it. Two halves, one loop:
+Malloyyo provides two surfaces, one for one for **creating** it, one for
+**using** it.
 
-- **The `malloyyo` CLI** is where the model gets made. An agent authors it,
-  compiles it, queries real data through it, and rehearses the questions your
-  users will actually ask. You steer from results, not syntax.
-- **The Malloyyo server** is where it gets used. The same model becomes
-  governed MCP tools for agents and a query surface, dashboards, and shared
-  links for humans.
+**Creating** happens in the `malloyyo` CLI. The model is code in a git repo: you
+edit files, compile them, query real data, and test before you ship.  This is what coding agents are
+already good at. You really don't have to know much.  The only command you will end up typing
+yourself is the one to set it up.  An agent is most powerful at the commandline.  
 
-Between them sits **`malloyyo publish`** — compile-gated and versioned. Nothing
-reaches the server that doesn't compile.
+And conversely, because it's code, you're not locked into the agent. Open the folder in VS Code
+with the
+[Malloy extension](https://marketplace.visualstudio.com/items?itemName=malloydata.malloy-vscode)
+and run queries by hand when you'd rather see it yourself.
+
+**Using** is the end product, and it's where the value actually lands. Agents
+reach the published model over MCP as a small set of governed tools. Humans reach
+it through the web app — a query surface, dashboards, and links they can hand to
+a colleague. Both ask their questions *through* the model; neither writes SQL
+against the warehouse.
+
+Between the two sits **`malloyyo publish`** — compile-gated and versioned.
+Nothing reaches the people using it that doesn't compile.
 
 ```
    ┌──────────────────────────────────────────────────────────────┐
-   │  AUTHOR                        cd my-model && claude          │
+   │  CREATE                        cd my-model && claude          │
    │                                                               │
    │   your agent  ──edit──►  *.malloy  ──compile──►  problems[]   │
    │       ▲                     │                        │        │
@@ -61,7 +72,7 @@ reaches the server that doesn't compile.
                           malloyyo publish        (compile-gated, versioned)
                                    │
    ┌───────────────────────────────▼──────────────────────────────┐
-   │  SERVE                            your Malloyyo instance      │
+   │  USE                              your Malloyyo instance      │
    │                                                               │
    │   /mcp  ──── governed tools ────►  claude.ai, any MCP client  │
    │   web   ──── ltool, dashboards, shared links ────►  humans    │
@@ -94,9 +105,12 @@ claude                 # opens in author mode
 ```
 
 `malloyyo init` wires the repo so `claude` starts connected to the **author
-surface** — tools that compile, prettify, and run queries against the files on
-disk. The agent works compiler-in-the-loop: write, compile, read `problems[]`,
-fix, run a real query, look at the numbers. You read results and redirect.
+surface** — tools that claude build semantic models and dashboards
+
+```
+> Build me a dashboard that let's me see an indvidual user's purchase history.
+> Let me see their returns.  Make it filterable by time.
+```
 
 Claude already knows Malloy the way it knows Python, so this goes fast.
 
@@ -120,7 +134,15 @@ join that isn't there. Fix it now, not after someone else hits it.
 
 ## Dashboards are queries
 
-A dashboard is a `.malloy` file. You write a query, tag it, and that's the
+A dashboard is a `.malloy` file inside the semantic model.  This is an important design point.  
+Dashboards are compiled with the model.  They don't rot.
+
+
+The dashboard can be made from one or more
+malloy queries.  A dashboad can use Malloy's simple renderer or can be built in 
+javascript and react.  Either way, Claude can write it for you.
+
+For Malloy's dashboard renderer, you write a query, tag it, and that's the
 dashboard — the filters, the layout, the title, and the drill targets all come
 out of the model:
 
@@ -135,8 +157,8 @@ query: overview is order_items -> {
 }
 ```
 
-Most dashboards contain no JavaScript at all. Preview them locally with
-`malloyyo dashboard dev`; they ship with the model when you publish.
+Dashboard are tested locally.  Simply run `malloyyo dashboard dev`.
+
 
 → **[Dashboards](dashboards.md)**
 

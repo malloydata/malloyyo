@@ -130,9 +130,40 @@ which is not part of the `@malloyyo/dashboard` surface — passes lint and then
 fails when the dashboard is opened. `malloyyo dashboard dev` does bundle, so
 loading each custom dashboard once in the preview is the check that catches it.
 
+## Checking it by hand, in VS Code
+
+Nothing about this workflow requires you to test through an agent. The model is
+plain Malloy in a git repo, so you can open the folder in VS Code with the
+[Malloy extension](https://marketplace.visualstudio.com/items?itemName=malloydata.malloy-vscode)
+and work the way you would on any other code: write a query, run it, look at the
+rendered result, adjust.
+
+This is the fastest loop when you already know what you want to check — a
+measure you're verifying against a number you trust, a join you're not sure
+about, a filter that should have excluded something.
+
+**Your dashboard layouts preview there too**, because the layout tags are the
+extension's own renderer tags. `# dashboard {columns=6}`, `# colspan`, `# break`,
+`# line_chart`, `# bar_chart`, `# shape_map` — run the dashboard's query in VS
+Code and you see the cards laid out the way the runtime will draw them.
+
+What VS Code does **not** know about is the Malloyyo layer on top:
+
+| | |
+|---|---|
+| `# artifact` | Just an unrecognized tag — VS Code won't treat the query as a dashboard |
+| Givens and controls | No control bar; supply given values yourself to run the query |
+| `# drill` | No click-through between dashboards |
+| Custom components | Not rendered at all |
+
+So: **VS Code to check the query and its rendering; `malloyyo dashboard dev` to
+check the dashboard** as a user will meet it. They're complementary, and both are
+faster than publishing to find out.
+
 ## Before you publish
 
-- The questions your users will ask get right answers, in the model's own terms.
+- The questions your users will ask get right answers, in the model's own terms
+  (`malloyyo test`), and the numbers hold up when you check them yourself.
 - Measures reconcile against a number you already trust.
 - `export {}` names exactly the public surface — no staging sources leaking.
 - `malloyyo lint` is clean.

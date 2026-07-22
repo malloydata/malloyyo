@@ -265,8 +265,9 @@ runtime sandboxes it):
 // dashboards/overview.jsx
 import { Controls, Search, VegaChart } from "@malloyyo/dashboard";
 
-// `Panel` is prop-only — it is NOT exported, so importing it fails to bundle.
-export default function Dashboard({ dashboard, givens, Panel }) {
+// A custom component draws the data itself — there is no `<Panel>` / Malloy
+// renderer in the sandbox (`Panel` is not exported; importing it fails to bundle).
+export default function Dashboard({ dashboard, givens }) {
   return (
     <>
       <Controls><Search given="BRAND" /></Controls>
@@ -276,9 +277,11 @@ export default function Dashboard({ dashboard, givens, Panel }) {
 }
 ```
 
-- A **bare `<Panel/>`** renders the whole dashboard (its tiles). A `<Panel
-  query="…"/>` / `<VegaChart query="…"/>` runs a specific query **defined in this
-  dashboard file** (by name, e.g. `"overview"`) or any `source -> view`.
+- **Adding a component opts the dashboard OUT of the Malloy renderer** — you draw
+  the results. Want the renderer back? Delete the component and let the tag render
+  it. `<VegaChart query="…"/>` / `useQuery({query:"…"})` runs a specific query
+  **defined in this dashboard file** (by name, e.g. `"overview"`) or any
+  `source -> view`.
 - `lint` checks each component's `query="…"` still resolves — a component
   pointing at a renamed/removed query fails, not silently blank.
 - For `<VegaChart>` (a Vega-Lite spec over query rows) there is **no `# vega_lite`

@@ -1,11 +1,21 @@
 # Malloyyo
 
-**An agentic-native workflow for data.**
+**An 'agentic-native' workflow for data.**
 
 You describe your data once, in a semantic model. An agent helps you write it,
 tests it against the real thing, and publishes it. From then on, every
 agent — and every human — asks questions through that model instead of writing
 SQL from scratch.
+
+*Agentic-native* means rethinking the workflow to put agents where they're most
+helpful — and removing the interfaces that are no longer necessary once they're
+there. Dashboards are the clearest case: in Malloyyo a dashboard is **code**, and
+there is no visual designer. You don't need one. You ask an agent to make the
+change, and you work alongside it in a test environment until the result is
+exactly what you wanted.
+
+**Agentic-native** and **conversational** are the two drivers of Malloyyo's
+design. Everything below follows from them.
 
 ---
 
@@ -15,6 +25,9 @@ Point an AI at a raw database and it writes SQL from scratch, every time. The
 same question next week produces a different query and a different number.
 Wrong joins, invented columns, fan-out double-counts — and the answer still
 *looks* right, which is the part that hurts.
+
+// AI + SQL is not deterministic.  When agents have to write complex equations from 
+//  documentation, they make mistakes.  A semantic layer encodes the calculations deterministicly.
 
 The fix isn't a better prompt. It's giving the AI something to compose against.
 

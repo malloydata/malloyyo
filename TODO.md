@@ -32,6 +32,20 @@ closes it.
       query-history analytics).
 - [ ] **Whitelisted charting libs for dashboards.** Decide on an allowed set of
       charting libraries for custom dashboard components (deliberately deferred in v2).
+- [ ] **`lint` doesn't resolve component imports.** It transpiles a custom
+      `dashboards/<name>.jsx` (esbuild transform) but never bundles it, so an
+      unresolvable import passes lint and `publish`, then fails at view time with
+      `No matching export … for import "X"`. Reproduced with `import { Panel }`
+      (not in the `@malloyyo/dashboard` export surface): `lint` ✓, `dashboard
+      dev` bundle ✗. Bundle in lint, or resolve the import list against the
+      runtime's exports (`packages/cli/src/lint.ts`, `frame-runtime/index.ts`).
+- [ ] **Decide whether `Panel` is available to custom components.**
+      `frame-runtime/index.ts` deliberately does NOT export it ("you want custom,
+      render it yourself") and the reference repo `~/dev/malloyyo-babynames`
+      follows that — all three components draw their own visuals and hand-roll
+      drill via `postMessage`. But `runtime.tsx:835` still passes `Panel={Panel}`
+      as a prop, so `<Panel/>` works if taken from props. Either drop the prop or
+      export it; the docs now describe the render-yourself rule.
 - [ ] **Filename-coupling is fragile.** A dashboard's `.malloy`, `.jsx`, and
       `# drill { to= }` target are all linked by filename. `lint` now checks the
       links, but consider a less fragile linkage.

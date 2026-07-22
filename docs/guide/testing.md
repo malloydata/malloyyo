@@ -124,6 +124,12 @@ Warnings never fail the lint; errors exit non-zero. **`publish` runs the lint
 first** and refuses to send a broken dashboard, so this is a preview of whether
 your publish will go through. `--skip-lint` overrides it if you need to.
 
+**One thing lint does not catch:** it *transpiles* a custom component, it doesn't
+bundle it, so an import that can't resolve — most easily `import { Panel }`,
+which is not part of the `@malloyyo/dashboard` surface — passes lint and then
+fails when the dashboard is opened. `malloyyo dashboard dev` does bundle, so
+loading each custom dashboard once in the preview is the check that catches it.
+
 ## Before you publish
 
 - The questions your users will ask get right answers, in the model's own terms.

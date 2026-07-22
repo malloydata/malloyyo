@@ -63,7 +63,7 @@ supplied by something other than the model author goes through it:
 
 - **Dashboard suggestion and typeahead queries** — the `# suggest {…}` tag's
   server-side narrowing runs as restricted Malloy.
-- **Ad-hoc panels** — `<Panel malloy=…/>` in a custom dashboard component.
+- **Ad-hoc queries from a custom dashboard component** — `useQuery({ malloy })`.
 - **`runData()`** — the frame runtime's escape hatch for a component that needs
   raw rows.
 

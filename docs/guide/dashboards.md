@@ -230,35 +230,48 @@ Most dashboards don't need one. Add a flat sibling `dashboards/<name>.jsx` (or
 `.tsx`) when you want bespoke layout or charts Malloy's render tags can't do.
 
 The component runs sandboxed: React and `@malloyyo/dashboard` only, no network,
-no credentials. Everything it needs arrives as props:
+no credentials.
+
+**Adding a component opts the dashboard out of the Malloy renderer.** That is
+the trade, and it's deliberate — a custom dashboard draws its own results. There
+is no `<Panel>` to fall back on; it isn't part of the import surface. If what you
+want is the renderer, delete the component and let the tag draw it.
+
+So the shape of a custom component is: pull rows, draw rows.
 
 ```jsx
 // dashboards/overview.jsx
-export default function Dashboard({ Panel, Controls, VegaChart, givens, useGiven }) {
+import { Controls, Search, VegaChart, useQuery } from "@malloyyo/dashboard";
+
+export default function Dashboard({ dashboard }) {
+  const { rows, loading } = useQuery({ query: "overview" });   // this file's query, by name
   return (
     <>
-      <Controls />
-      <Panel />                                       {/* this dashboard */}
-      <Panel query="order_items -> by_month" />       {/* a query in this file */}
+      <h1>{dashboard.title}</h1>
+      <Controls><Search given="BRAND" /></Controls>
+      {loading ? <p>Loading…</p> : <VegaChart spec={spec} data={rows} />}
     </>
   );
 }
 ```
 
-- A bare **`<Panel/>`** renders the whole dashboard. `<Panel query="…"/>` runs a
-  query defined in this dashboard file by name, or a `source -> view`.
-  `<Panel malloy="…"/>` runs ad-hoc Malloy, under the restricted-query rules.
 - **`<Controls/>`** lays out a control for every given the dashboard references;
   `<Given name="BRAND"/>` places one individually, and `Select`, `Search`,
   `MultiSelect`, `Range`, `TimeRange`, and `Checkbox` are available if you want
   to pick the widget yourself.
-- **`useGiven(name)`**, **`useQuery(req)`**, **`useOptions(name)`**, and
-  **`runData(malloy)`** are the hooks, for reading and setting filter state and
-  running queries.
+- **`useQuery({query})`** runs a query defined in this dashboard file by name, or
+  a `source -> view`, and hands you plain rows. **`useQuery({malloy})`** and
+  **`runData(malloy)`** run ad-hoc Malloy under the restricted-query rules.
+  **`useGiven(name)`** and **`useOptions(name)`** read and set filter state.
 - **`filters`** builds valid filter expressions — `filters.oneOf(…)`,
   `filters.between(lo, hi)`, `filters.lastN(n, units)`. Use it rather than
   concatenating strings; escaping matters, and `'Tesla, Inc.'` parses as two
   alternatives if you build it by hand.
+- **Drill is yours to wire.** Nothing draws the affordance for you, so post the
+  message the runtime uses:
+  `parent.postMessage({ type: "navigate", dashboard: "name_explorer", givens: { NAME: filters.oneOf(v) } }, "*")`.
+  Keep those targets in sync with the model's `# drill { to= }` by hand — a
+  component can't read a dimension's drill tag.
 
 `lint` transpiles the component and checks that every hard-coded `query="…"`
 still resolves.

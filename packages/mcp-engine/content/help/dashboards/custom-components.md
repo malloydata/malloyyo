@@ -13,10 +13,12 @@ and theming; the `.malloy` file still owns every query and filter. See also
 
 ```tsx
 import React from "react";
-import { Controls, Given, Search, Select, TimeRange, filters, useGiven } from "@malloyyo/dashboard";
+import { Controls, Given, Search, Select, TimeRange, VegaChart, filters, useQuery } from "@malloyyo/dashboard";
 
-// `Panel` is NOT importable — it arrives as a PROP (importing it fails to bundle).
-export default function Dashboard({ dashboard, givens, Panel }) {
+export default function Dashboard({ dashboard }) {
+  // YOU render the data. useQuery returns plain rows for the dashboard's own
+  // query (or any query named in its .malloy file) — draw them however you like.
+  const { rows, loading } = useQuery({ query: "births_by_decade" });
   return (
     <div style={{ maxWidth: 860, margin: "0 auto", padding: 24 }}>
       <h1>{dashboard.title}</h1>
@@ -32,8 +34,7 @@ export default function Dashboard({ dashboard, givens, Panel }) {
         <Select given="MIN_SAMPLE"
           options={[10, 200, 1000].map(n => ({ value: filters.greaterThan(n), text: `> ${n}` }))} />
       </Controls>
-      <Panel givens={givens} />         {/* the dashboard itself (its tiles/query) */}
-      <Panel query="baby_names -> births_by_decade" givens={givens} />  {/* a specific query */}
+      {loading ? <p>Loading…</p> : <VegaChart spec={spec} data={rows} />}
     </div>
   );
 }
@@ -69,15 +70,22 @@ From `@malloyyo/dashboard` (also handed to the component as props):
   `filters.values(src)`. The stock `<Select/>` does this automatically;
   `<Search/>` deliberately commits raw text (its input IS a filter
   expression).
-- `<Panel/>` is **prop-only — do NOT import it** (it is deliberately not in the
-  `@malloyyo/dashboard` export surface, so `import { Panel }` fails to bundle);
-  take it from props: `function Dashboard({ Panel, givens })`.
-  It runs against the DASHBOARD's own file: a bare `<Panel/>` renders
-  the whole dashboard (its tiles); `<Panel query="…"/>` runs a query defined in
-  the dashboard file (by name) or a `source -> view`; `<Panel malloy="…"/>` and
-  `runData(text, givens)` run arbitrary Malloy as a RESTRICTED query (no import /
-  given: / connection.* / raw SQL / ##! flags — the model's governed surface
-  only). `lint` checks each hard-coded `query="…"` still resolves.
+- **There is NO `<Panel>` in a custom component — you draw the data yourself.**
+  `Panel` is deliberately absent from the `@malloyyo/dashboard` export surface,
+  so `import { Panel }` fails to bundle. The Malloy renderer runs ONLY for a
+  TAG-ONLY dashboard (one with no `<name>.jsx`). **Want the renderer? Delete the
+  component** and let the tag draw it. Want custom? Pull rows and draw them.
+- **Getting rows**: `useQuery({ query: "…" })` runs a query DEFINED in this
+  dashboard's `.malloy` file (by name) or a `source -> view`;
+  `useQuery({ malloy: "…" })` and `runData(text, givens)` run arbitrary Malloy as
+  a RESTRICTED query (no import / given: / connection.* / raw SQL / ##! flags —
+  the model's governed surface only). `lint` checks each hard-coded `query="…"`
+  still resolves.
+- **Drill from a custom component**: nothing draws the affordance for you, so
+  post the same navigate message the runtime uses —
+  `parent.postMessage({ type: "navigate", dashboard: "<slug>", givens: { NAME: filters.oneOf(v) } }, "*")`.
+  Keep the targets in sync with the model's `# drill { to=… }` by hand; there is
+  no runtime API to read a dimension's drill tag from inside the frame.
 
 ## Theming
 
@@ -97,9 +105,9 @@ Vars: `--dash-font`, `--dash-bg`, `--dash-fg`, `--dash-muted`, `--dash-border`,
 `--dash-accent`, `--dash-accent-fg`, `--dash-control-bg`, `--dash-controls-bg`,
 `--dash-chip-bg`, `--dash-chip-fg`, `--dash-panel-bg`, `--dash-radius`,
 `--dash-danger`. `DefaultDashboard` also takes a `theme={{ accent, controlsBg }}`
-prop (camelCase keys → `--dash-*`). The results `<Panel>` keeps a light surface
-in both light/dark (the Malloy renderer has no dark theme) — override
-`--dash-panel-bg` if your renderer output is dark-safe.
+prop (camelCase keys → `--dash-*`). In a TAG-ONLY dashboard the results panel
+keeps a light surface in both light/dark (the Malloy renderer has no dark theme)
+— override `--dash-panel-bg` if your renderer output is dark-safe.
 
 For charts beyond the Malloy renderer's `#` tags, use `<VegaChart>` —
 `yo_help dashboards/vega-charts`.

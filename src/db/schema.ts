@@ -121,6 +121,10 @@ export const datasets = pgTable(
     statusError: text("status_error"),
     githubRepo: text("github_repo"),
     githubBranch: text("github_branch"),
+    // Subdirectory within the repo holding the model (index.malloy, dashboards/,
+    // malloy-config.json). Empty string = repo root. Stored normalized: no
+    // leading/trailing slashes.
+    githubPath: text("github_path").notNull().default(""),
     githubUseToken: boolean("github_use_token").notNull().default(true),
     // Last malloyyo-CLI publish attempt (success OR failure). Failures are recorded here
     // for visibility but never become a servable model version — see the transactional

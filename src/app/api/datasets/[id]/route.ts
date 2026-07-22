@@ -6,6 +6,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { db, datasets, malloyModels, malloyModelFiles, malloyArtifacts, users } from "@/db";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
+import { normalizeGitHubPath } from "@/lib/github";
 
 export const runtime = "nodejs";
 
@@ -71,6 +72,7 @@ export async function GET(
     isPublic: ds.isPublic,
     githubRepo: ds.githubRepo ?? null,
     githubBranch: ds.githubBranch ?? null,
+    githubPath: ds.githubPath || null,
     githubUseToken: ds.githubUseToken,
     userSlug: user?.slug ?? null,
     isAdmin: me ? isAdmin(me) : false,
@@ -115,11 +117,12 @@ export async function PATCH(
   if (!isAdmin(me)) return NextResponse.json({ error: "admin required" }, { status: 403 });
 
   const { id } = await ctx.params;
-  const body = await req.json() as { isPublic?: boolean; githubRepo?: string | null; githubBranch?: string | null; githubUseToken?: boolean };
+  const body = await req.json() as { isPublic?: boolean; githubRepo?: string | null; githubBranch?: string | null; githubPath?: string | null; githubUseToken?: boolean };
   const patch: Record<string, unknown> = {};
   if (body.isPublic !== undefined) patch.isPublic = body.isPublic;
   if (body.githubRepo !== undefined) patch.githubRepo = body.githubRepo ?? null;
   if (body.githubBranch !== undefined) patch.githubBranch = body.githubBranch ?? null;
+  if (body.githubPath !== undefined) patch.githubPath = normalizeGitHubPath(body.githubPath);
   if (body.githubUseToken !== undefined) patch.githubUseToken = body.githubUseToken;
   const [updated] = await db.update(datasets).set(patch).where(eq(datasets.id, id)).returning();
   if (!updated) return NextResponse.json({ error: "not found" }, { status: 404 });

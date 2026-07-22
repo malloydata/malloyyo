@@ -4,7 +4,7 @@
 import { desc, eq } from "drizzle-orm";
 import { modelArtifact, type ArtifactInfo } from "@malloyyo/mcp-engine";
 import { db, datasets, malloyModels, malloyModelFiles, malloyArtifacts } from "@/db";
-import { GitHubURLReader, fetchGitHubFile, listGitHubDir, parseGitHubRepo } from "./github";
+import { GitHubURLReader, fetchGitHubFile, listGitHubDir, parseGitHubRepo, normalizeGitHubPath, joinRepoPath } from "./github";
 import { introspectModelWithReader, withReaderRuntime, fileUrl, type SourceInfo } from "./malloy";
 import { logger } from "./logger";
 
@@ -16,17 +16,18 @@ export async function refreshGitHubModel(datasetId: string): Promise<RefreshResu
   const [ds] = await db.select().from(datasets).where(eq(datasets.id, datasetId));
   if (!ds) return { ok: false, error: "dataset not found" };
   if (!ds.githubRepo) return { ok: false, error: "dataset has no github_repo configured" };
-  logger.info("refreshGitHubModel start", { datasetId, repo: ds.githubRepo, branch: ds.githubBranch ?? "main" });
+  const basePath = normalizeGitHubPath(ds.githubPath);
+  logger.info("refreshGitHubModel start", { datasetId, repo: ds.githubRepo, branch: ds.githubBranch ?? "main", path: basePath });
 
   const { owner, repo } = parseGitHubRepo(ds.githubRepo);
   const branch = ds.githubBranch ?? "main";
 
-  const reader = new GitHubURLReader(owner, repo, branch, ds.githubUseToken);
+  const reader = new GitHubURLReader(owner, repo, branch, ds.githubUseToken, basePath);
 
-  // Fetch malloy-config.json from repo root — optional, absent in most repos.
+  // Fetch malloy-config.json from the model root — optional, absent in most repos.
   let malloyConfig: string | undefined;
   try {
-    malloyConfig = await fetchGitHubFile(owner, repo, branch, "malloy-config.json", {
+    malloyConfig = await fetchGitHubFile(owner, repo, branch, joinRepoPath(basePath, "malloy-config.json"), {
       useToken: ds.githubUseToken,
     });
   } catch {
@@ -47,7 +48,7 @@ export async function refreshGitHubModel(datasetId: string): Promise<RefreshResu
   // discovery. Non-fatal: a broken dashboard never fails the model refresh.
   const dashboards: Array<{ base: string; artifact: ArtifactInfo }> = [];
   try {
-    const entries = await listGitHubDir(owner, repo, branch, "dashboards", { useToken: ds.githubUseToken });
+    const entries = await listGitHubDir(owner, repo, branch, joinRepoPath(basePath, "dashboards"), { useToken: ds.githubUseToken });
     const bases = entries
       .filter((e) => e.type === "file" && e.name.endsWith(".malloy"))
       .map((e) => e.name.slice(0, -".malloy".length))
@@ -83,7 +84,7 @@ export async function refreshGitHubModel(datasetId: string): Promise<RefreshResu
       datasetId: ds.id,
       version: nextVersion,
       source: indexContent,
-      generatedBy: `github:${ds.githubRepo}@${branch}`,
+      generatedBy: `github:${ds.githubRepo}@${branch}${basePath ? `/${basePath}` : ""}`,
       compiledAt: new Date(),
       sources: result.sources,
     })
@@ -113,7 +114,7 @@ export async function refreshGitHubModel(datasetId: string): Promise<RefreshResu
       let source = "";
       for (const ext of ["jsx", "tsx"]) {
         try {
-          source = await fetchGitHubFile(owner, repo, branch, `dashboards/${base}.${ext}`, { useToken: ds.githubUseToken });
+          source = await fetchGitHubFile(owner, repo, branch, joinRepoPath(basePath, `dashboards/${base}.${ext}`), { useToken: ds.githubUseToken });
           break;
         } catch {
           // no component with this extension — try the next / render the default

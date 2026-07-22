@@ -17,6 +17,7 @@ type DatasetDetail = {
   isAdmin: boolean;
   githubRepo: string | null;
   githubBranch: string | null;
+  githubPath: string | null;
   dashboards: Array<{ name: string; title: string; manifest: Record<string, unknown>; source: string }>;
   lastPublish: {
     at: string;
@@ -187,6 +188,7 @@ export default function DatasetPage({
           datasetId={data.id}
           initialRepo={data.githubRepo}
           initialBranch={data.githubBranch}
+          initialPath={data.githubPath}
           onRefreshed={(model) => setData((d) => d ? { ...d, malloyModel: model } : d)}
         />
       )}
@@ -478,15 +480,18 @@ function GitHubConfig({
   datasetId,
   initialRepo,
   initialBranch,
+  initialPath,
   onRefreshed,
 }: {
   datasetId: string;
   initialRepo: string | null;
   initialBranch: string | null;
+  initialPath: string | null;
   onRefreshed: (model: MalloyModelSummary) => void;
 }) {
   const [repo, setRepo] = useState(initialRepo ?? "");
   const [branch, setBranch] = useState(initialBranch ?? "main");
+  const [path, setPath] = useState(initialPath ?? "");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [flash, setFlash] = useState("");
@@ -494,7 +499,8 @@ function GitHubConfig({
 
   const savedRepo = initialRepo ?? "";
   const savedBranch = initialBranch ?? "main";
-  const dirty = repo !== savedRepo || branch !== savedBranch;
+  const savedPath = initialPath ?? "";
+  const dirty = repo !== savedRepo || branch !== savedBranch || path !== savedPath;
 
   async function saveConfig() {
     setSaving(true);
@@ -502,7 +508,7 @@ function GitHubConfig({
     const res = await fetch(`/api/datasets/${datasetId}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ githubRepo: repo || null, githubBranch: branch || null, githubUseToken: true }),
+      body: JSON.stringify({ githubRepo: repo || null, githubBranch: branch || null, githubPath: path, githubUseToken: true }),
     });
     setSaving(false);
     if (!res.ok) { setError("save failed"); return; }
@@ -524,7 +530,7 @@ function GitHubConfig({
       <section className="border border-gray-200 dark:border-gray-800 rounded p-4 space-y-3">
         <h2 className="text-sm font-semibold">GitHub model</h2>
         <p className="text-xs text-gray-500 dark:text-gray-400">
-          Repo must have an <code>index.malloy</code> at its root. Imports are resolved from the same repo and branch.
+          Repo must have an <code>index.malloy</code> at its root (or under the path, if set). Imports are resolved from the same repo and branch.
         </p>
         <div className="flex gap-2">
           <label className="flex-1">
@@ -537,6 +543,12 @@ function GitHubConfig({
             <span className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Branch</span>
             <input type="text" value={branch} onChange={(e) => setBranch(e.target.value)}
               placeholder="main"
+              className="w-full rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-1.5 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/40" />
+          </label>
+          <label className="w-36">
+            <span className="block text-xs text-gray-500 dark:text-gray-400 mb-1">Path (optional)</span>
+            <input type="text" value={path} onChange={(e) => setPath(e.target.value)}
+              placeholder="malloy/"
               className="w-full rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-3 py-1.5 font-mono text-xs focus:outline-none focus:ring-2 focus:ring-blue-500/40" />
           </label>
         </div>

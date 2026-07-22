@@ -19,6 +19,12 @@ Malloyyo is the thin layer that serves that model:
 
 Try [the demo server](https://malloyyo.vercel.app/) and "Explore further with Claude" — sign in with any Google account.
 
+> **📖 [Read the guide](docs/guide/index.md)** — what Malloyyo is and how it
+> works, [authoring](docs/guide/authoring.md) and
+> [testing](docs/guide/testing.md) a semantic model,
+> [dashboards](docs/guide/dashboards.md), [publishing](docs/guide/publishing.md),
+> and [running a server](docs/guide/server-setup.md).
+
 **Questions, or built something cool? We'd love to hear from you.** Come say hi on [Slack](https://join.slack.com/t/malloy-community/shared_invite/zt-2dvtske75-TJQfolRtZGXLS24RhTQ79g), and learn more about Malloy at [malloydata.dev](https://www.malloydata.dev) and in the [documentation](https://docs.malloydata.dev).
 
 ## How it works

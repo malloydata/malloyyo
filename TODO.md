@@ -53,9 +53,6 @@ closes it.
 
 - [ ] **Revisit the dataset page.** `src/app/datasets/[id]/page.tsx` is rough —
       needs a redesign pass.
-- [ ] **Move "Refresh from GitHub" to the top of the dataset page.** Currently
-      mid-page (~the "Refresh from GitHub" button + `RefreshModal`). Fold into the
-      dataset-page redesign above.
 
 ## Docs
 

@@ -150,6 +150,18 @@ export default function DatasetPage({
         )}
       </header>
 
+      {/* Top of the page: the repo this model comes from and the button that
+          pulls it again. It's the control people come here to use, so it leads
+          rather than sitting below the status/dashboards/model sections. */}
+      {data.isAdmin && data.githubRepo && (
+        <GitHubConfig
+          datasetId={data.id}
+          initialRepo={data.githubRepo}
+          initialBranch={data.githubBranch}
+          onRefreshed={(model) => setData((d) => d ? { ...d, malloyModel: model } : d)}
+        />
+      )}
+
       <section className="border border-gray-200 dark:border-gray-800 rounded p-4 space-y-2">
         <div className="flex items-center gap-3">
           <StatusBadge status={data.status} />
@@ -181,15 +193,6 @@ export default function DatasetPage({
       )}
 
       {data.lastPublish && <LastPublishBanner lastPublish={data.lastPublish} />}
-
-      {data.isAdmin && data.githubRepo && (
-        <GitHubConfig
-          datasetId={data.id}
-          initialRepo={data.githubRepo}
-          initialBranch={data.githubBranch}
-          onRefreshed={(model) => setData((d) => d ? { ...d, malloyModel: model } : d)}
-        />
-      )}
 
       {data.malloyModel && (
         data.malloyModel.files

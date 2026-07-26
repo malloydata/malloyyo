@@ -12,8 +12,8 @@ and drop the interfaces that stop being necessary once they're there. Dashboards
 are the clearest case — a Malloyyo dashboard is **code**, so you ask an agent to
 change it and work alongside it in a test environment until it's exactly what you
 wanted. There is no visual designer, because you no longer need one.
-Agentic-native and **conversational** are the two drivers of the design; everything
-below follows from them.
+**Agentic-native** and **conversational** are the two drivers of the design;
+everything below follows from them.
 
 ---
 
@@ -35,18 +35,21 @@ re-deriving them.
 
 ## How it works
 
-Malloyyo provides two surfaces, one for one for **creating** it, one for
-**using** it.
+At the center is a **semantic model** — your data, described once. Around it are
+two interfaces: one for **creating** the model, one for **using** it.
 
 **Creating** happens in the `malloyyo` CLI. The model is code in a git repo: you
-edit files, compile them, query real data, and test before you ship.  This is what coding agents are
-already good at. You really don't have to know much.  The only command you will end up typing
-yourself is the one to set it up.  An agent is most powerful at the commandline.  
+edit files, compile them, query real data, and test before you ship. This is
+what coding agents are already good at, and it's where an agent is most
+powerful — at the command line, in a repo. You don't have to know much Malloy;
+you describe what you want and steer from the results. The handful of commands
+you type yourself are setup and the checkpoints — test, publish — not the
+modeling.
 
-And conversely, because it's code, you're not locked into the agent. Open the folder in VS Code
-with the
+Because it's code, you're also not locked into the agent. Open the folder in VS
+Code with the
 [Malloy extension](https://marketplace.visualstudio.com/items?itemName=malloydata.malloy-vscode)
-and run queries by hand when you'd rather see it yourself.
+and write and run queries by hand whenever you'd rather see it yourself.
 
 **Using** is the end product, and it's where the value actually lands. Agents
 reach the published model over MCP as a small set of governed tools. Humans reach
@@ -87,7 +90,7 @@ Nothing reaches the people using it that doesn't compile.
 That last arrow is the point. The questions your model can't answer are the
 best possible spec for the next version of it.
 
-## Authoring is a conversation
+## Creating is a conversation
 
 You do not have to know Malloy. Install the CLI, set up a repo, and start
 Claude Code in it:

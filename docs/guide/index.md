@@ -1,13 +1,139 @@
 # Malloyyo
 
-**An agentic-native workflow for data.**
+**A Semantic data model and an agentic-native workflow.**
 
-You describe your data once, in a semantic model. An agent helps you write it,
-tests it against real data, and publishes it — and from then on every agent, and
-every human, asks questions through that model instead of writing SQL from
-scratch.
+Semantic data models improve the accuracy of working with AI and data.  Semantic data models encode 
+aggregate and scalar calculatations, join relationships, filtering and other nuances in producing 
+accurate results.
 
-*Agentic-native* is the idea behind that: put agents where they're most helpful,
+Semantic data models are used to emit SQL to query data.  
+
+When an AI writes SQL, it must first 
+ingest all the rules around the data. The AI needs to know
+
+  * the schema for the tables
+  * which columns to join on
+  * what data to exclude when writing queries
+  * How to calculation simple and commplex things
+  * How to map as set complex things to simple ones (15 kinds of statuses to 3 kinds)
+
+Every time an AI writes ones of these queries, it has to reload all this context.
+
+**but wait! AIs + SQL are so cool!**
+
+AIs have gotten quite proficient in writing SQL.  If you work in data, I'm sure you've tried it 
+and been amazed.  AIs can write complex, correct SQL simply by asking.  The problem is not the AI, 
+the problem is SQL itself.  
+
+A SQL query in isolation is just fine.  Two SQL queries that are 'mostly' the same is the problem.
+When and AI or a human distills a context to SQL there are suble differences.  "What timezone are we 
+in?".  "Are you accounting for returns when you compute revenue?".   These are all things that are
+encoded into the semantic data model.  
+
+There is is a ton of good research about why you should use a semantic data model if you are serious 
+data.
+
+[1]: Rumiantsau & Fokeev, ["Semantic Layers for Reliable LLM-Powered Data
+    Analytics: A Paired Benchmark of Accuracy and Hallucination Across Three
+    Frontier Models"](https://arxiv.org/abs/2604.25149), arXiv:2604.25149 (2026)
+    — adding a semantic document to the schema improved accuracy by +17 to +23
+    percentage points across three frontier models.
+
+[2: Choi, ["Fact-Consistency Evaluation of Text-to-SQL Generation for Business
+    Intelligence Using Exaone 3.5"](https://arxiv.org/abs/2505.00060),
+    arXiv:2505.00060 (2025) — on real enterprise BI data, accuracy fell from 93%
+    on simple aggregations to 4% on arithmetic reasoning without explicit
+    business semantics.
+
+[3]: Lee, Kim & Hwang, ["Bootstrapping Semantic Layer from Execution for
+    Text-to-SQL"](https://arxiv.org/abs/2606.05634), arXiv:2606.05634 (2026) —
+    supplying the missing semantic layer consistently improves text-to-SQL over
+    strong baselines.
+
+[3]: Gartner, ["Lack of Semantics Causes Inaccurate AI Agents and Wasted
+    Spending"](https://www.gartner.com/en/newsroom/press-releases/2026-05-11-gartner-says-lack-of-semantics-causes-inaccurate-artificial-intelligence-agents-and-wasted-spending)
+    (May 2026) — projects that prioritizing semantics in AI-ready data will
+    increase GenAI accuracy by up to 80% and reduce costs up to 60% by 2027.
+
+**At the core of Malloyyo is Malloy**
+
+The Malloy language (the language behind Malloyyo), is more ambitious than other semantic data models.
+In the Malloy language, you not only write the calculations and joins, but you also write the 
+common queires that are useful with the dataset.  Malloy has a very rich query language that let's
+you express complex things quite simply.  But don't worry, the language can be used bythe AI, its not something
+you need to deeply understand. 
+
+**How Malloyyo works**
+
+The goal of Malloyyo's development experience is designed to replacate that experience 
+fantastic agentic experience you might of had asking an AI to write a SQL query for you.
+
+The, "I just asked and it built this crazy thing for me". Is what we are going for.  But
+instead of having the AI write SQL, we're having it write something thiat is more 'deterministic' 
+(you get the same thing, everytime you ask the same question) and something that is
+maintainable.
+
+The goal is that you an use AI to help build can Malloy 'context' simply by asking AI
+and pointing it at some source materials.  AIs know Malloy in the same way they know
+Python.  They can build a Malloy model, simply by asking.  
+
+Once the model is built, many people can ask questions of the data and get reliable and consistent 
+answers.
+
+I like to say that Malloyyo is   *Agentic-native*  - The creation interface is conversational 
+instead of usual drag and drop of traditional BI.  Everything from the semantic model to building 
+dashboards to doing analysis is converstational. No need to draw and wire dashboards.  No need
+built notebooks.  Conversations do yield artifacts like Dashboards and Notebooks, but the the builder
+is your voice. AI are your 'hands'
+
+Let's see how it works.  
+
+First, install malloyyo
+
+```
+npm install -g @malloydata/malloyyo
+```
+
+Next initialize malloy and ask it to build a semantic model.
+
+```
+$ malloyyo init
+$ claude
+──────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ Go into bigquery examin the dataset, retai and build me a semantic model around retail transactions.
+  YOu can look in folder ../code for the SQL Alchemy ORM for reference.  I'm going to paste a document
+  that contains some SQL queries wthat we currently use.  Can you make sure that the model can
+  run these queries?  Verify that we're getting the same results
+────────────────────────────────────────────────────────────────────────────────────────────────────────── 
+
+```
+
+The AI will crunches away for a while, maybe asks you some questions.
+
+
+Now we have our semantic model. In a separate shell  run `malloyyo test`.  This will launch claude.  
+You test the robustness of the model by asking questions.
+
+```
+$ malloyyo test  
+──────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ Has there been any recent changes in purchasing patterns from our customers?  
+────────────────────────────────────────────────────────────────────────────────────────────────────────── 
+```
+
+As you test, you might find things you want to change.  Ask once claude to make the change and the other 
+to try and use it.
+
+When you are happy with your model, you can publish it on a Malloyyo server so any AI surface that supports 
+MCP can use it.  
+
+```
+$ malloyyo publish http://...
+```
+
+
+
+is the idea behind that: put agents where they're most helpful,
 and drop the interfaces that stop being necessary once they're there. Dashboards
 are the clearest case — a Malloyyo dashboard is **code**, so you ask an agent to
 change it and work alongside it in a test environment until it's exactly what you
@@ -214,3 +340,6 @@ Malloy itself is documented at [malloydata.dev](https://www.malloydata.dev) and
 [docs.malloydata.dev](https://docs.malloydata.dev). Questions, or built
 something good? Come say hi on
 [Slack](https://join.slack.com/t/malloy-community/shared_invite/zt-2dvtske75-TJQfolRtZGXLS24RhTQ79g).
+
+---
+

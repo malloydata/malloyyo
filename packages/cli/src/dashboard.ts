@@ -23,115 +23,20 @@
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
-import { createRequire } from "node:module";
 import * as esbuild from "esbuild";
 import { makeRunner, type GivenSpec, type ModelRunner, type TileSpec } from "./host.js";
+import { givensFromSearch } from "./shared/givens-url.js";
+import { navHtml as sharedNav, NAV_CSS } from "./shared/nav.js";
+import {
+  discoverDashboards,
+  hostAliasPlugin,
+  resolveRuntimeDir,
+  type Dashboard,
+} from "./discover.js";
 
-// The dashboard's Dashboard.tsx lives in the user's model repo, which may be
-// anywhere on disk (outside this monorepo). Its `react` / automatic-JSX imports
-// must resolve to the CLI's OWN copies, not the model repo's node_modules (which
-// usually don't exist). Resolve them once from here and alias them at bundle time.
-const require = createRequire(import.meta.url);
-const HOST_LIBS = [
-  "react",
-  "react-dom",
-  "react-dom/client",
-  "react/jsx-runtime",
-  "react/jsx-dev-runtime",
-  "@malloydata/render",
-  "@malloydata/malloy-filter",
-];
-const HOST_ALIAS: Record<string, string> = {};
-for (const spec of HOST_LIBS) {
-  try {
-    HOST_ALIAS[spec] = require.resolve(spec);
-  } catch {
-    /* optional (jsx-dev-runtime may be absent) */
-  }
-}
-
-/** A dashboard = a `# artifact`-tagged query, plus an optional custom component. */
-interface Dashboard {
-  name: string;
-  query: string;
-  title: string;
-  description?: string;
-  /** Composite dashboard: tile run-expressions run separately and combined into
-      one `# dashboard` result. Present iff composite (then `query` is ""). */
-  tiles?: string[];
-  /** Composite only: pass-through to the dashboard nest's `columns`. */
-  dashboard_columns?: number;
-  /** Per-dashboard given defaults from the tag's `givens { … }` block. */
-  givens?: Record<string, string | number | boolean>;
-  /** `# artifact { autorun=false }` → stage control changes behind an Apply
-      button. Absent = live (re-run on every change). */
-  autorun?: boolean;
-  /** Structure v2: the dashboard's own file, relative to the project root
-      (`dashboards/<name>.malloy`) — compiled AS the entry to run its tiles. */
-  entryFile?: string;
-  /** Path to the optional custom component: `dashboards/<name>.jsx` (or .tsx). */
-  tsxPath?: string;
-}
-
-/** Runtime source files, resolved whether we're running from src/ (tsx dev),
-    the built dist/ (published install — copy-frame-src.mjs ships it alongside
-    index.js), or a built dist/ next to a sibling src/ (local checkout). */
-function resolveRuntimeDir(): string {
-  const candidates = [
-    new URL("./frame-runtime/", import.meta.url), // src/dashboard.ts (tsx) OR dist/index.js (published)
-    new URL("../src/frame-runtime/", import.meta.url), // built dist/ next to sibling src/ (checkout)
-  ].map((u) => fileURLToPath(u));
-  const found = candidates.find((c) => fs.existsSync(c));
-  if (!found) {
-    throw new Error(
-      "frame-runtime/ not found next to the CLI (looked in ./frame-runtime and " +
-        "../src/frame-runtime). A published install should ship it in dist/; " +
-        "reinstall the CLI, or rebuild with `npm run build`.",
-    );
-  }
-  return found;
-}
 const resolveFrameEntry = (): string => path.join(resolveRuntimeDir(), "..", "frame-entry.tsx");
 const resolveInPageEntry = (): string => path.join(resolveRuntimeDir(), "..", "frame-inpage-entry.tsx");
 
-/** esbuild plugin: force react / renderer / filter-parser imports to the CLI's
-    OWN copies, whatever directory the (possibly external) model repo lives in. */
-const hostAliasPlugin: esbuild.Plugin = {
-  name: "host-alias",
-  setup(b) {
-    b.onResolve(
-      { filter: /^(react($|\/)|react-dom($|\/)|@malloydata\/(render|malloy-filter)$)/ },
-      (args) => (HOST_ALIAS[args.path] ? { path: HOST_ALIAS[args.path] } : undefined),
-    );
-  },
-};
-
-/** Structure v2: each `dashboards/<name>.malloy` is one dashboard, compiled AS
-    its own entry to read its `## artifact`. The optional custom component is a
-    flat sibling `dashboards/<name>.jsx` (or .tsx). A `.malloy` with no
-    `## artifact` is skipped (e.g. a shared include). */
-async function discoverDashboards(root: string, runner: ModelRunner): Promise<Dashboard[]> {
-  const dir = path.join(root, "dashboards");
-  if (!fs.existsSync(dir)) return [];
-  const files = fs
-    .readdirSync(dir)
-    .filter((f) => f.endsWith(".malloy"))
-    .sort();
-  const dashboards: Dashboard[] = [];
-  for (const file of files) {
-    const base = file.slice(0, -".malloy".length);
-    const entryFile = path.join("dashboards", file); // relative to root (leaseIn joins it)
-    const res = await runner.artifactForFile(entryFile, base);
-    if (!res.ok) throw new Error(`dashboard ${file}: ${res.error}`);
-    if (!res.artifact) continue; // no `## artifact` in this file — not a dashboard
-    const component = ["jsx", "tsx"]
-      .map((ext) => path.join(dir, `${base}.${ext}`))
-      .find((p) => fs.existsSync(p));
-    dashboards.push({ ...res.artifact, name: res.artifact.name || base, entryFile, tsxPath: component });
-  }
-  return dashboards;
-}
 
 const esc = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
@@ -235,28 +140,15 @@ function makeInPageBundler() {
 
 const html = (body: string, title: string) =>
   `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>` +
-  `<meta name="viewport" content="width=device-width,initial-scale=1"></head>` +
+  `<meta name="viewport" content="width=device-width,initial-scale=1">` +
+  `<style>${NAV_CSS}</style></head>` +
   `<body style="margin:0">${body}</body></html>`;
 
-/** The dashboard switcher nav (shown when a repo declares more than one). */
+/** The dev server's link shape for the shared switcher: `/?d=<name>`. The bar
+    itself (markup, brand, styling) lives in shared/nav so dev and every bundle
+    target render the same thing. */
 function navHtml(dash: Dashboard, all: Dashboard[]): string {
-  if (all.length <= 1) return "";
-  return (
-    `<nav style="display:flex;gap:4px;align-items:center;padding:8px 12px;` +
-    `background:#f6f7f9;border-bottom:1px solid #e2e4e8;font:13px system-ui,sans-serif">` +
-    `<span style="color:#888;margin-right:8px">Dashboards</span>` +
-    all
-      .map((x) => {
-        const on = x.name === dash.name;
-        return (
-          `<a href="/?d=${encodeURIComponent(x.name)}" style="padding:4px 10px;` +
-          `border-radius:6px;text-decoration:none;${on ? "background:#1a1a1a;color:#fff" : "color:#333"}">` +
-          `${esc(x.title || x.name)}</a>`
-        );
-      })
-      .join("") +
-    `</nav>`
-  );
+  return sharedNav(dash.name, all, (n) => `/?d=${encodeURIComponent(n)}`);
 }
 
 /** Shell for a TAG-ONLY dashboard: NO iframe. The runtime's DefaultDashboard
@@ -356,9 +248,7 @@ window.addEventListener('message',async(e)=>{
 
 /** URL query minus the `d` (dashboard) selector = the givens/filter values. */
 function givensFromUrl(url: URL): Record<string, string> {
-  const g: Record<string, string> = {};
-  for (const [k, v] of url.searchParams) if (k !== "d") g[k] = v;
-  return g;
+  return givensFromSearch(url.search);
 }
 
 function frameDoc(

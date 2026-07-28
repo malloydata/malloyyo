@@ -16,10 +16,12 @@
     "src",
     "test"
   ],
-  "comment": "frame-entry.tsx + frame-runtime/ are browser JSX bundled at runtime by esbuild (and into the hosted vendor asset), never imported by node code — kept out of the node typecheck.",
+  "comment": "frame-*.tsx entries + frame-runtime/ are browser JSX bundled by esbuild (at runtime by `dashboard dev`, at build time by `dashboard bundle`, and into the hosted vendor asset), never imported by node code — kept out of the node typecheck. shims/ are browser CJS aliases for the same bundles.",
   "exclude": [
     "src/frame-entry.tsx",
     "src/frame-inpage-entry.tsx",
-    "src/frame-runtime"
+    "src/frame-wasm-entry.tsx",
+    "src/frame-runtime",
+    "src/shims"
   ]
 }

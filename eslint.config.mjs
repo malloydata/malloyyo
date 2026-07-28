@@ -22,7 +22,10 @@ const eslintConfig = defineConfig([
     // constraints). Includes the CLI frame runtime and example dashboards.
     "packages/cli/src/frame-entry.tsx",
     "packages/cli/src/frame-inpage-entry.tsx",
+    "packages/cli/src/frame-wasm-entry.tsx",
     "packages/cli/src/frame-runtime/**",
+    // Browser shims aliased into those bundles (CJS, no types by design).
+    "packages/cli/src/shims/**",
     "examples/**",
     // Generated at build time (react + renderer vendor bundle for dashboards).
     "public/dashboard-vendor.js",

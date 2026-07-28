@@ -66,3 +66,22 @@ export function mountInPage(opts: {
   // the reset). Returns the React root so the caller can unmount() on teardown.
   return mount(DefaultDashboard, WIDGETS, opts.root, { bodyReset: false });
 }
+
+/** Static-site entry (`malloyyo dashboard bundle`): like mountInPage, but mounts
+    the dashboard's OWN component when it has one. The published site has no
+    server and no iframe — the host runs Malloy + DuckDB-WASM in this same page,
+    so there is no trust boundary to sandbox across and custom and tag-only
+    dashboards can share one mount. A null Dashboard falls back to
+    DefaultDashboard, exactly as mountDashboard does. */
+export function mountStatic(
+  Dashboard: unknown,
+  opts: {
+    root: HTMLElement;
+    run: (req: { query?: string; malloy?: string }, givens: Record<string, unknown>) => Promise<unknown>;
+    navigate: (dashboard: string, givens: Record<string, unknown>) => void;
+    syncGivens: (givens: Record<string, unknown>) => void;
+  },
+): { unmount: () => void } {
+  setHost({ run: opts.run, navigate: opts.navigate, syncGivens: opts.syncGivens });
+  return mount(Dashboard ?? DefaultDashboard, WIDGETS, opts.root, { bodyReset: false });
+}

@@ -6,6 +6,26 @@ closes it.
 
 ## Dashboards
 
+- [ ] **Enforce: a dashboard's imports must be exactly the model entry file.**
+      `dashboards/*.malloy` may import `index.malloy` and nothing else. Today
+      that's convention only — `lint` compiles each dashboard as its own entry and
+      never checks where the names came from, so `import "../ecommerce.malloy"`
+      passes while quietly regaining sources the entry file doesn't export. In
+      `~/dev/malloyyo-babynames` that transitive import reached `baby_names_table`
+      (`md.table(...)`) — the raw table, past the `include { private: year, number }`
+      shaping. Enforcing it makes every dashboard-local definition composition over
+      the published surface, so every tile rebases to restricted query text — which
+      is what lets a tile open in LTool or hand off to Claude without inventing a
+      per-query compile root. It also forces each given's `# suggest {…}` referents
+      to be declared exports rather than accidental transitive ones. Both reference
+      repos (`malloyyo-babynames`, `malloyyo-ecommerce`) are already converted and
+      lint green, so the check should pass on day one. Add it in
+      `packages/cli/src/lint.ts` and again at publish so a hosted model can't drift.
+      Note this leans on `export {}`, which today curates *discovery* only —
+      `exportedOnly` is applied on the `list_sources` path (`src/lib/mcp-host.ts`)
+      while `describe_source`/`query` with an explicit `model_ref` still reach a
+      non-exported source. Import-level enforcement here doesn't close that back
+      door; the two want deciding together.
 - [ ] **New multi-tile dashboard layout.** Design a layout for dashboards that
       show several tiles at once — beyond today's grid (`# dashboard` bounded-box
       cards, 361px cap; `packages/cli/src/frame-runtime/`). Wants sizing/placement

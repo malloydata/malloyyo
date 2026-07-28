@@ -12,7 +12,9 @@ import {
   drillFieldNames,
   humanizeSlug,
   markDrillableCells,
+  rebuildDrillQuery,
   resolveDrill,
+  resolveDrillViews,
   type CellClickPayload,
 } from "../../packages/cli/src/frame-runtime/drill";
 
@@ -21,18 +23,36 @@ interface Props {
   /** The dataset the query ran against — drill targets are dashboards inside it.
       Without it a drill has nowhere to go, so the affordance stays off. */
   datasetId?: string | null;
+  /** Opt in to generic cell drilling: clicking any cell — including a MEASURE —
+      hands back the Malloy that isolates the rows behind it. Supplied by ltool,
+      which runs it in place. Omitted (the default) leaves drilling off, so a
+      read-only embed doesn't grow clickable cells. */
+  onDrillQuery?: (malloy: string) => void;
 }
 
 type MenuItem = { label: string; run: () => void };
 type Menu = { x: number; y: number; items: MenuItem[] };
 
-export function MalloyResultView({ stableResult, datasetId }: Props) {
+export function MalloyResultView({ stableResult, datasetId, onDrillQuery }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
   const [menu, setMenu] = useState<Menu | null>(null);
+  // A `# drill { to= }` dimension and generic cell drilling are two handlers on
+  // the same click: the renderer fires onClick on the inner cell, then its own
+  // drill handler on the enclosing div. An explicit tag wins, so when onClick
+  // navigates we set this and onDrill stands down for that one event.
+  const handledByTag = useRef(false);
+  // `# drill { view=[…] }` on the clicked cell. onClick fires first and is the
+  // only place the field's tag is available; onDrill supplies the clauses. This
+  // carries the views between them, per click.
+  const pendingViews = useRef<string[]>([]);
+  const pendingAt = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
 
   const onCellClick = useCallback(
     (payload: CellClickPayload) => {
+      const ev0 = payload.event ?? {};
+      pendingViews.current = resolveDrillViews(payload);
+      pendingAt.current = { x: ev0.clientX ?? 0, y: ev0.clientY ?? 0 };
       if (!datasetId) return;
       const drill = resolveDrill(payload);
       if (!drill) return;
@@ -40,6 +60,7 @@ export function MalloyResultView({ stableResult, datasetId }: Props) {
       // of its own, so only real dashboard targets are offered here.
       const dests = drill.dests.filter((d) => d !== "self");
       if (!dests.length) return;
+      handledByTag.current = true;
       const go = (dest: string) => {
         const u = new URL(`/datasets/${datasetId}/dashboard/${encodeURIComponent(dest)}`, window.location.origin);
         // Givens are `$`-prefixed in dashboard URLs (see the dashboard page).
@@ -68,11 +89,41 @@ export function MalloyResultView({ stableResult, datasetId }: Props) {
       if (cancelled || !container) return;
       const renderer = new MalloyRenderer({});
       const viz = renderer.createViz({
-        tableConfig: { enableDrill: false },
+        // Generic drilling routes EVERY cell (measures included) through the
+        // renderer's own walk, which climbs the result tree from the clicked
+        // cell collecting the filters that pin it. Only on when a host asked.
+        tableConfig: { enableDrill: !!onDrillQuery },
         scrollEl: container,
         // Clicking a `# drill`-tagged dimension opens the dashboard it points at
         // (no-op for every other cell).
         onClick: onCellClick,
+        onDrill: onDrillQuery
+          ? (d: { query?: string; whereClause?: string }) => {
+              const views = pendingViews.current;
+              pendingViews.current = [];
+              if (handledByTag.current) {
+                handledByTag.current = false;
+                return;
+              }
+              if (!d.query) return;
+              // No `# drill { view= }` on this field — fall back to the
+              // renderer's own `+ { select: * }` (every column of the raw rows).
+              // No givens in ltool — a clause naming one is dropped rather than
+              // resolved against the model's default.
+              const shape = (v: string | null) =>
+                rebuildDrillQuery(d.query!, v, d.whereClause ?? "", {}) ?? d.query!;
+              if (!views.length) return onDrillQuery(shape(null));
+              if (views.length === 1) return onDrillQuery(shape(views[0]));
+              setMenu({
+                x: pendingAt.current.x,
+                y: pendingAt.current.y,
+                items: views.map((v) => ({
+                  label: humanizeSlug(v),
+                  run: () => onDrillQuery(shape(v)),
+                })),
+              });
+            }
+          : undefined,
       });
       viz.setResult(stableResult as Parameters<typeof viz.setResult>[0]);
       viz.render(container);
@@ -98,7 +149,7 @@ export function MalloyResultView({ stableResult, datasetId }: Props) {
       observer?.disconnect();
       vizCleanup?.();
     };
-  }, [stableResult, datasetId, onCellClick]);
+  }, [stableResult, datasetId, onCellClick, onDrillQuery]);
 
   return (
     <>

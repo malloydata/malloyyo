@@ -214,7 +214,7 @@ function StarButton({
   );
 }
 
-export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { initialSlug?: string; initialSource?: string; initialDatasetId?: string }) {
+export function LtoolApp({ initialSlug, initialSource, initialDatasetId, initialMalloy }: { initialSlug?: string; initialSource?: string; initialDatasetId?: string; initialMalloy?: string }) {
   const [items, setItems] = useState<HistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<HistoryItem | null>(null);
@@ -327,6 +327,23 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
     }
   }, []);
 
+  // Drilling a result cell replaces the query in place: the drill Malloy is a
+  // complete `run:` against the same source, so ltool just becomes the drilled
+  // query. Runs as a fresh query (no baseSlug) — it's the user's, not a replay
+  // of whatever was loaded.
+  const onDrillQuery = useCallback(
+    (malloy: string) => {
+      const src = source || selected?.source;
+      if (!src) return;
+      setQuery(malloy);
+      setExpanded(true);
+      setEditedTitle(null);
+      runQuery(src, malloy, selected?.datasetId ?? null, null, "Drill");
+      mainRef.current?.scrollTo({top: 0, behavior: "smooth"});
+    },
+    [source, selected, runQuery],
+  );
+
   // Deep-link: hydrate from a shared slug and auto-run.
   useEffect(() => {
     if (!initialSlug) return;
@@ -375,7 +392,9 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
   useEffect(() => {
     if (initialSlug || !initialSource) return;
     autoFallback.current = false;
-    const starter = `run: ${initialSource} -> `;
+    // `?q=` carries a complete query (a drill from a dashboard) — seed and run
+    // it. Otherwise open a starter stub, which is incomplete so it can't run.
+    const starter = initialMalloy ?? `run: ${initialSource} -> `;
     // Intentional one-time init of the editor from the source prop on mount.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setSelected({
@@ -391,7 +410,8 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
     setEditedTitle(null);
     setResult(null);
     setRunError(null);
-  }, [initialSlug, initialSource, initialDatasetId]);
+    if (initialMalloy) runQuery(initialSource, initialMalloy, initialDatasetId ?? null, null, "Drill");
+  }, [initialSlug, initialSource, initialDatasetId, initialMalloy, runQuery]);
 
   function selectItem(item: HistoryItem) {
     setSelected(item);
@@ -781,7 +801,11 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
             {result?.stableResult && (
               <div className="space-y-2">
                 <p className="text-[11px] text-gray-500 dark:text-gray-400 uppercase tracking-wide font-semibold">Results</p>
-                <MalloyResultView stableResult={result.stableResult} datasetId={selected.datasetId} />
+                <MalloyResultView
+                  stableResult={result.stableResult}
+                  datasetId={selected.datasetId}
+                  onDrillQuery={onDrillQuery}
+                />
               </div>
             )}
 

@@ -26,7 +26,7 @@ import { MalloyRenderer } from "@malloydata/render";
 import { filters } from "./filters";
 // The drill contract (which cells drill, to where, seeding which given) is shared
 // with the hosted app's ltool result view — see drill.ts.
-import { drillFieldNames, humanizeSlug, markDrillableCells, resolveDrill } from "./drill";
+import { drillFieldNames, humanizeSlug, markDrillableCells, rebuildDrillQuery, resolveDrill, resolveDrillViews } from "./drill";
 import { combineTiles } from "./combine";
 
 export { filters };
@@ -70,6 +70,11 @@ let host = {
   },
   navigate(dashboard, givens) {
     parent.postMessage({ type: "navigate", dashboard, givens }, "*");
+  },
+  /** A generic cell drill: hand the parent the Malloy that isolates the rows
+      behind the clicked cell, for it to open in ltool. */
+  drill(malloy) {
+    parent.postMessage({ type: "drill", malloy }, "*");
   },
   syncGivens(givens) {
     parent.postMessage({ type: "givens", givens }, "*");
@@ -290,13 +295,27 @@ export function Panel({ query, malloy, dashboard, result: presetResult, givens, 
   // Drill: a dimension declared `# drill { to=[<slug>|self, …] }` makes clicking
   // its cell navigate to another dashboard (slug) and/or filter in place (self),
   // seeding the given named like the dimension, upcased (category → CATEGORY).
-  const { setGiven } = useDashboard();
+  const { setGiven, draft: givenValues } = useDashboard();
   const setGivenRef = useRef(setGiven);
   setGivenRef.current = setGiven;
+  // Current given values, for binding into a drill handed off to ltool (which
+  // has no givens of its own). Kept in a ref so the memoized viz config reads
+  // the latest without being rebuilt on every filter change.
+  const givenValuesRef = useRef(givenValues);
+  givenValuesRef.current = givenValues;
   const [menu, setMenu] = useState(null); // { x, y, items:[{label, run}] } | null
   const drillNamesRef = useRef(new Set()); // drillable field names for the current result
   const observerRef = useRef(null);
+  // A `# drill { to= }` dimension and the renderer's generic drill are two
+  // handlers on one click (onClick on the inner cell, then onDrill on the
+  // enclosing div). The explicit tag wins; this flags the click so onDrill
+  // stands down for it.
+  const drillHandledByTag = useRef(false);
+  // `# drill { view=[…] }` on the clicked cell — onClick is the only place the
+  // field's tag is in hand, onDrill is where the clauses arrive.
+  const drillViewsRef = useRef([]);
   const onCellClick = useCallback((payload) => {
+    drillViewsRef.current = resolveDrillViews(payload);
     const drill = resolveDrill(payload);
     if (!drill) return;
     const { dests, given, filterExpr } = drill;
@@ -311,6 +330,7 @@ export function Panel({ query, malloy, dashboard, result: presetResult, givens, 
     };
     const valid = dests.filter((d) => d !== "self" || selfSpec);
     if (!valid.length) return;
+    drillHandledByTag.current = true;
     if (valid.length === 1) return run(valid[0]);
     const items = valid.map((d) => ({
       label: d === "self" ? "Filter this dashboard" : humanizeSlug(d),
@@ -348,11 +368,35 @@ export function Panel({ query, malloy, dashboard, result: presetResult, givens, 
           // "Limiting … to N records" footer — so a huge table degrades to
           // "top N + too many rows" instead of blowing up. Dashboard cards get
           // this via the tableConfig fallback (they pass no rowLimit of their own).
-          tableConfig: { enableDrill: false, disableVirtualization: true, rowLimit: 1000 },
+          tableConfig: { enableDrill: true, disableVirtualization: true, rowLimit: 1000 },
           dashboardConfig: { disableVirtualization: true },
           // Drill: clicking a `# drill`-tagged dimension navigates / filters in
           // place (no-op for cells without the tag).
           onClick: onCellClick,
+          // Generic drill: any OTHER cell — including a measure — hands back the
+          // Malloy isolating the rows behind it, which the parent opens in ltool.
+          // A `# drill` tag wins, so onCellClick flags the ones it handled.
+          onDrill: (d) => {
+            const views = drillViewsRef.current;
+            drillViewsRef.current = [];
+            if (drillHandledByTag.current) {
+              drillHandledByTag.current = false;
+              return;
+            }
+            if (!d || !d.query) return;
+            // `# drill { view= }` shapes the rows with a model view; without it
+            // the renderer's raw `+ { select: * }` is all we have.
+            // setHost() replaces the host wholesale, and an in-page host may not
+            // implement drill — no-op rather than throw.
+            if (typeof host.drill !== "function") return;
+            const rebuilt = rebuildDrillQuery(
+              d.query,
+              views[0] || null,
+              d.whereClause || "",
+              givenValuesRef.current || {},
+            );
+            host.drill(rebuilt || d.query);
+          },
         });
       }
       vizRef.current.setResult(result);

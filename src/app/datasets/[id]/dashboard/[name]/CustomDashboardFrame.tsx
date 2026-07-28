@@ -60,6 +60,16 @@ export function CustomDashboardFrame({ id, name }: { id: string; name: string })
         window.location.href = u.pathname + u.search;
         return;
       }
+      // Generic cell drill (any cell, measures included): the frame hands over a
+      // complete `run:` isolating the rows behind what was clicked. Open it in
+      // ltool, where it can be read and edited. Same-tab, like `navigate` above.
+      if (m?.type === "drill" && typeof m.malloy === "string") {
+        const u = new URL("/ltool", window.location.origin);
+        u.searchParams.set("q", m.malloy);
+        u.searchParams.set("dataset", id);
+        window.location.href = u.pathname + u.search;
+        return;
+      }
       if (!m || m.type !== "run") return;
       let out: unknown;
       try {

@@ -7,6 +7,7 @@ import { lintDashboards, printLintReport } from "./lint.js";
 import { getAccessToken, login } from "./oauth.js";
 import { serveMcp } from "./mcp.js";
 import { serveDashboard } from "./dashboard.js";
+import { bundleDashboards } from "./bundle.js";
 import { initCmd } from "./init.js";
 import { launchCmd } from "./launch.js";
 import { clearCreds } from "./store.js";
@@ -200,14 +201,47 @@ program
 
 program
   .command("dashboard")
-  .argument("<action>", "action to run (currently: dev)")
+  .argument("<action>", "action to run (dev | bundle)")
   .option("-C, --root <dir>", "project root (default: current directory)")
-  .option("-p, --port <port>", "port to serve on", "4173")
-  .description("preview dashboard artifacts in ./dashboards against the local Malloy model")
-  .action(async (action: string, opts: { root?: string; port?: string }) => {
-    if (action !== "dev") throw new Error(`unknown dashboard action '${action}' (expected: dev)`);
-    await serveDashboard({ root: opts.root, port: Number(opts.port) });
-  });
+  .option("-p, --port <port>", "port to serve on (dev)", "4173")
+  .option("-o, --out <dir>", "output directory (bundle)", "docs")
+  .option("--title <title>", "site title (bundle; default: project directory name)")
+  .option("--target <target>", "deploy target: pages | vercel (bundle)", "pages")
+  .option("--duckdb <source>", "DuckDB binaries: cdn | bundled (bundle)", "cdn")
+  .option("--no-serve", "bundle only; don't serve the result (bundle)")
+  .description("preview dashboards locally (dev), or build a static site from them (bundle)")
+  .action(
+    async (
+      action: string,
+      opts: { root?: string; port?: string; out?: string; title?: string; serve?: boolean; target?: string; duckdb?: string },
+    ) => {
+      if (action === "dev") {
+        await serveDashboard({ root: opts.root, port: Number(opts.port) });
+        return;
+      }
+      if (action === "bundle") {
+        if (opts.target !== "pages" && opts.target !== "vercel") {
+          throw new Error(`unknown --target '${opts.target}' (expected: pages | vercel)`);
+        }
+        if (opts.duckdb !== "cdn" && opts.duckdb !== "bundled") {
+          throw new Error(`unknown --duckdb '${opts.duckdb}' (expected: cdn | bundled)`);
+        }
+        await bundleDashboards({
+          root: opts.root,
+          out: opts.out,
+          title: opts.title,
+          serve: opts.serve,
+          target: opts.target,
+          duckdb: opts.duckdb,
+          // `dashboard dev` owns 4173/4174; default the bundle preview clear of
+          // both so you can run the two side by side.
+          port: opts.port === "4173" ? 4180 : Number(opts.port),
+        });
+        return;
+      }
+      throw new Error(`unknown dashboard action '${action}' (expected: dev | bundle)`);
+    },
+  );
 
 program.parseAsync().catch((err: unknown) => {
   console.error(err instanceof Error ? err.message : String(err));

@@ -81,6 +81,111 @@ export function resolveDrill(payload: CellClickPayload | null | undefined): Dril
 }
 
 /**
+ * The views a `# drill { view=[…] }` cell offers, or [] when it declares none.
+ *
+ * This is the MEASURE half of the drill vocabulary, and it is a different
+ * mechanism from `to=`. `to=` seeds a given on another dashboard, which works
+ * because a given is a named parameter two dashboards can share. A measure
+ * drill produces a set of filters rooted in ONE source's namespace — there is no
+ * shared contract to seed — so it stays on that source and names a view to shape
+ * the rows instead. That's why it lands in ltool rather than a dashboard.
+ */
+export function resolveDrillViews(payload: CellClickPayload | null | undefined): string[] {
+  if (!payload || payload.isHeader) return [];
+  const f = payload.field;
+  const drillTag = f && f.tag && f.tag.tag("drill");
+  if (!drillTag) return [];
+  const one = drillTag.text("view");
+  return drillTag.textArray("view") ?? (one ? [one] : []);
+}
+
+/** The source a drill query targets — `run: order_items -> …` → `order_items`. */
+export function drillQuerySource(drillQuery: string): string | null {
+  const m = /^\s*run:\s*(`[^`]+`|[A-Za-z_][A-Za-z0-9_]*)/.exec(drillQuery);
+  return m ? m[1] : null;
+}
+
+/** The renderer joins drill expressions with ",\n" — split them back apart. */
+export function splitDrillClauses(whereClause: string): string[] {
+  return (whereClause || "")
+    .split("\n")
+    .map((l) => l.trim().replace(/,$/, "").trim())
+    .filter(Boolean);
+}
+
+/** Escape a filter-expression source for embedding in `f'…'`. */
+function filterLiteral(src: string): string {
+  return `f'${src.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
+}
+
+/**
+ * Bind a dashboard's given VALUES into its drill clauses.
+ *
+ * A dashboard's `where: brand ~ $BRAND` arrives as a drill clause that still
+ * names the given — but the destination (ltool) has no givens, so `$BRAND` there
+ * would resolve to the model's default, not what the dashboard was showing.
+ * So: substitute each set given as an `f'…'` literal, and DROP any clause whose
+ * givens aren't set — an unset given is `f''`, which filters nothing, so keeping
+ * it would be noise at best and a default-valued filter at worst.
+ */
+export function bindGivensInClauses(
+  clauses: string[],
+  givens: Record<string, unknown>,
+): string[] {
+  const out: string[] = [];
+  for (const clause of clauses) {
+    const refs = clause.match(/\$[A-Za-z_][A-Za-z0-9_]*/g);
+    if (!refs) {
+      out.push(clause);
+      continue;
+    }
+    let bound = clause;
+    let complete = true;
+    for (const ref of refs) {
+      const v = givens ? givens[ref.slice(1)] : undefined;
+      if (v == null || String(v) === "") {
+        complete = false;
+        break;
+      }
+      bound = bound.split(ref).join(filterLiteral(String(v)));
+    }
+    if (complete) out.push(bound);
+  }
+  return out;
+}
+
+/** Assemble `run: <src> -> [<view> +] { drill: … }`. */
+export function buildDrillQuery(
+  src: string,
+  view: string | null,
+  clauses: string[],
+): string {
+  const head = view ? `run: ${src} -> ${view}` : `run: ${src} ->`;
+  if (!clauses.length) return view ? head : `run: ${src} -> { select: * }`;
+  const body = clauses.map((c) => `    ${c}`).join(",\n");
+  const drill = `{\n  drill:\n${body}\n}`;
+  return view ? `${head} + ${drill}` : `${head} ${drill} + { select: * }`;
+}
+
+/**
+ * Rebuild a drill query: bind the dashboard's givens into the clauses, and shape
+ * the rows with a `# drill { view= }` view when the clicked field named one
+ * (otherwise the renderer's raw `select: *`). `drillQuery` is read only for its
+ * source name. Returns null when that can't be read, so callers can fall back.
+ */
+export function rebuildDrillQuery(
+  drillQuery: string,
+  view: string | null,
+  whereClause: string,
+  givens?: Record<string, unknown>,
+): string | null {
+  const src = drillQuerySource(drillQuery);
+  if (!src) return null;
+  const clauses = bindGivensInClauses(splitDrillClauses(whereClause), givens ?? {});
+  return buildDrillQuery(src, view, clauses);
+}
+
+/**
  * Names of the fields that declare `# drill`, from the renderer's metadata
  * (includes any `# label` so callers can match either against the header text).
  */

@@ -109,6 +109,15 @@ export function TagOnlyDashboard({ id, name }: { id: string; name: string }) {
           syncGivens: (givens: Record<string, unknown>) => {
             window.history.replaceState(null, "", givensToUrl(givens));
           },
+          // Generic cell drill: a complete `run:` isolating the rows behind the
+          // clicked cell. Open it in ltool (the iframe path posts `drill` to
+          // CustomDashboardFrame, which lands on the same URL).
+          drill: (malloy: string) => {
+            const u = new URL("/ltool", window.location.origin);
+            u.searchParams.set("q", malloy);
+            u.searchParams.set("dataset", id);
+            window.location.href = u.pathname + u.search;
+          },
         });
       })
       .catch((err) => {

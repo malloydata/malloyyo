@@ -341,7 +341,10 @@ export async function runQueryForWeb(
 ): Promise<WebRunResult> {
   // When the caller knows the dataset (an ltool replay carries the recorded
   // dataset_id), resolve by it — unambiguous. Else fall back to source name.
-  const found = datasetId ? await findByDatasetId(userId, datasetId) : await findBySource(userId, source);
+  // findByDatasetRef, not findByDatasetId: `datasetId` may be a readable dataset
+  // NAME (a drill handed over from a dashboard carries the name from its route),
+  // and a non-uuid reached the uuid column as a 500 rather than a lookup miss.
+  const found = datasetId ? await findByDatasetRef(userId, datasetId) : await findBySource(userId, source);
   if (!found) return { ok: false, error: `source '${source}' not found` };
   const { ds, model } = found;
   if (ds.status !== "ready") return { ok: false, error: `source '${source}' is not ready` };
@@ -396,7 +399,10 @@ export async function saveWebQuery(
   datasetId?: string | null,
   opts: WebRunOpts = {},
 ): Promise<WebSaveResult> {
-  const found = datasetId ? await findByDatasetId(userId, datasetId) : await findBySource(userId, source);
+  // findByDatasetRef, not findByDatasetId: `datasetId` may be a readable dataset
+  // NAME (a drill handed over from a dashboard carries the name from its route),
+  // and a non-uuid reached the uuid column as a 500 rather than a lookup miss.
+  const found = datasetId ? await findByDatasetRef(userId, datasetId) : await findBySource(userId, source);
   if (!found) return { ok: false, error: `source '${source}' not found` };
   const { ds, model } = found;
   if (ds.status !== "ready") return { ok: false, error: `source '${source}' is not ready` };

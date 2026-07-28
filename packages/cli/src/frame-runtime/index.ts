@@ -59,8 +59,11 @@ export function mountInPage(opts: {
   run: (req: { query?: string; malloy?: string }, givens: Record<string, unknown>) => Promise<unknown>;
   navigate: (dashboard: string, givens: Record<string, unknown>) => void;
   syncGivens: (givens: Record<string, unknown>) => void;
+  /** Open a generic cell drill (the Malloy isolating the clicked rows). Optional
+      so an older host still mounts — the runtime no-ops when it's absent. */
+  drill?: (malloy: string) => void;
 }): { unmount: () => void } {
-  setHost({ run: opts.run, navigate: opts.navigate, syncGivens: opts.syncGivens });
+  setHost({ run: opts.run, navigate: opts.navigate, syncGivens: opts.syncGivens, drill: opts.drill });
   // bodyReset:false — the dashboard is one element in the app shell, so it must
   // not restyle <body> (the iframe host DOES own the whole document, so it keeps
   // the reset). Returns the React root so the caller can unmount() on teardown.

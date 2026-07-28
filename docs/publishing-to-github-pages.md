@@ -152,28 +152,21 @@ headers, and the ranged GET returning `206` with `access-control-allow-origin`.
 
 ## 5. Build the semantic model
 
-Use the **two-file storage pattern**. Keep the storage binding in its own file
-so switching between local development and published data is a one-line change.
+Keep the storage binding in its own file. It is one line, it is the only thing
+that changes if the data moves, and it keeps the URL out of the model proper.
 
-`gs.malloy` — what the published site uses:
+`storage.malloy`:
 
 ```malloy
 source: mydata_table is duckdb.table('https://storage.googleapis.com/my-public-bucket/mydata.parquet')
 ```
 
-`md.malloy` — optional, for faster local iteration against a warehouse. Define
-**the same source names**:
-
-```malloy
-source: mydata_table is md.table('mydb.mydata')
-```
-
-`mydata.malloy` — the model. Import exactly one storage file:
+`mydata.malloy` — the model:
 
 ```malloy
 ##! experimental { access_modifiers givens }
 
-import "gs.malloy"
+import "storage.malloy"
 
 given:
   # label="Category" control=select suggest { source: mydata dimension: category }
@@ -192,11 +185,11 @@ import { mydata, CATEGORY } from './mydata.malloy'
 export { mydata, CATEGORY }
 ```
 
-> **Trap:** when you bundle, the model must reference only tables the browser
-> can fetch — i.e. `http(s)://` URLs. If you bundle while importing `md.malloy`,
-> the build succeeds (it compiles server-side with your warehouse credentials)
-> and then **fails in the browser**, where no such connection exists. Always
-> confirm the import line before bundling.
+> **Trap:** every table the model reads must be something a *browser* can fetch
+> — an `http(s)://` URL. A local file path or a warehouse connection compiles
+> fine at build time, because the build runs on your machine with your
+> credentials, and then **fails in the browser**, where neither exists. The build
+> stays green; only the published site breaks. The step-7 gate catches this.
 
 Then author dashboards in `dashboards/` — see `docs/creating-dashboards.md`. A
 dashboard is a `dashboards/<name>.malloy` with a `# artifact` tag; add an
@@ -330,7 +323,7 @@ Then open the site and click through every dashboard.
 | Controls appear with **no values** | `__GIVENS__` is empty in the HTML — the given specs weren't introspected. |
 | Tiles show **fewer rows than expected** | A per-query `limit:` in the model; the host default is 5000. |
 | **`process is not defined`** at load | A browser bundle missing the `assert`/`util` shims — file a bug, `browserBuildBase()` should apply them. |
-| Builds fine, **breaks only in the browser** | The model imports `md.malloy` (or another non-fetchable table). See step 5. |
+| Builds fine, **breaks only in the browser** | The model reads a table the browser can't fetch — a local path or a warehouse connection. See step 5. |
 
 ## Updating the site
 
@@ -341,6 +334,5 @@ malloyyo dashboard bundle --out docs --no-serve && git add docs && \
 
 The published site reads its model from the **snapshot** inlined at bundle time
 (`docs/assets/model-files.js`), not from your working tree. Editing `.malloy`
-files changes nothing live until you re-bundle and push — which also means you
-can freely switch back to `md.malloy` for local work without touching the live
-site.
+files changes nothing live until you re-bundle and push — so you can iterate on
+the model freely without touching the published site.

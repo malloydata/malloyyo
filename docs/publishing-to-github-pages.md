@@ -1,14 +1,97 @@
-# Guide: publish a Malloy dashboard site to GitHub Pages
+# Publish a Malloy dashboard site to GitHub Pages
+
+## How this actually goes
+
+You have a data file and you want a real dashboard site on the internet. There's
+no server to run, no database to provision, no cloud account to set up, and
+nothing to pay for. The data file ships with the site, and the whole thing runs
+in the visitor's browser.
+
+You type two commands. After that you just talk to Claude.
+
+**1. Set up the folder.**
+
+```bash
+mkdir mydashboards && cd mydashboards && git init
+malloyyo init
+```
+
+**2. Start Claude.**
+
+```bash
+claude
+```
+
+`malloyyo init` wired this folder up, so Claude opens already knowing how to
+write and compile Malloy against your data.
+
+**3. Say what you're building.**
+
+> I want to build a dashboard site I can publish on GitHub Pages.
+
+Say this first, before anything else. It decides how everything gets laid out —
+where the data goes, how the model refers to it, how the site gets built. Skip it
+and you may end up rearranging things later.
+
+**4. Tell it where the data is.**
+
+> The data is sales.parquet, it's in my Downloads folder. Have a look and tell me
+> what's in it.
+
+Claude will move it into `docs/` (that's the folder that gets published), read the
+schema, poke at the values, and describe what it found. Worth doing before asking
+for anything — you'll both know what you're working with, and you'll often spot a
+column you forgot about.
+
+**5. Ask for the dashboards you want.** In plain language:
+
+> Build me a dashboard showing revenue by region over time, with a filter for
+> product category. And a second one for our top customers.
+
+It writes the semantic model, then the dashboards, compiling against your real
+data as it goes and fixing its own mistakes. You don't write any Malloy.
+
+**6. Ask to see them.**
+
+> Let me look at these.
+
+It starts a preview server and gives you a URL. Click around. Then just say what's
+wrong: *"the date axis should be by month, not day"*, *"add a filter for sales
+rep"*, *"this chart should be a bar chart"*. Iterate until you like it.
+
+**7. Publish when you're ready.**
+
+> Publish this to GitHub.
+
+It builds the static site, commits it, creates the repo, turns on GitHub Pages,
+and hands you the URL. Takes about a minute.
+
+Afterwards, changing something is the same loop: tell Claude what you want, look
+at it, tell it to publish again.
+
+**What you should know going in:** your data file gets committed to the repo and
+served publicly, so this is for data you're happy to make public. Keep it under
+about 25 MB — GitHub rejects files over 100 MB, and every visitor downloads the
+whole file once.
+
+---
+
+## The detailed version
+
+Everything below is the step-by-step, written so an agent can follow it exactly.
+Read on if you want to know what's happening under the hood, or if something went
+wrong.
 
 **Audience:** an agent (or a person) taking a dataset from nothing to a live,
 public dashboard site. Every step has a **verification gate** — a command whose
-output tells you whether to continue. Do not skip a gate; several of the failure
-modes below are silent (a hang with no console error, or a build that goes green
-and only breaks in the browser).
+output tells you whether to continue. Don't skip a gate; several failure modes
+here are silent (a hang with no console error, or a build that goes green and
+only breaks in the browser).
 
-**What you end up with:** a static site with **no server, no token, and no
-database**. Malloy compiles in the browser; DuckDB-WASM runs the SQL against a
-public Parquet file over https. The only thing you deploy is files.
+**What you end up with:** a static site with **no server, no token, no database,
+and no object store**. The data file ships in the repo alongside the pages.
+Malloy compiles in the browser and DuckDB-WASM runs the SQL against it. The only
+thing you deploy is files.
 
 **Related:** `docs/creating-dashboards.md` (authoring dashboards),
 `docs/composite-dashboards.md` (tiled dashboards).
@@ -17,22 +100,20 @@ public Parquet file over https. The only thing you deploy is files.
 
 ## 0. Before you start
 
-You need `node` (20+), `git`, the `gh` CLI authenticated, and — for hosting your
-own data — `gcloud`. Check:
+You need `node` (20+), `git`, and the `gh` CLI authenticated:
 
 ```bash
-node --version && git --version && gh auth status && gcloud config get project
+node --version && git --version && gh auth status
 ```
 
-**Decide first: is this dataset a good fit?** The browser downloads the whole
-data file once and queries it locally. That is excellent up to a few tens of MB
-and wrong at gigabytes.
+**Is this dataset a good fit?** The browser downloads the whole data file once and
+queries it locally, and the file lives in your git repo.
 
 | data size | verdict |
 |---|---|
-| < 50 MB | ideal |
-| 50–200 MB | works, but first load gets slow |
-| > 200 MB | use a warehouse-backed deployment instead, not this |
+| < 25 MB | ideal |
+| 25–100 MB | works; first load and `git clone` both get heavy |
+| > 100 MB | **GitHub rejects the push.** Use a warehouse-backed deployment instead |
 
 Compression is what matters, not row count: 6.3M rows of baby names is 15 MB as
 Parquet.
@@ -44,216 +125,154 @@ Parquet.
 ```bash
 mkdir ~/dev/myproject && cd ~/dev/myproject
 git init
-npm install -g @malloydata/malloyyo     # or: npx @malloydata/malloyyo …
+npm install -g @malloydata/malloyyo
 malloyyo init
 ```
 
-`malloyyo init` writes `.mcp.json` (so `claude` opens in author mode) and
-scaffolds `index.malloy` if missing.
+**Do `malloyyo init` before anything else.** It writes `.mcp.json`, which is what
+lets `claude` open with the Malloy authoring tools wired to this repo — that's how
+step 3 stops being work. It also scaffolds `index.malloy` if missing.
 
-**Gate:** `malloyyo --version` prints a version.
+**Gate:** `malloyyo --version` prints a version, and `.mcp.json` exists.
 
 ---
 
-## 2. Get the data, and make it a Parquet file
+## 2. Put the data in `docs/` as Parquet
 
-Find the source data (a CSV, a TSV, a database export, an existing Parquet).
-Convert to Parquet — it is dramatically smaller and DuckDB reads it column-wise:
+`docs/` is the directory GitHub Pages will serve, so anything you put there is
+published alongside the pages — including the data.
 
 ```bash
-duckdb -c "COPY (SELECT * FROM read_csv_auto('raw.csv')) TO 'mydata.parquet' (FORMAT PARQUET)"
+mkdir -p docs
+duckdb -c "COPY (SELECT * FROM read_csv_auto('raw.csv')) TO 'docs/mydata.parquet' (FORMAT PARQUET)"
 ```
 
-Two things worth doing now, because they are hard to change later:
+Convert to Parquet even if the source is already tabular: it is dramatically
+smaller and DuckDB reads it column-wise.
 
-- **Trim columns you will not query.** Every byte is downloaded by every visitor.
-- **Check which column dominates.** If one wide string column is most of the
-  file and every query touches it, no amount of clever reading will avoid
-  downloading the whole thing:
+> **Don't put the data under Git LFS.** GitHub Pages and
+> `raw.githubusercontent.com` serve the LFS *pointer file* — about 130 bytes of
+> text — not your data, and DuckDB will fail on it in a way that looks nothing
+> like the real problem. Commit it as an ordinary file, which means staying under
+> 100 MB.
+
+If the file is larger than you expected, this shows where the bytes went:
 
 ```bash
 duckdb -c "SELECT path_in_schema AS col, sum(total_compressed_size) AS bytes
-           FROM parquet_metadata('mydata.parquet') GROUP BY col ORDER BY bytes DESC"
+           FROM parquet_metadata('docs/mydata.parquet') GROUP BY col ORDER BY bytes DESC"
 ```
 
-**Gate:** the file exists and `duckdb -c "SELECT count(*) FROM 'mydata.parquet'"`
-returns the expected row count.
+**Gate:** `duckdb -c "SELECT count(*) FROM 'docs/mydata.parquet'"` returns the
+expected row count.
 
 ---
 
-## 3. Publish the data to Google Cloud Storage
+## 3. Build the model and dashboards with Claude
 
-The browser must fetch this file directly, so it has to be **publicly readable
-over https**.
-
-```bash
-BUCKET=my-public-bucket
-gcloud storage buckets create gs://$BUCKET --uniform-bucket-level-access   # once
-gcloud storage buckets add-iam-policy-binding gs://$BUCKET \
-  --member=allUsers --role=roles/storage.objectViewer                      # once
-gcloud storage cp mydata.parquet gs://$BUCKET/mydata.parquet
-```
-
-**Gate — must return `200`:**
+Don't hand-write Malloy. `malloyyo init` (step 1) wrote a `.mcp.json`, so from the
+repo root:
 
 ```bash
-curl -s -o /dev/null -w "%{http_code}\n" https://storage.googleapis.com/$BUCKET/mydata.parquet
+claude
 ```
 
----
+Claude opens with the local Malloy authoring tools — `compile`, `compile_file`,
+`prettify`, `query`, `yo_help` — pointed at the files on disk. It writes the
+model, compiles it against your real data as it goes, and fixes its own errors.
 
-## 4. Set CORS on the bucket
+Tell it where the data is and what you want:
 
-**This step is mandatory and easy to get wrong.** Without it the browser refuses
-to read the file and the dashboards render empty.
+> The data is at `docs/mydata.parquet`. Build a model over it, then a dashboard
+> showing revenue by category over time with a category filter.
 
-`cors.json`:
-
-```json
-[{
-  "origin": ["*"],
-  "method": ["GET", "HEAD"],
-  "responseHeader": ["Content-Type", "Range", "Content-Range", "Content-Length", "ETag", "Accept-Ranges"],
-  "maxAgeSeconds": 3600
-}]
-```
-
-```bash
-gcloud storage buckets update gs://$BUCKET --cors-file=cors.json
-```
-
-**Why `origin: ["*"]` is not a security downgrade here:** CORS is not access
-control. The object is already public and unauthenticated — anyone can `curl` it.
-CORS only decides whether a *browser* lets a page read a response it was already
-allowed to fetch. Restricting origins protects nothing; it just breaks every new
-localhost port and preview URL you use. The one real cost is that anyone can
-hotlink the file against your egress bill — if that matters, list your origins
-explicitly instead (scheme + host + port, exact match, no wildcards).
-
-**Gate — do NOT trust a `HEAD` request here.** A cached `HEAD` can come back
-without CORS headers and look like failure. Verify with the two requests the
-browser actually makes:
-
-```bash
-# 1. preflight (DuckDB sends a Range header, which is not CORS-safelisted)
-curl -sI -X OPTIONS -H "Origin: https://example.com" \
-  -H "Access-Control-Request-Method: GET" -H "Access-Control-Request-Headers: range" \
-  "https://storage.googleapis.com/$BUCKET/mydata.parquet" | grep -i access-control
-
-# 2. a real ranged GET
-curl -s -o /dev/null -D - -H "Origin: https://example.com" -H "Range: bytes=0-1023" \
-  "https://storage.googleapis.com/$BUCKET/mydata.parquet?cb=$RANDOM" | grep -i "access-control\|content-range"
-```
-
-You need `access-control-allow-methods: GET,HEAD`, `Range` among the allowed
-headers, and the ranged GET returning `206` with `access-control-allow-origin`.
-
----
-
-## 5. Build the semantic model
-
-Keep the storage binding in its own file. It is one line, it is the only thing
-that changes if the data moves, and it keeps the URL out of the model proper.
-
-`storage.malloy`:
+**Reference the file by its path relative to the project root** — `docs/mydata.parquet`:
 
 ```malloy
-source: mydata_table is duckdb.table('https://storage.googleapis.com/my-public-bucket/mydata.parquet')
+source: mydata_table is duckdb.table('docs/mydata.parquet')
 ```
 
-`mydata.malloy` — the model:
+That one spelling works everywhere. In VSCode and `malloyyo dashboard dev`, DuckDB
+reads the file off disk. In the published site — which *is* `docs/` — the page
+fetches `./mydata.parquet` and registers it under the model's original name. The
+model text never changes between local and published, and because the fetch is
+same-origin there is **no CORS to configure anywhere**.
 
-```malloy
-##! experimental { access_modifiers givens }
+Keeping the data in `docs/` rather than a separate `data/` also means it lives in
+git once instead of twice, since `docs/` is committed for Pages.
 
-import "storage.malloy"
+> **Trap:** every table the model reads must be something a *browser* can fetch —
+> a path inside the project, or an `http(s)://` URL. A warehouse connection
+> compiles fine on your machine and then fails in the published site, because the
+> build runs with your credentials and the browser has none. The build stays
+> green; only the live site breaks. The step-5 gate catches this.
 
-given:
-  # label="Category" control=select suggest { source: mydata dimension: category }
-  CATEGORY :: filter<string> is f'Widgets'
+**Gate:** `malloyyo lint` passes (it checks each dashboard's query, givens, and
+component).
 
-source: mydata is mydata_table extend {
-  measure: total is count()
-  dimension: year is date_col.year
-}
-```
-
-`index.malloy` — the published surface:
-
-```malloy
-import { mydata, CATEGORY } from './mydata.malloy'
-export { mydata, CATEGORY }
-```
-
-> **Trap:** every table the model reads must be something a *browser* can fetch
-> — an `http(s)://` URL. A local file path or a warehouse connection compiles
-> fine at build time, because the build runs on your machine with your
-> credentials, and then **fails in the browser**, where neither exists. The build
-> stays green; only the published site breaks. The step-7 gate catches this.
-
-Then author dashboards in `dashboards/` — see `docs/creating-dashboards.md`. A
-dashboard is a `dashboards/<name>.malloy` with a `# artifact` tag; add an
-optional `dashboards/<name>.jsx` to draw it yourself.
-
-**Gate:** `malloyyo lint` passes.
+For what a dashboard can do — tiled layouts, custom React components, drills —
+see `docs/creating-dashboards.md` and `docs/composite-dashboards.md`.
 
 ---
 
-## 6. Test locally
+## 4. Test locally
 
 ```bash
 malloyyo dashboard dev
 ```
 
 Open the URL it prints. Check each dashboard: controls appear with their default
-values, queries return rows, and drills/links work.
+values, queries return rows, drills work.
 
-**Gate:** every dashboard renders with data. Fix the model here — it is much
-faster than debugging after bundling.
+**Gate:** every dashboard renders with data. Fix the model here — much faster than
+debugging after bundling.
 
 ---
 
-## 7. Bundle the static site
+## 5. Bundle the static site
 
 ```bash
 malloyyo dashboard bundle --out docs
 ```
 
 This serves the result immediately (`--no-serve` to skip). Open it and re-check
-every dashboard — this is the artifact that ships, and it runs a different
-execution path from `dashboard dev` (browser DuckDB rather than a local server).
+every dashboard: this is the artifact that ships, and it runs a different
+execution path from `dashboard dev` — DuckDB in the browser rather than a local
+server.
 
 Useful flags:
 
 | flag | when |
 |---|---|
 | `--target vercel` | deploying to Vercel: clean URLs + cache headers |
+| `--analytics G-XXXXXXXXXX` | inject Google Analytics 4 |
 | `--duckdb bundled` | self-host the wasm (offline / no CDN) — adds ~75 MB |
 | `--no-serve` | CI |
 | `--title "…"` | site title (defaults to the directory name) |
 
 **Optional: a landing page.** Add `dashboards/index.jsx` exporting a React
-component and it becomes the site's front page instead of the generated list. It
-receives `{ dashboards: [{name, title, description, href}] }`. It is bundled
-separately, so keep it plain React — no Malloy imports — and it stays small.
+component and it becomes the front page instead of the generated list. It receives
+`{ dashboards: [{name, title, description, href}] }`, is bundled separately, and
+needs no Malloy — keep it plain React and it stays small.
 
 **Gate — check the emitted HTML, because these fail silently:**
 
 ```bash
 grep -o 'window.__GIVENS__ = \[[^]]*' docs/*.html | head        # must NOT be empty
-grep -o '__REMOTE_TABLES__ = \[[^]]*\]' docs/assets/model-files.js  # your https URLs
+grep -o '__TABLE_FILES__ = {[^}]*}' docs/assets/model-files.js  # your data file(s)
 ```
 
-An empty `__GIVENS__` means controls have no specs and every filter starts blank.
-An empty `__REMOTE_TABLES__` means the model isn't pointing at a fetchable table
-(see the trap in step 5).
+Empty `__GIVENS__` means controls have no specs and every filter starts blank.
+`__TABLE_FILES__` maps each table reference to the href the page fetches; for
+`docs/mydata.parquet` you should see `"docs/mydata.parquet":"./mydata.parquet"`.
+If it's empty, the model isn't reading a fetchable table — see the step-3 trap.
 
 ---
 
-## 8. Commit and push
+## 6. Commit and push
 
-`docs/` is build output, but it **must be committed** — GitHub Pages serves what
-is in the branch.
+`docs/` is build output, but it **must be committed** — Pages serves what's in the
+branch. Your data file is already in there.
 
 ```bash
 printf '.claude/\n' >> .gitignore
@@ -263,12 +282,12 @@ gh repo create myorg/myproject --public --source=. --push   # first time
 # or: git push origin main
 ```
 
-By default DuckDB comes from the jsDelivr CDN, so **no wasm binaries are
-committed**. If you used `--duckdb bundled`, expect ~75 MB in git — permanently.
+DuckDB comes from the jsDelivr CDN by default, so **no wasm binaries are
+committed**. With `--duckdb bundled`, expect ~75 MB in git — permanently.
 
 ---
 
-## 9. Turn on GitHub Pages
+## 7. Turn on GitHub Pages
 
 ```bash
 gh api -X POST repos/myorg/myproject/pages \
@@ -277,9 +296,9 @@ gh api -X PUT repos/myorg/myproject/pages -F https_enforced=true
 ```
 
 The response includes `html_url` — note it, especially if your org has a custom
-domain, because Pages will use that instead of `myorg.github.io`.
+domain, because Pages uses that instead of `myorg.github.io`.
 
-**Gate — wait for the build, then test the live site:**
+**Gate — wait for the build, then test the live site including the data:**
 
 ```bash
 until s=$(gh api repos/myorg/myproject/pages/builds/latest --jq .status); \
@@ -287,43 +306,38 @@ until s=$(gh api repos/myorg/myproject/pages/builds/latest --jq .status); \
 
 SITE=$(gh api repos/myorg/myproject/pages --jq .html_url)
 curl -sL -o /dev/null -w "%{http_code}\n" "$SITE"
+curl -sL -o /dev/null -w "%{http_code} %{size_download} bytes\n" "$SITE/mydata.parquet"
 ```
 
-**Final gate — verify CORS from the real production origin,** not from
-`example.com`. This is the check that proves a visitor's browser can actually
-load the data:
-
-```bash
-ORIGIN=$(echo "$SITE" | sed -E 's#(https?://[^/]+).*#\1#')
-curl -s -o /dev/null -D - -H "Origin: $ORIGIN" -H "Range: bytes=0-1023" \
-  "https://storage.googleapis.com/$BUCKET/mydata.parquet" | grep -i access-control-allow-origin
-```
-
-Then open the site and click through every dashboard.
+That second request is the one that matters: it proves the browser can actually
+get the data. Then open the site and click through every dashboard.
 
 ---
 
 ## GitHub Pages constraints worth knowing
 
 - **No custom response headers.** So no COOP/COEP, so no cross-origin isolation,
-  so DuckDB runs **single-threaded**. Fine for this data size; it is a hard
-  ceiling, not a preference. (Vercel can set headers — use `--target vercel`.)
+  so DuckDB runs **single-threaded**. Fine at this data size; a hard ceiling, not
+  a preference. (Vercel can set headers — use `--target vercel`.)
 - **Project sites live under a base path** (`/reponame/`). Asset URLs must be
-  relative; the bundler handles this, but it is why a hand-edited absolute path
+  relative; the bundler handles this, but it's why a hand-edited absolute path
   will 404.
 - **`.nojekyll`** is emitted automatically — without it Jekyll silently drops
   paths beginning with an underscore.
+- **1 GB site limit, 100 GB/month soft bandwidth limit.** A 20 MB site is ~5,000
+  cold visits a month.
 
 ## Troubleshooting
 
 | symptom | cause |
 |---|---|
-| Page loads, spinner forever, **no console error** | A DuckDB asset 404'd. Its URL is resolved inside the worker, so a relative path resolves against the worker's directory. Check the network panel for a 404 ending in `.wasm`. |
-| Dashboards render but are **empty** | CORS. Re-run the step-4 gates using your real origin. |
+| Page loads, spinner forever, **no console error** | A DuckDB asset 404'd. Its URL is resolved inside the worker, so a relative path resolves against the worker's directory. Look for a 404 ending in `.wasm`. |
+| Dashboards render but are **empty** | The data file 404'd, or `__TABLE_FILES__` is empty. Check the network panel for the `.parquet`. |
+| DuckDB errors on a file that clearly exists | The data is under **Git LFS** — you're being served a 130-byte pointer. |
 | Controls appear with **no values** | `__GIVENS__` is empty in the HTML — the given specs weren't introspected. |
 | Tiles show **fewer rows than expected** | A per-query `limit:` in the model; the host default is 5000. |
 | **`process is not defined`** at load | A browser bundle missing the `assert`/`util` shims — file a bug, `browserBuildBase()` should apply them. |
-| Builds fine, **breaks only in the browser** | The model reads a table the browser can't fetch — a local path or a warehouse connection. See step 5. |
+| Builds fine, **breaks only in the browser** | The model reads a table the browser can't fetch — a warehouse connection. See step 3. |
 
 ## Updating the site
 
@@ -334,5 +348,24 @@ malloyyo dashboard bundle --out docs --no-serve && git add docs && \
 
 The published site reads its model from the **snapshot** inlined at bundle time
 (`docs/assets/model-files.js`), not from your working tree. Editing `.malloy`
-files changes nothing live until you re-bundle and push — so you can iterate on
-the model freely without touching the published site.
+files changes nothing live until you re-bundle and push — so you can iterate
+freely without touching the published site.
+
+To refresh the data, overwrite `docs/mydata.parquet` and push. No re-bundle is
+needed unless the schema changed.
+
+---
+
+### Cheat sheet
+
+| Step | Command |
+|------|---------|
+| Install | `npm install -g @malloydata/malloyyo` |
+| Set up the repo | `malloyyo init` |
+| Data → `docs/` | `duckdb -c "COPY (…) TO 'docs/mydata.parquet' (FORMAT PARQUET)"` |
+| Build the model | `claude` → "the data is at `docs/mydata.parquet`, build …" |
+| Validate | `malloyyo lint` |
+| Preview | `malloyyo dashboard dev` |
+| Bundle | `malloyyo dashboard bundle --out docs` |
+| Publish | `git add -A && git commit && git push` |
+| Turn on Pages | `gh api -X POST repos/OWNER/REPO/pages -f "source[branch]=main" -f "source[path]=/docs"` |

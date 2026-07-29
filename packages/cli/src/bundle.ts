@@ -104,6 +104,19 @@ function navFor(dash: Dashboard, all: Dashboard[], cleanUrls: boolean): string {
   );
 }
 
+/** Google Analytics 4, injected into every emitted page's <head>.
+    Returns "" when no id is configured, so the default build ships no
+    third-party script and sets no cookies. */
+function analyticsSnippet(id: string | undefined): string {
+  if (!id) return "";
+  const j = JSON.stringify(id);
+  return (
+    `<script async src="https://www.googletagmanager.com/gtag/js?id=${encodeURIComponent(id)}"></script>\n` +
+    `<script>window.dataLayer=window.dataLayer||[];function gtag(){dataLayer.push(arguments)}\n` +
+    `gtag('js',new Date());gtag('config',${j});</script>`
+  );
+}
+
 function page(
   dash: Dashboard,
   all: Dashboard[],
@@ -111,6 +124,7 @@ function page(
   givenSpecs: unknown[],
   tileSpecs: unknown[] | undefined,
   cleanUrls: boolean,
+  analytics: string | undefined,
 ): string {
   const info = {
     name: dash.name,
@@ -131,6 +145,7 @@ function page(
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(dash.title || dash.name)}${title ? ` · ${esc(title)}` : ""}</title>
 <link rel="stylesheet" href="./assets/site.css">
+${analyticsSnippet(analytics)}
 </head>
 <body>
 ${navFor(dash, all, cleanUrls)}
@@ -158,7 +173,13 @@ window.__GIVENS__ = ${JSON.stringify(givenSpecs)};
     written introduction; without one we emit a plain list of dashboards. The
     custom landing page is ordinary React — it needs no Malloy and no DuckDB, so
     it is bundled separately and stays tiny. */
-function indexPage(dashboards: Dashboard[], title: string, custom: boolean, cleanUrls: boolean): string {
+function indexPage(
+  dashboards: Dashboard[],
+  title: string,
+  custom: boolean,
+  cleanUrls: boolean,
+  analytics: string | undefined,
+): string {
   const link = (n: string) => (cleanUrls ? `./${encodeURIComponent(n)}` : `./${encodeURIComponent(n)}.html`);
   const body = custom
     ? `<div id="root"></div>\n` +
@@ -183,6 +204,7 @@ function indexPage(dashboards: Dashboard[], title: string, custom: boolean, clea
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${esc(title)}</title>
 <link rel="stylesheet" href="./assets/site.css">
+${analyticsSnippet(analytics)}
 </head>
 <body>
 ${sharedNav("", dashboards, link)}
@@ -229,6 +251,9 @@ export interface BundleOptions {
       site that works offline and depends on no third party — at the cost of
       ~75 MB, which for a GitHub Pages deploy means 75 MB committed to git. */
   duckdb?: "cdn" | "bundled";
+  /** GA4 Measurement ID (G-XXXXXXXXXX). Omitted = no analytics, no third-party
+      script, no cookies. */
+  analytics?: string;
 }
 
 export async function bundleDashboards(opts: BundleOptions = {}): Promise<void> {
@@ -377,9 +402,9 @@ export async function bundleDashboards(opts: BundleOptions = {}): Promise<void> 
       if (!got.ok) throw new Error(`dashboard ${d.name}: ${got.error}`);
       specs = got.givens;
     }
-    fs.writeFileSync(path.join(outDir, `${d.name}.html`), page(d, dashboards, title, specs, tileSpecs, cleanUrls));
+    fs.writeFileSync(path.join(outDir, `${d.name}.html`), page(d, dashboards, title, specs, tileSpecs, cleanUrls, opts.analytics));
   }
-  fs.writeFileSync(path.join(outDir, "index.html"), indexPage(dashboards, title, !!landing, cleanUrls));
+  fs.writeFileSync(path.join(outDir, "index.html"), indexPage(dashboards, title, !!landing, cleanUrls, opts.analytics));
 
   if (landing) {
     // Deliberately its OWN esbuild pass, not an entry in the dashboard build:

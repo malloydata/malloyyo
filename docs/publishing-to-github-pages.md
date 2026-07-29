@@ -237,6 +237,12 @@ component and it becomes the site's front page instead of the generated list. It
 receives `{ dashboards: [{name, title, description, href}] }`. It is bundled
 separately, so keep it plain React — no Malloy imports — and it stays small.
 
+**Optional: analytics.** `--analytics G-XXXXXXXXXX` injects the GA4 snippet into
+every emitted page. Omit it and the site ships no third-party script and sets no
+cookies — which is the default for a reason: adding analytics puts your site in
+scope for cookie-consent rules in several jurisdictions. A cookieless
+alternative (Plausible, Fathom) avoids that; this flag does not.
+
 **Gate — check the emitted HTML, because these fail silently:**
 
 ```bash

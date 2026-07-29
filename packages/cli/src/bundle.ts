@@ -53,19 +53,95 @@ function inlineModelFiles(root: string): Record<string, string> {
   return files;
 }
 
-/** Remote tables the model reads — `duckdb.table('https://…')` and friends.
-    The page pre-downloads each and registers it with DuckDB-WASM under the same
-    URL string before running anything, so queries hit a local buffer instead of
-    issuing ranged HTTP reads. (db-duckdb's own remote-table callback can't do
-    this: findTables skips ^https?:// outright.) */
-export function findRemoteTables(modelFiles: Record<string, string>): string[] {
-  const urls = new Set<string>();
-  // `table('url')` / `table("url")`, with or without a connection prefix.
-  const re = /\btable\(\s*(['"])(https?:\/\/[^'"]+)\1/g;
-  for (const src of Object.values(modelFiles)) {
-    for (const m of src.matchAll(re)) urls.add(m[2]);
+/** The model files reachable by following imports from `entries`.
+
+    Table references must come from THIS set rather than from every .malloy in
+    the project. A repo commonly keeps more than one storage binding — a
+    gs.malloy pointing at GCS next to the one actually imported — and scanning
+    all of them would put both sets of tables in the preload map, so the page
+    would download a second full copy of data it already has. Leftover files
+    should cost nothing. */
+export function reachableModelFiles(
+  modelFiles: Record<string, string>,
+  entries: string[],
+): Record<string, string> {
+  // `import "x.malloy"` and `import { a, b } from './x.malloy'`.
+  const IMPORT = /\bimport\s+(?:\{[^}]*\}\s+from\s+)?['"]([^'"]+)['"]/g;
+  const out: Record<string, string> = {};
+  const queue = entries.map((e) => `file:///${e.replace(/^\.?\//, "")}`);
+  while (queue.length) {
+    const key = queue.shift() as string;
+    if (key in out) continue;
+    const src = modelFiles[key];
+    if (src == null) continue; // an import we don't have; the compiler reports it
+    out[key] = src;
+    const dir = key.slice(0, key.lastIndexOf("/"));
+    for (const m of src.matchAll(IMPORT)) {
+      queue.push(new URL(m[1], dir + "/").href); // resolve against the importer
+    }
   }
-  return [...urls].sort();
+  return out;
+}
+
+/** Every `table('…')` reference in the model, in declaration order, deduped. */
+export function findTableRefs(modelFiles: Record<string, string>): string[] {
+  const refs = new Set<string>();
+  // `table('x')` / `table("x")`, with or without a connection prefix.
+  const re = /\btable\(\s*(['"])([^'"]+)\1/g;
+  for (const src of Object.values(modelFiles)) {
+    for (const m of src.matchAll(re)) refs.add(m[2]);
+  }
+  return [...refs].sort();
+}
+
+/** A data FILE the published page has to fetch, as opposed to a warehouse table
+    it can't. Two spellings qualify:
+      - an absolute `http(s)://` URL, fetched as-is;
+      - a path relative to the project root (`data/x.parquet`), which the build
+        copies into the site and the page fetches same-origin.
+    A warehouse reference like `md.table('db.schema.tbl')` is neither, and must
+    NOT end up here — it isn't fetchable, and listing it would make the page try.
+    The data-file extension is what separates the two. */
+export function isDataFile(ref: string): boolean {
+  if (/^https?:\/\//i.test(ref)) return true;
+  return /\.(parquet|csv|tsv|json|ndjson)$/i.test(ref);
+}
+
+/** Where each data file the model reads has to come from, once published.
+    `map` is what the page needs: table reference -> href to fetch. The KEY stays
+    exactly what the model wrote, because that is the name DuckDB looks up — so
+    the same model text works in VSCode, `dashboard dev`, and the published site.
+    `copies` is what the build has to move.
+
+    The href is always the file's path relative to the SITE ROOT. That gives two
+    layouts for free:
+      data/x.parquet  with --out docs  ->  ./data/x.parquet   (copied into docs/)
+      docs/x.parquet  with --out docs  ->  ./x.parquet        (already there)
+    The second is worth preferring when the site is committed: the file lives in
+    git once instead of twice. */
+export function tableFilePlan(
+  modelFiles: Record<string, string>,
+  outRel: string,
+): { map: Record<string, string>; copies: string[] } {
+  const map: Record<string, string> = {};
+  const copies: string[] = [];
+  const out = outRel.replace(/^\.?\//, "").replace(/\/$/, "");
+  for (const ref of findTableRefs(modelFiles)) {
+    if (!isDataFile(ref)) continue;
+    if (/^https?:\/\//i.test(ref)) {
+      map[ref] = ref;
+      continue;
+    }
+    const rel = ref.replace(/^\.?\//, "");
+    if (out && (rel === out || rel.startsWith(out + "/"))) {
+      // Already inside the site — just rebase the name, nothing to copy.
+      map[ref] = `./${rel.slice(out.length + 1)}`;
+    } else {
+      map[ref] = `./${rel}`;
+      copies.push(rel);
+    }
+  }
+  return { map, copies };
 }
 
 /** Copy the DuckDB-WASM binaries + workers next to the site. Self-hosting keeps
@@ -245,6 +321,19 @@ export async function bundleDashboards(opts: BundleOptions = {}): Promise<void> 
   const dashboards = await discoverDashboards(root, runner);
   if (dashboards.length === 0) throw new Error(`no dashboards found in ${path.join(root, "dashboards")}`);
 
+  // Data files copied in by a PREVIOUS run are not predictable from this run's
+  // model — if the data moved (data/ -> docs/), last run's copies are orphans
+  // that nobody notices until they are committed. So the build records what it
+  // copied and removes anything it no longer needs. Same failure as the stale
+  // esbuild chunks below, one directory over.
+  const manifestPath = path.join(outDir, ".bundle-manifest.json");
+  let priorData: string[] = [];
+  try {
+    priorData = JSON.parse(fs.readFileSync(manifestPath, "utf8")).dataFiles ?? [];
+  } catch {
+    /* no manifest yet */
+  }
+
   // Clear what we generate before regenerating it. esbuild hashes chunk names,
   // so without this every run leaves the previous run's chunks behind — dead
   // weight that then gets committed and served. Scoped to our own outputs so a
@@ -294,11 +383,48 @@ export async function bundleDashboards(opts: BundleOptions = {}): Promise<void> 
   }
 
   const modelFiles = inlineModelFiles(root);
-  const remoteTables = findRemoteTables(modelFiles);
+  // Copy every project-relative data file into the site, preserving its path, so
+  // the page can fetch it SAME-ORIGIN — no CORS to configure at all. Absolute
+  // URLs are left alone and fetched cross-origin (which needs CORS on that host).
+  const outRel = path.relative(root, outDir).split(path.sep).join("/");
+  // Only what the dashboards actually import — see reachableModelFiles.
+  const usedFiles = reachableModelFiles(
+    modelFiles,
+    dashboards.map((d) => d.entryFile).filter((f): f is string => !!f),
+  );
+  const { map: tableFiles, copies } = tableFilePlan(usedFiles, outRel);
+  for (const rel of copies) {
+    const from = path.join(root, rel);
+    if (!fs.existsSync(from)) {
+      throw new Error(
+        `model reads '${rel}' but ${from} does not exist.\n` +
+          `Data files are referenced by a path relative to the project root.`,
+      );
+    }
+    const to = path.join(outDir, rel);
+    fs.mkdirSync(path.dirname(to), { recursive: true });
+    fs.copyFileSync(from, to);
+  }
+  const copiedData = copies;
+
+  for (const stale of priorData) {
+    if (copies.includes(stale)) continue;
+    fs.rmSync(path.join(outDir, stale), { force: true });
+    // Tidy any directory the orphan left behind, but never anything with
+    // content still in it.
+    try {
+      fs.rmdirSync(path.dirname(path.join(outDir, stale)));
+    } catch {
+      /* not empty, or the site root */
+    }
+    console.log(`  removed stale ${stale}`);
+  }
+  fs.writeFileSync(manifestPath, JSON.stringify({ dataFiles: copies }, null, 2) + "\n");
+
   fs.writeFileSync(
     path.join(outDir, "assets", "model-files.js"),
     `window.__MODEL_FILES__ = ${JSON.stringify(modelFiles)};\n` +
-      `window.__REMOTE_TABLES__ = ${JSON.stringify(remoteTables)};\n` +
+      `window.__TABLE_FILES__ = ${JSON.stringify(tableFiles)};\n` +
       (selfHostDuckdb ? `window.__DUCKDB_BASE__ = "./duckdb/";\n` : ""),
   );
 
@@ -427,6 +553,10 @@ export async function bundleDashboards(opts: BundleOptions = {}): Promise<void> 
       : `  duckdb     jsDelivr CDN (nothing copied)`,
   );
   console.log(`  model      ${Object.keys(modelFiles).length} .malloy files inlined`);
+  if (copiedData.length) {
+    const mb = copiedData.reduce((a, r) => a + fs.statSync(path.join(root, r)).size, 0) / 1048576;
+    console.log(`  data       ${copiedData.length} file(s) copied, ${mb.toFixed(1)} MB (same-origin)`);
+  }
   console.log(
     target === "pages"
       ? `\nPublish: commit ${path.basename(outDir)}/ and point GitHub Pages at it.`

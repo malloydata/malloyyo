@@ -46,24 +46,30 @@ class StaticWasmConnection extends DuckDBWASMConnection {
   }
 }
 
-// Whole-file fetch, not ranged reads. For a columnar file whose dominant column
-// every query touches, ranged reads trade one bulk download for dozens of WAN
-// round trips and lose badly.
+// Whole-file fetch, not ranged reads.
 //
-// This CANNOT go through registerRemoteTableCallback: db-duckdb's findTables
-// skips anything matching ^https?:// ("handled by duckdb-wasm") so the callback
-// never fires for a remote URL. Instead we pre-register the bytes under the
-// exact URL string before any query runs — duckdb-wasm resolves its registered
-// files by name first, so the table reference finds the buffer and never issues
-// an HTTP request. The URL list is extracted from the model at build time.
-const REMOTE_TABLES: string[] = (window as any).__REMOTE_TABLES__ || [];
+// __TABLE_FILES__ maps each table reference the model makes to the URL this
+// page fetches for it. The KEY is what the model wrote and what DuckDB will
+// look up, so registering the bytes under that exact name means the model needs
+// no rewriting between `dashboard dev` (reads the file off disk) and here.
+//
+// Project-relative refs like `data/x.parquet` resolve against the page, so they
+// are SAME-ORIGIN — no CORS involved at all. Absolute URLs are fetched
+// cross-origin and do need CORS on that host.
+//
+// This cannot go through db-duckdb's registerRemoteTableCallback: findTables
+// skips anything matching ^https?:// ("handled by duckdb-wasm"), so the callback
+// never fires for a remote URL. Pre-registering is also strictly better — one
+// bulk GET instead of dozens of ranged round trips.
+const TABLE_FILES: Record<string, string> = (window as any).__TABLE_FILES__ || {};
 
-async function preloadRemoteTables(db: any) {
+async function preloadTables(db: any) {
   await Promise.all(
-    REMOTE_TABLES.map(async (url) => {
+    Object.entries(TABLE_FILES).map(async ([name, href]) => {
+      const url = new URL(href, document.baseURI).href;
       const r = await fetch(url);
       if (!r.ok) throw new Error(`fetch ${url} failed: ${r.status} ${r.statusText}`);
-      await db.registerFileBuffer(url, new Uint8Array(await r.arrayBuffer()));
+      await db.registerFileBuffer(name, new Uint8Array(await r.arrayBuffer()));
     }),
   );
 }
@@ -89,7 +95,7 @@ function getRuntime() {
     runtimeP = (async () => {
       const connection = new StaticWasmConnection({ name: "duckdb" });
       await connection.connecting;
-      await preloadRemoteTables((connection as any).database);
+      await preloadTables((connection as any).database);
       return new SingleConnectionRuntime({ connection, urlReader });
     })();
   }

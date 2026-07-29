@@ -48,10 +48,11 @@ npm install -g @malloydata/malloyyo     # or: npx @malloydata/malloyyo …
 malloyyo init
 ```
 
-`malloyyo init` writes `.mcp.json` (so `claude` opens in author mode) and
-scaffolds `index.malloy` if missing.
+**Do `malloyyo init` before anything else.** It writes `.mcp.json`, which is what
+lets `claude` open with the Malloy authoring tools wired to this repo — that's
+how step 5 stops being work. It also scaffolds `index.malloy` if missing.
 
-**Gate:** `malloyyo --version` prints a version.
+**Gate:** `malloyyo --version` prints a version, and `.mcp.json` exists.
 
 ---
 
@@ -64,12 +65,7 @@ Convert to Parquet — it is dramatically smaller and DuckDB reads it column-wis
 duckdb -c "COPY (SELECT * FROM read_csv_auto('raw.csv')) TO 'mydata.parquet' (FORMAT PARQUET)"
 ```
 
-Two things worth doing now, because they are hard to change later:
-
-- **Trim columns you will not query.** Every byte is downloaded by every visitor.
-- **Check which column dominates.** If one wide string column is most of the
-  file and every query touches it, no amount of clever reading will avoid
-  downloading the whole thing:
+If the file is larger than you expected, this shows where the bytes went:
 
 ```bash
 duckdb -c "SELECT path_in_schema AS col, sum(total_compressed_size) AS bytes
@@ -150,52 +146,41 @@ headers, and the ranged GET returning `206` with `access-control-allow-origin`.
 
 ---
 
-## 5. Build the semantic model
+## 5. Build the model and dashboards with Claude
 
-Keep the storage binding in its own file. It is one line, it is the only thing
-that changes if the data moves, and it keeps the URL out of the model proper.
+Don't hand-write Malloy. `malloyyo init` (step 1) wrote a `.mcp.json`, so from
+the repo root:
 
-`storage.malloy`:
-
-```malloy
-source: mydata_table is duckdb.table('https://storage.googleapis.com/my-public-bucket/mydata.parquet')
+```bash
+claude
 ```
 
-`mydata.malloy` — the model:
+Claude opens with the local Malloy authoring tools — `compile`, `compile_file`,
+`prettify`, `query`, `yo_help` — pointed at the files on disk. It writes the
+model, compiles it against your real data as it goes, and fixes its own errors.
 
-```malloy
-##! experimental { access_modifiers givens }
+Give it the URL from step 3 and say what you want:
 
-import "storage.malloy"
+> The data is at `https://storage.googleapis.com/my-bucket/mydata.parquet`.
+> Build a model over it, then a dashboard showing revenue by category over time
+> with a category filter.
 
-given:
-  # label="Category" control=select suggest { source: mydata dimension: category }
-  CATEGORY :: filter<string> is f'Widgets'
+It will create `mydata.malloy` (sources, dimensions, measures, `given:` filter
+declarations), an `index.malloy` that exports the surface, and
+`dashboards/<name>.malloy` for each dashboard. Keep asking for changes; it
+recompiles each time.
 
-source: mydata is mydata_table extend {
-  measure: total is count()
-  dimension: year is date_col.year
-}
-```
+> **One thing to tell it:** every table the model reads must be something a
+> *browser* can fetch — an `http(s)://` URL. A local path or a warehouse
+> connection compiles fine on your machine and then fails in the published site,
+> because the build runs with your credentials and the browser has none. The
+> build stays green; only the live site breaks. The step-7 gate catches it.
 
-`index.malloy` — the published surface:
+**Gate:** `malloyyo lint` passes (it checks each dashboard's query, givens, and
+component).
 
-```malloy
-import { mydata, CATEGORY } from './mydata.malloy'
-export { mydata, CATEGORY }
-```
-
-> **Trap:** every table the model reads must be something a *browser* can fetch
-> — an `http(s)://` URL. A local file path or a warehouse connection compiles
-> fine at build time, because the build runs on your machine with your
-> credentials, and then **fails in the browser**, where neither exists. The build
-> stays green; only the published site breaks. The step-7 gate catches this.
-
-Then author dashboards in `dashboards/` — see `docs/creating-dashboards.md`. A
-dashboard is a `dashboards/<name>.malloy` with a `# artifact` tag; add an
-optional `dashboards/<name>.jsx` to draw it yourself.
-
-**Gate:** `malloyyo lint` passes.
+For what a dashboard can do — tiled layouts, custom React components, drills —
+see `docs/creating-dashboards.md` and `docs/composite-dashboards.md`.
 
 ---
 
@@ -336,3 +321,21 @@ The published site reads its model from the **snapshot** inlined at bundle time
 (`docs/assets/model-files.js`), not from your working tree. Editing `.malloy`
 files changes nothing live until you re-bundle and push — so you can iterate on
 the model freely without touching the published site.
+
+---
+
+### Cheat sheet
+
+| Step | Command |
+|------|---------|
+| Install | `npm install -g @malloydata/malloyyo` |
+| Set up the repo | `malloyyo init` |
+| Data → Parquet | `duckdb -c "COPY (…) TO 'mydata.parquet' (FORMAT PARQUET)"` |
+| Upload | `gcloud storage cp mydata.parquet gs://$BUCKET/` |
+| CORS | `gcloud storage buckets update gs://$BUCKET --cors-file=cors.json` |
+| Build the model | `claude` → "build a model over `<url>` and a dashboard that …" |
+| Validate | `malloyyo lint` |
+| Preview | `malloyyo dashboard dev` |
+| Bundle | `malloyyo dashboard bundle --out docs` |
+| Publish | `git add -A && git commit && git push` |
+| Turn on Pages | `gh api -X POST repos/OWNER/REPO/pages -f "source[branch]=main" -f "source[path]=/docs"` |

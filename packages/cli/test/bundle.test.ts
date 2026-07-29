@@ -10,7 +10,45 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { givensFromSearch, givensToParams } from "../src/shared/givens-url.js";
-import { findRemoteTables } from "../src/bundle.js";
+import {
+  findTableRefs,
+  isDataFile,
+  reachableModelFiles,
+  tableFilePlan,
+} from "../src/bundle.js";
+
+test("reachableModelFiles follows imports and ignores unreferenced files", () => {
+  // The case this exists for: a leftover gs.malloy next to the storage file that
+  // is actually imported. Scanning it too would preload a second copy of the data.
+  const files = {
+    "file:///dashboards/d.malloy": `import "../index.malloy"`,
+    "file:///index.malloy": `import { x } from './model.malloy'`,
+    "file:///model.malloy": `import "storage.malloy"`,
+    "file:///storage.malloy": "source: t is duckdb.table('docs/x.parquet')",
+    "file:///gs.malloy": "source: t is duckdb.table('https://example.com/x.parquet')",
+  };
+  const out = reachableModelFiles(files, ["dashboards/d.malloy"]);
+  assert.deepEqual(Object.keys(out).sort(), [
+    "file:///dashboards/d.malloy",
+    "file:///index.malloy",
+    "file:///model.malloy",
+    "file:///storage.malloy",
+  ]);
+  assert.equal("file:///gs.malloy" in out, false);
+  // …and therefore only the imported storage file's table is planned.
+  assert.deepEqual(tableFilePlan(out, "docs").map, { "docs/x.parquet": "./x.parquet" });
+});
+
+test("reachableModelFiles survives a cycle and a missing import", () => {
+  const files = {
+    "file:///a.malloy": `import "b.malloy"\nimport "nope.malloy"`,
+    "file:///b.malloy": `import "a.malloy"`,
+  };
+  assert.deepEqual(Object.keys(reachableModelFiles(files, ["a.malloy"])).sort(), [
+    "file:///a.malloy",
+    "file:///b.malloy",
+  ]);
+});
 
 test("givensFromSearch keeps the $ prefix the runtime keys off", () => {
   // The runtime ignores any key that does not start with `$`, so stripping the
@@ -50,30 +88,59 @@ test("givensToParams round-trips through givensFromSearch", () => {
   assert.deepEqual(out, { $NAME: "Emma", $STATE: "NY" });
 });
 
-test("findRemoteTables picks up http(s) table() references", () => {
+test("tableFilePlan maps an https table to itself and copies nothing", () => {
   const files = {
-    "file:///gs.malloy":
+    "file:///storage.malloy":
       "source: t is duckdb.table('https://storage.googleapis.com/b/x.parquet')",
   };
-  assert.deepEqual(findRemoteTables(files), ["https://storage.googleapis.com/b/x.parquet"]);
+  const { map, copies } = tableFilePlan(files, "docs");
+  assert.deepEqual(map, {
+    "https://storage.googleapis.com/b/x.parquet": "https://storage.googleapis.com/b/x.parquet",
+  });
+  assert.deepEqual(copies, []);
 });
 
-test("findRemoteTables dedupes across files and sorts", () => {
-  const a = "https://example.com/a.parquet";
-  const b = "https://example.com/b.parquet";
-  const files = {
-    "file:///one.malloy": `source: x is duckdb.table('${b}')\nsource: y is duckdb.table('${a}')`,
-    "file:///two.malloy": `source: z is duckdb.table("${b}")`, // double quotes too
-  };
-  assert.deepEqual(findRemoteTables(files), [a, b]);
+test("tableFilePlan copies a file that lives outside the site", () => {
+  // The KEY must stay exactly what the model wrote — DuckDB looks the file up by
+  // that name, so rewriting it would break the model.
+  const files = { "file:///storage.malloy": "source: t is duckdb.table('data/x.parquet')" };
+  const { map, copies } = tableFilePlan(files, "docs");
+  assert.deepEqual(map, { "data/x.parquet": "./data/x.parquet" });
+  assert.deepEqual(copies, ["data/x.parquet"]);
 });
 
-test("findRemoteTables ignores non-http tables", () => {
-  // A MotherDuck or local table can't be preloaded into DuckDB-WASM — it isn't
-  // fetchable — so it must not appear in the preload list.
+test("tableFilePlan rebases a file already inside the site, without copying", () => {
+  // docs/x.parquet published from docs/ is served at ./x.parquet — and since it
+  // is already in place, it stays in git exactly once.
+  const files = { "file:///storage.malloy": "source: t is duckdb.table('docs/x.parquet')" };
+  const { map, copies } = tableFilePlan(files, "docs");
+  assert.deepEqual(map, { "docs/x.parquet": "./x.parquet" });
+  assert.deepEqual(copies, []);
+});
+
+test("tableFilePlan rebases nested paths inside the site", () => {
+  const files = { "file:///s.malloy": "source: t is duckdb.table('docs/data/x.parquet')" };
+  assert.deepEqual(tableFilePlan(files, "docs").map, { "docs/data/x.parquet": "./data/x.parquet" });
+});
+
+test("tableFilePlan excludes warehouse tables", () => {
+  // md.table('db.tbl') is not fetchable; listing it would make the page try.
+  const files = { "file:///md.malloy": "source: t is md.table('mayolo.baby_names')" };
+  assert.deepEqual(tableFilePlan(files, "docs"), { map: {}, copies: [] });
+});
+
+test("isDataFile distinguishes files from warehouse references", () => {
+  assert.equal(isDataFile("https://example.com/a.parquet"), true);
+  assert.equal(isDataFile("data/a.parquet"), true);
+  assert.equal(isDataFile("data/a.csv"), true);
+  assert.equal(isDataFile("mayolo.baby_names"), false);
+  assert.equal(isDataFile("db.schema.tbl"), false);
+});
+
+test("findTableRefs dedupes across files and handles both quote styles", () => {
   const files = {
-    "file:///md.malloy": "source: t is md.table('mayolo.baby_names')",
-    "file:///local.malloy": "source: u is duckdb.table('data/x.parquet')",
+    "file:///one.malloy": "source: x is duckdb.table('b.parquet')\nsource: y is duckdb.table('a.parquet')",
+    "file:///two.malloy": 'source: z is duckdb.table("b.parquet")',
   };
-  assert.deepEqual(findRemoteTables(files), []);
+  assert.deepEqual(findTableRefs(files), ["a.parquet", "b.parquet"]);
 });

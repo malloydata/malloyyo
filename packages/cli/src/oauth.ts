@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import type { AddressInfo } from "node:net";
 import { loadCreds, saveCreds, type Creds } from "./store.js";
+import { apiFetch } from "./http.js";
 import type { Target } from "./config.js";
 
 interface Endpoints {
@@ -20,7 +21,7 @@ interface TokenGrant {
 const LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
 
 async function discover(baseUrl: string): Promise<Endpoints> {
-  const res = await fetch(`${baseUrl}/api/oauth/discovery/authorization-server`);
+  const res = await apiFetch(`${baseUrl}/api/oauth/discovery/authorization-server`);
   if (!res.ok) throw new Error(`OAuth discovery failed at ${baseUrl}: ${res.status} ${res.statusText}`);
   return (await res.json()) as Endpoints;
 }
@@ -32,7 +33,7 @@ function pkce(): { verifier: string; challenge: string } {
 }
 
 async function registerClient(registrationEndpoint: string, redirectUri: string): Promise<string> {
-  const res = await fetch(registrationEndpoint, {
+  const res = await apiFetch(registrationEndpoint, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -128,7 +129,7 @@ export async function login(baseUrl: string): Promise<Creds> {
 
     const authCode = await code;
 
-    const res = await fetch(ep.token_endpoint, {
+    const res = await apiFetch(ep.token_endpoint, {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
@@ -157,7 +158,7 @@ export async function login(baseUrl: string): Promise<Creds> {
 
 async function refresh(baseUrl: string, creds: Creds): Promise<Creds> {
   const ep = await discover(baseUrl);
-  const res = await fetch(ep.token_endpoint, {
+  const res = await apiFetch(ep.token_endpoint, {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({

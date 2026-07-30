@@ -5,6 +5,7 @@ import { resolveTarget, resolveInstance } from "./config.js";
 import { gatherDirectory, gatherDashboards, gitInfo } from "./gather.js";
 import { lintDashboards, printLintReport } from "./lint.js";
 import { getAccessToken, login } from "./oauth.js";
+import { apiFetch } from "./http.js";
 import { serveMcp } from "./mcp.js";
 import { serveDashboard } from "./dashboard.js";
 import { initCmd } from "./init.js";
@@ -61,7 +62,7 @@ async function publish(
     return;
   }
 
-  const res = await fetch(`${t.url}/api/datasets/${t.dataset}/model/push`, {
+  const res = await apiFetch(`${t.url}/api/datasets/${t.dataset}/model/push`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${bearer}` },
     body: JSON.stringify(body),
@@ -80,7 +81,7 @@ async function publish(
 async function status(target: string, opts: { token?: string }): Promise<void> {
   const t = resolveTarget(resolve("."), target);
   const bearer = await getAccessToken(t, { tokenFlag: opts.token });
-  const res = await fetch(`${t.url}/api/datasets/${t.dataset}/model/status`, {
+  const res = await apiFetch(`${t.url}/api/datasets/${t.dataset}/model/status`, {
     headers: { authorization: `Bearer ${bearer}` },
   });
   if (!res.ok) {

@@ -10,11 +10,19 @@
  *   - version NOT on npm        -> the PR carried its own semver bump:
  *       publish it as-is + tag. No commit (the version is already in the repo).
  *
- * Either way the deployed server (the repo-root @malloyyo/server package) is
- * kept in lockstep: the CLI and the server are two faces of the same repo, so
- * the release version is mirrored into the root package.json and committed with
- * the bump. The mcp-engine is internal and unpublished — it is NOT versioned
- * here (it stays pinned at 0.0.1).
+ * This releases the CLI and ONLY the CLI. It deliberately does not touch the
+ * repo-root @malloyyo/server version, which it used to mirror.
+ *
+ * The mirror made sense while one number meant "these match" — the server and
+ * the CLI moved together. They don't anymore: a server is deployed on its own
+ * schedule, a globally installed CLI is upgraded on the operator's, and the
+ * server version is the unit of release state. A CLI patch that bumped it would
+ * report every deployment as out of date. Compatibility across that gap comes
+ * from the server staying backward compatible (see src/http.ts), not from
+ * matching numbers.
+ *
+ * The mcp-engine is internal and unpublished — it is NOT versioned here (it
+ * stays pinned at 0.0.1).
  *
  * Auth is supplied by the environment, so CI and humans run the identical
  * command: npm trusted publishing (OIDC) in CI, or a personal npm token /
@@ -23,29 +31,13 @@
  * Run `npm run release -- --help` for the full guided walkthrough.
  */
 import {execFileSync} from 'node:child_process';
-import {readFileSync, writeFileSync} from 'node:fs';
+import {readFileSync} from 'node:fs';
 import {createInterface} from 'node:readline/promises';
 import {fileURLToPath} from 'node:url';
 import {dirname, join} from 'node:path';
 
 const pkgDir = join(dirname(fileURLToPath(import.meta.url)), '..');
 const pkgJsonPath = join(pkgDir, 'package.json');
-// The deployed server lives at the repo root and shares the CLI's version.
-const repoRoot = join(pkgDir, '..', '..');
-const rootPkgJsonPath = join(repoRoot, 'package.json');
-
-function readVersionAt(path: string): string {
-  return JSON.parse(readFileSync(path, 'utf8')).version;
-}
-// Rewrite only the top-level "version" field, preserving the file's formatting.
-// (The first "version": occurrence is the package version; dependency pins use
-// the "name": "^x.y.z" shape and never match this key.)
-function writeVersionAt(path: string, version: string): void {
-  const text = readFileSync(path, 'utf8');
-  const next = text.replace(/("version":\s*")[^"]+(")/, `$1${version}$2`);
-  if (next === text) throw new Error(`could not find a version field to update in ${path}`);
-  writeFileSync(path, next);
-}
 
 // ---------------------------------------------------------------------------
 // tiny presentation helpers
@@ -142,9 +134,8 @@ ${bold('WHAT IT DOES')}
   So: to cut a normal patch, do nothing — just merge. To cut a minor/major,
   bump the version in ${cyan('package.json')} inside your PR and merge.
 
-  Either way the repo-root ${cyan('package.json')} (the deployed ${cyan('@malloyyo/server')}) is
-  mirrored to the same version and committed alongside — the CLI and the server
-  share one version.
+  This releases the CLI alone. The repo-root ${cyan('@malloyyo/server')} keeps its own
+  version — the two are released separately.
 
 ${bold('USAGE')}
   ${cyan('npm run release')}                 cut a release (prompts before publishing locally)
@@ -281,19 +272,9 @@ async function main(): Promise<void> {
     ok(`${name}@${inRepo} is not on npm → publishing ${green(version)} as-is.`);
   }
 
-  // Mirror the release version into the repo-root server package.json so the
-  // deployed @malloyyo/server reports the same version as the published CLI.
-  const inRootRepo = readVersionAt(rootPkgJsonPath);
-  const rootSynced = version !== inRootRepo;
-  if (rootSynced) {
-    writeVersionAt(rootPkgJsonPath, version);
-    ok(`Synced server package.json ${inRootRepo} → ${green(version)}.`);
-  }
-
   const tag = `malloyyo-v${version}`;
   const restoreVersion = (): void => {
     if (bumped) run('npm', ['version', '--no-git-tag-version', inRepo], {quiet: true});
-    if (rootSynced) writeVersionAt(rootPkgJsonPath, inRootRepo);
   };
 
   // --- the plan ------------------------------------------------------------
@@ -301,18 +282,15 @@ async function main(): Promise<void> {
   console.log(`  publish      ${bold(`${name}@${version}`)} → npm (tag: latest)`);
   console.log(`  tag          ${tag}`);
   console.log(
-    `  server sync  ${rootSynced ? `yes — root package.json → ${green(version)}` : dim('no (already in sync)')}`
-  );
-  console.log(
     `  commit back  ${
-      bumped || rootSynced
+      bumped
         ? `yes — "${`release: ${name} v${version} [skip ci]`}"`
         : dim('no (version already in repo)')
     }`
   );
   console.log(
     `  push         ${
-      noPush ? yellow('no (--no-push)') : bumped || rootSynced ? 'commit + tag → origin/main' : 'tag → origin'
+      noPush ? yellow('no (--no-push)') : bumped ? 'commit + tag → origin/main' : 'tag → origin'
     }`
   );
   console.log(`  auth         ${isCI ? 'OIDC (trusted publishing)' : 'your npm login'}`);
@@ -352,12 +330,9 @@ async function main(): Promise<void> {
     }
 
     step('Git');
-    const committed = bumped || rootSynced;
+    const committed = bumped;
     if (committed) {
-      const files: string[] = [];
-      if (bumped) files.push(pkgJsonPath);
-      if (rootSynced) files.push(rootPkgJsonPath);
-      run('git', ['commit', '-m', `release: ${name} v${version} [skip ci]`, ...files]);
+      run('git', ['commit', '-m', `release: ${name} v${version} [skip ci]`, pkgJsonPath]);
     }
     if (!succeeds('git', ['rev-parse', '-q', '--verify', `refs/tags/${tag}`])) {
       run('git', ['tag', tag]);

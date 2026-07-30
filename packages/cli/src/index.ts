@@ -208,7 +208,7 @@ program
   .option("--title <title>", "site title (bundle; default: project directory name)")
   .option("--target <target>", "deploy target: pages | vercel (bundle)", "pages")
   .option("--duckdb <source>", "DuckDB binaries: cdn | bundled (bundle)", "cdn")
-  .option("--analytics <id>", "Google Analytics 4 Measurement ID, e.g. G-XXXXXXXXXX (bundle)")
+  .option("--analytics <id>", "GA4 Measurement ID, overriding malloyyo.analytics in malloy-config.json (bundle)")
   .option("--no-serve", "bundle only; don't serve the result (bundle)")
   .description("preview dashboards locally (dev), or build a static site from them (bundle)")
   .action(

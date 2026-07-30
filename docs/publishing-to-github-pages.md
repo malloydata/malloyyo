@@ -245,7 +245,6 @@ Useful flags:
 | flag | when |
 |---|---|
 | `--target vercel` | deploying to Vercel: clean URLs + cache headers |
-| `--analytics G-XXXXXXXXXX` | inject Google Analytics 4 |
 | `--duckdb bundled` | self-host the wasm (offline / no CDN) — adds ~75 MB |
 | `--no-serve` | CI |
 | `--title "…"` | site title (defaults to the directory name) |
@@ -255,11 +254,26 @@ component and it becomes the front page instead of the generated list. It receiv
 `{ dashboards: [{name, title, description, href}] }`, is bundled separately, and
 needs no Malloy — keep it plain React and it stays small.
 
-**Optional: analytics.** `--analytics G-XXXXXXXXXX` injects the GA4 snippet into
-every emitted page. Omit it and the site ships no third-party script and sets no
-cookies — which is the default for a reason: adding analytics puts your site in
-scope for cookie-consent rules in several jurisdictions. A cookieless
-alternative (Plausible, Fathom) avoids that; this flag does not.
+**Optional: analytics.** Put your GA4 Measurement ID in `malloy-config.json`,
+in the `malloyyo` block:
+
+```json
+{
+  "malloyyo": {
+    "analytics": "G-XXXXXXXXXX"
+  }
+}
+```
+
+Every build injects the snippet from then on. It belongs in the config rather
+than on the command line because it is a property of the project — a site should
+not lose its tag because someone rebuilt without remembering a flag. (`--analytics`
+overrides it for a one-off build.)
+
+Leave it out and the site ships no third-party script and sets no cookies, which
+is the default for a reason: adding analytics puts your site in scope for
+cookie-consent rules in several jurisdictions. A cookieless alternative
+(Plausible, Fathom) avoids that; this does not.
 
 **Gate — check the emitted HTML, because these fail silently:**
 

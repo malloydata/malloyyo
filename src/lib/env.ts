@@ -45,4 +45,11 @@ export const env = {
   get GITHUB_TOKEN() {
     return process.env.GITHUB_TOKEN ?? "";
   },
+  // Optional GA4 Measurement ID (G-XXXXXXXXXX). Unset means this deployment
+  // ships no third-party script and sets no cookies — the same default the
+  // static `dashboard bundle` sites use, where the ID lives in
+  // malloy-config.json instead.
+  get ANALYTICS_ID() {
+    return process.env.ANALYTICS_ID ?? "";
+  },
 };

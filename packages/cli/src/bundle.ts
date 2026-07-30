@@ -17,6 +17,7 @@ import path from "node:path";
 import { createRequire } from "node:module";
 import * as esbuild from "esbuild";
 import { makeRunner, type ModelRunner } from "./host.js";
+import { readSiteConfig } from "./config.js";
 import {
   discoverDashboards,
   resolveRuntimeDir,
@@ -327,8 +328,11 @@ export interface BundleOptions {
       site that works offline and depends on no third party — at the cost of
       ~75 MB, which for a GitHub Pages deploy means 75 MB committed to git. */
   duckdb?: "cdn" | "bundled";
-  /** GA4 Measurement ID (G-XXXXXXXXXX). Omitted = no analytics, no third-party
-      script, no cookies. */
+  /** GA4 Measurement ID (G-XXXXXXXXXX), overriding `malloyyo.analytics` in
+      malloy-config.json. Normally set it in the config instead: it is a
+      property of the project, not of one invocation, so every rebuild picks it
+      up without anyone having to remember a flag. Neither set = no analytics,
+      no third-party script, no cookies. */
   analytics?: string;
 }
 
@@ -337,6 +341,10 @@ export async function bundleDashboards(opts: BundleOptions = {}): Promise<void> 
   const outDir = path.resolve(root, opts.out ?? "docs");
   const title = opts.title ?? path.basename(root);
   const target: BundleTarget = opts.target ?? "pages";
+  // The flag wins so a one-off build can override, but the config is the
+  // normal place — a site should not lose its analytics tag because someone
+  // rebuilt without remembering the flag.
+  const analytics = opts.analytics ?? readSiteConfig(root).analytics;
   // Only Vercel can rewrite extensionless paths, so only there do the nav links
   // drop `.html`. On a plain static host a clean URL would just 404.
   const cleanUrls = target === "vercel";
@@ -528,9 +536,9 @@ export async function bundleDashboards(opts: BundleOptions = {}): Promise<void> 
       if (!got.ok) throw new Error(`dashboard ${d.name}: ${got.error}`);
       specs = got.givens;
     }
-    fs.writeFileSync(path.join(outDir, `${d.name}.html`), page(d, dashboards, title, specs, tileSpecs, cleanUrls, opts.analytics));
+    fs.writeFileSync(path.join(outDir, `${d.name}.html`), page(d, dashboards, title, specs, tileSpecs, cleanUrls, analytics));
   }
-  fs.writeFileSync(path.join(outDir, "index.html"), indexPage(dashboards, title, !!landing, cleanUrls, opts.analytics));
+  fs.writeFileSync(path.join(outDir, "index.html"), indexPage(dashboards, title, !!landing, cleanUrls, analytics));
 
   if (landing) {
     // Deliberately its OWN esbuild pass, not an entry in the dashboard build:
@@ -578,6 +586,7 @@ export async function bundleDashboards(opts: BundleOptions = {}): Promise<void> 
       : `  duckdb     jsDelivr CDN (nothing copied)`,
   );
   console.log(`  model      ${Object.keys(modelFiles).length} .malloy files inlined`);
+  if (analytics) console.log(`  analytics  ${analytics}`);
   if (copiedData.length) {
     const mb = copiedData.reduce((a, r) => a + fs.statSync(path.join(root, r)).size, 0) / 1048576;
     console.log(`  data       ${copiedData.length} file(s) copied, ${mb.toFixed(1)} MB (same-origin)`);

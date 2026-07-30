@@ -18,25 +18,131 @@ interface TargetConfig {
 
 type TargetMap = Record<string, TargetConfig>;
 
+/** Project-level settings for the published site. */
+export interface SiteConfig {
+  /** Google Analytics 4 Measurement ID, e.g. G-XXXXXXXXXX. */
+  analytics?: string;
+}
+
 /**
- * Find the `malloyyo` target map. Looked for, in order:
+ * The `malloyyo` block. Every key here is a KNOWN name:
+ *
+ *   { "malloyyo": {
+ *       "analytics": "G-XXXXXXXXXX",
+ *       "targets": { "prod": { "url": …, "dataset": … } }
+ *   } }
+ *
+ * The old shape put targets directly at the top level, which made the block an
+ * open map: a mistyped setting silently became a publish target, and there was
+ * nowhere to put project settings. That shape still works and still warns —
+ * see parseMalloyyoConfig.
+ */
+const KNOWN_KEYS = new Set(["analytics", "targets"]);
+
+/** A target is an object with a string `url`. Only used to tell a legacy
+    top-level target apart from a mistyped key, so the warning can say which. */
+function isTarget(v: unknown): v is TargetConfig {
+  return typeof v === "object" && v !== null && typeof (v as TargetConfig).url === "string";
+}
+
+// The config is read by several entry points in one process; warn once each.
+const warned = new Set<string>();
+function warnOnce(key: string, msg: string): void {
+  if (warned.has(key)) return;
+  warned.add(key);
+  console.warn(msg);
+}
+
+function parseMalloyyoConfig(raw: Record<string, unknown>): {
+  analytics?: string;
+  targets: TargetMap;
+} {
+  const declared = raw.targets;
+  const targets: TargetMap =
+    typeof declared === "object" && declared !== null ? { ...(declared as TargetMap) } : {};
+
+  const legacy: string[] = [];
+  const unknown: string[] = [];
+  for (const [k, v] of Object.entries(raw)) {
+    if (KNOWN_KEYS.has(k)) continue;
+    if (isTarget(v)) {
+      // Accept it, so existing repos keep working.
+      if (!(k in targets)) targets[k] = v as TargetConfig;
+      legacy.push(k);
+    } else {
+      unknown.push(k);
+    }
+  }
+
+  if (legacy.length) {
+    warnOnce(
+      "legacy-targets",
+      `malloy-config.json: publish target(s) ${legacy.map((t) => `"${t}"`).join(", ")} are ` +
+        `at the top of the "malloyyo" block. Move them under "targets":\n` +
+        `  "malloyyo": { "targets": { ${legacy.map((t) => `"${t}": { … }`).join(", ")} } }\n` +
+        `The old shape still works for now.`,
+    );
+  }
+  if (unknown.length) {
+    warnOnce(
+      "unknown-keys",
+      `malloy-config.json: ignoring unknown key(s) in the "malloyyo" block: ` +
+        `${unknown.map((k) => `"${k}"`).join(", ")}. ` +
+        `Known keys: ${[...KNOWN_KEYS].join(", ")}.`,
+    );
+  }
+  const analytics = raw.analytics;
+  return {
+    analytics: typeof analytics === "string" && analytics ? analytics : undefined,
+    targets,
+  };
+}
+
+/**
+ * Publish targets. Looked for, in order:
  *   1. the `malloyyo` key in malloy-config.json
- *   2. a standalone malloyyo.json (whole file is the map)
+ *   2. a standalone malloyyo.json (whole file is the block)
  */
 function readTargetMap(dir: string): TargetMap {
-  const malloyConfig = join(dir, "malloy-config.json");
-  if (existsSync(malloyConfig)) {
-    const json = JSON.parse(readFileSync(malloyConfig, "utf8"));
-    if (json.malloyyo && typeof json.malloyyo === "object") return json.malloyyo;
-  }
-  const standalone = join(dir, "malloyyo.json");
-  if (existsSync(standalone)) {
-    return JSON.parse(readFileSync(standalone, "utf8"));
-  }
+  const raw = readMalloyyoBlock(dir);
+  if (raw) return parseMalloyyoConfig(raw).targets;
   throw new Error(
     `No \`malloyyo\` config found in ${dir} ` +
       `(looked for a "malloyyo" block in malloy-config.json, then malloyyo.json).`,
   );
+}
+
+/** The raw `malloyyo` block, or null. Same lookup order as the target map:
+    the `malloyyo` key in malloy-config.json, then a standalone malloyyo.json. */
+function readMalloyyoBlock(dir: string): Record<string, unknown> | null {
+  const malloyConfig = join(dir, "malloy-config.json");
+  if (existsSync(malloyConfig)) {
+    try {
+      const json = JSON.parse(readFileSync(malloyConfig, "utf8"));
+      if (json.malloyyo && typeof json.malloyyo === "object") return json.malloyyo;
+    } catch {
+      /* malformed config — target resolution will report it */
+    }
+  }
+  const standalone = join(dir, "malloyyo.json");
+  if (existsSync(standalone)) {
+    try {
+      return JSON.parse(readFileSync(standalone, "utf8"));
+    } catch {
+      /* same */
+    }
+  }
+  return null;
+}
+
+/** Site settings from the `malloyyo` block. Unlike target resolution this NEVER
+    throws: publishing a static site does not require a malloyyo block at all,
+    so a missing or malformed config just means no settings. */
+export function readSiteConfig(dir: string): SiteConfig {
+  const raw = readMalloyyoBlock(dir);
+  if (!raw) return {};
+  const { analytics } = parseMalloyyoConfig(raw);
+  return analytics ? { analytics } : {};
 }
 
 const normalizeUrl = (u: string): string => u.replace(/\/+$/, "");

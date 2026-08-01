@@ -140,11 +140,13 @@ fails loudly, not at click time).
 ## Custom component (optional)
 
 For bespoke layout/charts, add a flat sibling `dashboards/<name>.jsx` (or
-`.tsx`). Only React + `@malloyyo/dashboard` importable (sandboxed). A bare
-`<Panel/>` renders the whole dashboard; a `<Panel query="…"/>` /
-`<VegaChart query="…"/>` runs a query DEFINED in this dashboard file (by name) or
-a `source -> view`. `lint` checks each `query="…"` still resolves. See `yo_help
-dashboards/custom-components`.
+`.tsx`). Only React + `@malloyyo/dashboard` importable (sandboxed). **A custom
+component renders the data ITSELF** — there is no `<Panel>` / Malloy renderer in
+the sandbox (adding a component is how you opt OUT of it; delete the component
+to get it back). Pull rows with `useQuery({query:"…"})` / `runData` and draw them
+with `<VegaChart/>` or your own markup; `query="…"` names a query DEFINED in this
+dashboard file, or a `source -> view`. `lint` checks each `query="…"` still
+resolves. See `yo_help dashboards/custom-components`.
 
 ## Rules
 - Each dashboard is one `dashboards/<name>.malloy`; the filename is the slug.

@@ -1,10 +1,26 @@
 # malloyyo
 
-CLI to publish Malloy models to a [Malloyyo](https://github.com/malloydata) instance.
+The CLI for authoring, testing, and publishing Malloy semantic models and dashboards on
+[Malloyyo](https://github.com/malloydata/malloyyo).
 
-It bundles up the `.malloy` files in a directory plus `malloy-config.json`, records the git
-commit they came from, and pushes them to a Malloyyo deployment. The server compiles and
-introspects the model — the CLI needs no database connection.
+> **Full reference: [the CLI guide](../../docs/guide/reference/cli.md).** Start with
+> [authoring a model](../../docs/guide/authoring.md) if you're new.
+
+| | |
+|---|---|
+| `init` | Set up a model repo so `cd repo && claude` opens in author mode |
+| `author` / `test` | Launch Claude wired to one surface — build the model, or rehearse what the web will see |
+| `mcp` | Run the local stdio MCP server (`--develop` / `--explore`) |
+| `dashboard dev` | Live-reloading dashboard preview against the local model |
+| `lint` | Validate `./dashboards` against the model |
+| `login` / `logout` | Sign in to an instance |
+| `publish` / `status` | Push a model version; see what's live |
+
+For `publish`, the CLI bundles the `.malloy` files in a directory plus
+`malloy-config.json`, records the git commit they came from, and pushes them to a Malloyyo
+deployment; the server does the compiling and introspection. The other commands
+(`lint`, `dashboard dev`, `mcp`, and the dashboard-gathering step of `publish`) compile
+locally and **do** open the connections your `malloy-config.json` declares.
 
 ## Install
 
@@ -80,4 +96,6 @@ malloyyo status main            # what's live: version, commit, compile state
 your `malloyyo login` session. So interactively you just `login` once; in CI you set the env
 var and never touch the browser.
 
-See `docs/model-publishing-design.md` in the repo for the full design.
+Every other command — `init`, `author`, `test`, `mcp`, `dashboard dev`, `lint` — is
+documented in **[the CLI reference](../../docs/guide/reference/cli.md)**. For the publish
+design, see [`docs/model-publishing-design.md`](../../docs/model-publishing-design.md).

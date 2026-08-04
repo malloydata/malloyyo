@@ -15,10 +15,42 @@ import { useEffect, useRef } from "react";
 // Tag-only dashboards do NOT come here — they render in the trusted page
 // (TagOnlyDashboard). The postMessage broker below (run / givens / navigate) is
 // the same contract the in-page host implements with direct calls.
+// The shareable URL carries TWO namespaces the frame syncs independently:
+// `$NAME` = a given (the governed query contract), `~key` = a custom
+// component's useUrlState view-state (a rack, a board — see the runtime's
+// useUrlState). Each sync rewrites the whole query string, so both are cached
+// per mount and every write re-emits the other's params.
+function splitParams(search: string) {
+  const givens: Record<string, unknown> = {};
+  const urlState: Record<string, unknown> = {};
+  for (const [k, v] of new URLSearchParams(search)) {
+    if (k.startsWith("~")) urlState[k.slice(1)] = v;
+    else if (k.startsWith("$")) givens[k.slice(1)] = v;
+  }
+  return { givens, urlState };
+}
+
 export function CustomDashboardFrame({ id, name }: { id: string; name: string }) {
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
   useEffect(() => {
+    // Seeded from the URL this page opened with: whichever namespace syncs
+    // first must not erase the other's shared-link values.
+    let { givens: lastGivens, urlState: lastUrlState } = splitParams(window.location.search);
+    const writeUrl = () => {
+      const u = new URL(window.location.href);
+      u.search = "";
+      // Skip empty (no-filter) givens so the URL stays clean; view-state keeps
+      // an empty value, which means "cleared" when the default is non-empty.
+      for (const [k, v] of Object.entries(lastGivens)) {
+        if (v != null && String(v) !== "") u.searchParams.set(`$${k}`, String(v));
+      }
+      for (const [k, v] of Object.entries(lastUrlState)) {
+        if (v != null) u.searchParams.set(`~${k}`, String(v));
+      }
+      window.history.replaceState(null, "", u.pathname + u.search);
+    };
+
     // Set the iframe src ONCE, imperatively, from the actual URL (so a shared
     // link's `?$NAME=…` givens survive). NOT a reactive `src` prop derived from
     // useSearchParams(): that value settles once during the initial client
@@ -36,16 +68,18 @@ export function CustomDashboardFrame({ id, name }: { id: string; name: string })
       if (!frame || e.source !== frame.contentWindow) return;
       const m = e.data;
       // Mirror the dashboard's givens into the URL (shareable) — replaceState so
-      // filter tweaks don't spam history.
+      // filter tweaks don't spam history. Givens are `$`-prefixed; bare params
+      // are reserved for future dimension filters.
       if (m?.type === "givens") {
-        const u = new URL(window.location.href);
-        u.search = "";
-        // Givens are `$`-prefixed in the URL; bare params are reserved for future
-        // dimension filters. Skip empty (no-filter) givens so the URL stays clean.
-        for (const [k, v] of Object.entries(m.givens as Record<string, unknown>)) {
-          if (v != null && String(v) !== "") u.searchParams.set(`$${k}`, String(v));
-        }
-        window.history.replaceState(null, "", u.pathname + u.search);
+        lastGivens = (m.givens ?? {}) as Record<string, unknown>;
+        writeUrl();
+        return;
+      }
+      // The other namespace: a custom component's useUrlState (`~key`), so a
+      // JS-computed view (an anagram rack, a Scrabble board) is shareable too.
+      if (m?.type === "urlstate") {
+        lastUrlState = (m.state ?? {}) as Record<string, unknown>;
+        writeUrl();
         return;
       }
       // Drill (a `# drill { to }` dimension click the frame forwarded): open the

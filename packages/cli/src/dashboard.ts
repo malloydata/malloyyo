@@ -25,7 +25,7 @@ import fs from "node:fs";
 import path from "node:path";
 import * as esbuild from "esbuild";
 import { makeRunner, type GivenSpec, type ModelRunner, type TileSpec } from "./host.js";
-import { givensFromSearch } from "./shared/givens-url.js";
+import { givensFromSearch, urlStateFromSearch } from "./shared/givens-url.js";
 import { navHtml as sharedNav, NAV_CSS } from "./shared/nav.js";
 import {
   discoverDashboards,
@@ -160,6 +160,7 @@ function inPageShell(
   all: Dashboard[],
   givenSpecs: GivenSpec[],
   initialGivens: Record<string, string>,
+  initialUrlState: Record<string, string>,
   tileSpecs?: TileSpec[],
 ): string {
   const info = {
@@ -178,7 +179,8 @@ function inPageShell(
       `<div id="root"></div>` +
       `<script>window.__DASHBOARD__=${JSON.stringify(info)};` +
       `window.__GIVENS__=${JSON.stringify(givenSpecs)};` +
-      `window.__INITIAL_GIVENS__=${JSON.stringify(initialGivens)}</script>` +
+      `window.__INITIAL_GIVENS__=${JSON.stringify(initialGivens)};` +
+      `window.__INITIAL_URLSTATE__=${JSON.stringify(initialUrlState)}</script>` +
       `<script>try{new EventSource('/events').onmessage=()=>location.reload();}catch(e){}</script>` +
       `<script src="/inpage.js?d=${encodeURIComponent(dash.name)}"></script>`,
     dash.title,
@@ -190,8 +192,11 @@ function parentShell(
   frameBase: string,
   all: Dashboard[],
   initialGivens: Record<string, string>,
+  initialUrlState: Record<string, string>,
 ): string {
-  const givensQs = Object.entries(initialGivens)
+  // Both namespaces ride along to the frame: `$given` (the query contract) and
+  // `~key` (a custom component's useUrlState view-state).
+  const givensQs = Object.entries({ ...initialGivens, ...initialUrlState })
     .map(([k, v]) => `&${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
     .join("");
   // Trusted broker: forwards a run request from the sandboxed frame to /api/run
@@ -215,21 +220,37 @@ function parentShell(
       `<script>
 const f=document.getElementById('f');
 try{new EventSource('/events').onmessage=()=>location.reload();}catch(e){}
+// The shareable URL has TWO namespaces the frame syncs independently:
+// '$NAME' = a given (the governed query contract), '~key' = a custom
+// component's useUrlState view-state. Each write must re-emit the other's
+// params, so both are cached and every write rebuilds the whole query string.
+let G=${JSON.stringify(Object.fromEntries(Object.entries(initialGivens).map(([k, v]) => [k.replace(/^\$/, ""), v])))};
+let U=${JSON.stringify(Object.fromEntries(Object.entries(initialUrlState).map(([k, v]) => [k.replace(/^~/, ""), v])))};
+function shareUrl(dashboard){
+  const u=new URL(location.href); u.search='';
+  u.searchParams.set('d',dashboard);
+  for(const [k,v] of Object.entries(G)) if(v!=null&&String(v)!=='') u.searchParams.set('$'+k,String(v));
+  for(const [k,v] of Object.entries(U)) if(v!=null) u.searchParams.set('~'+k,String(v));
+  return u.pathname+u.search;
+}
 window.addEventListener('message',async(e)=>{
   if(e.source!==f.contentWindow||e.origin!==${fb})return;
   const m=e.data;
   if(m&&m.type==='givens'){
-    const u=new URL(location.href); u.search='';
-    u.searchParams.set('d',${d});
-    for(const [k,v] of Object.entries(m.givens)) if(v!=null&&String(v)!=='') u.searchParams.set('$'+k,String(v));
-    history.replaceState(null,'',u.pathname+u.search);
+    G=m.givens||{};
+    history.replaceState(null,'',shareUrl(${d}));
+    return;
+  }
+  if(m&&m.type==='urlstate'){
+    U=m.state||{};
+    history.replaceState(null,'',shareUrl(${d}));
     return;
   }
   if(m&&m.type==='navigate'&&typeof m.dashboard==='string'){
-    const u=new URL(location.href); u.search='';
-    u.searchParams.set('d',m.dashboard);
-    for(const [k,v] of Object.entries(m.givens||{})) if(v!=null&&String(v)!=='') u.searchParams.set('$'+k,String(v));
-    location.href=u.pathname+u.search;
+    // A drill leaves this dashboard: carry the givens it seeded, but NOT this
+    // component's view-state — that belongs to the component being left.
+    G=m.givens||{}; U={};
+    location.href=shareUrl(m.dashboard);
     return;
   }
   if(!m||m.type!=='run')return;
@@ -246,15 +267,21 @@ window.addEventListener('message',async(e)=>{
   );
 }
 
-/** URL query minus the `d` (dashboard) selector = the givens/filter values. */
+/** URL query minus the `d` selector and the `~` view-state = the givens. */
 function givensFromUrl(url: URL): Record<string, string> {
   return givensFromSearch(url.search);
+}
+
+/** The `~`-prefixed half: a custom component's useUrlState view-state. */
+function urlStateFromUrl(url: URL): Record<string, string> {
+  return urlStateFromSearch(url.search);
 }
 
 function frameDoc(
   dash: Dashboard,
   givenSpecs: GivenSpec[],
   initialGivens: Record<string, string>,
+  initialUrlState: Record<string, string>,
   tileSpecs?: TileSpec[],
 ): string {
   // NOTE (prototype): the `sandbox` attribute is the containment here. A
@@ -277,7 +304,8 @@ function frameDoc(
     `<div id="root"></div>` +
       `<script>window.__DASHBOARD__=${JSON.stringify(info)};` +
       `window.__GIVENS__=${JSON.stringify(givenSpecs)};` +
-      `window.__INITIAL_GIVENS__=${JSON.stringify(initialGivens)}</script>` +
+      `window.__INITIAL_GIVENS__=${JSON.stringify(initialGivens)};` +
+      `window.__INITIAL_URLSTATE__=${JSON.stringify(initialUrlState)}</script>` +
       `<script src="/bundle.js?d=${encodeURIComponent(dash.name)}"></script>`,
     dash.title,
   );
@@ -388,7 +416,8 @@ export async function serveDashboard(opts: {
             return send(200, "text/html; charset=utf-8",
               html(`<pre style="color:crimson;padding:16px">model error: ${esc(g.error)}</pre>`, dash.title));
           }
-          return send(200, "text/html; charset=utf-8", frameDoc(dash, g.union, givensFromUrl(url), g.tiles));
+          return send(200, "text/html; charset=utf-8",
+            frameDoc(dash, g.union, givensFromUrl(url), urlStateFromUrl(url), g.tiles));
         }
         if (url.pathname === "/bundle.js") {
           return send(200, "application/javascript; charset=utf-8", await bundle(pick(url)));
@@ -415,9 +444,11 @@ export async function serveDashboard(opts: {
             return send(200, "text/html; charset=utf-8",
               html(`<pre style="color:crimson;padding:16px">model error: ${esc(g.error)}</pre>`, dash.title));
           }
-          return send(200, "text/html; charset=utf-8", inPageShell(dash, dashboards, g.union, givensFromUrl(url), g.tiles));
+          return send(200, "text/html; charset=utf-8",
+            inPageShell(dash, dashboards, g.union, givensFromUrl(url), urlStateFromUrl(url), g.tiles));
         }
-        return send(200, "text/html; charset=utf-8", parentShell(dash, frameBase, dashboards, givensFromUrl(url)));
+        return send(200, "text/html; charset=utf-8",
+          parentShell(dash, frameBase, dashboards, givensFromUrl(url), urlStateFromUrl(url)));
       }
       // The in-page bundle (tag-only): served SAME-ORIGIN as the trusted shell —
       // it IS trusted (no untrusted author code), so it may fetch /api/run

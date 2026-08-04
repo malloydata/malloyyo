@@ -10,13 +10,27 @@ import { mountInPage } from "./frame-runtime/index";
 const info = window.__DASHBOARD__ || {};
 const name = info.name;
 
-// Reflect committed givens into the shell URL as `?d=<name>&$NAME=…`.
-const givensToUrl = (dashboard, givens) => {
+// Reflect committed givens into the shell URL as `?d=<name>&$NAME=…`, plus any
+// `~key` view-state (useUrlState). A tag-only dashboard runs no custom code, so
+// there's normally no view-state here — but the two namespaces share one query
+// string, so each write re-emits the other's params rather than erasing them.
+let lastGivens = {};
+// Seeded (`~key` -> value, prefix stripped) from what the shell put in the page,
+// so a link's view-state survives the very first givens sync.
+let lastUrlState = Object.fromEntries(
+  Object.entries(window.__INITIAL_URLSTATE__ || {}).map(([k, v]) => [k[0] === "~" ? k.slice(1) : k, v]),
+);
+const shareUrl = (dashboard) => {
   const u = new URL(location.href);
   u.search = "";
   u.searchParams.set("d", dashboard);
-  for (const [k, v] of Object.entries(givens)) if (v != null && String(v) !== "") u.searchParams.set("$" + k, String(v));
+  for (const [k, v] of Object.entries(lastGivens)) if (v != null && String(v) !== "") u.searchParams.set("$" + k, String(v));
+  for (const [k, v] of Object.entries(lastUrlState)) if (v != null) u.searchParams.set("~" + k, String(v));
   return u.pathname + u.search;
+};
+const givensToUrl = (dashboard, givens) => {
+  lastGivens = givens;
+  return shareUrl(dashboard);
 };
 
 mountInPage({
@@ -32,7 +46,13 @@ mountInPage({
       .then((r) => r.json())
       .catch((e) => ({ ok: false, problems: [{ message: String(e) }] })),
   navigate: (dashboard, givens) => {
+    // Leaving this dashboard: carry the drilled givens, drop the view-state.
+    lastUrlState = {};
     location.href = givensToUrl(dashboard, givens);
   },
   syncGivens: (givens) => history.replaceState(null, "", givensToUrl(name, givens)),
+  syncUrlState: (state) => {
+    lastUrlState = state;
+    history.replaceState(null, "", shareUrl(name));
+  },
 });

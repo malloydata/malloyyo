@@ -10,14 +10,61 @@
 // Deliberately dependency-free (no React, no node builtins) so the Node dev
 // server and the browser bundle can share the same file.
 
+// Two namespaces share the query string and must never collide:
+//   `$NAME`  a GIVEN — the governed, filter-typed query contract (declared in
+//            the model, drives the auto-rendered controls, MCP-visible).
+//   `~key`   a custom component's VIEW-STATE (useUrlState): a rack string, a
+//            board layout, a checkbox. Not a query parameter; the runtime
+//            round-trips it verbatim so JS-driven components get shareable links.
+export const URL_STATE_PREFIX = "~";
+
 /** Query string -> given values. Keys KEEP their `$` prefix — the runtime
-    requires it — and `d` (the dashboard selector) is dropped. */
+    requires it — while `d` (the dashboard selector) and the `~` view-state
+    namespace are dropped. */
 export function givensFromSearch(search: string): Record<string, string> {
   const g: Record<string, string> = {};
   for (const [k, v] of new URLSearchParams(search)) {
-    if (k !== "d") g[k] = v;
+    if (k !== "d" && k.charAt(0) !== URL_STATE_PREFIX) g[k] = v;
   }
   return g;
+}
+
+/** Query string -> view-state values (`useUrlState`). Keys KEEP their `~`
+    prefix, mirroring givensFromSearch: the runtime strips it itself. */
+export function urlStateFromSearch(search: string): Record<string, string> {
+  const s: Record<string, string> = {};
+  for (const [k, v] of new URLSearchParams(search)) {
+    if (k.charAt(0) === URL_STATE_PREFIX) s[k] = v;
+  }
+  return s;
+}
+
+/** View-state -> `~`-prefixed query params. Accepts keys with or without the
+    prefix. Unlike givens, an EMPTY STRING is kept: a component whose default is
+    non-empty needs `~rack=` to mean "the user cleared it" (the runtime already
+    drops keys that equal their default, so nothing pointless reaches here). */
+export function urlStateToParams(state: Record<string, unknown>): URLSearchParams {
+  const p = new URLSearchParams();
+  for (const [k, v] of Object.entries(state ?? {})) {
+    if (v == null) continue;
+    p.set(k.charAt(0) === URL_STATE_PREFIX ? k : URL_STATE_PREFIX + k, String(v));
+  }
+  return p;
+}
+
+/** The one shareable query string: `d` (when the host uses a selector) +
+    `$givens` + `~view-state`, in that order. Returns "" or "?…". */
+export function shareSearch(opts: {
+  d?: string;
+  givens?: Record<string, unknown>;
+  urlState?: Record<string, unknown>;
+}): string {
+  const p = new URLSearchParams();
+  if (opts.d != null) p.set("d", opts.d);
+  for (const [k, v] of givensToParams(opts.givens ?? {})) p.set(k, v);
+  for (const [k, v] of urlStateToParams(opts.urlState ?? {})) p.set(k, v);
+  const s = p.toString();
+  return s ? "?" + s : "";
 }
 
 /** Given values -> `$`-prefixed query params, skipping empties. Accepts keys

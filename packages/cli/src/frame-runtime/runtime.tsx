@@ -9,9 +9,10 @@
 // and posts results back.
 //
 // Injected frame globals (read lazily — script order differs between hosts):
-//   window.__DASHBOARD__      { name, query, title, description? }  (the # artifact tag)
-//   window.__GIVENS__         given specs introspected from the model's given: decls
-//   window.__INITIAL_GIVENS__ URL-seeded given values for shareable links
+//   window.__DASHBOARD__        { name, query, title, description? }  (the # artifact tag)
+//   window.__GIVENS__           given specs introspected from the model's given: decls
+//   window.__INITIAL_GIVENS__   URL-seeded given values ($-prefixed) for shareable links
+//   window.__INITIAL_URLSTATE__ URL-seeded useUrlState view-state (~-prefixed)
 import React, {
   createContext,
   useCallback,
@@ -35,9 +36,10 @@ export const dashboardInfo = () => window.__DASHBOARD__ || {};
 export const givenSpecs = () => window.__GIVENS__ || [];
 
 // ── host bridge ─────────────────────────────────────────────────────
-// The runtime performs three privileged actions it can't do itself: run a
-// governed query, navigate to a sibling dashboard, and mirror the committed
-// givens into the shareable URL. It delegates all three to a HOST. Two hosts
+// The runtime performs four privileged actions it can't do itself: run a
+// governed query, navigate to a sibling dashboard, mirror the committed givens
+// into the shareable URL, and mirror a custom component's view-state
+// (useUrlState) into it too. It delegates all of them to a HOST. Two hosts
 // implement the contract:
 //   • postMessage host (default) — the sandboxed iframe: posts to the trusted
 //     parent shell, which holds the runner. This is the CUSTOM-dashboard path.
@@ -73,6 +75,9 @@ let host = {
   },
   syncGivens(givens) {
     parent.postMessage({ type: "givens", givens }, "*");
+  },
+  syncUrlState(state) {
+    parent.postMessage({ type: "urlstate", state }, "*");
   },
 };
 
@@ -131,6 +136,74 @@ export function useGiven(name) {
     set: useCallback((v) => setGiven(name, v), [name, setGiven]),
     spec,
   };
+}
+
+// ── view-state in the URL (useUrlState) ─────────────────────────────
+// Givens are the GOVERNED QUERY CONTRACT: declared in the model, filter-typed,
+// they drive the auto-rendered controls and are visible to MCP. A custom
+// component that computes its query inputs in JS has other state that belongs
+// in the URL but is not a query parameter — an anagram rack, a Scrabble board,
+// a "reuse letters" checkbox. Stuffing those into givens overloads what a given
+// is (and they aren't in givenSpecs(), so they never rehydrate).
+//
+// useUrlState is that second channel: a useState twin whose value lives in the
+// URL under a `~key` param, on the same parent<->frame transport as givens. The
+// component runs in a sandboxed cross-origin iframe and CANNOT touch the
+// top-level URL itself, so only the runtime + trusted parent can do this.
+const UrlStateCtx = createContext(null);
+
+/** value -> URL string. Strings pass through verbatim (a readable `~rack=cats`
+    beats `~rack=%22cats%22`); numbers/booleans stringify; everything else is
+    JSON. */
+export function serializeUrlState(v) {
+  if (typeof v === "string") return v;
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  return JSON.stringify(v ?? null);
+}
+
+/** URL string -> value, typed by the `initial` the caller declared. A value the
+    URL can't produce (a bad number, malformed JSON) falls back to `initial`
+    rather than throwing — a hand-edited link must not white-screen a page. */
+export function deserializeUrlState(raw, initial) {
+  if (typeof initial === "string") return raw;
+  if (typeof initial === "number") {
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : initial;
+  }
+  if (typeof initial === "boolean") return raw === "true" || raw === "1";
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return initial;
+  }
+}
+
+/** A `useState` twin backed by the browser URL — the dashboard-runtime
+    equivalent of useSearchParams, abstracted over the iframe boundary:
+
+      const [rack, setRack] = useUrlState("rack", "");        // string
+      const [reuse, setReuse] = useUrlState("reuse", false);  // boolean
+      const [board, setBoard] = useUrlState("board", "........");
+
+    The value is read from `?~rack=…` on load (else `initial`), and every change
+    is mirrored back (debounced, replaceState — no history spam), so the URL is
+    always shareable/bookmarkable. `setValue` takes a value or an updater fn.
+    Typing follows `initial` (string / number / boolean / JSON-serializable);
+    it has nothing to do with Malloy given types. A value equal to `initial` is
+    dropped from the URL, so defaults never clutter the link. */
+export function useUrlState(key, initial) {
+  const ctx = useContext(UrlStateCtx);
+  if (!ctx) throw new Error("useUrlState must run inside the dashboard runtime");
+  const { state, setKey } = ctx;
+  const raw = state[key];
+  const value = raw === undefined ? initial : deserializeUrlState(raw, initial);
+  // `initial` is usually an inline literal (a fresh array each render), so it
+  // can't be a dep — capture it in a ref the setter reads. The default a key is
+  // declared with doesn't change over a component's life.
+  const initialRef = useRef(initial);
+  initialRef.current = initial;
+  const set = useCallback((next) => setKey(key, next, initialRef.current), [key, setKey]);
+  return [value, set];
 }
 
 // ── queries as hooks ────────────────────────────────────────────────
@@ -821,25 +894,61 @@ function Root({ Dashboard, extraProps }) {
   useEffect(() => {
     host.syncGivens(committed);
   }, [committed]);
+
+  // useUrlState's store: `~key` -> serialized string, seeded from the URL. It
+  // starts as the WHOLE seed (not just keys some hook has claimed) so params
+  // belonging to a component that hasn't mounted yet survive the first sync.
+  const urlSeed = useMemo(() => {
+    const s = {};
+    for (const [k, v] of Object.entries(window.__INITIAL_URLSTATE__ || {})) {
+      s[k[0] === "~" ? k.slice(1) : k] = v;
+    }
+    return s;
+  }, []);
+  const [urlState, setUrlState] = useState(urlSeed);
+  const setUrlKey = useCallback((key, next, initial) => {
+    setUrlState((prev) => {
+      const cur = prev[key] === undefined ? initial : deserializeUrlState(prev[key], initial);
+      const v = typeof next === "function" ? next(cur) : next;
+      const s = serializeUrlState(v);
+      if (s === prev[key]) return prev; // no-op set: don't re-render or re-sync
+      const out = { ...prev };
+      // A value back at its default is absent, not empty — keeps links clean.
+      if (s === serializeUrlState(initial)) delete out[key];
+      else out[key] = s;
+      return out;
+    });
+  }, []);
+  // Debounced: view-state is typed into (a rack, a board cell), and Safari
+  // throttles replaceState. Givens commit discretely, so they sync immediately.
+  useEffect(() => {
+    const t = setTimeout(() => host.syncUrlState?.(urlState), 150);
+    return () => clearTimeout(t);
+  }, [urlState]);
+  const urlCtx = useMemo(() => ({ state: urlState, setKey: setUrlKey }), [urlState, setUrlKey]);
+
   const ctx = useMemo(
     () => ({ givens: committed, draft, setGiven, apply, reset, dirty, autorun }),
     [committed, draft, setGiven, apply, reset, dirty, autorun],
   );
   return (
     <Ctx.Provider value={ctx}>
-      <Dashboard
-        dashboard={dashboardInfo()}
-        givenSpecs={givenSpecs()}
-        givens={committed}
-        setGiven={setGiven}
-        Panel={Panel}
-        filters={filters}
-        useGiven={useGiven}
-        useOptions={useOptions}
-        useQuery={useQuery}
-        runData={runData}
-        {...extraProps}
-      />
+      <UrlStateCtx.Provider value={urlCtx}>
+        <Dashboard
+          dashboard={dashboardInfo()}
+          givenSpecs={givenSpecs()}
+          givens={committed}
+          setGiven={setGiven}
+          Panel={Panel}
+          filters={filters}
+          useGiven={useGiven}
+          useOptions={useOptions}
+          useQuery={useQuery}
+          useUrlState={useUrlState}
+          runData={runData}
+          {...extraProps}
+        />
+      </UrlStateCtx.Provider>
     </Ctx.Provider>
   );
 }

@@ -28,9 +28,15 @@ export async function GET(req: Request, ctx: { params: Promise<{ datasetId: stri
     if (!view) return new Response("dashboard not found", { status: 404 });
     const { dash, info, givenSpecs } = view;
     // Initial givens (filter values) from the query → the dashboard seeds from
-    // these so a shared/deep link opens in that state.
+    // these so a shared/deep link opens in that state. `~`-prefixed params are
+    // the OTHER namespace: a custom component's useUrlState view-state (a rack,
+    // a board), seeded separately so the two never collide.
     const initialGivens: Record<string, string> = {};
-    for (const [k, v] of new URL(req.url).searchParams) initialGivens[k] = v;
+    const initialUrlState: Record<string, string> = {};
+    for (const [k, v] of new URL(req.url).searchParams) {
+      if (k.startsWith("~")) initialUrlState[k] = v;
+      else initialGivens[k] = v;
+    }
     // Capability token for the sandboxed guest to fetch its own bundle without a
     // session cookie (see frame-token.ts). Scoped to this viewer + dashboard.
     const token = mintFrameToken({ userId: user.id, datasetId, name });
@@ -41,7 +47,8 @@ export async function GET(req: Request, ctx: { params: Promise<{ datasetId: stri
       `<body style="margin:0"><div id="root"></div>` +
       `<script>window.__DASHBOARD__=${JSON.stringify(info)};` +
       `window.__GIVENS__=${JSON.stringify(givenSpecs)};` +
-      `window.__INITIAL_GIVENS__=${JSON.stringify(initialGivens)}</script>` +
+      `window.__INITIAL_GIVENS__=${JSON.stringify(initialGivens)};` +
+      `window.__INITIAL_URLSTATE__=${JSON.stringify(initialUrlState)}</script>` +
       `<script src="/dashboard-vendor.js"></script>` +
       `<script src="${bundleUrl}"></script></body></html>`;
     return new Response(html, { headers: { "content-type": "text/html; charset=utf-8" } });

@@ -63,8 +63,10 @@ const RUNTIME_SHIM = `
 const D = window.__DASH_RUNTIME__;
 export const filters = D.filters, runData = D.runData,
   useGiven = D.useGiven, useOptions = D.useOptions, useQuery = D.useQuery,
+  useUrlState = D.useUrlState,
   mount = D.mount, setHost = D.setHost,
   mountDashboard = D.mountDashboard, mountInPage = D.mountInPage,
+  mountStatic = D.mountStatic,
   dashboardInfo = D.dashboardInfo, givenSpecs = D.givenSpecs,
   Controls = D.Controls, Given = D.Given, Select = D.Select, Search = D.Search,
   MultiSelect = D.MultiSelect, Range = D.Range, Checkbox = D.Checkbox,

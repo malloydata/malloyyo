@@ -52,7 +52,8 @@ From `@malloyyo/dashboard` (also handed to the component as props):
 - **Hooks**: `useGiven(name)` → {value, set, spec};
   `useOptions(name, typed?)` → {options, loading} (typeahead);
   `useQuery({query|malloy, givens})` → {rows, loading, error} — plain rows
-  for your own visuals
+  for your own visuals;
+  `useUrlState(key, initial)` → [value, setValue] — shareable view-state (below)
 - **Helpers**: `filters.oneOf/contains/between/atLeast/…` build
   filter-expression strings with correct escaping; temporal:
   `filters.lastN(7, "day")` → `'7 days'`, `filters.dateRange("2026-01-01",
@@ -74,6 +75,44 @@ From `@malloyyo/dashboard` (also handed to the component as props):
   `runData(text, givens)` run arbitrary Malloy as a RESTRICTED query (no import /
   given: / connection.* / raw SQL / ##! flags — the model's governed surface
   only). `lint` checks each hard-coded `query="…"` still resolves.
+
+## Shareable view-state: `useUrlState`
+
+`useState` is invisible to the page that owns the URL, so a component built on
+it has an address bar that never changes — the result can't be shared or
+bookmarked. **`useUrlState(key, initial)` is a `useState` twin whose value lives
+in the URL**, under a `~key` param:
+
+```jsx
+import { useUrlState } from "@malloyyo/dashboard";
+
+const [rack,  setRack]  = useUrlState("rack", "");          // string
+const [reuse, setReuse] = useUrlState("reuse", false);      // boolean
+const [board, setBoard] = useUrlState("board", "........"); // string
+const [topN,  setTopN]  = useUrlState("n", 20);             // number
+```
+
+- Same shape as `useState`: `[value, setValue]`, and `setValue` takes a value
+  **or** an updater fn (`setBoard(b => …)`).
+- The value comes from the URL on load, else `initial`. Every change is written
+  back (debounced, `replaceState` — no history spam), so the address bar is
+  always a shareable link.
+- Typed by `initial`: string / number / boolean / any JSON-serializable value.
+  Strings stay readable in the URL (`~rack=retinas`); objects and arrays are
+  JSON. A value equal to `initial` is dropped from the URL, so defaults never
+  clutter it, and a malformed value falls back to `initial` instead of throwing.
+- Works identically in `malloyyo dashboard dev`, on a bundled static site, and
+  on a hosted instance — including inside the sandboxed iframe, which cannot
+  reach the top-level URL on its own. That's why this is a hook and not
+  something a component can do with `history.replaceState`.
+
+**Use it for view-state, not query parameters.** A `given:` is the governed,
+filter-typed query contract: it's declared in the model, drives the default
+controls, and is visible over MCP — bind those with `useGiven` and they already
+round-trip through the URL as `$NAME`. `useUrlState` is for everything else a
+custom component needs to make shareable: a letter rack whose real query inputs
+(allowed letters, min/max length) are computed from it in JS, a board layout, a
+mode toggle. The two namespaces (`$NAME` vs `~key`) never collide.
 
 ## Theming
 

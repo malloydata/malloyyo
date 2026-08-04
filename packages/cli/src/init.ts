@@ -13,6 +13,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const AUTHOR_MCP = {
   mcpServers: {
@@ -79,6 +80,40 @@ function scaffoldIndex(root: string): { wrote: boolean; note: string } {
   };
 }
 
+/** Copy the bundled Claude skill templates into the project's .claude/skills/.
+    The templates ride in dist/templates/ (copied there at build time by
+    copy-frame-src.mjs), next to this file's bundle (dist/index.js) — resolve
+    them relative to import.meta.url, same as the frame runtime. Existing skill
+    directories are left untouched so a re-init never clobbers local edits. */
+function installSkills(root: string): { wrote: string[]; skipped: string[]; note?: string } {
+  const distDir = path.dirname(fileURLToPath(import.meta.url));
+  // Dev (tsx src/index.ts) resolves to src/, where templates live directly;
+  // a published install resolves to dist/, where the build copied them.
+  const candidates = [
+    path.join(distDir, "templates", "skills"),
+    path.join(distDir, "..", "src", "templates", "skills"),
+  ];
+  const srcSkills = candidates.find((p) => fs.existsSync(p));
+  if (!srcSkills) return { wrote: [], skipped: [], note: "no skill templates found — skipped" };
+
+  const destSkills = path.join(root, ".claude", "skills");
+  fs.mkdirSync(destSkills, { recursive: true });
+  const wrote: string[] = [];
+  const skipped: string[] = [];
+  for (const name of fs.readdirSync(srcSkills)) {
+    const from = path.join(srcSkills, name);
+    if (!fs.statSync(from).isDirectory()) continue;
+    const to = path.join(destSkills, name);
+    if (fs.existsSync(to)) {
+      skipped.push(name);
+      continue;
+    }
+    fs.cpSync(from, to, { recursive: true });
+    wrote.push(name);
+  }
+  return { wrote, skipped };
+}
+
 export async function initCmd(dir: string): Promise<void> {
   const root = path.resolve(dir);
   if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) {
@@ -98,6 +133,18 @@ export async function initCmd(dir: string): Promise<void> {
 
   const idx = scaffoldIndex(root);
   console.log(`${idx.wrote ? "✓" : "•"} ${idx.note}`);
+
+  const sk = installSkills(root);
+  if (sk.note) {
+    console.log(`• ${sk.note}`);
+  } else {
+    if (sk.wrote.length) {
+      console.log(`✓ installed skill(s) into .claude/skills/: ${sk.wrote.join(", ")}`);
+    }
+    if (sk.skipped.length) {
+      console.log(`• skill(s) already present — left as-is: ${sk.skipped.join(", ")}`);
+    }
+  }
 
   console.log("");
   console.log("Next:");

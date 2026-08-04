@@ -27,6 +27,10 @@ const items = [
   "frame-wasm-entry.tsx",
   "shims",
   "shared",
+  // Claude skill templates that `malloyyo init` copies into a project's
+  // .claude/skills/ (see installSkills in init.ts). Non-code assets, so they
+  // ride along in dist/ like the frame source.
+  "templates",
 ];
 
 for (const item of items) {

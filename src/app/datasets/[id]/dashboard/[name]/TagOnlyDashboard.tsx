@@ -38,22 +38,16 @@ function loadVendor(): Promise<Record<string, unknown>> {
 }
 
 // `$`-prefixed given values from the current URL — the seed the runtime reads
-// from window.__INITIAL_GIVENS__ (it strips the `$` itself).
+// from window.__INITIAL_GIVENS__ (it strips the `$` itself). `~key` params (a
+// custom component's useUrlState) are a separate namespace and stay out of it;
+// a tag-only dashboard runs no custom code, so it never produces them, but a
+// link may still carry them and must not have them mangled into givens.
 function initialGivensFromUrl(): Record<string, string> {
   const g: Record<string, string> = {};
-  for (const [k, v] of new URLSearchParams(window.location.search)) g[k] = v;
-  return g;
-}
-
-// Reflect the committed givens into the URL (shareable) as `?$NAME=…`, skipping
-// empties. Same contract CustomDashboardFrame applies to the iframe's messages.
-function givensToUrl(givens: Record<string, unknown>): string {
-  const u = new URL(window.location.href);
-  u.search = "";
-  for (const [k, v] of Object.entries(givens)) {
-    if (v != null && String(v) !== "") u.searchParams.set(`$${k}`, String(v));
+  for (const [k, v] of new URLSearchParams(window.location.search)) {
+    if (!k.startsWith("~")) g[k] = v;
   }
-  return u.pathname + u.search;
+  return g;
 }
 
 export function TagOnlyDashboard({ id, name }: { id: string; name: string }) {
@@ -105,9 +99,16 @@ export function TagOnlyDashboard({ id, name }: { id: string; name: string }) {
             }
             window.location.href = u.pathname + u.search;
           },
-          // Mirror committed givens into the URL (replaceState — no history spam).
+          // Mirror committed givens into the URL (replaceState — no history
+          // spam) as `?$NAME=…`, skipping empties. Same contract
+          // CustomDashboardFrame applies to the iframe's messages.
           syncGivens: (givens: Record<string, unknown>) => {
-            window.history.replaceState(null, "", givensToUrl(givens));
+            const u = new URL(window.location.href);
+            u.search = "";
+            for (const [k, v] of Object.entries(givens)) {
+              if (v != null && String(v) !== "") u.searchParams.set(`$${k}`, String(v));
+            }
+            window.history.replaceState(null, "", u.pathname + u.search);
           },
         });
       })

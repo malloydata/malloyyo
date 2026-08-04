@@ -16,7 +16,7 @@ import * as duckdb from "@duckdb/duckdb-wasm";
 import { DuckDBWASMConnection } from "@malloydata/db-duckdb/wasm";
 import { API, SingleConnectionRuntime } from "@malloydata/malloy";
 import { mountStatic } from "./frame-runtime/index";
-import { givensFromSearch, givensToParams } from "./shared/givens-url";
+import { givensFromSearch, shareSearch, urlStateFromSearch } from "./shared/givens-url";
 
 const info = window.__DASHBOARD__ || {};
 const MODEL_FILES = window.__MODEL_FILES__ || {};
@@ -138,11 +138,22 @@ async function run(req: { query?: string; malloy?: string }, givens: Record<stri
 
 // Same param encoding as the dev server (shared/givens-url); only the path
 // shape differs — sibling .html pages here vs `/?d=` there.
-const givensToUrl = (dashboard: string, givens: Record<string, unknown>) => {
+//
+// The URL carries TWO namespaces — `$given` and `~view-state` (useUrlState) —
+// written by two independent syncs, so each write must re-emit the other's
+// params or it would erase them. Both are cached here, seeded from the URL this
+// page opened with, and every write rebuilds the whole query string.
+let lastGivens: Record<string, unknown> = givensFromSearch(location.search);
+let lastUrlState: Record<string, unknown> = urlStateFromSearch(location.search);
+
+const dashUrl = (dashboard: string, givens: Record<string, unknown>, urlState: Record<string, unknown>) => {
   const u = new URL(`./${dashboard}.html`, document.baseURI);
-  u.search = givensToParams(givens).toString();
-  return u.pathname + u.search;
+  return u.pathname + shareSearch({ givens, urlState });
 };
+// A drill LEAVES this dashboard: carry the givens it seeded, but not this
+// component's view-state — that belongs to the component being left.
+const navigateUrl = (dashboard: string, givens: Record<string, unknown>) =>
+  dashUrl(dashboard, givens, {});
 
 // Custom dashboards drive drills by posting to `parent` directly:
 //   parent.postMessage({ type: "navigate", dashboard, givens }, "*")
@@ -157,11 +168,17 @@ function installMessageBridge(name: string) {
     const m = e.data;
     if (!m || typeof m !== "object") return;
     if (m.type === "givens" && m.givens) {
-      history.replaceState(null, "", givensToUrl(name, m.givens));
+      lastGivens = m.givens;
+      history.replaceState(null, "", dashUrl(name, lastGivens, lastUrlState));
+      return;
+    }
+    if (m.type === "urlstate" && m.state) {
+      lastUrlState = m.state;
+      history.replaceState(null, "", dashUrl(name, lastGivens, lastUrlState));
       return;
     }
     if (m.type === "navigate" && typeof m.dashboard === "string") {
-      location.href = givensToUrl(m.dashboard, m.givens || {});
+      location.href = navigateUrl(m.dashboard, m.givens || {});
     }
   });
 }
@@ -173,14 +190,24 @@ export function boot(Dashboard: unknown) {
   // there, here from our own query string, but through the SAME encoder, so the
   // `$` prefix the runtime keys off is preserved. Set before mount: the runtime
   // reads this global lazily when it computes initial given values.
-  (window as any).__INITIAL_GIVENS__ = givensFromSearch(location.search);
+  (window as any).__INITIAL_GIVENS__ = lastGivens;
+  // …and the `~` half: a custom component's useUrlState (a rack, a board) —
+  // view-state, not a query parameter, but just as shareable.
+  (window as any).__INITIAL_URLSTATE__ = lastUrlState;
   installMessageBridge(info.name);
   return mountStatic(Dashboard, {
     root: document.getElementById("root") as HTMLElement,
     run,
     navigate: (dashboard, givens) => {
-      location.href = givensToUrl(dashboard, givens);
+      location.href = navigateUrl(dashboard, givens);
     },
-    syncGivens: (givens) => history.replaceState(null, "", givensToUrl(info.name, givens)),
+    syncGivens: (givens) => {
+      lastGivens = givens;
+      history.replaceState(null, "", dashUrl(info.name, lastGivens, lastUrlState));
+    },
+    syncUrlState: (state) => {
+      lastUrlState = state;
+      history.replaceState(null, "", dashUrl(info.name, lastGivens, lastUrlState));
+    },
   });
 }

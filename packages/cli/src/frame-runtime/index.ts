@@ -18,6 +18,7 @@ export {
   useGiven,
   useOptions,
   useQuery,
+  useUrlState,
   mount,
   setHost,
   dashboardInfo,
@@ -59,8 +60,17 @@ export function mountInPage(opts: {
   run: (req: { query?: string; malloy?: string }, givens: Record<string, unknown>) => Promise<unknown>;
   navigate: (dashboard: string, givens: Record<string, unknown>) => void;
   syncGivens: (givens: Record<string, unknown>) => void;
+  /** Mirror useUrlState view-state into the URL as `~key` params. Optional: a
+      host that omits it simply has no shareable view-state (tag-only
+      dashboards run no custom code, so none exists). */
+  syncUrlState?: (state: Record<string, string>) => void;
 }): { unmount: () => void } {
-  setHost({ run: opts.run, navigate: opts.navigate, syncGivens: opts.syncGivens });
+  setHost({
+    run: opts.run,
+    navigate: opts.navigate,
+    syncGivens: opts.syncGivens,
+    syncUrlState: opts.syncUrlState,
+  });
   // bodyReset:false — the dashboard is one element in the app shell, so it must
   // not restyle <body> (the iframe host DOES own the whole document, so it keeps
   // the reset). Returns the React root so the caller can unmount() on teardown.
@@ -80,8 +90,16 @@ export function mountStatic(
     run: (req: { query?: string; malloy?: string }, givens: Record<string, unknown>) => Promise<unknown>;
     navigate: (dashboard: string, givens: Record<string, unknown>) => void;
     syncGivens: (givens: Record<string, unknown>) => void;
+    /** Mirror useUrlState view-state into the URL as `~key` params — a static
+        site's custom components DO use it, so this host should supply it. */
+    syncUrlState?: (state: Record<string, string>) => void;
   },
 ): { unmount: () => void } {
-  setHost({ run: opts.run, navigate: opts.navigate, syncGivens: opts.syncGivens });
+  setHost({
+    run: opts.run,
+    navigate: opts.navigate,
+    syncGivens: opts.syncGivens,
+    syncUrlState: opts.syncUrlState,
+  });
   return mount(Dashboard ?? DefaultDashboard, WIDGETS, opts.root, { bodyReset: false });
 }

@@ -130,9 +130,13 @@ to something being retired.
 > (`packages/cli/src/frame-runtime/`, ONE implementation bundled by both the
 > CLI dev server and the hosted vendor asset) provides `@malloyyo/dashboard`:
 > headless widgets (`Controls`/`Given`/`Select`/`Search`/`Range`, themed via
-> `--dash-*` CSS vars), hooks (`useGiven`/`useOptions`/`useQuery`), and
-> `filters` helpers (built on `@malloydata/malloy-filter`) so artifacts never
-> hand-concatenate a filter expression.
+> `--dash-*` CSS vars), hooks (`useGiven`/`useOptions`/`useQuery`/
+> `useUrlState`), and `filters` helpers (built on `@malloydata/malloy-filter`)
+> so artifacts never hand-concatenate a filter expression. Givens ride the URL
+> as `$NAME`; `useUrlState(key, initial)` is the parallel channel for a custom
+> component's own view-state (a letter rack, a board layout) under `~key`, so a
+> component that computes its query inputs in JS still has a shareable link
+> even though the sandboxed frame can't touch the top-level URL itself.
 
 Why this beats declared-but-arbitrary Malloy:
 

@@ -9,7 +9,13 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { givensFromSearch, givensToParams } from "../src/shared/givens-url.js";
+import {
+  givensFromSearch,
+  givensToParams,
+  shareSearch,
+  urlStateFromSearch,
+  urlStateToParams,
+} from "../src/shared/givens-url.js";
 import {
   findTableRefs,
   isDataFile,
@@ -86,6 +92,55 @@ test("givensToParams skips empty and nullish values", () => {
 test("givensToParams round-trips through givensFromSearch", () => {
   const out = givensFromSearch("?" + givensToParams({ NAME: "Emma", STATE: "NY" }).toString());
   assert.deepEqual(out, { $NAME: "Emma", $STATE: "NY" });
+});
+
+// ── useUrlState's `~` namespace ─────────────────────────────────────
+// Custom-component view-state (a rack, a board) lives beside the givens in one
+// query string. The two must never bleed into each other: a `~` param parsed as
+// a given would reach the query layer, and a `$` param parsed as view-state
+// would break the shareable link on reload.
+
+test("givensFromSearch drops the ~ view-state namespace", () => {
+  assert.deepEqual(givensFromSearch("?$NAME=Emma&~rack=retinas"), { $NAME: "Emma" });
+});
+
+test("urlStateFromSearch keeps the ~ prefix and takes nothing else", () => {
+  assert.deepEqual(urlStateFromSearch("?d=anagram&$NAME=Emma&~rack=retinas&~reuse=true"), {
+    "~rack": "retinas",
+    "~reuse": "true",
+  });
+  assert.deepEqual(urlStateFromSearch("?$NAME=Emma"), {});
+  assert.deepEqual(urlStateFromSearch(""), {});
+});
+
+test("urlStateToParams prefixes bare keys and KEEPS empty values", () => {
+  // Unlike a given, "" is meaningful view-state: the user cleared a field whose
+  // default is non-empty. Only null/undefined are dropped.
+  assert.equal(urlStateToParams({ rack: "cats" }).toString(), "%7Erack=cats");
+  assert.equal(urlStateToParams({ "~rack": "cats" }).toString(), "%7Erack=cats");
+  assert.equal(urlStateToParams({ rack: "", x: null, y: undefined }).toString(), "%7Erack=");
+});
+
+test("urlStateToParams round-trips through urlStateFromSearch", () => {
+  const out = urlStateFromSearch("?" + urlStateToParams({ board: "..a...#.", reuse: true }).toString());
+  assert.deepEqual(out, { "~board": "..a...#.", "~reuse": "true" });
+});
+
+test("shareSearch emits d, then givens, then view-state — each namespace intact", () => {
+  const s = shareSearch({ d: "anagram", givens: { MINLEN: 3 }, urlState: { rack: "retinas?" } });
+  const parsed = new URLSearchParams(s);
+  assert.equal(parsed.get("d"), "anagram");
+  assert.equal(parsed.get("$MINLEN"), "3");
+  assert.equal(parsed.get("~rack"), "retinas?");
+  // And splitting it back apart returns exactly what went in.
+  assert.deepEqual(givensFromSearch(s), { $MINLEN: "3" });
+  assert.deepEqual(urlStateFromSearch(s), { "~rack": "retinas?" });
+});
+
+test("shareSearch omits the selector and empty maps", () => {
+  assert.equal(shareSearch({}), "");
+  assert.equal(shareSearch({ givens: {}, urlState: {} }), "");
+  assert.equal(shareSearch({ urlState: { rack: "cat" } }), "?%7Erack=cat");
 });
 
 test("tableFilePlan maps an https table to itself and copies nothing", () => {

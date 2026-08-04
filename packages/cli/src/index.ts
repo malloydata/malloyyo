@@ -9,6 +9,7 @@ import { serveMcp } from "./mcp.js";
 import { serveDashboard } from "./dashboard.js";
 import { bundleDashboards } from "./bundle.js";
 import { initCmd } from "./init.js";
+import { sqlCmd } from "./sql.js";
 import { launchCmd } from "./launch.js";
 import { clearCreds } from "./store.js";
 import type { PublishRequest, ModelStatus } from "./protocol.js";
@@ -182,6 +183,26 @@ program
       "author mode, and scaffold index.malloy if missing",
   )
   .action(initCmd);
+
+program
+  .command("sql")
+  .argument("[connection]", "connection name from malloy-config.json", "duckdb")
+  .option("-e, --execute <sql>", "SQL to run (else read from -f <file> or stdin)")
+  .option("-f, --file <path>", "read SQL from a file")
+  .option("-C, --root <dir>", "project root for malloy-config.json discovery (default: current directory)")
+  .option("-j, --json", "print result rows as JSON")
+  .description(
+    "run raw SQL against a configured connection using the embedded DuckDB — " +
+      "e.g. COPY a web CSV into docs/*.parquet, no standalone duckdb needed",
+  )
+  .action(
+    async (
+      connection: string | undefined,
+      opts: { execute?: string; file?: string; json?: boolean; root?: string },
+    ) => {
+      await sqlCmd(connection, opts);
+    },
+  );
 
 program
   .command("author")

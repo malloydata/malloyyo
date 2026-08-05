@@ -14,21 +14,40 @@ export async function proxy(req: NextRequest) {
 
   const requestId = req.headers.get("x-request-id") ?? crypto.randomUUID();
   const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
-  logger.info("request", { requestId, method: req.method, path: pathname, ip });
+  // Exactly one "request" line per request. Page navigations resolve the
+  // session first so the line carries userId alongside the IP; the paths that
+  // return early authenticate downstream and log their own userId there
+  // (bearer routes) or not at all.
+  const logRequest = (userId?: string) =>
+    logger.info("request", { requestId, method: req.method, path: pathname, ip, userId });
 
   // Propagate requestId so route handlers can correlate logs.
   const headers = new Headers(req.headers);
   headers.set("x-request-id", requestId);
   const next = () => NextResponse.next({ request: { headers } });
 
-  if (ALWAYS_ALLOW.test(pathname)) return next();
+  if (ALWAYS_ALLOW.test(pathname)) {
+    logRequest();
+    return next();
+  }
 
   // API routes authenticate and authorize themselves (getSessionUser → 401
   // JSON). The middleware only guards PAGE navigations, where it can redirect
   // the browser to the sign-in screen.
-  if (pathname.startsWith("/api/")) return next();
+  if (pathname.startsWith("/api/")) {
+    logRequest();
+    return next();
+  }
 
-  const session = await auth();
+  let session;
+  try {
+    session = await auth();
+  } catch (err) {
+    // Never let session resolution swallow the request log line.
+    logRequest();
+    throw err;
+  }
+  logRequest(session?.user?.id);
 
   // Authentication: every page except the public landing requires a signed-in
   // user. Bounce anonymous visitors to Google sign-in and return them here

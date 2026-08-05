@@ -154,12 +154,31 @@ export async function POST(req: Request) {
 
 export async function OPTIONS() { return corsPreflight(); }
 
+/**
+ * GET /mcp — 405, per the Streamable HTTP transport.
+ *
+ * Clients open GET on the MCP endpoint to listen for server→client messages
+ * over SSE. We send none (every response rides the POST), so the spec's answer
+ * is 405: "the server MUST return HTTP 405 Method Not Allowed, indicating that
+ * the server does not offer an SSE stream at this endpoint."
+ *
+ * Returning 200 here — as we used to — puts a client into an endless reconnect
+ * loop, and one client did exactly that for ~11h at ~1 req/s. In the reference
+ * client (@modelcontextprotocol/sdk client/streamableHttp.js) our 200 is
+ * `response.ok`, so it is adopted as an open stream with isReconnectable=true;
+ * the plain-text body yields zero SSE events and ends at once; the graceful-end
+ * path re-arms with `_scheduleReconnection(…, 0)`, resetting the attempt
+ * counter so the maxRetries=2 cap never trips; and the flat 1000ms
+ * initialReconnectionDelay sets the cadence. A 405 is a bare `return` — no
+ * error surfaced, no reconnect.
+ *
+ * The body text stays: browsers render it regardless of status, so a human who
+ * pastes the URL still gets pointed at the right verb.
+ */
 export async function GET(req: Request) {
-  // GET /mcp needs no auth (it only returns the pointer text below), but MCP
-  // Streamable HTTP clients open it for the server→client SSE stream and send
-  // their bearer token. We don't serve a stream, so a client can settle into a
-  // reconnect loop — resolving the token here is purely so the log names who
-  // is behind that traffic. One indexed lookup, and no last_used_at write.
+  // No auth needed to answer, but Streamable HTTP clients send their bearer
+  // token when opening the stream — resolve it purely so the log names who is
+  // behind any residual traffic. One indexed lookup, no last_used_at write.
   const raw = bearerToken(req);
   const validated = raw ? await validateAccessToken(raw) : null;
   logger.info("mcp GET", {
@@ -170,6 +189,6 @@ export async function GET(req: Request) {
   });
   return withCors(new Response(
     "POST JSON-RPC requests to this URL. See https://modelcontextprotocol.io",
-    { status: 200 },
+    { status: 405, headers: { Allow: "POST, OPTIONS" } },
   ));
 }

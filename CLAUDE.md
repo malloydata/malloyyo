@@ -30,6 +30,35 @@ npx dotenv-cli -e local/staging -- npx drizzle-kit push
 
 See `local/CLAUDE.md` for instance-specific details (gitignored, private).
 
+## Commits & the DCO check
+
+This repo runs the Probot **DCO** app. It requires every commit to carry a
+`Signed-off-by:` trailer whose email matches that commit's **author** (the
+committer may stay `Claude`). Opening the PR under a human's account does NOT
+satisfy it — the check reads commits, not PR authorship.
+
+**Author and sign off as the person running the session. Never hardcode a
+name here.** The DCO is a certification that *that person* has the right to
+submit the code; signing it as someone else — the repo owner, a previous
+contributor — is a false attestation, and the bot will not catch it (it only
+string-matches the trailer against the author field, so a sign-off naming the
+wrong person passes just as green as a correct one).
+
+Resolve the identity per session — `mcp__github__get_me` on a remote/hosted
+session (the container's git identity is `Claude`, not the human's), or
+`git config user.email` locally, where it already is. Default the email to
+`<id>+<login>@users.noreply.github.com`, which always maps to that GitHub
+account; use another only if they say so.
+
+```bash
+git commit --author="<name> <email>" -F -   # message ends with:
+#   Co-Authored-By: Claude … (keep — the assist stays visible)
+#   Signed-off-by: <name> <email>           (same address as --author)
+```
+
+Fixing it after the fact: `git commit --amend --author=… -F -` with the
+trailer appended, then `git push --force-with-lease`.
+
 ## Database & migrations
 
 - **`drizzle-kit push` is INTERACTIVE.** When a change is risky (e.g. adding a

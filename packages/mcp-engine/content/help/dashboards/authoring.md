@@ -11,8 +11,10 @@ for the basic case no JavaScript. Preview with `malloyyo dashboard dev`; check
 with `malloyyo lint`. Requires `@malloydata/malloy` 0.0.423+.
 
 Related: `yo_help dashboards/givens-and-controls` (filter controls),
-`dashboards/grid-layout` (columns/colspan/break), `dashboards/custom-components`
-(a flat `<name>.jsx`), `dashboards/vega-charts` (`<VegaChart>`).
+`dashboards/grid-layout` (columns/colspan/break), `dashboards/charts` (the
+`# bar_chart`/`# line_chart` tags and their channel rules),
+`dashboards/custom-components` (a flat `<name>.jsx`), `dashboards/vega-charts`
+(`<VegaChart>`).
 
 > **Need a chart the `# bar_chart`/`# line_chart`/`# shape_map` tags can't do?**
 > Use the `<VegaChart>` COMPONENT (a Vega-Lite spec over query rows) — NOT a `#`

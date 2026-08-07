@@ -136,5 +136,26 @@ prop (camelCase keys → `--dash-*`). The results `<Panel>` keeps a light surfac
 in both light/dark (the Malloy renderer has no dark theme) — override
 `--dash-panel-bg` if your renderer output is dark-safe.
 
+**Use `--dash-*` and nothing else.** A custom component renders in its own
+**iframe**, so CSS variables defined by the surrounding page — including the
+bundled site's `--line` / `--card` / `--muted` — are NOT in scope inside it. A
+component styled against those still renders, but every rule referencing them
+resolves to nothing: borders, dividers and panel backgrounds vanish silently
+while text and layout survive, so the page looks *almost* right and the cause
+isn't obvious. If you're porting CSS that has to work both inside the frame and
+on a bundled page, resolve each colour once through the chain and use the alias:
+
+```css
+.my-card {
+  --edge: var(--dash-border, var(--line, #e4e6eb));
+  --surface: var(--dash-panel-bg, var(--card, #fff));
+  border: 1px solid var(--edge);
+  background: var(--surface);
+}
+```
+
+This is a class of bug `lint` cannot see and a screenshot can — look at custom
+components in `malloyyo dashboard dev` before shipping them.
+
 For charts beyond the Malloy renderer's `#` tags, use `<VegaChart>` —
 `yo_help dashboards/vega-charts`.

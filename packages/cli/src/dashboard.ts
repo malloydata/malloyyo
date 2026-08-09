@@ -25,6 +25,7 @@ import fs from "node:fs";
 import path from "node:path";
 import * as esbuild from "esbuild";
 import { makeRunner, type GivenSpec, type ModelRunner, type TileSpec } from "./host.js";
+import { initConnections } from "./connections.js";
 import { givensFromSearch, urlStateFromSearch } from "./shared/givens-url.js";
 import { navHtml as sharedNav, NAV_CSS } from "./shared/nav.js";
 import {
@@ -321,7 +322,7 @@ export async function serveDashboard(opts: {
   root?: string;
   port?: number;
 }): Promise<void> {
-  await import("@malloydata/malloy-connections");
+  await initConnections();
   const root = path.resolve(opts.root ?? process.cwd());
   const port = opts.port ?? 4173;
   // The untrusted artifact is served from a SECOND origin (port+1). That lets

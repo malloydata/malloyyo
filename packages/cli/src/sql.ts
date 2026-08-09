@@ -14,6 +14,22 @@
 // Relative file paths in the SQL resolve from the current working directory
 // (DuckDB's default), so run it from the repo root — `docs/x.parquet` lands where
 // the site expects it.
+//
+// KNOWN LIMITATION — `--json` prints BIGINT values as quoted strings
+// (`{"n": "1"}`). This is NOT the malloyyo#137 bug and is not fixed by
+// jsonRows(): that fix works because a Malloy Result carries a schema, and here
+// there is none. `conn.runSQL()` returns bare `{rows, totalRows}` — the DuckDB
+// connector reads them with the node-api's `getRowObjectsJson()`, which
+// stringifies BIGINT before Malloy ever sees a type. By the time the rows reach
+// this file, a BIGINT 1 and a VARCHAR '42' are both just strings with nothing to
+// tell them apart, so "convert the numeric-looking ones" would corrupt real text
+// columns. Deliberately left alone rather than guessed at.
+//
+// It matters little in practice: this is a local authoring/build command whose
+// output goes to a terminal or a script, not to a chart. If you are piping
+// `--json` somewhere that needs real numbers, CAST in the SQL
+// (`SELECT n::INTEGER`). Raised upstream at malloydata/malloy#3031, where the
+// connector does still have the column types and can convert properly.
 
 import fs from "node:fs";
 import path from "node:path";

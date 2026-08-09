@@ -4,6 +4,7 @@
 import * as malloy from "@malloydata/malloy";
 import { API, type GivenValue } from "@malloydata/malloy";
 import { DuckDBConnection as MalloyDuckDBConnection } from "@malloydata/db-duckdb";
+import { jsonRows } from "@malloyyo/mcp-engine";
 import { hostname, networkInterfaces } from "node:os";
 import { randomBytes } from "node:crypto";
 import { env } from "./env";
@@ -129,7 +130,7 @@ export async function runMalloy(
     const runner = runtime.loadQuery(`${modelSource}\n${query}`);
     const sql = await runner.getSQL();
     const result = await runner.run({ rowLimit: opts.rowLimit ?? DEFAULT_ROW_LIMIT });
-    const rows = result.data.toJSON() as Record<string, unknown>[];
+    const rows = jsonRows(result);
     const stableResult = API.util.wrapResult(result);
     return { sql, rows, rowCount: rows.length, stableResult };
   } finally {
@@ -614,7 +615,7 @@ export async function runMalloyFiles(
     const tCompile = Date.now();
     const result = await runner.run({ rowLimit: opts.rowLimit ?? DEFAULT_ROW_LIMIT });
     const tRun = Date.now();
-    const rows = result.data.toJSON() as Record<string, unknown>[];
+    const rows = jsonRows(result);
     const stableResult = API.util.wrapResult(result);
     if (persist && opts.cacheKey) await persistModelDef(opts.cacheKey, () => mm.getModel());
     logger.info("runMalloyFiles timing", {
@@ -656,7 +657,7 @@ export async function runNamedMalloyFiles(
         : undefined;
     const sql = await runner.getSQL(compileOpts);
     const result = await runner.run({ rowLimit: opts.rowLimit ?? DEFAULT_ROW_LIMIT, ...compileOpts });
-    const rows = result.data.toJSON() as Record<string, unknown>[];
+    const rows = jsonRows(result);
     const stableResult = API.util.wrapResult(result);
     if (persist && opts.cacheKey) await persistModelDef(opts.cacheKey, () => mm.getModel());
     return { sql, rows, rowCount: rows.length, stableResult };

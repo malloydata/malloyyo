@@ -59,6 +59,13 @@ Three ways to feed it data:
   you as the dataset.
 - **Nests come back as arrays.** Flatten to plottable rows in the query, or bind
   a nest to its own chart: `<VegaChart data={row.my_nest}/>`.
+- **Huge integers arrive as strings, on purpose.** Integers serialize as JSON
+  numbers, but a value beyond ±2^53 (a snowflake ID, a 64-bit hash) keeps its
+  full precision by staying a string — JSON has no int64. Bound to a
+  `quantitative` or `temporal` channel, Vega-Lite would sort such a column
+  lexicographically (`"1","10","11","2"`). If a column can get that big and you
+  need to plot it, narrow it in the QUERY — bucket it, rank it, or emit the
+  value you actually want on the axis.
 - **Interactivity = setting given values**, never rewriting query text per
   interaction. Client-side chart interactions (tooltip, zoom, brush) work;
   anything that calls a server does not.

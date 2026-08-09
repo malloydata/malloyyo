@@ -18,6 +18,16 @@
 // instead: a Vega-Lite `quantitative` channel sorts "1","10","11","2", charts
 // render the wrong shape, and none of it errors. (malloyyo#137)
 //
+// TO BE CLEAR, toJSON()'s behaviour is DELIBERATE upstream, not a bug — JSON
+// has no int64, and "bigint fields serialize as strings" is a documented Malloy
+// invariant its reviewers enforce. Malloy's answer for consumers who need the
+// type is the stable API, whose typed cells carry `subtype: "bigint"` next to
+// both `number_value` and `string_value`. We diverge knowingly, because we ship
+// plain JSON rows as a product surface (MCP `query`, /api/run, dashboard
+// useQuery) where no schema travels with the values and the consumer is often
+// an LLM or a chart library that will never reconstruct a Result. This is not a
+// stopgap awaiting an upstream fix; expect toJSON() to keep its contract.
+//
 // THE FIX is type-driven, not a guess about what a string "looks like".
 // `result.data.toObject()` walks the SAME tree with the SAME normalizers as
 // toJSON() and differs in exactly two ways: bigints stay real `bigint`s, and
@@ -26,11 +36,11 @@
 // ISO-stringifying dates so the output is byte-identical to today's toJSON()
 // everywhere except the bigints we deliberately fixed.
 //
-// Reading toObject() rather than post-processing toJSON()'s strings also keeps
-// us independent of upstream: if Malloy later narrows bigints itself, this
-// helper is unaffected — it never looks at toJSON(). And it can never corrupt a
-// genuine string column whose value happens to be "42", because it only ever
-// converts values the schema already says are numbers.
+// Reading toObject() rather than post-processing toJSON()'s strings also means
+// we never depend on toJSON()'s contract, so a change there cannot surprise us
+// in either direction. And it can never corrupt a genuine string column whose
+// value happens to be "42", because it only ever converts values the schema
+// already says are numbers.
 //
 // THE REMAINING (deliberate) HOLE: a value beyond Number.MAX_SAFE_INTEGER stays
 // a string, because JSON has no int64 and the alternative is silent precision

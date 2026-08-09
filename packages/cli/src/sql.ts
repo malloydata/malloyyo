@@ -14,11 +14,26 @@
 // Relative file paths in the SQL resolve from the current working directory
 // (DuckDB's default), so run it from the repo root — `docs/x.parquet` lands where
 // the site expects it.
+//
+// TYPES — `conn.runSQL()` returns bare `{rows, totalRows}` with no schema, and
+// the DuckDB connector fills them via the node-api's `getRowObjectsJson()`,
+// which stringifies BIGINT before Malloy ever assigns a type. Rows arriving
+// that way are untypeable downstream: a BIGINT 1 and a VARCHAR '42' are both
+// just strings, so "convert the numeric-looking ones" would corrupt real text
+// columns (malloyyo#137).
+//
+// So we do not run raw SQL raw when we can avoid it. A row-returning statement
+// goes through Malloy as `<conn>.sql("…")`, which yields a real Result with a
+// schema — `jsonRows` then applies and the output matches every other Malloyyo
+// surface. Only statements Malloy cannot type (COPY, DDL, several statements at
+// once) take the untyped path, and those have no rows worth typing anyway. See
+// runTyped below.
 
 import fs from "node:fs";
 import path from "node:path";
 import url from "node:url";
-import { MalloyConfig, discoverConfig, type URLReader } from "@malloydata/malloy";
+import { MalloyConfig, Runtime, discoverConfig, type URLReader } from "@malloydata/malloy";
+import { jsonRows } from "@malloyyo/mcp-engine";
 
 /** File-only reader for config discovery — same shape host.ts uses. */
 function fileReader(): URLReader {
@@ -43,6 +58,75 @@ async function loadConfig(rootDir: string): Promise<MalloyConfig> {
       rootDirectory: rootUrl.toString(),
     })
   );
+}
+
+// ── the typed path ──────────────────────────────────────────────────
+//
+// A row-returning statement can go through Malloy as `<conn>.sql("…")`, which
+// hands back a real Result — schema and all — so `jsonRows` applies and the
+// output matches every other Malloyyo surface (BIGINTs numeric, dates ISO).
+// Statements Malloy cannot type (COPY, DDL, several statements at once) fail to
+// COMPILE, so nothing has run, and we fall back to the raw driver path below.
+
+/** Cap for the typed path. Malloy's own default rowLimit is 10, which would
+    silently truncate; past this we hand back to the untyped path rather than
+    return a short answer that looks complete. */
+const TYPED_ROW_CAP = 1_000_000;
+
+/**
+ * Encode arbitrary SQL as a ONE-LINE double-quoted Malloy string literal.
+ *
+ * Malloy strings come in `'…'`, `"…"`, and `"""…"""`; only the first two take
+ * `\X` escapes, and both are single-line. So rather than pick a fence and hope
+ * the SQL does not contain it (`'` and `"` are everywhere in SQL, and a `"""`
+ * fence still loses to a SQL string holding `"""`), escape into one line and
+ * let quoting stop being a question at all.
+ *
+ * The trailing newline is load-bearing: without it a SQL that ends in a `--`
+ * comment would swallow whatever follows.
+ */
+function malloyStringLiteral(sql: string): string {
+  const body =
+    sql
+      .trim()
+      // Malloy's sql() takes ONE statement; a trailing `;` is a parse error.
+      .replace(/;\s*$/, "") + "\n";
+  const escaped = body
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\r/g, "\\r")
+    .replace(/\n/g, "\\n")
+    .replace(/\t/g, "\\t");
+  return `"${escaped}"`;
+}
+
+/**
+ * Run `sql` through Malloy to get typed rows, or null if it cannot be typed —
+ * in which case the caller runs it raw.
+ *
+ * Failure is nearly always a COMPILE failure (COPY/DDL/multi-statement), which
+ * happens before execution, so falling back does not double-execute. A
+ * row-returning statement with side effects that fails mid-run is the one case
+ * that would run twice; vanishingly rare for a build command, and the raw path
+ * would have had the same effect anyway.
+ */
+async function runTyped(
+  cfg: MalloyConfig,
+  name: string,
+  sql: string,
+): Promise<Record<string, unknown>[] | null> {
+  // Backquoting makes any configured connection name a legal Malloy reference;
+  // a name containing a backquote has no escape, so give up and run it raw.
+  if (name.includes("`")) return null;
+  try {
+    const runtime = new Runtime({ config: cfg, urlReader: fileReader() });
+    const query = `run: \`${name}\`.sql(${malloyStringLiteral(sql)})`;
+    const result = await runtime.loadQuery(query).run({ rowLimit: TYPED_ROW_CAP });
+    const rows = jsonRows(result);
+    return rows.length >= TYPED_ROW_CAP ? null : rows;
+  } catch {
+    return null;
+  }
 }
 
 async function readStdin(): Promise<string> {
@@ -74,10 +158,15 @@ export async function sqlCmd(
 
   const cfg = await loadConfig(rootDir);
   try {
-    const conn = await cfg.connections.lookupConnection(name);
-    // runSQL executes all `;`-separated statements and returns the last result.
-    const result = await conn.runSQL(sql);
-    const rows = result?.rows ?? [];
+    // Prefer the typed path — it is the only one that knows a BIGINT from a
+    // VARCHAR. Both output modes use it, so `--json` and the table agree.
+    let rows: readonly Record<string, unknown>[] | null = await runTyped(cfg, name, sql);
+    if (rows === null) {
+      const conn = await cfg.connections.lookupConnection(name);
+      // runSQL executes all `;`-separated statements and returns the last result.
+      const result = await conn.runSQL(sql);
+      rows = result?.rows ?? [];
+    }
     if (opts.json) {
       process.stdout.write(JSON.stringify(rows, null, 2) + "\n");
     } else if (rows.length === 0) {

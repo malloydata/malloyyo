@@ -65,6 +65,7 @@ export { selectSource, describeSource } from './select';
 export { projectModel, projectDescription, buildSourceDescribe } from './project';
 export { modelCatalogEntry } from './catalog';
 export { run, executeMaterialized, DEFAULT_ROW_LIMIT, type RunOptions } from './run';
+export { jsonRows } from './rows';
 export { validateRestricted, runRestricted } from './restricted';
 export {
   dashboardGivenSpecs,

@@ -25,6 +25,15 @@ To answer a question you need to see what sources are available which pertain to
   * `join_source_map` — the named sources those `{ source }` joins resolve to, deduped.
   * In its own content block, the source's raw Malloy, for anything the structured output above doesn't cover.
 * `query(source: "...", malloy: "run: source -> { ... }", execute: false)` — validate without running; it returns the SQL. Iterate until clean. (`model_ref` optional, needed only when the source name is ambiguous.)
+* **If you can run shell commands, iterate locally instead — it is far faster.** `fetch_compiled_model(model_ref)` returns the entire compiled model as one compressed blob. Save that result to a file, install the client it names, and compile there:
+
+  ```
+  npm i -g @malloydata/malloyyo-client@<the client_version in the result>
+  malloyyo_client --model <file> describe_source <source>
+  malloyyo_client --model <file> query <source> '<malloy>'
+  ```
+
+  Same tools, same output — it runs this server's own code against the same compiled model — but with no round trip: ~450ms per attempt. It exits 0 when a query compiles and 1 when it does not, and it never executes anything. Fetch once per model and reuse the file; when a query finally compiles, come back here and `query(...)` to get the rows.
 * Some queries accept parameters (givens). More info if needed: yo_help("language/givens-model-level-parameters")
 
 # Run the query

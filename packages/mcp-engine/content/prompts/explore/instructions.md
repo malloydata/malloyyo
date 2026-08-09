@@ -1,1 +1,1 @@
-Malloy semantic-layer analytics for {{INSTANCE_NAME}}. Start with `list_sources` or `describe_source` — every tool result carries the workflow and points you to `yo_help`.
+Malloy semantic-layer analytics for {{INSTANCE_NAME}}. Start with `list_sources` or `describe_source` — every tool result carries the workflow and points you to `yo_help`. If you can run shell commands, `fetch_compiled_model` once and compile queries locally with `malloyyo_client` — far faster than validating over the wire.

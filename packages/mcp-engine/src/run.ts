@@ -8,6 +8,7 @@
 import type { GivenValue, QueryMaterializer, Runtime } from '@malloydata/malloy';
 import { API, MalloyError } from '@malloydata/malloy';
 import { codeProblem, errorProblem, mapProblems } from './problems';
+import { jsonRows } from './rows';
 import type { Problem, RunResult } from './types';
 
 export const DEFAULT_ROW_LIMIT = 10_000;
@@ -59,7 +60,7 @@ export async function executeMaterialized(
     const t1 = Date.now();
     const results = await retry(() => query.run({ rowLimit, ...compileOpts }));
     const t2 = Date.now();
-    const rows = results.toJSON().queryResult.result;
+    const rows = jsonRows(results);
     const out: RunResult = {
       ok: true,
       sql,

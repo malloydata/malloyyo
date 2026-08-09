@@ -17,6 +17,7 @@ import { DuckDBWASMConnection } from "@malloydata/db-duckdb/wasm";
 import { API, SingleConnectionRuntime } from "@malloydata/malloy";
 import { mountStatic } from "./frame-runtime/index";
 import { givensFromSearch, shareSearch, urlStateFromSearch } from "./shared/givens-url";
+import { jsonRows } from "./shared/json-rows";
 
 const info = window.__DASHBOARD__ || {};
 const MODEL_FILES = window.__MODEL_FILES__ || {};
@@ -125,7 +126,7 @@ async function run(req: { query?: string; malloy?: string }, givens: Record<stri
     // Malloy renderer needs for DefaultDashboard / <Panel>.
     return {
       ok: true,
-      rows: result.toJSON().queryResult.result,
+      rows: jsonRows(result),
       stable_result: API.util.wrapResult(result),
     };
   } catch (e: unknown) {

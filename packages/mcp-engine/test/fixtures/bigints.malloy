@@ -1,0 +1,28 @@
+// Fixture for the BIGINT wire-shape tests (malloyyo#137). Every column here is
+// chosen to pin one case of jsonRows():
+//   big      BIGINT inside the safe range  -> must be a JSON number
+//   small    INTEGER (already a number)    -> unchanged
+//   dbl      DOUBLE                        -> unchanged
+//   strcol   a genuine string "42"         -> must STAY a string
+//   huge     2^53+1                        -> exceeds safe range, stays a string
+//   neg_huge -(2^53+1)                     -> the negative bound
+//   d        DATE                          -> ISO string, same as toJSON()
+// The nest and the sum() measure cover the two places the walker recurses and
+// the "aggregate over a bigint is itself a bigint" case.
+source: nums is duckdb.sql("""
+  SELECT 1::BIGINT                  as big,
+         2::INTEGER                 as small,
+         3.5::DOUBLE                as dbl,
+         '42'                       as strcol,
+         9007199254740993::BIGINT   as huge,
+         -9007199254740993::BIGINT  as neg_huge,
+         DATE '2020-01-02'          as d
+""") extend {
+  measure: big_total is big.sum()
+}
+
+run: nums -> {
+  group_by: big, small, dbl, strcol, huge, neg_huge, d
+  aggregate: big_total
+  nest: sub is { group_by: big }
+}

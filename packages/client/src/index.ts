@@ -40,6 +40,11 @@ OPTIONS
       --givens <json>  values for $NAME givens, e.g. '{"STATE":"CA"}'
       --model-ref <r>  disambiguate when a source name is not unique
       --compact        single-line JSON (default is indented)
+      --any-version    DEV ONLY: open a blob whose Malloy version differs from
+                       this build's, warning instead of refusing. For testing
+                       both halves from one working tree; a mismatch in the wild
+                       means the model cannot be read correctly.
+                       [env MALLOYYO_ANY_VERSION=1]
   -h, --help           this message
   -v, --version        print the version
 
@@ -56,6 +61,7 @@ interface Parsed {
   givens?: string;
   modelRef?: string;
   compact: boolean;
+  anyVersion: boolean;
   help: boolean;
   version: boolean;
 }
@@ -63,7 +69,13 @@ interface Parsed {
 class UsageError extends Error {}
 
 function parseArgs(argv: string[]): Parsed {
-  const out: Parsed = { positionals: [], compact: false, help: false, version: false };
+  const out: Parsed = {
+    positionals: [],
+    compact: false,
+    anyVersion: process.env['MALLOYYO_ANY_VERSION'] === '1',
+    help: false,
+    version: false,
+  };
   const need = (flag: string, v: string | undefined): string => {
     if (v === undefined) throw new UsageError(`${flag} needs a value`);
     return v;
@@ -75,6 +87,7 @@ function parseArgs(argv: string[]): Parsed {
       case '--givens': out.givens = need(a, argv[++i]); break;
       case '--model-ref': case '--model_ref': out.modelRef = need(a, argv[++i]); break;
       case '--compact': out.compact = true; break;
+      case '--any-version': out.anyVersion = true; break;
       case '-h': case '--help': out.help = true; break;
       case '-v': case '--version': out.version = true; break;
       default: {
@@ -164,7 +177,7 @@ async function main(argv: string[]): Promise<number> {
     );
   }
 
-  const loaded = openModelFile(modelPath);
+  const loaded = openModelFile(modelPath, { allowVersionMismatch: p.anyVersion });
 
   if (p.command === 'info') {
     const b = loaded.blob;

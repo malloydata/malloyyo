@@ -205,6 +205,14 @@ package measures a real install and fails if it does).
 - **Commands are the MCP tools**: the client dispatches into the engine's
   `exploreSurface` tool array, so `describe_source` output is the server's code
   path, not a lookalike. `query` is compile-only by construction.
+- **Local dev loop: `docs/local-client-dev.md`.** `npm run build:all` then
+  `npm run dev:link` puts the working tree's `malloyyo` + `malloyyo_client` on
+  PATH; `npm run test:all` runs all four suites. `fetch_compiled_model` is
+  HOST-only, so testing it needs the real server (`npm run dev`) plus
+  `claude mcp add --transport http malloyyo-local http://localhost:3000/mcp` —
+  `malloyyo mcp` cannot exercise it. `--any-version` /
+  `MALLOYYO_ANY_VERSION=1` turns the version gate into a stderr warning for
+  when both halves come from one tree.
 
 ## Planned work
 

@@ -8,6 +8,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFile } from 'node:child_process';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import url from 'node:url';
 import { promisify } from 'node:util';
@@ -81,6 +83,34 @@ test('opening a blob from a different Malloy fails with the client to install', 
       return true;
     },
   );
+});
+
+test('--any-version opens a mismatched blob and warns on stderr, not stdout', async () => {
+  const bad = { ...(await makeBlob()), malloy_version: '0.0.0-other' };
+  const dir = mkdtempSync(path.join(tmpdir(), 'malloyyo-anyver-'));
+  const file = path.join(dir, 'model.json');
+  writeFileSync(file, JSON.stringify(bad));
+
+  assert.equal((await run(['--model', file, 'list_sources'])).code, 2, 'must refuse by default');
+
+  const r = await run(['--model', file, '--any-version', 'list_sources']);
+  assert.equal(r.code, 0, r.stderr);
+  // stdout stays parseable JSON — a warning that broke `| jq` would make the
+  // escape hatch unusable in exactly the scripts that need it.
+  assert.ok((JSON.parse(r.stdout) as { models: Record<string, unknown> }).models['demo']);
+  assert.match(r.stderr, /0\.0\.0-other/);
+  assert.match(r.stderr, /version check off/i);
+});
+
+test('MALLOYYO_ANY_VERSION=1 is equivalent to the flag', async () => {
+  const bad = { ...(await makeBlob()), malloy_version: '0.0.0-other' };
+  const dir = mkdtempSync(path.join(tmpdir(), 'malloyyo-anyver-env-'));
+  const file = path.join(dir, 'model.json');
+  writeFileSync(file, JSON.stringify(bad));
+  const { stdout } = await execFileP(process.execPath, [BIN, '--model', file, 'list_sources'], {
+    env: { ...process.env, MALLOYYO_ANY_VERSION: '1' },
+  });
+  assert.ok((JSON.parse(stdout) as { models: Record<string, unknown> }).models['demo']);
 });
 
 // ── the binary ──────────────────────────────────────────────────────

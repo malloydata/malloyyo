@@ -101,6 +101,12 @@ Install the matching client:  npm i -g @malloydata/malloyyo-client@0.2.29
 The client, the `malloyyo` CLI and the server release together at one version,
 so the version a server stamps onto a blob always names a client that exists.
 
+`--any-version` (or `MALLOYYO_ANY_VERSION=1`) downgrades that gate to a warning
+on stderr. It is for local development only — when you build both halves from
+one tree, a mismatch can be one you created deliberately, with nothing to
+install to fix it. It does not relax the checksum or encoding checks, which
+catch corruption rather than drift.
+
 ## Development
 
 ```bash
@@ -111,3 +117,8 @@ npm run weigh      # measure a real install; fails if the dependency budget grow
 
 `npm run weigh` is the guard on the only number this package exists for. If you
 add a dependency, it will argue with you.
+
+From the repo root, `npm run build:all` builds every package and
+`npm run dev:link` puts this working tree's `malloyyo_client` on your PATH. See
+[`docs/local-client-dev.md`](../../docs/local-client-dev.md) for the whole loop,
+including driving a `localhost:3000` server with Claude.

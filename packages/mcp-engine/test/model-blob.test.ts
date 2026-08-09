@@ -76,6 +76,40 @@ test('decode rejects a different envelope format', () => {
   assert.equal(res.ok, false);
 });
 
+test('allowVersionMismatch opens a mismatched blob but never does so silently', () => {
+  const blob = {
+    ...encodeModelBlob({ a: 1 }, ENCODE_OPTS),
+    malloy_version: '0.0.0-other',
+    format: MODEL_BLOB_FORMAT + 99,
+  };
+  assert.equal(decodeModelBlob(blob).ok, false, 'must still refuse by default');
+
+  const res = decodeModelBlob(blob, { allowVersionMismatch: true });
+  assert.equal(res.ok, true);
+  if (!res.ok) return;
+  assert.deepEqual(res.def, { a: 1 });
+  // Both gates report; a dev override that hid what it overrode would be worse
+  // than the gate it replaces.
+  assert.equal(res.warnings?.length, 2);
+  assert.ok(res.warnings?.some((w) => /0\.0\.0-other/.test(w)));
+  assert.ok(res.warnings?.some((w) => /format/.test(w)));
+});
+
+test('allowVersionMismatch does NOT weaken the checksum or the encoding check', () => {
+  // The override is about versions, not integrity: corruption must still fail.
+  const good = encodeModelBlob({ a: 'x'.repeat(2_000) }, ENCODE_OPTS);
+  const tampered = { ...good, payload: encodeModelBlob({ a: 'y'.repeat(2_000) }, ENCODE_OPTS).payload };
+  assert.equal(decodeModelBlob(tampered, { allowVersionMismatch: true }).ok, false);
+  assert.equal(decodeModelBlob({ ...good, encoding: 'gzip+base64' }, { allowVersionMismatch: true }).ok, false);
+});
+
+test('a matching blob produces no warnings even with the override on', () => {
+  const res = decodeModelBlob(encodeModelBlob({ a: 1 }, ENCODE_OPTS), { allowVersionMismatch: true });
+  assert.equal(res.ok, true);
+  if (!res.ok) return;
+  assert.equal(res.warnings, undefined);
+});
+
 test('decode rejects a truncated payload via the checksum', () => {
   const blob = encodeModelBlob({ a: 'x'.repeat(5_000) }, ENCODE_OPTS);
   // Re-encode different content but keep the original checksum: exactly what a

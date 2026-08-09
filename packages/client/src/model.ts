@@ -63,11 +63,23 @@ export interface LoadedModel {
   blob: ModelBlob;
 }
 
+export interface OpenOptions {
+  /** Local development only — see DecodeOptions.allowVersionMismatch. */
+  allowVersionMismatch?: boolean;
+  /** Where a version warning goes. Defaults to stderr, so it never pollutes the
+      JSON on stdout that a caller is parsing. */
+  warn?: (message: string) => void;
+}
+
 /** Decode a blob and stand up a rehydrated, driver-free model. */
-export function openModelBlob(input: unknown): LoadedModel {
-  const decoded = decodeModelBlob(input);
+export function openModelBlob(input: unknown, opts: OpenOptions = {}): LoadedModel {
+  const decoded = decodeModelBlob(input, { allowVersionMismatch: opts.allowVersionMismatch });
   if (!decoded.ok) throw new ClientError(decoded.error);
   const { def, blob } = decoded;
+  const warn = opts.warn ?? ((m: string) => process.stderr.write(m + '\n'));
+  for (const w of decoded.warnings ?? []) {
+    warn(`malloyyo_client: WARNING (version check off) ${w}`);
+  }
 
   const conns = modelConnections(def);
   const stubs = new Map<string, Connection>(
@@ -145,7 +157,7 @@ export function openModelBlob(input: unknown): LoadedModel {
 }
 
 /** Read a blob from a file (or `-` for stdin) and open it. */
-export function openModelFile(path: string): LoadedModel {
+export function openModelFile(path: string, opts: OpenOptions = {}): LoadedModel {
   let text: string;
   try {
     text = readFileSync(path === '-' ? 0 : path, 'utf8');
@@ -154,5 +166,5 @@ export function openModelFile(path: string): LoadedModel {
       `cannot read model file '${path}': ${e instanceof Error ? e.message : String(e)}`,
     );
   }
-  return openModelBlob(text);
+  return openModelBlob(text, opts);
 }

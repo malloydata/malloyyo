@@ -121,8 +121,22 @@ export function encodeModelBlob(def: unknown, opts: EncodeOptions): ModelBlob {
 }
 
 export type DecodeResult =
-  | { ok: true; def: unknown; blob: ModelBlob }
+  | { ok: true; def: unknown; blob: ModelBlob; warnings?: string[] }
   | { ok: false; error: string };
+
+export interface DecodeOptions {
+  /**
+   * Skip the format + malloy_version gates. FOR LOCAL DEVELOPMENT ONLY: when
+   * you are building both halves from one working tree, the gate can fail on a
+   * mismatch you deliberately created (a half-applied malloy bump, two copies
+   * of @malloydata/malloy in one install) and there is nothing to "install" to
+   * fix it. Never set this from a published path — reading a ModelDef written
+   * by a different compiler is undefined behavior, not a warning, so a decode
+   * that only *probably* works is exactly what the gate exists to prevent.
+   * Mismatches come back in `warnings` so the caller can say so out loud.
+   */
+  allowVersionMismatch?: boolean;
+}
 
 /**
  * Decode and validate an envelope. Never throws — a bad blob is a diagnosable
@@ -133,7 +147,15 @@ export type DecodeResult =
  * undefined behavior, not a warning. Failing here with the version to install
  * is what keeps client and server from silently drifting.
  */
-export function decodeModelBlob(input: unknown): DecodeResult {
+export function decodeModelBlob(input: unknown, opts: DecodeOptions = {}): DecodeResult {
+  const warnings: string[] = [];
+  // A gate failure is fatal by default and a recorded warning under the dev
+  // override — never silent, either way.
+  const gate = (message: string): string | undefined => {
+    if (!opts.allowVersionMismatch) return message;
+    warnings.push(message);
+    return undefined;
+  };
   if (typeof input === 'string') {
     try {
       input = JSON.parse(input) as unknown;
@@ -146,28 +168,28 @@ export function decodeModelBlob(input: unknown): DecodeResult {
     return { ok: false, error: 'not a model blob: no `payload` field.' };
   }
   if (blob.format !== MODEL_BLOB_FORMAT) {
-    return {
-      ok: false,
-      error:
-        `model blob format ${String(blob.format)} — this build reads format ` +
+    const fatal = gate(
+      `model blob format ${String(blob.format)} — this build reads format ` +
         `${MODEL_BLOB_FORMAT}. Re-fetch the model` +
         (blob.client_version ? ` with malloyyo_client ${blob.client_version}.` : '.'),
-    };
+    );
+    if (fatal) return { ok: false, error: fatal };
   }
+  // NOT gated: the encoding names how to read the bytes, so ignoring a mismatch
+  // would just fail messily a line later.
   if (blob.encoding !== 'br+base64') {
     return { ok: false, error: `unsupported model blob encoding '${String(blob.encoding)}'.` };
   }
   if (blob.malloy_version !== MALLOY_VERSION) {
-    return {
-      ok: false,
-      error:
-        `this model was compiled by Malloy ${String(blob.malloy_version)}, but this ` +
+    const fatal = gate(
+      `this model was compiled by Malloy ${String(blob.malloy_version)}, but this ` +
         `build bundles Malloy ${MALLOY_VERSION}. A compiled model can only be read ` +
         `by the Malloy that wrote it.` +
         (blob.client_version
           ? `\nInstall the matching client:  npm i -g @malloydata/malloyyo-client@${blob.client_version}`
           : ''),
-    };
+    );
+    if (fatal) return { ok: false, error: fatal };
   }
   let json: string;
   try {
@@ -182,7 +204,9 @@ export function decodeModelBlob(input: unknown): DecodeResult {
     };
   }
   try {
-    return { ok: true, def: JSON.parse(json) as unknown, blob: blob as ModelBlob };
+    const out: DecodeResult = { ok: true, def: JSON.parse(json) as unknown, blob: blob as ModelBlob };
+    if (warnings.length) out.warnings = warnings;
+    return out;
   } catch {
     return { ok: false, error: 'model blob payload did not contain valid JSON — re-fetch it.' };
   }

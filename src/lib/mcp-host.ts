@@ -233,10 +233,18 @@ async function fetchCompiledModel(
     );
   }
 
+  // In `next dev` the client that matches this build is the one in the working
+  // tree (npm run dev:link), not one on npm — which for an unreleased version
+  // does not exist. Telling a local agent to npm-install it would send it to a
+  // 404 on its first move, so dev says use what is already linked.
+  const install =
+    process.env.NODE_ENV === "development"
+      ? `  # dev server: using your linked working-tree build (npm run dev:link)\n`
+      : `  npm i -g @malloydata/malloyyo-client@${VERSION}\n`;
   const usage =
     `Save this entire result to a file (e.g. ${ref}.json), then compile queries locally ` +
     `instead of calling ${TAG} query(execute:false):\n` +
-    `  npm i -g @malloydata/malloyyo-client@${VERSION}\n` +
+    install +
     `  malloyyo_client --model ${ref}.json describe_source <source>\n` +
     `  malloyyo_client --model ${ref}.json query <source> '<malloy>'\n` +
     `It exits 0 when a query compiles and 1 when it does not, and never runs anything — ` +

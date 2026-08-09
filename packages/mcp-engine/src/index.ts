@@ -88,6 +88,20 @@ export {
   engineSkills,
 } from './help';
 export { prettify, type PrettifyOutcome } from './prettify';
+export {
+  MODEL_BLOB_FORMAT,
+  MALLOY_VERSION,
+  decodeModelBlob,
+  encodeModelBlob,
+  extractModelDef,
+  modelConnections,
+  rehydrateModel,
+  _blobMeta,
+  type CompiledModel,
+  type DecodeResult,
+  type EncodeOptions,
+  type ModelBlob,
+} from './model-blob';
 export { INSTANCE_PLACEHOLDER, renderInstructions } from './instance';
 export {
   mapProblems,

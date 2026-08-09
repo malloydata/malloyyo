@@ -1,0 +1,45 @@
+{
+  "name": "@malloydata/malloyyo-client",
+  "version": "0.2.29",
+  "description": "Compile and debug Malloy queries offline against a published Malloyyo model",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/malloydata/malloyyo.git",
+    "directory": "packages/client"
+  },
+  "type": "module",
+  "bin": {
+    "malloyyo_client": "dist/index.js"
+  },
+  "files": [
+    "dist/**"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build:engine": "cd ../mcp-engine && npm run build",
+    "build": "npm run build:engine && node scripts/build.mjs",
+    "dev": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "pretest": "npm run build",
+    "test": "tsx --test test/*.test.ts",
+    "weigh": "node scripts/weigh.mjs",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@malloydata/malloy": "^0.0.425"
+  },
+  "devDependencies": {
+    "@malloyyo/mcp-engine": "*",
+    "@malloydata/db-duckdb": "^0.0.425",
+    "@types/node": "^20",
+    "esbuild": "^0.24.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5"
+  }
+}

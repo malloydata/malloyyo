@@ -11,10 +11,13 @@
 # WHAT IT RUNS (fail-fast, in order):
 #   1. mcp-engine  — typecheck (src + test) and the full unit suite
 #                    (node:test via tsx, real in-process DuckDB compiles).
-#   2. cli         — typecheck, then `npm test` whose pretest BUILDS the bundle
+#   2. client      — typecheck, build + tests for malloyyo_client. Runs BEFORE
+#                    the cli, whose compile e2e spawns this binary to prove a
+#                    blob written by `malloyyo compile` opens driver-free.
+#   3. cli         — typecheck, then `npm test` whose pretest BUILDS the bundle
 #                    (which also rebuilds the engine) — so "the CLI builds and
 #                    works" is proven, not assumed.
-#   3. server      — eslint, `next build` (the real type/route check), and the
+#   4. server      — eslint, `next build` (the real type/route check), and the
 #                    hosted-explore integration test (test:hosted spins up an
 #                    EPHEMERAL Docker Postgres + in-process DuckDB, hermetic).
 #
@@ -79,11 +82,15 @@ run "mcp-engine: unit tests"       npm test -w packages/mcp-engine
 # (CI) does not — so build it explicitly before anything consumes it.
 run "mcp-engine: build (dist)"     npm run build -w packages/mcp-engine
 
-# --- 2. cli (pretest builds the bundle + engine) ---------------------------
+# --- 2. client (built BEFORE the cli, whose compile e2e drives this binary) -
+run "client: typecheck"            npm run typecheck -w packages/client
+run "client: build + tests"        npm test -w packages/client
+
+# --- 3. cli (pretest builds the bundle + engine) ---------------------------
 run "cli: typecheck"               npm run typecheck -w packages/cli
 run "cli: build + tests"           npm test -w packages/cli
 
-# --- 3. server -------------------------------------------------------------
+# --- 4. server -------------------------------------------------------------
 run "server: lint"                 npm run lint
 # Guard: no app PAGE may statically import the DuckDB path — a page render
 # function can't load libduckdb.so and 500s in prod (reference_ssr_page_duckdb_500).

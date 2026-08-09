@@ -34,6 +34,14 @@ const pkgJsonPath = join(pkgDir, 'package.json');
 const repoRoot = join(pkgDir, '..', '..');
 const rootPkgJsonPath = join(repoRoot, 'package.json');
 const lockPath = join(repoRoot, 'package-lock.json');
+// malloyyo_client ships from this repo too, and its version is LOAD-BEARING:
+// `fetch_compiled_model` stamps the running server's version onto every blob as
+// the client version that can read it, so a client published at a different
+// version would send agents to install something that doesn't exist. Released
+// in lockstep, from here, for that reason.
+const clientDir = join(pkgDir, '..', 'client');
+const clientPkgJsonPath = join(clientDir, 'package.json');
+const CLIENT_NAME = '@malloydata/malloyyo-client';
 
 function readVersionAt(path: string): string {
   return JSON.parse(readFileSync(path, 'utf8')).version;
@@ -114,11 +122,11 @@ function die(msg: string, fix?: string): never {
 // ---------------------------------------------------------------------------
 // shell helpers
 // ---------------------------------------------------------------------------
-function run(cmd: string, args: string[], opts: {quiet?: boolean} = {}): string {
+function run(cmd: string, args: string[], opts: {quiet?: boolean; cwd?: string} = {}): string {
   if (!opts.quiet) console.log(dim(`  > ${cmd} ${args.join(' ')}`));
   return (
     execFileSync(cmd, args, {
-      cwd: pkgDir,
+      cwd: opts.cwd ?? pkgDir,
       encoding: 'utf8',
       stdio: opts.quiet ? 'pipe' : 'inherit',
     })
@@ -335,6 +343,14 @@ async function main(): Promise<void> {
     ok(`Synced server package.json ${inRootRepo} → ${green(version)}.`);
   }
 
+  // Same mirror for the client package (see clientPkgJsonPath above).
+  const inClientRepo = readVersionAt(clientPkgJsonPath);
+  const clientSynced = version !== inClientRepo;
+  if (clientSynced) {
+    writeVersionAt(clientPkgJsonPath, version);
+    ok(`Synced client package.json ${inClientRepo} → ${green(version)}.`);
+  }
+
   const lockSynced = syncLockVersion(version);
   if (lockSynced) ok(`Synced package-lock.json → ${green(version)}.`);
 
@@ -342,6 +358,7 @@ async function main(): Promise<void> {
   const restoreVersion = (): void => {
     if (bumped) run('npm', ['version', '--no-git-tag-version', inRepo], {quiet: true});
     if (rootSynced) writeVersionAt(rootPkgJsonPath, inRootRepo);
+    if (clientSynced) writeVersionAt(clientPkgJsonPath, inClientRepo);
     // Unconditional: `npm version` may have touched the lock even when we didn't.
     writeFileSync(lockPath, lockBefore);
   };
@@ -387,20 +404,36 @@ async function main(): Promise<void> {
   try {
     step('Build');
     run('npm', ['run', 'build']); // builds the engine, then bundles the CLI
+    run('npm', ['run', 'build'], {cwd: clientDir});
     step('Typecheck');
     run('npm', ['run', 'typecheck']);
+    run('npm', ['run', 'typecheck'], {cwd: clientDir});
 
     step('Publish');
     if (isPublished(name, version)) {
       warn(`${name}@${version} is already on npm — skipping publish (finishing git side).`);
     } else if (dryRun) {
       run('npm', ['publish', '--dry-run']);
+      run('npm', ['publish', '--dry-run'], {cwd: clientDir});
       restoreVersion();
-      console.log(`\n${green('✓')} ${bold(`Dry run OK`)} — would publish ${name}@${version}.`);
+      console.log(
+        `\n${green('✓')} ${bold(`Dry run OK`)} — would publish ${name}@${version} ` +
+          `and ${CLIENT_NAME}@${version}.`,
+      );
       return;
     } else {
       run('npm', ['publish']); // auth from env: OIDC in CI, token locally
       ok(`Published ${green(`${name}@${version}`)}.`);
+    }
+
+    // The client is published separately but at the SAME version — skipped
+    // independently so a retry after a half-failed release finishes the job
+    // instead of dying on "you cannot publish over an existing version".
+    if (isPublished(CLIENT_NAME, version)) {
+      warn(`${CLIENT_NAME}@${version} is already on npm — skipping.`);
+    } else if (!dryRun) {
+      run('npm', ['publish'], {cwd: clientDir});
+      ok(`Published ${green(`${CLIENT_NAME}@${version}`)}.`);
     }
 
     if (dryRun) {
@@ -411,11 +444,12 @@ async function main(): Promise<void> {
     step('Git');
     // lockSynced can be the ONLY reason to commit: a release that publishes the
     // in-repo version as-is still has to carry a lock that drifted earlier.
-    const committed = bumped || rootSynced || lockSynced;
+    const committed = bumped || rootSynced || clientSynced || lockSynced;
     if (committed) {
       const files: string[] = [];
       if (bumped) files.push(pkgJsonPath);
       if (rootSynced) files.push(rootPkgJsonPath);
+      if (clientSynced) files.push(clientPkgJsonPath);
       if (lockSynced) files.push(lockPath);
       run('git', ['commit', '-m', `release: ${name} v${version} [skip ci]`, ...files]);
     }

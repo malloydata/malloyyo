@@ -62,6 +62,20 @@ closes it.
       `givens` contract, and where the full authoring guide lives
       (`docs/repo-artifacts.md`, `yo_help` topics under `dashboards/*`).
 
+## malloyyo_client
+
+- [ ] **Let the client fetch its own model.** Today `fetch_compiled_model`
+      returns the blob through the MCP result (the only channel a locked-down
+      container is guaranteed to have), so the bytes pass through the agent's
+      context once — ~2.6k tokens for the IMDB model. Where the container CAN
+      reach the instance, `malloyyo_client fetch <target>` could make the
+      JSON-RPC call itself and cost zero. `store.ts`/`oauth.ts` in the CLI are
+      dependency-free, so the token plumbing can be reused as-is.
+- [ ] **Cache the compiled model server-side.** `fetch_compiled_model` compiles
+      on every call. The durable ModelDef cache (`compiled_model_def`) already
+      stores exactly this blob's payload — wire them together and a fetch
+      becomes a read (see the model-cache TODO below; both want the same fix).
+
 ## Known issues / cleanup
 
 - [ ] **Thorough code review.** No focused review pass has been done across the

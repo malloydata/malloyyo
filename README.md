@@ -82,6 +82,7 @@ Alternatively, **point Malloyyo at a GitHub repo** and it pulls `index.malloy` (
 | `describe_source` | A source's semantic model — measures, dimensions, views, joins |
 | `query` | Run a Malloy query; returns rows + a shareable link (`execute: false` for SQL only) |
 | `open_share_link` | Resolve a shared link back to its source, question, and Malloy |
+| `fetch_compiled_model` | Download the compiled model as a compressed blob for [`malloyyo_client`](packages/client), so queries can be compiled locally instead of over the wire |
 
 The MCP endpoint speaks OAuth 2.1, so claude.ai's remote MCP integration can connect after a one-time authorization flow.
 
@@ -132,6 +133,33 @@ malloyyo publish <your-instance>   # bundle *.malloy + malloy-config.json and pu
 ```
 
 The server compiles and introspects the model and stores a new version; a compile failure rejects the push and leaves the live model unchanged. (Or push to GitHub and point Malloyyo at the repo.) See [`packages/cli/README.md`](packages/cli/README.md) for the CLI.
+
+## Compiling queries locally: `malloyyo_client`
+
+A first draft of a query rarely compiles — a measure is misspelled, a field is
+behind a join — and over MCP each of those costs a network round trip to find
+out. But a published model is *already compiled*: every source's schema is baked
+into it, so validating a query needs the model and nothing else.
+
+[**`malloyyo_client`**](packages/client) is that, and only that — **51 packages,
+~4s to install** (against the full CLI's 661 and ~47s), because a client that
+only compiles needs no database driver, no renderer, no warehouse SDKs:
+
+```bash
+npm i -g @malloydata/malloyyo-client
+
+# get the model: the fetch_compiled_model MCP tool, or locally —
+malloyyo compile -C ./my-model -o model.json
+
+malloyyo_client --model model.json describe_source movies
+malloyyo_client --model model.json query movies 'run: movies -> { group_by: genre; aggregate: c is count() }'
+```
+
+It exits `0` when a query compiles (returning the SQL) and `1` when it doesn't
+(returning Malloy's own diagnostics with line and column), so an agent iterates
+locally in ~450ms per attempt and sends the query to the server exactly once, to
+run it. The subcommands *are* the MCP tools, dispatched into the same engine code
+the server runs, so the two surfaces can't drift.
 
 ## Stack
 

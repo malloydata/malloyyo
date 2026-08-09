@@ -6,6 +6,7 @@ import { gatherDirectory, gatherDashboards, gitInfo } from "./gather.js";
 import { lintDashboards, printLintReport } from "./lint.js";
 import { getAccessToken, login } from "./oauth.js";
 import { serveMcp } from "./mcp.js";
+import { compileCmd } from "./compile.js";
 import { serveDashboard } from "./dashboard.js";
 import { bundleDashboards } from "./bundle.js";
 import { initCmd } from "./init.js";
@@ -154,6 +155,19 @@ program
   .option("--token <token>", "bearer token (overrides login/env)")
   .description("show what's live on <target>: version, commit, compile state")
   .action(status);
+
+program
+  .command("compile")
+  .option("-o, --output <file>", 'write the compiled-model blob here ("-" for stdout)')
+  .option("-C, --root <dir>", "project root (default: current directory)")
+  .option("--model-ref <name>", "name the blob carries (default: the directory name)")
+  .description(
+    "compile index.malloy and write it as a blob for malloyyo_client, so queries " +
+      "can be compiled and debugged offline without a database",
+  )
+  .action(async (opts: { output?: string; root?: string; modelRef?: string }) => {
+    await compileCmd({ ...opts, clientVersion: VERSION });
+  });
 
 program
   .command("mcp")

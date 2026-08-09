@@ -165,6 +165,47 @@ vercel alias set <deploy-url> malloyyo-staging.vercel.app   # staging alias
   MANUAL" above) — merging to `main` no longer deploys.
 - The CLI is already authenticated (`vercel whoami`).
 
+## The three published faces (one version)
+
+The repo ships **three** things that must agree on a version number:
+
+| package | what |
+|---|---|
+| `@malloyyo/server` (repo root, private) | the deployed Next.js app |
+| `@malloydata/malloyyo` (`packages/cli`) | the authoring/publishing CLI |
+| `@malloydata/malloyyo-client` (`packages/client`) | `malloyyo_client`, the offline query compiler |
+
+`packages/cli/scripts/release.ts` mirrors one version into all three and
+publishes the two public ones together. That lockstep is **load-bearing**, not
+tidiness: `fetch_compiled_model` stamps the running server's version onto every
+blob as "the client version that can read this", so a client published at a
+different version would point agents at something that doesn't exist.
+
+`packages/mcp-engine` stays internal and unpublished at 0.0.1.
+
+### malloyyo_client — offline query compiling
+
+A compiled Malloy ModelDef carries every source's schema, so re-opening one
+needs **no driver, no credentials, no network** — only the compiler. That is why
+the client installs 51 packages / ~4s where the CLI needs 661 / ~47s, and why
+`packages/client` must never grow a dependency casually (`npm run weigh` in that
+package measures a real install and fails if it does).
+
+- **The envelope** is `packages/mcp-engine/src/model-blob.ts` — brotli+base64,
+  sha256, version gate. Brotli, not gzip: ModelDef JSON is hugely repetitive and
+  brotli gets ~57x where gzip gets ~23x, and the difference is thousands of
+  tokens of agent context, because the blob travels **inside an MCP tool result**
+  (a container may reach nothing but the MCP endpoint, so a download URL is not
+  an option).
+- **The one place that touches Malloy's underscore APIs** (`Model._modelDef`,
+  `Runtime._loadModelFromModelDef`) is that same file, pinned by
+  `test/model-blob.test.ts`. `src/lib/model-cache.ts` holds an older, separate
+  copy for the durable ModelDef cache — worth collapsing into the engine's when
+  that cache is next touched (see the TODO on it).
+- **Commands are the MCP tools**: the client dispatches into the engine's
+  `exploreSurface` tool array, so `describe_source` output is the server's code
+  path, not a lookalike. `query` is compile-only by construction.
+
 ## Planned work
 
 ### Dashboard artifacts v2 — SHIPPED 2026-07-06 (PR #65, deployed to prod)

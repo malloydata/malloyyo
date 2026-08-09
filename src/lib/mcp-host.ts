@@ -20,7 +20,9 @@ import { desc } from "drizzle-orm";
 import { db, datasets, type User } from "@/db";
 import {
   compile,
+  encodeModelBlob,
   exploreSurface,
+  extractModelDef,
   modelCatalogEntry,
   renderInstructions,
   toContent,
@@ -45,6 +47,7 @@ import {
   type RecordHistoryFields,
 } from "./mcp-tools";
 import { env } from "./env";
+import { VERSION } from "./version";
 import { clientProfile, renderRowsMarkdown } from "./client-profile";
 
 export type ToolResult = {
@@ -192,6 +195,84 @@ async function openShareLink(args: Record<string, unknown>, baseUrl: string): Pr
   });
 }
 
+// Above this much base64, the blob costs more agent context than the round
+// trips it saves; refuse rather than silently flood the conversation. ~57x
+// compression means this is a genuinely enormous model (tens of MB of ModelDef).
+const MAX_BLOB_CHARS = 384 * 1024;
+// Past this, it still works but is worth saying out loud.
+const BIG_BLOB_CHARS = 64 * 1024;
+
+/** Compile a dataset's model and hand back the portable compiled-model blob. */
+async function fetchCompiledModel(
+  userId: string,
+  args: Record<string, unknown>,
+): Promise<ToolResult> {
+  const ref = String(args.model_ref ?? "").trim();
+  if (!ref) return errText("model_ref is required — the model name from list_sources.");
+  const found = await findModelByRef(userId, ref);
+  if (!found) return errText(`no model '${ref}' (unknown, or not visible to you)`);
+
+  // The raw malloy Model, not the engine's wire ModelInfo — the ModelDef behind
+  // it is what travels.
+  const blob = await leaseDataset(found.model, async (m) => {
+    const compiled = await m.runtime.loadModel(m.entry).getModel();
+    return encodeModelBlob(extractModelDef(compiled), {
+      model_ref: ref,
+      // The server and the client are released in lockstep from this repo, so
+      // the running server's version IS the client version that matches it.
+      client_version: VERSION,
+    });
+  });
+
+  if (blob.payload.length > MAX_BLOB_CHARS) {
+    return errText(
+      `'${ref}' compiles to ${(blob.bytes / 1024 / 1024).toFixed(1)}MB ` +
+        `(${(blob.payload.length / 1024).toFixed(0)}KB compressed), too large to return in a tool ` +
+        `result without flooding your context. Compile it locally instead: ` +
+        `\`malloyyo compile -C <model-dir> -o model.json\`.`,
+    );
+  }
+
+  const usage =
+    `Save this entire result to a file (e.g. ${ref}.json), then compile queries locally ` +
+    `instead of calling ${TAG} query(execute:false):\n` +
+    `  npm i -g @malloydata/malloyyo-client@${VERSION}\n` +
+    `  malloyyo_client --model ${ref}.json describe_source <source>\n` +
+    `  malloyyo_client --model ${ref}.json query <source> '<malloy>'\n` +
+    `It exits 0 when a query compiles and 1 when it does not, and never runs anything — ` +
+    `once a query compiles, call ${TAG} query here to get rows.`;
+
+  const result: Record<string, unknown> = { ...blob, usage };
+  if (blob.payload.length > BIG_BLOB_CHARS) {
+    result.note =
+      `This is a large model (${(blob.payload.length / 1024).toFixed(0)}KB). Save it to a file now ` +
+      `and work from the file — do not re-fetch it.`;
+  }
+  return text(result);
+}
+
+const FETCH_COMPILED_MODEL = {
+  name: "fetch_compiled_model",
+  title: "Fetch the compiled model",
+  description:
+    `Download a model from ${env.INSTANCE_NAME} as a compressed, self-contained blob for ` +
+    `malloyyo_client, so you can compile and debug Malloy queries LOCALLY — instantly, and ` +
+    `without a round trip per attempt. Save the result to a file, iterate with ` +
+    `\`malloyyo_client --model <file> query <source> '<malloy>'\` until it compiles, then send ` +
+    `the finished query to \`query\` here to get rows. Fetch once per model and reuse the file.`,
+  inputSchema: {
+    type: "object",
+    properties: {
+      model_ref: {
+        type: "string",
+        description: "The model to fetch (a model_ref from list_sources).",
+      },
+    },
+    required: ["model_ref"],
+    additionalProperties: false,
+  },
+} as const;
+
 const OPEN_SHARE_LINK = {
   name: "open_share_link",
   title: "Open a share link",
@@ -279,6 +360,11 @@ export function buildHostedExploreSurface(
       description: `${TAG} ${OPEN_SHARE_LINK.description}`,
       inputSchema: withModelParam(OPEN_SHARE_LINK.inputSchema as Record<string, unknown>),
     },
+    {
+      ...FETCH_COMPILED_MODEL,
+      description: `${TAG} ${FETCH_COMPILED_MODEL.description}`,
+      inputSchema: withModelParam(FETCH_COMPILED_MODEL.inputSchema as Record<string, unknown>),
+    },
   ];
 
   const strArg = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
@@ -310,6 +396,11 @@ export function buildHostedExploreSurface(
     try {
       if (name === "open_share_link") {
         const result = await openShareLink(toolArgs, baseUrl);
+        await record({ error: resultError(result as unknown as Record<string, unknown>) });
+        return result;
+      }
+      if (name === "fetch_compiled_model") {
+        const result = await fetchCompiledModel(user.id, toolArgs);
         await record({ error: resultError(result as unknown as Record<string, unknown>) });
         return result;
       }

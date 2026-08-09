@@ -6,6 +6,9 @@
 //   2. Scaffold index.malloy (the entry model the dashboard/publish tooling
 //      requires) if it's missing, re-exporting the repo's models — so the
 //      "No index.malloy" landmine doesn't hit every authoring session.
+//   3. Pre-approve the author server's tools in .claude/settings.json, so the
+//      first compile/query doesn't stop for a permission prompt. Merged, never
+//      clobbered — the file is hand-edited.
 //
 // The .mcp.json is the guaranteed fix; the index.malloy is a best-effort
 // scaffold to review (validate it with `malloyyo mcp --develop` / `dashboard
@@ -14,14 +17,96 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { developSurface, type DevelopHost } from "@malloyyo/mcp-engine";
+
+/** The server KEY is the tool prefix: mcp__<key>__<tool>. */
+const AUTHOR_SERVER = "malloyyo_author";
 
 const AUTHOR_MCP = {
   mcpServers: {
     // No -C: the server roots at the launch cwd (the project dir), so this file
     // is portable/committable — no absolute paths baked in.
-    malloyyo_author: { command: "malloyyo", args: ["mcp", "--develop"] },
+    [AUTHOR_SERVER]: { command: "malloyyo", args: ["mcp", "--develop"] },
   },
 };
+
+/**
+ * The permission rules that pre-approve the author server's tools.
+ *
+ * DERIVED from the surface, never hand-listed: a hand-written list is exactly
+ * what rotted before — settings.json allowed `mcp__malloyyo-local__*` /
+ * `mcp__malloy__*` from an older naming scheme, matched nothing once the server
+ * became `malloyyo_author`, and so every call still prompted. Reading the names
+ * off developSurface() means adding a tool to the engine updates this for free.
+ *
+ * The stub host is never invoked: developSurface only closes over it, and the
+ * handlers (the sole callers) don't run while we're listing names.
+ */
+export function authorToolPermissions(): string[] {
+  const stub = {
+    withRuntime: () => Promise.reject(new Error("unused: listing tool names only")),
+  } as unknown as DevelopHost;
+  return developSurface(stub)
+    .tools.map((t) => `mcp__${AUTHOR_SERVER}__${t.name}`)
+    .sort();
+}
+
+/**
+ * Merge the author tool rules into a parsed .claude/settings.json.
+ *
+ * Pure, and deliberately conservative: unrelated keys and existing allow
+ * entries are preserved, and anything unexpected is reported rather than
+ * overwritten — this file is hand-edited and losing it would be worse than
+ * leaving a permission prompt in place.
+ */
+export function withAuthorPermissions(
+  input: unknown,
+): { settings: Record<string, unknown>; added: string[] } | { error: string } {
+  const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+    typeof v === "object" && v !== null && !Array.isArray(v);
+
+  if (input !== undefined && !isPlainObject(input)) {
+    return { error: ".claude/settings.json isn't a JSON object" };
+  }
+  const settings: Record<string, unknown> = input ?? {};
+
+  const rawPerms = settings.permissions ?? {};
+  if (!isPlainObject(rawPerms)) return { error: `"permissions" isn't an object` };
+
+  const rawAllow = rawPerms.allow;
+  if (rawAllow !== undefined && !Array.isArray(rawAllow)) {
+    return { error: `"permissions.allow" isn't an array` };
+  }
+  const allow = (rawAllow ?? []) as unknown[];
+
+  const added = authorToolPermissions().filter((rule) => !allow.includes(rule));
+  if (added.length === 0) return { settings, added };
+
+  settings.permissions = { ...rawPerms, allow: [...allow, ...added] };
+  return { settings, added };
+}
+
+/** Write the merged permissions back, creating .claude/settings.json if absent. */
+function allowAuthorTools(root: string): { added: string[]; note?: string } {
+  const file = path.join(root, ".claude", "settings.json");
+
+  let existing: unknown;
+  if (fs.existsSync(file)) {
+    try {
+      existing = JSON.parse(fs.readFileSync(file, "utf8"));
+    } catch {
+      return { added: [], note: ".claude/settings.json isn't valid JSON — left as-is" };
+    }
+  }
+
+  const merged = withAuthorPermissions(existing);
+  if ("error" in merged) return { added: [], note: `${merged.error} — left as-is` };
+  if (merged.added.length === 0) return { added: [] };
+
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify(merged.settings, null, 2) + "\n");
+  return { added: merged.added };
+}
 
 /** Top-level exportable names in a .malloy file: sources, queries, and givens.
     Heuristic (no compile) — good enough to scaffold; the author reviews it. */
@@ -144,6 +229,18 @@ export async function initCmd(dir: string): Promise<void> {
     if (sk.skipped.length) {
       console.log(`• skill(s) already present — left as-is: ${sk.skipped.join(", ")}`);
     }
+  }
+
+  const perms = allowAuthorTools(root);
+  if (perms.note) {
+    console.log(`• ${perms.note}`);
+  } else if (perms.added.length) {
+    console.log(
+      `✓ pre-approved ${perms.added.length} author tool(s) in .claude/settings.json` +
+        ` — no permission prompt on first use`,
+    );
+  } else {
+    console.log(`• author tools already allowed in .claude/settings.json`);
   }
 
   console.log("");

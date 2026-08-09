@@ -26,13 +26,14 @@ import {execFileSync} from 'node:child_process';
 import {readFileSync, writeFileSync} from 'node:fs';
 import {createInterface} from 'node:readline/promises';
 import {fileURLToPath} from 'node:url';
-import {dirname, join} from 'node:path';
+import {dirname, join, relative, sep} from 'node:path';
 
 const pkgDir = join(dirname(fileURLToPath(import.meta.url)), '..');
 const pkgJsonPath = join(pkgDir, 'package.json');
 // The deployed server lives at the repo root and shares the CLI's version.
 const repoRoot = join(pkgDir, '..', '..');
 const rootPkgJsonPath = join(repoRoot, 'package.json');
+const lockPath = join(repoRoot, 'package-lock.json');
 
 function readVersionAt(path: string): string {
   return JSON.parse(readFileSync(path, 'utf8')).version;
@@ -45,6 +46,46 @@ function writeVersionAt(path: string, version: string): void {
   const next = text.replace(/("version":\s*")[^"]+(")/, `$1${version}$2`);
   if (next === text) throw new Error(`could not find a version field to update in ${path}`);
   writeFileSync(path, next);
+}
+
+/**
+ * Point package-lock.json at the release version too.
+ *
+ * The lock records the version of the root package AND of each workspace, so a
+ * release that rewrites package.json without it leaves the two permanently out
+ * of step. That is exactly what happened: the lock sat at 0.2.19 while
+ * package.json reached 0.2.25, so any contributor running `npm install` got a
+ * spurious three-line diff to notice and discard. (`npm ci` tolerates it — it
+ * only checks that the lock satisfies the dependencies — so this was noise, not
+ * a broken build.)
+ *
+ * Edited surgically rather than with `npm install --package-lock-only`, which
+ * re-resolves the whole tree and would let unrelated dependency bumps ride into
+ * a release commit. npm writes this file as `JSON.stringify(…, null, 2)`, so a
+ * parse/serialise round-trip is byte-identical and the diff stays on the
+ * version fields.
+ */
+function syncLockVersion(version: string): boolean {
+  const text = readFileSync(lockPath, 'utf8');
+  const lock = JSON.parse(text);
+  // The workspace is keyed by its repo-relative path, always POSIX-separated.
+  const cliKey = relative(repoRoot, pkgDir).split(sep).join('/');
+  const targets: Array<[string, unknown]> = [
+    ['<root>', lock],
+    ['packages[""]', lock.packages?.['']],
+    [`packages["${cliKey}"]`, lock.packages?.[cliKey]],
+  ];
+  for (const [label, target] of targets) {
+    const t = target as {version?: unknown} | undefined;
+    if (!t || typeof t.version !== 'string') {
+      throw new Error(`package-lock.json: no version field at ${label}`);
+    }
+    t.version = version;
+  }
+  const next = JSON.stringify(lock, null, 2) + '\n';
+  if (next === text) return false;
+  writeFileSync(lockPath, next);
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -262,6 +303,10 @@ async function main(): Promise<void> {
     info(`${cyan(name)} has never been published — this will be the first release.`);
   }
 
+  // Captured before `npm version` runs — it rewrites the lock as a side effect,
+  // so this is the only faithful copy to roll back to if the release aborts.
+  const lockBefore = readFileSync(lockPath, 'utf8');
+
   let version = inRepo;
   let bumped = false;
   if (isPublished(name, inRepo)) {
@@ -290,10 +335,15 @@ async function main(): Promise<void> {
     ok(`Synced server package.json ${inRootRepo} → ${green(version)}.`);
   }
 
+  const lockSynced = syncLockVersion(version);
+  if (lockSynced) ok(`Synced package-lock.json → ${green(version)}.`);
+
   const tag = `malloyyo-v${version}`;
   const restoreVersion = (): void => {
     if (bumped) run('npm', ['version', '--no-git-tag-version', inRepo], {quiet: true});
     if (rootSynced) writeVersionAt(rootPkgJsonPath, inRootRepo);
+    // Unconditional: `npm version` may have touched the lock even when we didn't.
+    writeFileSync(lockPath, lockBefore);
   };
 
   // --- the plan ------------------------------------------------------------
@@ -304,15 +354,22 @@ async function main(): Promise<void> {
     `  server sync  ${rootSynced ? `yes — root package.json → ${green(version)}` : dim('no (already in sync)')}`
   );
   console.log(
+    `  lock sync    ${lockSynced ? `yes — package-lock.json → ${green(version)}` : dim('no (already in sync)')}`
+  );
+  console.log(
     `  commit back  ${
-      bumped || rootSynced
+      bumped || rootSynced || lockSynced
         ? `yes — "${`release: ${name} v${version} [skip ci]`}"`
         : dim('no (version already in repo)')
     }`
   );
   console.log(
     `  push         ${
-      noPush ? yellow('no (--no-push)') : bumped || rootSynced ? 'commit + tag → origin/main' : 'tag → origin'
+      noPush
+        ? yellow('no (--no-push)')
+        : bumped || rootSynced || lockSynced
+          ? 'commit + tag → origin/main'
+          : 'tag → origin'
     }`
   );
   console.log(`  auth         ${isCI ? 'OIDC (trusted publishing)' : 'your npm login'}`);
@@ -352,11 +409,14 @@ async function main(): Promise<void> {
     }
 
     step('Git');
-    const committed = bumped || rootSynced;
+    // lockSynced can be the ONLY reason to commit: a release that publishes the
+    // in-repo version as-is still has to carry a lock that drifted earlier.
+    const committed = bumped || rootSynced || lockSynced;
     if (committed) {
       const files: string[] = [];
       if (bumped) files.push(pkgJsonPath);
       if (rootSynced) files.push(rootPkgJsonPath);
+      if (lockSynced) files.push(lockPath);
       run('git', ['commit', '-m', `release: ${name} v${version} [skip ci]`, ...files]);
     }
     if (!succeeds('git', ['rev-parse', '-q', '--verify', `refs/tags/${tag}`])) {
@@ -366,10 +426,10 @@ async function main(): Promise<void> {
       warn('--no-push: leaving the commit + tag local. Push them yourself when ready.');
     } else {
       if (committed) {
-        // --autostash: `npm version` also rewrites the root package-lock.json,
-        // which we intentionally don't commit — it's left unstaged and would
-        // otherwise abort the rebase ("cannot pull with rebase: You have
-        // unstaged changes"). Stash it across the rebase and restore after.
+        // --autostash: the lock is committed above, but the build/typecheck
+        // steps can still leave other files dirty, and unstaged changes abort a
+        // rebase ("cannot pull with rebase: You have unstaged changes"). Stash
+        // across the rebase and restore after.
         run('git', ['pull', '--rebase', '--autostash', 'origin', 'main']);
         run('git', ['push', 'origin', 'HEAD:main']);
       }

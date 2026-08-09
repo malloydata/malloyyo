@@ -58,6 +58,12 @@ published server's will, rather than silently leaning on a default that would no
 exist in production. (It differs from `malloy-cli`, which forces the defaults on
 unconditionally.)
 
+*No connection named* has one cause that is **not** about your config: if more
+than one copy of `@malloydata/malloy` is installed, the connectors register with
+one copy and malloyyo reads another, and every connection looks missing. malloyyo
+detects that and says so instead — if it doesn't mention duplicate copies, the
+problem really is the config. To check by hand: `npm ls @malloydata/malloy`.
+
 Give a connection a **custom name** — not the bare type default — whenever you
 have more than one connection of the same type, or need non-default parameters.
 

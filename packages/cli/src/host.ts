@@ -30,6 +30,7 @@ import {
   type DashboardGivenSpecsResult,
   type RunResult,
 } from "@malloyyo/mcp-engine";
+import { initConnections, withConnectionDiagnostics } from "./connections.js";
 
 export type ValidateResult = { ok: true } | { ok: false; error: string };
 
@@ -188,8 +189,9 @@ export interface ModelRunner {
 }
 
 export async function makeRunner(root: string): Promise<ModelRunner> {
-  // Registers connection types; MUST run before any MalloyConfig is built.
-  await import("@malloydata/malloy-connections");
+  // Registers connection types and verifies the registry we read is the one
+  // that was written to; MUST run before any MalloyConfig is built.
+  await initConnections();
   const abs = path.resolve(root);
   const rootUrl = url.pathToFileURL(abs + path.sep);
 
@@ -248,7 +250,9 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
     inFlight++;
     clearIdleTimer();
     try {
-      return await fn(runtime, entry);
+      // A missing connection surfaces from deep inside a compile; annotate it
+      // here, the one choke point every lease passes through.
+      return await withConnectionDiagnostics(() => fn(runtime, entry));
     } finally {
       inFlight--;
       if (inFlight === 0) scheduleIdleShutdown();

@@ -34,6 +34,7 @@ import path from "node:path";
 import url from "node:url";
 import { MalloyConfig, Runtime, discoverConfig, type URLReader } from "@malloydata/malloy";
 import { jsonRows } from "@malloyyo/mcp-engine";
+import { initConnections, withConnectionDiagnostics } from "./connections.js";
 
 /** File-only reader for config discovery — same shape host.ts uses. */
 function fileReader(): URLReader {
@@ -152,17 +153,20 @@ export async function sqlCmd(
     throw new Error("no SQL provided — pass -e <sql>, -f <file>, or pipe it via stdin");
   }
 
-  // Registers connection types (duckdb, md, postgres, …); MUST run before a
-  // MalloyConfig is built. Same ordering constraint as host.ts.
-  await import("@malloydata/malloy-connections");
+  // Registers connection types (duckdb, md, postgres, …) and verifies the
+  // registry is the one we read; MUST run before a MalloyConfig is built. Same
+  // ordering constraint as host.ts.
+  await initConnections();
 
   const cfg = await loadConfig(rootDir);
   try {
     // Prefer the typed path — it is the only one that knows a BIGINT from a
     // VARCHAR. Both output modes use it, so `--json` and the table agree.
+    // A missing connection makes runTyped return null like any other failure,
+    // so the diagnosis still comes from the lookup below.
     let rows: readonly Record<string, unknown>[] | null = await runTyped(cfg, name, sql);
     if (rows === null) {
-      const conn = await cfg.connections.lookupConnection(name);
+      const conn = await withConnectionDiagnostics(() => cfg.connections.lookupConnection(name));
       // runSQL executes all `;`-separated statements and returns the last result.
       const result = await conn.runSQL(sql);
       rows = result?.rows ?? [];

@@ -45,6 +45,7 @@ import {
   type ToolSurface,
 } from "@malloyyo/mcp-engine";
 import { attachSurface } from "@malloyyo/mcp-engine/mcp-sdk";
+import { initConnections, withConnectionDiagnostics } from "./connections.js";
 
 const ENTRY = "index.malloy";
 
@@ -182,7 +183,9 @@ function makeWithRuntime(root: string, currentConfig: () => Promise<LoadedConfig
       const { reader, entry, readSource } = prepareSource(fsReader(), resolved);
       const runtime = new Runtime({ config, urlReader: reader });
       try {
-        return await fn({ runtime, entry, readSource });
+        // A missing connection surfaces from deep inside a compile; annotate it
+        // here, the one choke point every tool call passes through.
+        return await withConnectionDiagnostics(() => fn({ runtime, entry, readSource }));
       } finally {
         await config.shutdown("idle");
       }
@@ -231,10 +234,11 @@ export async function serveMcp(opts: {
   version: string;
   mode?: Mode;
 }): Promise<void> {
-  // Registers every current connection type. Dynamic so the other CLI commands
-  // never load native DB backends; MUST complete before any MalloyConfig is
-  // built (the registry feeds includeDefaultConnections).
-  await import("@malloydata/malloy-connections");
+  // Registers every current connection type, and verifies the registry we read
+  // is the one that was written to. Dynamic so the other CLI commands never
+  // load native DB backends; MUST complete before any MalloyConfig is built
+  // (the registry feeds includeDefaultConnections).
+  await initConnections();
   const root = path.resolve(opts.root ?? process.cwd());
   const mode: Mode = opts.mode ?? "explore";
   const currentConfig = makeConfigSource(root);

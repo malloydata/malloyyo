@@ -62,6 +62,23 @@ function ensureConnectionTypes(): Promise<void> {
         logger.warn("malloy connection backend unavailable", { pkg, ...serializeErr(err) });
       }
     }
+    // The registry is module-level state on @malloydata/malloy. Each db-*
+    // package registers with the copy IT resolves; we read the copy WE resolve.
+    // If the build ever nests a second copy, those differ and every connection
+    // fails with `No connection named "duckdb" found in config` — pointing at
+    // malloy-config.json, where nothing is wrong (malloyyo issue #136). An
+    // empty registry here is that, so name it rather than let the config take
+    // the blame.
+    const types = malloy.getRegisteredConnectionTypes();
+    if (types.length === 0) {
+      logger.error(
+        "0 malloy connection types registered — every connection will fail. " +
+          "Likely more than one copy of @malloydata/malloy in the bundle " +
+          "(the registry is per-copy module state), or no backend loaded above.",
+      );
+    } else {
+      logger.debug("malloy connection types registered", { types });
+    }
   })();
   return _connectionTypesReady;
 }

@@ -18,8 +18,11 @@ import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
 import { desc, eq, and, isNotNull } from "drizzle-orm";
 import { db, users, datasets, malloyModels, malloyModelFiles, history, type User } from "@/db";
+import { Runtime } from "@malloydata/malloy";
+import { decodeModelBlob, modelConnections, rehydrateModel } from "@malloyyo/mcp-engine";
 import { buildHostedExploreSurface } from "@/lib/mcp-host";
 import { loadSharedQuery, runQueryForWeb } from "@/lib/mcp-tools";
+import { VERSION } from "@/lib/version";
 
 const MODEL = `#" Pet shop sales.
 source: sales is duckdb.sql("""
@@ -199,6 +202,73 @@ test("ChatGPT client (openai-mcp UA) gets a table in content and NO structuredCo
   assert.match(blockText(forDefault, 0), /"rows":/, "default client still gets JSON content");
   const defSc = forDefault.structuredContent as { rows: unknown[]; row_count: number } | undefined;
   assert.ok(defSc?.rows, "default client keeps structuredContent");
+});
+
+test("fetch_compiled_model returns a blob that opens and compiles, driver-free", async () => {
+  const r = await host().call("fetch_compiled_model", { model_ref: "petshop" });
+  assert.ok(!r.isError, blockText(r, 0));
+  const blob = JSON.parse(blockText(r, 0)) as Record<string, unknown>;
+
+  // It names the client that can read it, so an agent is never left guessing.
+  assert.equal(blob.model_ref, "petshop");
+  assert.equal(blob.client_version, VERSION);
+  assert.equal(blob.encoding, "br+base64");
+  assert.match(String(blob.usage), /malloyyo_client/);
+
+  // The blob is worth shipping through a tool result at all.
+  const payload = String(blob.payload);
+  assert.ok(payload.length * 2 < Number(blob.bytes), `expected compression, got ${blob.bytes} -> ${payload.length}`);
+
+  // The whole promise, end to end: the envelope decodes, and the model behind
+  // it compiles a query with no connection to the data it describes.
+  const decoded = decodeModelBlob(blob);
+  assert.equal(decoded.ok, true, decoded.ok ? "" : decoded.error);
+  if (!decoded.ok) return;
+
+  const conns = modelConnections(decoded.def);
+  assert.ok(conns.size > 0, "the blob must carry its connection→dialect map");
+  const stub = {
+    name: "duckdb",
+    dialectName: [...conns.values()][0],
+    get isPool() { return false; },
+    get isStreaming() { return false; },
+    runSQL: () => Promise.reject(new Error("the client must never execute")),
+    fetchSchemaForTables: () => Promise.reject(new Error("the client must never fetch a schema")),
+    fetchSchemaForSQLStruct: () => Promise.reject(new Error("the client must never fetch a schema")),
+    close: () => Promise.resolve(),
+  };
+  const runtime = new Runtime({
+    urlReader: { readURL: () => Promise.reject(new Error("no source files")) },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    connection: stub as any,
+  });
+  const mm = rehydrateModel(runtime, decoded.def);
+  const sql = await mm.loadQuery("run: sales -> by_animal").getSQL();
+  assert.match(sql, /GROUP BY/i);
+
+  // And a bad query still produces a real diagnostic — the reason to iterate here.
+  await assert.rejects(() => mm.loadQuery("run: sales -> { group_by: nope }").getSQL());
+});
+
+test("fetch_compiled_model refuses an unknown model_ref without leaking existence", async () => {
+  const r = await host().call("fetch_compiled_model", { model_ref: "nope" });
+  assert.ok(r.isError);
+  assert.match(blockText(r, 0), /unknown, or not visible to you/);
+});
+
+test("fetch_compiled_model requires a model_ref", async () => {
+  const r = await host().call("fetch_compiled_model", {});
+  assert.ok(r.isError);
+  assert.match(blockText(r, 0), /model_ref is required/);
+});
+
+test("fetch_compiled_model is advertised on the surface", async () => {
+  const tool = host().descriptors.find((d) => d.name === "fetch_compiled_model");
+  assert.ok(tool, "the tool must appear in tools/list");
+  assert.match(tool!.description, /malloyyo_client/);
+  // Host policy applies to it like any other tool.
+  assert.match(tool!.description, /^\[/, "instance tag prefixed");
+  assert.ok((tool!.inputSchema as { properties?: Record<string, unknown> }).properties?.model);
 });
 
 test("query without a question is refused (host policy)", async () => {

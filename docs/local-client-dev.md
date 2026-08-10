@@ -100,6 +100,35 @@ malloyyo_client query movies 'run: movies -> { group_by: genre; aggregate: c is 
 echo $?        # 0 compiles, 1 does not
 ```
 
+### With a server, no browser: seed a token and use curl
+
+Google sign-in needs credentials and a browser, which a headless box has
+neither of. `scripts/seed-local.ts` writes a user, a dataset and a **real**
+access token — the same rows the OAuth flow writes, so `validateAccessToken`,
+the allow-list re-check and token-use recording all still run:
+
+```bash
+export DATABASE_URL="postgres://postgres@localhost:55432/postgres"
+psql "$DATABASE_URL" -c 'drop schema public cascade; create schema public;'
+npx drizzle-kit push --force
+npx tsx scripts/seed-local.ts ~/dev/malloyyo-imdb imdb     # prints export MCP_TOKEN=…
+
+DATABASE_URL=… INSTANCE_NAME=LocalYo INSTANCE_CODE=loc AUTH_SECRET=dev npm run dev &
+
+curl -s -X POST http://localhost:3000/mcp \
+  -H "Authorization: Bearer $MCP_TOKEN" -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call",
+       "params":{"name":"fetch_compiled_model","arguments":{"model_ref":"imdb"}}}' \
+  | jq -r '.result.content[0].text' > imdb.json
+
+malloyyo_client --model imdb.json query movies 'run: movies -> { group_by: genre; aggregate: c is count() }'
+```
+
+Note that a model using **relative** table paths (`duckdb.table('docs/x.parquet')`)
+resolves them against the server's cwd, not the model directory — the hosted
+server has no dataDir overlay. Symlink the data into the repo root to test one
+locally, and keep it out of git via `.git/info/exclude` rather than `.gitignore`.
+
 ### With a server, driving Claude
 
 ```bash
@@ -149,7 +178,30 @@ the wording in
 
 ---
 
-## 4. Turning off the version check
+## 4. What the local loop actually costs
+
+Measured against a local server holding the IMDB model (115KB compiled ModelDef
+→ 7.9KB blob → a 2,159-token tool result):
+
+| | time |
+|---|---|
+| `fetch_compiled_model`, cold pool | ~500ms, once |
+| `malloyyo_client query` (a fresh process) | ~525ms — of which **268ms is importing `@malloydata/malloy`** and ~180ms is the first compile |
+| a second compile *inside one process* | ~30ms |
+| server-side `query(execute:false)`, warm pool | ~62ms + network |
+
+Read that honestly: **on localhost against a warm server the wire wins**, because
+the network is free and the client pays its whole startup on every invocation.
+The local loop pays off when the network is not free — a real instance behind
+Vercel, where an RTT plus a possible cold-start compile is seconds, not
+milliseconds — and its unambiguous win is the install: 51 packages / ~4s against
+the CLI's 661 / ~47s.
+
+The fixable part is that 268ms import, paid per invocation because each CLI call
+is a new process. Compiling several queries in one process would amortize it to
+~30ms each; there is no batch mode today.
+
+## 5. Turning off the version check
 
 A blob records the Malloy that compiled it, and the client refuses a blob from
 a different one — reading another compiler's ModelDef is undefined behavior, not
@@ -172,7 +224,7 @@ on. `npm ls @malloydata/malloy` will show a second copy if there is one.
 
 ---
 
-## 5. When it goes wrong
+## 6. When it goes wrong
 
 | symptom | cause |
 |---|---|
@@ -187,7 +239,7 @@ on. `npm ls @malloydata/malloy` will show a second copy if there is one.
 
 ---
 
-## 6. Before pushing
+## 7. Before pushing
 
 ```bash
 npm run test:all

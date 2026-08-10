@@ -158,7 +158,7 @@ malloyyo_client --model model.json query movies 'run: movies -> { group_by: genr
 
 It exits `0` when a query compiles (returning the SQL) and `1` when it doesn't
 (returning Malloy's own diagnostics with line and column), so an agent iterates
-locally in ~320ms per attempt and sends the query to the server exactly once, to
+locally in ~90ms per attempt and sends the query to the server exactly once, to
 run it. The subcommands *are* the MCP tools, dispatched into the same engine code
 the server runs, so the two surfaces can't drift.
 

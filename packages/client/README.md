@@ -28,8 +28,15 @@ publishes models and runs them. A client that only compiles needs the Malloy
 compiler and nothing more — and that is bundled in, so an install resolves no
 dependencies at all.
 
-Compiling a query against a real model takes **~320ms** including Node startup,
-and 3-5ms per query within one process.
+Compiling a query against a real model takes **~90ms** — the first call on a
+model forks a resident compiler, and every call after it is a socket round trip
+plus a 3-5ms compile. A ten-command session working a query out takes 0.73s
+rather than 3.3s.
+
+The daemon holds the Malloy compiler and the model, so it is ~100MB resident. It
+exits by itself after two minutes idle; `--no-daemon` (or `MALLOYYO_NO_DAEMON=1`)
+turns it off, and `malloyyo_client --model <file> daemon status|stop` inspects
+or stops it.
 
 ## Getting a model
 

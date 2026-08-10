@@ -18,6 +18,16 @@
 import { exploreSurface, type ToolDef } from '@malloyyo/mcp-engine';
 import { version as VERSION } from '../package.json';
 import { ClientError, openModelFile, type LoadedModel } from './model.js';
+import {
+  askDaemon,
+  IDLE_MS,
+  serve,
+  socketPathFor,
+  spawnDaemon,
+  SERVE_COMMAND,
+  type CommandResult,
+  type CommandRunner,
+} from './daemon.js';
 
 const USAGE = `malloyyo_client ${VERSION} — offline Malloy query compiler
 
@@ -34,12 +44,17 @@ COMMANDS
   query <source> <malloy>          compile a query: SQL + problems (never runs it)
   yo_help [topic]                  Malloy authoring help; omit topic to list
   info                             what this model file is, and its versions
+  daemon [status|stop]             inspect or stop the resident compiler
 
 OPTIONS
   -m, --model <file>   compiled model blob ('-' for stdin) [env MALLOYYO_MODEL]
       --givens <json>  values for $NAME givens, e.g. '{"STATE":"CA"}'
       --model-ref <r>  disambiguate when a source name is not unique
       --compact        single-line JSON (default is indented)
+      --no-daemon      do not use or start the resident compiler. The first call
+                       on a model forks one, so later calls answer in ~5ms
+                       instead of ~320ms; it exits by itself once idle.
+                       [env MALLOYYO_NO_DAEMON=1]
       --any-version    DEV ONLY: open a blob whose Malloy version differs from
                        this build's, warning instead of refusing. For testing
                        both halves from one working tree; a mismatch in the wild
@@ -62,6 +77,7 @@ interface Parsed {
   modelRef?: string;
   compact: boolean;
   anyVersion: boolean;
+  daemon: boolean;
   help: boolean;
   version: boolean;
 }
@@ -73,6 +89,7 @@ function parseArgs(argv: string[]): Parsed {
     positionals: [],
     compact: false,
     anyVersion: process.env['MALLOYYO_ANY_VERSION'] === '1',
+    daemon: process.env['MALLOYYO_NO_DAEMON'] !== '1',
     help: false,
     version: false,
   };
@@ -88,6 +105,7 @@ function parseArgs(argv: string[]): Parsed {
       case '--model-ref': case '--model_ref': out.modelRef = need(a, argv[++i]); break;
       case '--compact': out.compact = true; break;
       case '--any-version': out.anyVersion = true; break;
+      case '--no-daemon': out.daemon = false; break;
       case '-h': case '--help': out.help = true; break;
       case '-v': case '--version': out.version = true; break;
       default: {
@@ -153,8 +171,8 @@ function toolArgs(cmd: string, p: Parsed, loaded: LoadedModel): Record<string, u
   }
 }
 
-function emit(value: unknown, compact: boolean): void {
-  process.stdout.write((compact ? JSON.stringify(value) : JSON.stringify(value, null, 2)) + '\n');
+function render(value: unknown, compact: boolean): string {
+  return (compact ? JSON.stringify(value) : JSON.stringify(value, null, 2)) + '\n';
 }
 
 /** ok:false anywhere in a tool result means the request failed. */
@@ -162,35 +180,27 @@ function failed(result: object): boolean {
   return (result as { ok?: unknown }).ok === false || 'error' in result;
 }
 
-async function main(argv: string[]): Promise<number> {
-  const p = parseArgs(argv);
-  if (p.version) { process.stdout.write(VERSION + '\n'); return 0; }
-  // Asking for help is a success; being invoked with nothing is not.
-  if (p.help) { process.stdout.write(USAGE + '\n'); return 0; }
-  if (!p.command) { process.stderr.write(USAGE + '\n'); return 2; }
-
-  const modelPath = p.model ?? process.env['MALLOYYO_MODEL'];
-  if (!modelPath) {
-    throw new UsageError(
-      'no model file. Pass --model <file> (or set MALLOYYO_MODEL).\n' +
-        'Get one from the `fetch_compiled_model` MCP tool, or `malloyyo compile -o model.json`.',
-    );
-  }
-
-  const loaded = openModelFile(modelPath, { allowVersionMismatch: p.anyVersion });
-
+/**
+ * Run one command against an already-open model. This is the ONE place a
+ * command is executed: the direct path and the daemon both land here, so their
+ * output cannot diverge.
+ */
+async function runCommand(p: Parsed, loaded: LoadedModel): Promise<CommandResult> {
   if (p.command === 'info') {
     const b = loaded.blob;
-    emit({
-      ok: true,
-      model_ref: b.model_ref,
-      malloy_version: b.malloy_version,
-      client_version: b.client_version,
-      running_client: VERSION,
-      model_bytes: b.bytes,
-      blob_bytes: b.payload.length,
-    }, p.compact);
-    return 0;
+    return {
+      stdout: render({
+        ok: true,
+        model_ref: b.model_ref,
+        malloy_version: b.malloy_version,
+        client_version: b.client_version,
+        running_client: VERSION,
+        model_bytes: b.bytes,
+        blob_bytes: b.payload.length,
+      }, p.compact),
+      stderr: '',
+      exitCode: 0,
+    };
   }
 
   const tools = exploreSurface(loaded.host).tools;
@@ -202,8 +212,111 @@ async function main(argv: string[]): Promise<number> {
   }
 
   const result = await tool.handler(toolArgs(tool.name, p, loaded));
-  emit(result, p.compact);
-  return failed(result) ? 1 : 0;
+  return { stdout: render(result, p.compact), stderr: '', exitCode: failed(result) ? 1 : 0 };
+}
+
+/** Resolve the model file the way every path must agree on. */
+function modelPathOf(p: Parsed): string {
+  const modelPath = p.model ?? process.env['MALLOYYO_MODEL'];
+  if (!modelPath) {
+    throw new UsageError(
+      'no model file. Pass --model <file> (or set MALLOYYO_MODEL).\n' +
+        'Get one from the `fetch_compiled_model` MCP tool, or `malloyyo compile -o model.json`.',
+    );
+  }
+  return modelPath;
+}
+
+/**
+ * The daemon's request handler: parse an argv the same way the CLI does, then
+ * run it against the model this daemon holds. Errors become results rather than
+ * throws, so one bad request cannot take the daemon down.
+ */
+function daemonRunner(loaded: LoadedModel): CommandRunner {
+  return async (argv: string[]): Promise<CommandResult> => {
+    if (argv[0] === '__stop') {
+      // Answer first, exit after — so `daemon stop` gets a reply rather than a
+      // dropped connection it would report as "no daemon was running".
+      setTimeout(() => process.exit(0), 50).unref();
+      return { stdout: '', stderr: '', exitCode: 0 };
+    }
+    try {
+      return await runCommand(parseArgs(argv), loaded);
+    } catch (e) {
+      if (e instanceof UsageError) {
+        return { stdout: '', stderr: `malloyyo_client: ${e.message}\n\nTry --help.\n`, exitCode: 2 };
+      }
+      return {
+        stdout: '',
+        stderr: `malloyyo_client: ${e instanceof Error ? e.message : String(e)}\n`,
+        exitCode: 2,
+      };
+    }
+  };
+}
+
+async function main(argv: string[]): Promise<number> {
+  // The daemon entry point, spawned by a previous invocation. Not documented in
+  // --help: it is an implementation detail of `--daemon`, not a command.
+  if (argv[0] === SERVE_COMMAND) {
+    const p = parseArgs(argv.slice(1));
+    const modelPath = modelPathOf(p);
+    const loaded = openModelFile(modelPath, { allowVersionMismatch: p.anyVersion, warn: () => {} });
+    await serve(socketPathFor(modelPath), daemonRunner(loaded));
+    return 0;
+  }
+
+  const p = parseArgs(argv);
+  if (p.version) { process.stdout.write(VERSION + '\n'); return 0; }
+  // Asking for help is a success; being invoked with nothing is not.
+  if (p.help) { process.stdout.write(USAGE + '\n'); return 0; }
+  if (!p.command) { process.stderr.write(USAGE + '\n'); return 2; }
+
+  const modelPath = modelPathOf(p);
+
+  if (p.command === 'daemon') {
+    return daemonCommand(p, modelPath);
+  }
+
+  // Fast path: a warm daemon answers in ~5ms instead of ~320ms. Its absence is
+  // ordinary — we just do the work here instead.
+  if (p.daemon) {
+    const hit = await askDaemon(socketPathFor(modelPath), argv);
+    if (hit) {
+      process.stdout.write(hit.stdout);
+      if (hit.stderr) process.stderr.write(hit.stderr);
+      return hit.exitCode;
+    }
+  }
+
+  const loaded = openModelFile(modelPath, { allowVersionMismatch: p.anyVersion });
+  const result = await runCommand(p, loaded);
+
+  // Warm one for next time. AFTER doing the work, so this invocation never
+  // waits on a process it does not need — the payoff is entirely for the calls
+  // that follow, which is the shape of an agent working out a query.
+  if (p.daemon) spawnDaemon(modelPath, p.anyVersion ? ['--any-version'] : []);
+
+  process.stdout.write(result.stdout);
+  if (result.stderr) process.stderr.write(result.stderr);
+  return result.exitCode;
+}
+
+/** `daemon status|stop` — visibility and an off switch for the resident process. */
+async function daemonCommand(p: Parsed, modelPath: string): Promise<number> {
+  const sub = p.positionals[0] ?? 'status';
+  const sock = socketPathFor(modelPath);
+  if (sub === 'status') {
+    const hit = await askDaemon(sock, ['info', '--compact']);
+    process.stdout.write(render({ running: hit !== null, socket: sock, idle_ms: IDLE_MS }, p.compact));
+    return 0;
+  }
+  if (sub === 'stop') {
+    const hit = await askDaemon(sock, ['__stop']);
+    process.stdout.write(render({ stopped: hit !== null, socket: sock }, p.compact));
+    return 0;
+  }
+  throw new UsageError(`unknown daemon subcommand '${sub}' (expected: status, stop)`);
 }
 
 main(process.argv.slice(2)).then(

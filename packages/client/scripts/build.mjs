@@ -23,7 +23,7 @@
 // warm process, and by how much.
 import { build } from 'esbuild';
 import { createRequire } from 'node:module';
-import { writeFileSync, chmodSync } from 'node:fs';
+import { chmodSync, statSync } from 'node:fs';
 
 const require = createRequire(import.meta.url);
 const malloyVersion = require('@malloydata/malloy/package.json').version;
@@ -51,16 +51,31 @@ await build({
   logLevel: 'info',
 });
 
-writeFileSync(
-  'dist/index.cjs',
-  `#!/usr/bin/env node
-// Enable V8's compile cache BEFORE loading the bundle — the cache only applies
-// to modules compiled after this call, so it cannot live inside main.cjs.
-// Optional and best-effort: added in Node 22.1, and a read-only or full cache
-// directory must degrade to "slower", never to "broken".
-try { require('node:module').enableCompileCache?.(); } catch {}
-require('./main.cjs');
-`,
-);
+// The launcher is bundled separately and must stay TINY — it only pulls in
+// src/daemon.ts, which imports nothing but Node builtins. If this output ever
+// grows past a few KB, something from the heavy graph has leaked into it and
+// the daemon fast path has quietly become as slow as a cold start.
+await build({
+  entryPoints: ['src/launcher.ts'],
+  bundle: true,
+  platform: 'node',
+  format: 'cjs',
+  target: 'node20',
+  outfile: 'dist/index.cjs',
+  // The whole point: main.cjs is loaded at RUNTIME, only on a daemon miss.
+  // Bundling it in would defeat the launcher's reason to exist.
+  external: ['./main.cjs'],
+  banner: { js: '#!/usr/bin/env node' },
+  logLevel: 'info',
+});
 chmodSync('dist/index.cjs', 0o755);
-console.log('  dist/index.cjs  (launcher: compile cache -> main.cjs)');
+
+const launcherBytes = statSync('dist/index.cjs').size;
+if (launcherBytes > 32 * 1024) {
+  throw new Error(
+    `dist/index.cjs is ${(launcherBytes / 1024).toFixed(0)}KB — the launcher must stay tiny ` +
+      '(builtins only). Something heavy leaked into src/launcher.ts or src/daemon.ts, ' +
+      'which would make every daemon hit pay a full bundle load.',
+  );
+}
+console.log(`  dist/index.cjs  ${(launcherBytes / 1024).toFixed(1)}kb (thin launcher)`);

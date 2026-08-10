@@ -205,6 +205,18 @@ package measures a real install and fails if it does).
 - **Commands are the MCP tools**: the client dispatches into the engine's
   `exploreSurface` tool array, so `describe_source` output is the server's code
   path, not a lookalike. `query` is compile-only by construction.
+- **Startup, not compiling, is the cost.** A compile is 3–5ms; everything else
+  is process startup. Three layers deal with it, and they only work together:
+  Malloy is BUNDLED into `dist/main.cjs` (CJS — it does dynamic `require()`, so
+  an ESM bundle builds and then dies at runtime); `dist/index.cjs` is a **4.7KB
+  launcher** (builtins only, enforced by a 32KB check in `scripts/build.mjs`)
+  that enables V8's compile cache and asks a **resident daemon** over a unix
+  socket, falling through to the fat bundle only on a miss. 460ms → 90ms per
+  call; a 10-command session 3.3s → 0.73s. The launcher must stay thin: a
+  version that loaded `main.cjs` before asking the daemon cost 250ms, i.e.
+  nearly all of the saving. The daemon is ~100MB resident, keyed by the model
+  file's (path, size, mtime) so an edit can never hit a stale one, and exits
+  after 2 minutes idle.
 - **Local dev loop: `docs/local-client-dev.md`.** `npm run build:all` then
   `npm run dev:link` puts the working tree's `malloyyo` + `malloyyo_client` on
   PATH; `npm run test:all` runs all four suites. `fetch_compiled_model` is

@@ -186,32 +186,47 @@ Measured against a local server holding the IMDB model (115KB compiled ModelDef
 | | time |
 |---|---|
 | `fetch_compiled_model`, cold pool | ~500ms, once |
-| `malloyyo_client query` (a fresh process) | **~322ms** |
-| a second compile *inside one process* | **~3–5ms** |
+| `malloyyo_client query` — **daemon warm** | **~90ms** |
+| `malloyyo_client query` — `--no-daemon` | ~410ms |
+| bare `node -e 0` on this box (the floor) | ~39ms |
 | server-side `query(execute:false)`, warm pool | ~62ms + network |
 
-The 322ms is almost entirely startup: ~180ms loading the bundle and ~170ms of
-first-compile warmup inside Malloy (JIT and lazy dialect/parser init). The
-compile itself is 3–5ms. Two optimisations already applied (see
-`scripts/build.mjs`) took it from ~460ms:
+A realistic agent session — ten mixed `describe_source` / `query` / `yo_help`
+invocations working a query out — runs **3.3s without the daemon and 0.73s with
+it**.
 
-| | Malloy import | total |
+How it got there, in order:
+
+| | per call | what changed |
 |---|---|---|
-| unbundled, 341 separate files | 275ms | ~460ms |
-| bundled into `dist/main.cjs` | 177ms | ~360ms |
-| **+ V8 compile cache** | **140ms** | **~322ms** |
-| *(rejected)* bun `--compile --bytecode` | 98ms | ~290ms, for a 115MB per-platform binary |
+| unbundled, 341 Malloy files | ~460ms | — |
+| bundled into `dist/main.cjs` | ~360ms | one file to resolve and parse |
+| + V8 compile cache | ~322ms | bytecode reused across runs |
+| **+ resident daemon** | **~90ms** | startup paid once, not per call |
+| *(rejected)* bun `--compile --bytecode` | ~290ms | 115MB per-platform binary |
 
-Read the result honestly: **on localhost against a warm server, the wire still
-wins** — the network is free there and the client pays full startup every
-invocation. The local loop pays off when the network is not free (a real
+The daemon needed a second change to pay off: the first version still cost
+250ms, because the "thin" client loaded the whole 4.2MB bundle *in order to ask
+the daemon*. `dist/index.cjs` is now a 4.7KB launcher using nothing but Node
+builtins, which falls through to `main.cjs` only when no daemon answers. The
+build fails if that launcher grows past 32KB, since a leak there silently
+restores the old cost.
+
+At ~90ms the remaining time is essentially Node itself (39ms floor) plus the
+socket round trip and a 3–5ms compile. Further gains need a different process
+model, not more optimisation.
+
+**The daemon costs ~100MB resident** — it holds the Malloy compiler and a
+rehydrated model. One is a good trade; a dozen left over from a morning's work
+across several models is a gigabyte. Hence the two-minute idle exit, and
+`--no-daemon` for when a resident process is unwelcome. `malloyyo_client
+--model <file> daemon status|stop` inspects and stops it.
+
+Even so: **on localhost against a warm server the wire is still competitive**
+(~62ms + no network). The local loop wins when the network is real — an
 instance behind Vercel, where an RTT plus a possible cold-start compile is
-seconds), and its unambiguous win is the install: **1 package in ~0.5s** against
-the CLI's 661 in ~47s.
-
-The ceiling is 3–5ms, not 322ms. Precompilation bought ~1.4x and has run out of
-road; the remaining cost is startup thrown away after every query, so only a
-resident process can collapse it — worth ~100x, and not built.
+seconds — and its unambiguous win remains the install, **1 package in ~0.5s**
+against the CLI's 661 in ~47s.
 
 ## 5. Turning off the version check
 

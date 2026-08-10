@@ -79,6 +79,22 @@ function text(value: unknown): ToolResult {
 function errText(msg: string): ToolResult {
   return { content: [{ type: "text", text: msg }], isError: true };
 }
+/** Host policy: every tool result carries `timing` — when the host started
+    handling the call and how long the whole round trip took — so the calling
+    model (or a human reading the transcript) can see where time is going
+    across a session. Appended as a trailing content block (reaches every
+    client regardless of structuredContent handling) and merged into
+    structuredContent when the result already has one, so it never overrides
+    the per-client decision (see client-profile.ts) to omit structuredContent
+    entirely. */
+function withTiming(result: ToolResult, start: number): ToolResult {
+  const timing = { started_at: new Date(start).toISOString(), duration_ms: Date.now() - start };
+  return {
+    ...result,
+    content: [...result.content, { type: "text", text: JSON.stringify({ timing }) }],
+    ...(result.structuredContent ? { structuredContent: { ...result.structuredContent, timing } } : {}),
+  };
+}
 function ltoolUrl(baseUrl: string, slug: string | null): string | undefined {
   return slug ? `${baseUrl.replace(/\/$/, "")}/ltool/${slug}` : undefined;
 }
@@ -311,12 +327,12 @@ export function buildHostedExploreSurface(
       if (name === "open_share_link") {
         const result = await openShareLink(toolArgs, baseUrl);
         await record({ error: resultError(result as unknown as Record<string, unknown>) });
-        return result;
+        return withTiming(result, start);
       }
       const tool = byName.get(name);
       if (!tool) {
         await record({ error: `unknown tool: ${name}` });
-        return errText(`unknown tool: ${name}`);
+        return withTiming(errText(`unknown tool: ${name}`), start);
       }
 
       const executing = isQuery && args.execute !== false;
@@ -325,7 +341,7 @@ export function buildHostedExploreSurface(
       if (isQuery && !String(args.question ?? "").trim()) {
         const msg = "'question' is required: a plain-English description of what this query answers.";
         await record({ malloyInput: strArg(args.malloy), question: null, executed: executing, error: msg });
-        return errText(msg);
+        return withTiming(errText(msg), start);
       }
 
       const result = (await tool.handler(toolArgs)) as Record<string, unknown>;
@@ -375,9 +391,9 @@ export function buildHostedExploreSurface(
           : JSON.stringify(withLink, null, 2);
         const out: ToolResult = { content: [{ type: "text", text }] };
         if (profile.sendStructuredContent) out.structuredContent = withLink;
-        return out;
+        return withTiming(out, start);
       }
-      return toContent(result) as ToolResult;
+      return withTiming(toContent(result) as ToolResult, start);
     } catch (e) {
       // A thrown handler (the engine throws only on programmer misuse; the
       // host's resolution/lease can also throw) — record the failure, then let

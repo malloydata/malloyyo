@@ -19,7 +19,7 @@ import { makeBlob, blobFile } from './helpers';
 
 const execFileP = promisify(execFile);
 const here = path.dirname(url.fileURLToPath(import.meta.url));
-const BIN = path.join(here, '..', 'dist', 'index.js');
+const BIN = path.join(here, '..', 'dist', 'index.cjs');
 
 /** Run the built binary; never throws on a non-zero exit. */
 async function run(args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {

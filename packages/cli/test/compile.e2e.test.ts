@@ -17,7 +17,7 @@ import { promisify } from 'node:util';
 const execFileP = promisify(execFile);
 const here = path.dirname(url.fileURLToPath(import.meta.url));
 const CLI = path.join(here, '..', 'dist', 'index.js');
-const CLIENT = path.join(here, '..', '..', 'client', 'dist', 'index.js');
+const CLIENT = path.join(here, '..', '..', 'client', 'dist', 'index.cjs');
 
 const MODEL = `
 source: orders is duckdb.sql("""

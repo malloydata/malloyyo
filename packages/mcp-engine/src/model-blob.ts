@@ -32,12 +32,28 @@ import type { Model, Runtime, SingleConnectionRuntime } from '@malloydata/malloy
 /** Bump when the envelope shape changes; an old blob then fails the gate. */
 export const MODEL_BLOB_FORMAT = 1;
 
-// Malloy does not re-export MALLOY_VERSION from its index, but it DOES export
-// "./package.json" in its exports map — so this resolves under plain Node ESM
-// with no JSON import attributes and no bundler help.
-const require = createRequire(import.meta.url);
-export const MALLOY_VERSION: string =
-  (require('@malloydata/malloy/package.json') as { version?: string }).version ?? 'unknown';
+/**
+ * The Malloy this build compiles and reads ModelDefs with — the compatibility
+ * key the version gate turns on, so it must be right in every packaging.
+ *
+ * Two ways to learn it, because there are two packagings. A bundler that inlines
+ * Malloy (malloyyo_client does, to ship zero runtime dependencies) has no
+ * `@malloydata/malloy/package.json` left to resolve at runtime, so it injects
+ * the version at build time via `--define:__MALLOY_VERSION__`; the constant
+ * folds and the fallback below is dead-code-eliminated. Everyone else resolves
+ * it at runtime — Malloy does not re-export MALLOY_VERSION from its index, but
+ * it DOES export "./package.json" in its exports map, so this works under plain
+ * Node ESM with no JSON import attributes and no bundler help.
+ */
+declare const __MALLOY_VERSION__: string | undefined;
+
+function resolveMalloyVersion(): string {
+  if (typeof __MALLOY_VERSION__ === 'string') return __MALLOY_VERSION__;
+  const req = createRequire(import.meta.url);
+  return (req('@malloydata/malloy/package.json') as { version?: string }).version ?? 'unknown';
+}
+
+export const MALLOY_VERSION: string = resolveMalloyVersion();
 
 /**
  * The wire envelope. Deliberately flat and self-describing: a human staring at

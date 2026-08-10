@@ -15,7 +15,11 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const MAX_PACKAGES = 80; // malloy's own tree is ~50; headroom, not a blank cheque.
+// Malloy is BUNDLED (scripts/build.mjs), so a correct install resolves exactly
+// one package: this one. The budget is 2 rather than 1 only so a deliberate,
+// reviewed dependency does not have to land together with a threshold bump —
+// anything more means something crept into `dependencies` by accident.
+const MAX_PACKAGES = 2;
 
 const pkgDir = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const work = mkdtempSync(path.join(tmpdir(), 'malloyyo-client-weigh-'));
@@ -57,8 +61,10 @@ try {
   } else if (packages > MAX_PACKAGES) {
     console.error(
       `\nFAIL: ${packages} packages exceeds the ${MAX_PACKAGES}-package budget.\n` +
-        'This package exists to be small. Either drop the new dependency, or bundle it\n' +
-        '(scripts/build.mjs) if it is dependency-free, or raise MAX_PACKAGES deliberately.',
+        'This package exists to be small — a clean install is 1 package in ~0.5s,\n' +
+        'against the full CLI\'s 661 in ~47s. Bundle the new dependency into\n' +
+        'dist/main.cjs (scripts/build.mjs) rather than declaring it, or raise\n' +
+        'MAX_PACKAGES deliberately and say why.',
     );
     process.exitCode = 1;
   } else {

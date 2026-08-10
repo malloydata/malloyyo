@@ -187,7 +187,7 @@ different version would point agents at something that doesn't exist.
 
 A compiled Malloy ModelDef carries every source's schema, so re-opening one
 needs **no driver, no credentials, no network** — only the compiler. That is why
-the client installs 51 packages / ~4s where the CLI needs 661 / ~47s, and why
+the client installs 1 package in ~0.5s where the CLI needs 661 in ~47s (Malloy is bundled in), and why
 `packages/client` must never grow a dependency casually (`npm run weigh` in that
 package measures a real install and fails if it does).
 

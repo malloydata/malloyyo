@@ -10,7 +10,7 @@
   },
   "type": "module",
   "bin": {
-    "malloyyo_client": "dist/index.js"
+    "malloyyo_client": "dist/index.cjs"
   },
   "files": [
     "dist/**"
@@ -31,11 +31,10 @@
     "weigh": "node scripts/weigh.mjs",
     "prepublishOnly": "npm run build"
   },
-  "dependencies": {
-    "@malloydata/malloy": "^0.0.425"
-  },
+  "comment": "No `dependencies`, deliberately: Malloy is bundled into dist/main.cjs so an install resolves ZERO packages. See scripts/build.mjs and `npm run weigh`.",
   "devDependencies": {
     "@malloyyo/mcp-engine": "*",
+    "@malloydata/malloy": "^0.0.425",
     "@malloydata/db-duckdb": "^0.0.425",
     "@types/node": "^20",
     "esbuild": "^0.24.0",

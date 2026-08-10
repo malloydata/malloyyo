@@ -1,22 +1,66 @@
-// Bundle malloyyo_client. The point of this package is its install weight, so
-// the externals list is the contract: ONLY @malloydata/malloy stays external
-// (it is the real runtime dependency — the compiler). @malloyyo/mcp-engine is
-// bundled IN, which costs nothing because the engine has no dependencies of its
-// own, and buys the client the server's exact tool implementations.
+// Bundle malloyyo_client.
 //
-// scripts/weigh.mjs asserts the resulting install stays small; if you add an
-// external here, add it to package.json dependencies and expect weigh to argue.
+// EVERYTHING is bundled, Malloy included, so the published package has ZERO
+// runtime dependencies: `npm i` resolves one package instead of 51. That is the
+// number this package exists for, and inlining the compiler is what takes it to
+// the floor.
+//
+// Two outputs, and the split is load-bearing:
+//
+//   main.cjs   the whole client + engine + Malloy, in CJS.
+//              CJS because Malloy does dynamic require() internally — an ESM
+//              bundle builds fine and then dies at runtime with "Dynamic
+//              require of X is not supported".
+//
+//   index.cjs  a ~5-line launcher that turns on V8's compile cache and THEN
+//              requires main.cjs. It has to be a separate file: the cache only
+//              helps modules compiled after it is enabled, so anything in the
+//              same file as the heavy require is already too late.
+//
+// Measured on a 115KB compiled model: 460ms -> 387ms from the compile cache,
+// and Malloy's import 275ms -> 177ms from bundling. Both are startup costs paid
+// per invocation; see docs/local-client-dev.md for why that still loses to a
+// warm process, and by how much.
 import { build } from 'esbuild';
+import { createRequire } from 'node:module';
+import { writeFileSync, chmodSync } from 'node:fs';
+
+const require = createRequire(import.meta.url);
+const malloyVersion = require('@malloydata/malloy/package.json').version;
+if (!malloyVersion) throw new Error('could not read the @malloydata/malloy version');
 
 await build({
   entryPoints: ['src/index.ts'],
   bundle: true,
   platform: 'node',
-  format: 'esm',
+  format: 'cjs',
   target: 'node20',
-  outfile: 'dist/index.js',
-  external: ['@malloydata/malloy', '@malloydata/malloy/internal'],
-  // No shebang banner: src/index.ts carries its own (so `tsx src/index.ts`
-  // works in dev) and esbuild preserves it. Adding one here yields two.
+  outfile: 'dist/main.cjs',
+  // Nothing external: that is the point. Malloy's version can no longer be
+  // resolved from node_modules at runtime, so it is injected here — see
+  // resolveMalloyVersion() in mcp-engine/src/model-blob.ts, whose runtime
+  // fallback this constant folds away.
+  define: {
+    __MALLOY_VERSION__: JSON.stringify(malloyVersion),
+    // The runtime fallback that reads it from node_modules is dead code here
+    // (the constant above folds), but esbuild still parses its `import.meta.url`
+    // and warns that import.meta is empty in CJS. Defining it keeps the build
+    // output clean, so a future REAL warning is not lost in a known-benign one.
+    'import.meta.url': JSON.stringify('file:///malloyyo-client-bundle'),
+  },
   logLevel: 'info',
 });
+
+writeFileSync(
+  'dist/index.cjs',
+  `#!/usr/bin/env node
+// Enable V8's compile cache BEFORE loading the bundle — the cache only applies
+// to modules compiled after this call, so it cannot live inside main.cjs.
+// Optional and best-effort: added in Node 22.1, and a read-only or full cache
+// directory must degrade to "slower", never to "broken".
+try { require('node:module').enableCompileCache?.(); } catch {}
+require('./main.cjs');
+`,
+);
+chmodSync('dist/index.cjs', 0o755);
+console.log('  dist/index.cjs  (launcher: compile cache -> main.cjs)');

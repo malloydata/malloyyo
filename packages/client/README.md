@@ -21,14 +21,15 @@ nothing else:
 | | packages | install | on disk |
 |---|---|---|---|
 | `@malloydata/malloyyo` (the full CLI) | 661 | ~47s | 530 MB |
-| `@malloydata/malloyyo-client` | **51** | **~4s** | **17 MB** |
+| `@malloydata/malloyyo-client` | **1** | **~0.5s** | **4 MB** |
 
 The CLI carries BigQuery, Snowflake, DuckDB, the renderer and Vega because it
 publishes models and runs them. A client that only compiles needs the Malloy
-compiler and nothing more.
+compiler and nothing more — and that is bundled in, so an install resolves no
+dependencies at all.
 
-Compiling a query against a real model takes **~450ms** including Node startup,
-and ~30ms per query within one process.
+Compiling a query against a real model takes **~320ms** including Node startup,
+and 3-5ms per query within one process.
 
 ## Getting a model
 
@@ -110,7 +111,7 @@ catch corruption rather than drift.
 ## Development
 
 ```bash
-npm run build      # bundle (mcp-engine is bundled in; malloy stays external)
+npm run build      # bundle everything (engine + Malloy) into dist/main.cjs
 npm test           # unit + binary tests
 npm run weigh      # measure a real install; fails if the dependency budget grows
 ```

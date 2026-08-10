@@ -19,12 +19,12 @@ npm run dev:link      # put THIS tree's malloyyo + malloyyo_client on your PATH
 ```
 
 `dev:link` is the load-bearing step: it symlinks the workspace packages
-globally so `malloyyo_client` resolves to `packages/client/dist/index.js` — the
+globally so `malloyyo_client` resolves to `packages/client/dist/index.cjs` — the
 code you are editing, not a published version. **Verify it, because a stale
 global install here will waste an hour:**
 
 ```bash
-readlink -f "$(which malloyyo_client)"     # → <your tree>/packages/client/dist/index.js
+readlink -f "$(which malloyyo_client)"     # → <your tree>/packages/client/dist/index.cjs
 malloyyo_client --version
 ```
 
@@ -186,20 +186,32 @@ Measured against a local server holding the IMDB model (115KB compiled ModelDef
 | | time |
 |---|---|
 | `fetch_compiled_model`, cold pool | ~500ms, once |
-| `malloyyo_client query` (a fresh process) | ~525ms — of which **268ms is importing `@malloydata/malloy`** and ~180ms is the first compile |
-| a second compile *inside one process* | ~30ms |
+| `malloyyo_client query` (a fresh process) | **~322ms** |
+| a second compile *inside one process* | **~3–5ms** |
 | server-side `query(execute:false)`, warm pool | ~62ms + network |
 
-Read that honestly: **on localhost against a warm server the wire wins**, because
-the network is free and the client pays its whole startup on every invocation.
-The local loop pays off when the network is not free — a real instance behind
-Vercel, where an RTT plus a possible cold-start compile is seconds, not
-milliseconds — and its unambiguous win is the install: 51 packages / ~4s against
-the CLI's 661 / ~47s.
+The 322ms is almost entirely startup: ~180ms loading the bundle and ~170ms of
+first-compile warmup inside Malloy (JIT and lazy dialect/parser init). The
+compile itself is 3–5ms. Two optimisations already applied (see
+`scripts/build.mjs`) took it from ~460ms:
 
-The fixable part is that 268ms import, paid per invocation because each CLI call
-is a new process. Compiling several queries in one process would amortize it to
-~30ms each; there is no batch mode today.
+| | Malloy import | total |
+|---|---|---|
+| unbundled, 341 separate files | 275ms | ~460ms |
+| bundled into `dist/main.cjs` | 177ms | ~360ms |
+| **+ V8 compile cache** | **140ms** | **~322ms** |
+| *(rejected)* bun `--compile --bytecode` | 98ms | ~290ms, for a 115MB per-platform binary |
+
+Read the result honestly: **on localhost against a warm server, the wire still
+wins** — the network is free there and the client pays full startup every
+invocation. The local loop pays off when the network is not free (a real
+instance behind Vercel, where an RTT plus a possible cold-start compile is
+seconds), and its unambiguous win is the install: **1 package in ~0.5s** against
+the CLI's 661 in ~47s.
+
+The ceiling is 3–5ms, not 322ms. Precompilation bought ~1.4x and has run out of
+road; the remaining cost is startup thrown away after every query, so only a
+resident process can collapse it — worth ~100x, and not built.
 
 ## 5. Turning off the version check
 
@@ -249,4 +261,4 @@ bash scripts/preflight.sh            # everything, incl. next build (needs Docke
 
 `weigh` is the guard on the only number this package exists for: it packs the
 tarball, installs it into a throwaway directory, and fails if the dependency
-count exceeds its budget. Currently 51 packages / ~4s / 17MB.
+count exceeds its budget. Currently 1 package / ~0.5s / 4MB.

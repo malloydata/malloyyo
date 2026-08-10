@@ -141,9 +141,10 @@ behind a join — and over MCP each of those costs a network round trip to find
 out. But a published model is *already compiled*: every source's schema is baked
 into it, so validating a query needs the model and nothing else.
 
-[**`malloyyo_client`**](packages/client) is that, and only that — **51 packages,
-~4s to install** (against the full CLI's 661 and ~47s), because a client that
-only compiles needs no database driver, no renderer, no warehouse SDKs:
+[**`malloyyo_client`**](packages/client) is that, and only that — **one package,
+~0.5s to install** (against the full CLI's 661 and ~47s), because a client that
+only compiles needs no database driver, no renderer, no warehouse SDKs, and
+bundles the Malloy compiler itself:
 
 ```bash
 npm i -g @malloydata/malloyyo-client
@@ -157,7 +158,7 @@ malloyyo_client --model model.json query movies 'run: movies -> { group_by: genr
 
 It exits `0` when a query compiles (returning the SQL) and `1` when it doesn't
 (returning Malloy's own diagnostics with line and column), so an agent iterates
-locally in ~450ms per attempt and sends the query to the server exactly once, to
+locally in ~320ms per attempt and sends the query to the server exactly once, to
 run it. The subcommands *are* the MCP tools, dispatched into the same engine code
 the server runs, so the two surfaces can't drift.
 

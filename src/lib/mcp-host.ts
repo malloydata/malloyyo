@@ -28,6 +28,7 @@ import {
   type BoundModel,
   type ExploreHost,
   type ModelEntry,
+  type ToolAnnotations,
   type RunResult,
   type WithHostOnly,
 } from "@malloyyo/mcp-engine";
@@ -258,7 +259,13 @@ function withModelParam(inputSchema: Record<string, unknown>): Record<string, un
 
 export interface HostedSurface {
   instructions: string;
-  descriptors: Array<{ name: string; title?: string; description: string; inputSchema: Record<string, unknown> }>;
+  descriptors: Array<{
+    name: string;
+    title?: string;
+    description: string;
+    inputSchema: Record<string, unknown>;
+    annotations?: ToolAnnotations;
+  }>;
   call(name: string, args: Record<string, unknown>): Promise<ToolResult>;
 }
 
@@ -290,6 +297,11 @@ export function buildHostedExploreSurface(
       // instance-agnostic; multi-instance routing is the host's concern.
       description: `${TAG} ${t.description}`,
       inputSchema: withModelParam(withRequiredQuestion(t.name, t.inputSchema)),
+      // Forward the engine's MCP annotations. Without this the hosted route
+      // drops them (unlike OPEN_SHARE_LINK below, which is spread wholesale),
+      // so every read-only tool looks potentially mutating to the client and
+      // gets re-prompted for approval on each call.
+      ...(t.annotations ? { annotations: t.annotations } : {}),
     })),
     {
       ...OPEN_SHARE_LINK,

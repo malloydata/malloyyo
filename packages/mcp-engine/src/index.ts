@@ -106,6 +106,7 @@ export {
   DEFAULT_RESULT_BYTES,
   type ResultPolicy,
   type SpillContext,
+  type ToolAnnotations,
   type ToolDef,
   type ToolSurface,
 } from './surfaces/shared';

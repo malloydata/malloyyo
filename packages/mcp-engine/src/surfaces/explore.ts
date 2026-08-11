@@ -148,6 +148,9 @@ export function queryTool(
     name: 'query',
     title: prompts.shared.tools.query.title,
     description: prompts.shared.tools.query.description,
+    // Runs a SELECT through a compiled Malloy model; never writes. Hits an
+    // external warehouse, hence openWorldHint.
+    annotations: { readOnlyHint: true, openWorldHint: true },
     inputSchema: {
       type: 'object',
       properties: {
@@ -338,6 +341,7 @@ function listSourcesTool(host: ExploreHost): ToolDef {
     name: 'list_sources',
     title: prompts.explore.tools.list_sources.title,
     description: prompts.explore.tools.list_sources.description,
+    annotations: { readOnlyHint: true, idempotentHint: true },
     inputSchema: { type: 'object', properties: {}, additionalProperties: false },
     handler: async (): Promise<ListSourcesResult> => {
       const { entries } = await host.list!();
@@ -373,6 +377,7 @@ function describeSourceTool(host: ExploreHost): ToolDef {
     name: 'describe_source',
     title: prompts.explore.tools.describe_source.title,
     description: prompts.explore.tools.describe_source.description,
+    annotations: { readOnlyHint: true, idempotentHint: true },
     inputSchema: {
       type: 'object',
       properties: {
@@ -449,6 +454,9 @@ function exploreQueryTool(host: ExploreHost, opts: ExploreSurfaceOptions): ToolD
     name: 'query',
     title: prompts.shared.tools.query.title,
     description: prompts.shared.tools.query.description,
+    // Runs a SELECT through a compiled Malloy model; never writes. Hits an
+    // external warehouse, hence openWorldHint.
+    annotations: { readOnlyHint: true, openWorldHint: true },
     inputSchema: {
       type: 'object',
       properties: {

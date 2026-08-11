@@ -104,6 +104,7 @@ export function developSurface(
       name: 'compile_file',
       title: prompts.develop.tools.compile_file.title,
       description: prompts.develop.tools.compile_file.description,
+      annotations: { readOnlyHint: true },
       inputSchema: {
         type: 'object',
         properties: { path: pathSchema, expand: expandSchema, emit_run_sql: emitRunSqlSchema },
@@ -123,6 +124,7 @@ export function developSurface(
       name: 'compile',
       title: prompts.develop.tools.compile.title,
       description: prompts.develop.tools.compile.description,
+      annotations: { readOnlyHint: true },
       inputSchema: {
         type: 'object',
         properties: {
@@ -153,6 +155,7 @@ export function developSurface(
       name: 'prettify',
       title: prompts.develop.tools.prettify.title,
       description: prompts.develop.tools.prettify.description,
+      annotations: { readOnlyHint: true, idempotentHint: true },
       inputSchema: {
         type: 'object',
         properties: { source: sourceSchema },

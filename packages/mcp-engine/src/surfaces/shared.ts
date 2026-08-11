@@ -11,12 +11,31 @@ import { prompts } from '../prompts';
 import { HOST_ONLY } from '../types';
 import type { HelpTopic, Problem, RunResult } from '../types';
 
+/**
+ * MCP tool annotations (spec `ToolAnnotations`). Hints, not guarantees — hosts
+ * use them to decide how much ceremony a call needs. `readOnlyHint` is the one
+ * that matters here: without it, hosts must assume every tool can mutate, so
+ * clients like Claude re-prompt for approval on each call.
+ */
+export interface ToolAnnotations {
+  /** The tool does not modify its environment. */
+  readOnlyHint?: boolean;
+  /** Only meaningful when readOnlyHint is false. */
+  destructiveHint?: boolean;
+  /** Repeated calls with the same arguments have no additional effect. */
+  idempotentHint?: boolean;
+  /** The tool interacts with entities outside the host (e.g. a database). */
+  openWorldHint?: boolean;
+}
+
 export interface ToolDef {
   name: string;
   title: string;
   description: string;
   /** Plain JSON Schema — the MCP wire format, usable verbatim by any host. */
   inputSchema: Record<string, unknown>;
+  /** Optional MCP annotations; omitted from tools/list when absent. */
+  annotations?: ToolAnnotations;
   handler: (args: Record<string, unknown>) => Promise<object>;
 }
 
@@ -183,6 +202,7 @@ export function yoHelpTool(): ToolDef {
     name: 'yo_help',
     title: prompts.shared.tools.yo_help.title,
     description: prompts.shared.tools.yo_help.description,
+    annotations: { readOnlyHint: true, idempotentHint: true },
     inputSchema: {
       type: 'object',
       properties: {

@@ -214,6 +214,7 @@ const OPEN_SHARE_LINK = {
   description:
     `Resolve a ${env.INSTANCE_NAME} share link or slug back into its source, question, and Malloy. ` +
     `Use when the user pastes a share link; does not run the query.`,
+  annotations: { readOnlyHint: true, idempotentHint: true },
   inputSchema: {
     type: "object",
     properties: { slug: { type: "string", description: "Share slug, e.g. `main_k7m2qx9p4b`, or a full /ltool/ link." } },

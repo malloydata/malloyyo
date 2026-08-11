@@ -51,6 +51,9 @@ export function attachSurface(
       title: t.title,
       description: t.description,
       inputSchema: t.inputSchema as { type: 'object'; [k: string]: unknown },
+      // Omitted entirely when a tool declares none, so hosts fall back to the
+      // spec default (assume the tool may mutate) rather than seeing `{}`.
+      ...(t.annotations ? { annotations: t.annotations } : {}),
     })),
   }));
 

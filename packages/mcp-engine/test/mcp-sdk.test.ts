@@ -44,6 +44,34 @@ test('sdk adapter: tools/list exposes the surface with JSON Schema', async () =>
   }
 });
 
+test('sdk adapter: tools/list carries read-only annotations', async () => {
+  const { client, server } = await connectedPair();
+  try {
+    const { tools } = await client.listTools();
+    // Every explore-surface tool is read-only. Without these hints a host must
+    // assume each call can mutate, which is what makes clients re-prompt for
+    // approval on every call.
+    for (const name of ['query', 'list_sources', 'describe_source', 'yo_help']) {
+      const tool = tools.find((t) => t.name === name);
+      assert.equal(
+        tool?.annotations?.readOnlyHint,
+        true,
+        `${name} should advertise readOnlyHint`,
+      );
+    }
+    // query is the one that reaches outside the host, to the warehouse.
+    const query = tools.find((t) => t.name === 'query');
+    assert.equal(query?.annotations?.openWorldHint, true);
+    assert.equal(
+      tools.find((t) => t.name === 'list_sources')?.annotations?.idempotentHint,
+      true,
+    );
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
 test('sdk adapter: tools/call round-trips a real describe and a real query', async () => {
   const { client, server } = await connectedPair();
   try {

@@ -4,7 +4,7 @@
 import { NextResponse } from "next/server";
 import { and, desc, eq } from "drizzle-orm";
 import { db, datasets, malloyModels, malloyModelFiles, malloyArtifacts, users } from "@/db";
-import { getSessionUser, UnauthorizedError } from "@/lib/user";
+import { allowAnonymousPublicReads, getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
 
 export const runtime = "nodejs";
@@ -13,6 +13,18 @@ export async function GET(
   _req: Request,
   ctx: RouteContext<"/api/datasets/[id]">,
 ) {
+  // Resolve the session before touching the database: when anonymous reads are
+  // disabled every caller without one gets the same 401, so the response can't
+  // be used to probe which dataset names exist.
+  let me;
+  try { me = await getSessionUser(); } catch (err) {
+    if (!(err instanceof UnauthorizedError)) throw err;
+    if (!allowAnonymousPublicReads()) {
+      return NextResponse.json({ error: "sign in required" }, { status: 401 });
+    }
+    me = null;
+  }
+
   const { id } = await ctx.params;
   // `id` may be a dataset uuid OR a name (the ready dataset with that name).
   const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
@@ -21,13 +33,7 @@ export async function GET(
     : await db.select().from(datasets).where(and(eq(datasets.name, id), eq(datasets.status, "ready")));
   if (!ds) return NextResponse.json({ error: "not found" }, { status: 404 });
 
-  let me;
-  try { me = await getSessionUser(); } catch (err) {
-    if (err instanceof UnauthorizedError) {
-      if (!ds.isPublic) return NextResponse.json({ error: "not found" }, { status: 404 });
-      me = null;
-    } else throw err;
-  }
+  if (!me && !ds.isPublic) return NextResponse.json({ error: "not found" }, { status: 404 });
 
   if (me && !ds.isPublic && !isAdmin(me) && ds.userId !== me.id) {
     return NextResponse.json({ error: "not found" }, { status: 404 });

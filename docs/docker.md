@@ -78,6 +78,7 @@ The ones that matter for a container deploy:
 | `INSTANCE_NAME` / `INSTANCE_CODE` | optional | Display name + short slug; default `Malloyyo` / `main`. |
 | Analytical DB secret | per model | e.g. `MOTHERDUCK_TOKEN`, `BQ_JSON_KEY` — referenced by your model's `malloy-config.json`. |
 | `EMAIL_ALLOW_LIST` | optional | Restrict sign-in to specific emails (unset = open instance). |
+| `ALLOW_ANONYMOUS_PUBLIC_DATASETS` | optional | `true` lets callers with no session read public datasets — including their model source and files. Default `false`. |
 | `GITHUB_TOKEN` | optional | Only for loading models from private GitHub repos. |
 
 ## Notes

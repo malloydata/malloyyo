@@ -5,6 +5,7 @@ import { db, users, type User } from "@/db";
 import { eq } from "drizzle-orm";
 import { auth } from "@/auth";
 import { newUserSlug } from "./slug";
+import { env } from "./env";
 
 export class UnauthorizedError extends Error {
   constructor(msg: string) {
@@ -26,6 +27,15 @@ export function isEmailAllowed(email: string | null | undefined): boolean {
   if (!allowList) return true;
   const allowed = allowList.split(",").map((e) => e.trim().toLowerCase());
   return allowed.includes((email ?? "").toLowerCase());
+}
+
+// Whether a read route may serve a caller with no valid session by falling back
+// to public datasets. Off by default: see env.ALLOW_ANONYMOUS_PUBLIC_DATASETS.
+// Note that getSessionUser throws the same UnauthorizedError for an anonymous
+// caller and for one who is signed in but off EMAIL_ALLOW_LIST, so with the
+// fallback enabled the allow-list buys nothing on those routes.
+export function allowAnonymousPublicReads(): boolean {
+  return env.ALLOW_ANONYMOUS_PUBLIC_DATASETS;
 }
 
 export async function getSessionUser(): Promise<User> {

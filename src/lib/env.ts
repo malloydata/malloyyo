@@ -45,6 +45,16 @@ export const env = {
   get GITHUB_TOKEN() {
     return process.env.GITHUB_TOKEN ?? "";
   },
+  // Whether an unauthenticated caller may read public datasets. The read routes
+  // that list datasets/sources, and the one that returns a dataset's model
+  // source and files, otherwise fall back to a public-only query when there is
+  // no session. On a deployment whose whole point is that only staff can see
+  // the model (SSO-gated, EMAIL_ALLOW_LIST), "public" should mean "everyone
+  // signed in here" — not "the internet". Defaults false so a missing or
+  // misspelled value fails closed.
+  get ALLOW_ANONYMOUS_PUBLIC_DATASETS(): boolean {
+    return (process.env.ALLOW_ANONYMOUS_PUBLIC_DATASETS ?? "false").trim().toLowerCase() === "true";
+  },
   // Optional GA4 Measurement ID (G-XXXXXXXXXX). Unset means this deployment
   // ships no third-party script and sets no cookies — the same default the
   // static `dashboard bundle` sites use, where the ID lives in

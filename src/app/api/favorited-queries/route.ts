@@ -4,7 +4,7 @@
 import { NextResponse } from "next/server";
 import { eq, and, ne, or, inArray, sql, desc } from "drizzle-orm";
 import { db, datasets, savedQueries, favorites, users } from "@/db";
-import { getSessionUser, UnauthorizedError } from "@/lib/user";
+import { allowAnonymousPublicReads, getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
 import { env } from "@/lib/env";
 
@@ -18,8 +18,11 @@ export const runtime = "nodejs";
 export async function GET() {
   let me;
   try { me = await getSessionUser(); } catch (err) {
-    if (err instanceof UnauthorizedError) me = null;
-    else throw err;
+    if (!(err instanceof UnauthorizedError)) throw err;
+    if (!allowAnonymousPublicReads()) {
+      return NextResponse.json({ error: "sign in required" }, { status: 401 });
+    }
+    me = null;
   }
 
   const admin = me ? isAdmin(me) : false;

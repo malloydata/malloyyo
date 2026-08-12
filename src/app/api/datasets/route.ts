@@ -5,7 +5,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { eq, desc, ne, and } from "drizzle-orm";
 import { db, datasets, malloyModels, malloyModelFiles, users } from "@/db";
-import { getSessionUser, UnauthorizedError } from "@/lib/user";
+import { allowAnonymousPublicReads, getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
 import { nameToSlug } from "@/lib/slug";
 import { GitHubURLReader, fetchGitHubFile, parseGitHubRepo } from "@/lib/github";
@@ -130,6 +130,9 @@ export async function GET() {
   let user;
   try { user = await getSessionUser(); } catch (err) {
     if (err instanceof UnauthorizedError) {
+      if (!allowAnonymousPublicReads()) {
+        return NextResponse.json({ error: "sign in required" }, { status: 401 });
+      }
       const rows = await db
         .select({ id: datasets.id, name: datasets.name, status: datasets.status,
           createdAt: datasets.createdAt, readyAt: datasets.readyAt, isPublic: datasets.isPublic })

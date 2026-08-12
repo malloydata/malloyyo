@@ -36,6 +36,15 @@ configured.
   - `APP_ADMIN_EMAILS` (comma-separated) marks users as admins (create datasets,
     publish, see everything). Both lists match on the account's **email**, so
     they work identically across Google, Okta, and Microsoft.
+  - `ALLOW_ANONYMOUS_PUBLIC_DATASETS` (default `false`) decides whether a caller
+    with **no session at all** may read datasets marked public. With it `true`,
+    `GET /api/datasets`, `/api/datasets/<id-or-name>`, `/api/sources` and
+    `/api/favorited-queries` serve public datasets to anyone who can reach the
+    host — and `/api/datasets/<id-or-name>` includes the model source and every
+    model file. Note `EMAIL_ALLOW_LIST` does **not** restrain those routes: an
+    unauthenticated caller and a signed-in-but-not-allowed one raise the same
+    `UnauthorizedError`, and the fallback treats both as anonymous. Leave it
+    `false` on any deployment where the model itself is not meant to be public.
 - **First sign-in** creates the user row and assigns a friendly slug
   (`createUser` event in `src/auth.ts`). New providers store an `accounts` row
   automatically via the Drizzle adapter — no schema or migration change.

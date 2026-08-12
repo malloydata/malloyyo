@@ -112,8 +112,10 @@ test("describe_source resolves a bare source: schema (block 0) + verbatim text (
   // block 0 *looks like* a schema. The exact describe_source schema shape is the
   // engine's contract, pinned by its golden tests (packages/mcp-engine/test) —
   // don't re-pin it here, or every engine reshape breaks this test for nothing.
+  // A trailing timing block (withTiming, src/lib/mcp-host.ts) rides along on
+  // every tool result — block 2 here, not asserted on.
   const r = await host().call("describe_source", { source: "sales" });
-  assert.equal(r.content.length, 2, "two content blocks: schema + source text");
+  assert.equal(r.content.length, 3, "schema + source text + trailing timing block");
   const schema = JSON.parse(blockText(r, 0)) as { ok: boolean; model_ref: string; source: string };
   assert.equal(schema.ok, true);
   assert.equal(schema.model_ref, "petshop", "bare source resolved to its model");
@@ -213,7 +215,7 @@ test("query without a question is refused (host policy)", async () => {
 
 test("multi-file model: compiles across the import; block 1 slices the entry source", async () => {
   const r = await host().call("describe_source", { source: "pets" });
-  assert.equal(r.content.length, 2, "two blocks even for a multi-file model");
+  assert.equal(r.content.length, 3, "schema + source text + trailing timing block, even for a multi-file model");
   // Host-seam check only: the import resolved and `pets` was described. The exact
   // schema shape is the engine's contract (see the describe_source test above).
   const schema = JSON.parse(blockText(r, 0)) as { ok: boolean; source: string };

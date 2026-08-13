@@ -4,13 +4,16 @@
 // (or .tsx) component. Every check is LOCAL to one file — the file compiles as
 // its own entry (catching undefined tiles / missing imports / unresolved givens
 // loudly, at the line), each tile compiles, `dashboard_columns` is a positive
-// int, each referenced given's `# suggest {…}` compiles, the component compiles,
-// no duplicate names, no orphaned component. `index.malloy` is validated
-// separately as the MCP/ltool surface.
+// int, each referenced given's `# suggest {…}` compiles, the component compiles
+// AND every name it imports from `@malloyyo/dashboard` really is exported, no
+// duplicate names, nothing named `index` (the bundled site's landing page owns
+// it), no orphaned component. `index.malloy` is validated separately as the
+// MCP/ltool surface.
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import * as esbuild from "esbuild";
+import { resolveRuntimeDir } from "./discover.js";
 import { makeRunner, type ModelRunner } from "./host.js";
 
 export interface DashboardLint {
@@ -28,8 +31,62 @@ export interface LintReport {
  * the runtime uses when it builds the suggest query. */
 const quoteField = (f: string) => (/^[A-Za-z_]\w*$/.test(f) ? f : `\`${f}\``);
 
+/** The names `@malloyyo/dashboard` actually exports, read from the frame-runtime
+    entry itself (esbuild metafile) rather than a hand-kept list, so this can't
+    drift from the runtime. Bare specifiers are externalized, so the probe build
+    touches only frame-runtime's own files — no react/vega/renderer pulled in.
+    Returns null if the runtime can't be probed: an unreadable runtime is a
+    broken INSTALL, not a broken model, so it must not fail the user's lint. */
+function makeRuntimeExports(): () => Promise<Set<string> | null> {
+  let pending: Promise<Set<string> | null> | undefined;
+  return () =>
+    (pending ??= (async () => {
+      try {
+        const res = await esbuild.build({
+          entryPoints: [join(resolveRuntimeDir(), "index.ts")],
+          bundle: true,
+          format: "esm",
+          write: false,
+          metafile: true,
+          logLevel: "silent",
+          plugins: [
+            {
+              name: "externalize-bare",
+              setup(b) {
+                b.onResolve({ filter: /^[^./]/ }, (a) => ({ path: a.path, external: true }));
+              },
+            },
+          ],
+        });
+        const out = Object.values(res.metafile.outputs)[0];
+        return out ? new Set(out.exports) : null;
+      } catch {
+        return null;
+      }
+    })());
+}
+
+/** The value names a component imports from "@malloyyo/dashboard". Covers the
+    `import { A, B as C } from "@malloyyo/dashboard"` form every component uses;
+    `type` specifiers are erased at build time, so they're skipped, and a
+    namespace/default import contributes no names to check. */
+function dashboardImportNames(source: string): string[] {
+  const out = new Set<string>();
+  const re = /import\s*\{([^}]*)\}\s*from\s*["']@malloyyo\/dashboard["']/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(source)) !== null) {
+    for (const raw of m[1]!.split(",")) {
+      const part = raw.trim();
+      if (!part || /^type\s/.test(part)) continue;
+      const name = part.split(/\s+as\s+/)[0]!.trim();
+      if (name) out.add(name);
+    }
+  }
+  return [...out];
+}
+
 /** The run-expressions a component hard-codes as `query="…"` string literals
-    (`<Panel query="…"/>`, `<VegaChart query="…"/>`). Only string literals — a
+    (`<VegaChart query="…"/>`). Only string literals — a
     `query={expr}` is dynamic and skipped. Deduped. Lint checks each still
     resolves, so a component pointing at a renamed/removed query fails loudly. */
 function componentQueryLiterals(source: string): string[] {
@@ -53,6 +110,7 @@ export async function lintDashboards(root: string): Promise<LintReport> {
 
 async function runLint(abs: string, runner: ModelRunner): Promise<LintReport> {
   const dashboards: DashboardLint[] = [];
+  const runtimeExports = makeRuntimeExports(); // probed at most once, only if a component exists
 
   // index.malloy is the MCP/ltool surface — validate it compiles on its own,
   // independent of whether any dashboard imports it.
@@ -69,8 +127,11 @@ async function runLint(abs: string, runner: ModelRunner): Promise<LintReport> {
   const malloyBases = new Set(malloyFiles.map((f) => f.slice(0, -".malloy".length)));
 
   // Orphaned component: a `dashboards/<name>.jsx|tsx` with no `<name>.malloy`.
+  // `index.jsx|tsx` is EXEMPT — it is the bundled site's landing page (see
+  // bundle.ts), deliberately a component with no dashboard behind it.
   for (const c of entries.filter((f) => /\.(jsx|tsx)$/.test(f)).sort()) {
     const cbase = c.replace(/\.(jsx|tsx)$/, "");
+    if (cbase === "index") continue;
     if (!malloyBases.has(cbase)) {
       dashboards.push({
         name: c,
@@ -103,6 +164,16 @@ async function runLint(abs: string, runner: ModelRunner): Promise<LintReport> {
       errors.push(`duplicate dashboard name "${art.name}" (also declared by ${seenNames.get(art.name)})`);
     } else {
       seenNames.set(art.name, file);
+    }
+
+    // `index` belongs to the bundled site's landing page. A dashboard by that
+    // name builds an index.html that the landing page then overwrites — the
+    // dashboard just silently vanishes from the site — so reject it here.
+    if (art.name === "index") {
+      errors.push(
+        `dashboard name "index" is reserved for the bundled site's landing page ` +
+          `(dashboards/index.jsx) — its page would be overwritten. Rename the dashboard.`,
+      );
     }
 
     if (
@@ -160,6 +231,28 @@ async function runLint(abs: string, runner: ModelRunner): Promise<LintReport> {
         errors.push(`${base}.${ext}: ${msg}`);
         continue;
       }
+
+      // `transform` above is single-file: it validates syntax and never resolves
+      // an import, so importing a name the runtime doesn't export passes it and
+      // then fails the real bundle at load time (500 on /bundle.js → blank
+      // iframe). Check the imported names against the runtime's own exports.
+      const exported = await runtimeExports();
+      if (exported) {
+        const unknown = dashboardImportNames(source).filter((n) => !exported.has(n));
+        if (unknown.length > 0) {
+          errors.push(
+            `${base}.${ext}: @malloyyo/dashboard does not export ` +
+              `${unknown.map((n) => `"${n}"`).join(", ")} — the component will not bundle ` +
+              `(blank dashboard). A custom component renders its OWN results: pull rows with ` +
+              `useQuery({query, givens}) or chart them with <VegaChart query="…"/>. To get Malloy's ` +
+              `renderer instead, delete the component and let the dashboard be tag-only. ` +
+              // The mount*/setHost entry points are the iframe/page plumbing, not
+              // author API — listing them here would only invite their use.
+              `Exports: ${[...exported].filter((n) => !/^(mount|setHost)/.test(n)).sort().join(", ")}`,
+          );
+        }
+      }
+
       for (const q of componentQueryLiterals(source)) {
         const v = await runner.validateIn(entryFile, q, {});
         if (!v.ok) errors.push(`${base}.${ext}: query "${q}" doesn't resolve — ${v.error}`);

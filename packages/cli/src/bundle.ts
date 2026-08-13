@@ -328,12 +328,6 @@ export interface BundleOptions {
       site that works offline and depends on no third party — at the cost of
       ~75 MB, which for a GitHub Pages deploy means 75 MB committed to git. */
   duckdb?: "cdn" | "bundled";
-  /** GA4 Measurement ID (G-XXXXXXXXXX), overriding `malloyyo.analytics` in
-      malloy-config.json. Normally set it in the config instead: it is a
-      property of the project, not of one invocation, so every rebuild picks it
-      up without anyone having to remember a flag. Neither set = no analytics,
-      no third-party script, no cookies. */
-  analytics?: string;
 }
 
 export async function bundleDashboards(opts: BundleOptions = {}): Promise<void> {
@@ -341,10 +335,11 @@ export async function bundleDashboards(opts: BundleOptions = {}): Promise<void> 
   const outDir = path.resolve(root, opts.out ?? "docs");
   const title = opts.title ?? path.basename(root);
   const target: BundleTarget = opts.target ?? "pages";
-  // The flag wins so a one-off build can override, but the config is the
-  // normal place — a site should not lose its analytics tag because someone
-  // rebuilt without remembering the flag.
-  const analytics = opts.analytics ?? readSiteConfig(root).analytics;
+  // Analytics is a property of the PROJECT, not of one invocation: it lives in
+  // malloy-config.json so every rebuild picks it up and a site can't lose its
+  // tag because someone rebuilt without remembering a flag. Unset = no
+  // analytics, no third-party script, no cookies.
+  const analytics = readSiteConfig(root).analytics;
   // Only Vercel can rewrite extensionless paths, so only there do the nav links
   // drop `.html`. On a plain static host a clean URL would just 404.
   const cleanUrls = target === "vercel";

@@ -29,7 +29,6 @@ malloyyo dashboard bundle --no-serve    # CI / just build
 | `--target pages\|vercel` | `pages` | host conventions — see below |
 | `--duckdb cdn\|bundled` | `cdn` | where DuckDB's wasm comes from |
 | `--title <title>` | project dir name | site title |
-| `--analytics <G-…>` | — | GA4 ID, overriding `malloyyo.analytics` |
 | `--no-serve` | serves | build only |
 | `-C, --root <dir>` | cwd | project root |
 
@@ -143,10 +142,9 @@ settings and publish targets:
 }
 ```
 
-- `analytics` — GA4 Measurement ID. Set it HERE rather than passing `--analytics`
-  each time: it's a property of the project, not of one invocation, so every
-  rebuild picks it up. Neither set = no analytics, no third-party script, no
-  cookies.
+- `analytics` — GA4 Measurement ID for the built site. It's a property of the
+  project, so every rebuild picks it up. Unset = no analytics, no third-party
+  script, no cookies.
 - `targets` — named `malloyyo publish` destinations. `malloyyo_token` takes the
   `{ "env": … }` form so the token is never committed (`yo_help
   develop/connection-setup`).

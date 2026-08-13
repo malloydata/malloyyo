@@ -229,13 +229,12 @@ program
   .option("--title <title>", "site title (bundle; default: project directory name)")
   .option("--target <target>", "deploy target: pages | vercel (bundle)", "pages")
   .option("--duckdb <source>", "DuckDB binaries: cdn | bundled (bundle)", "cdn")
-  .option("--analytics <id>", "GA4 Measurement ID, overriding malloyyo.analytics in malloy-config.json (bundle)")
   .option("--no-serve", "bundle only; don't serve the result (bundle)")
   .description("preview dashboards locally (dev), or build a static site from them (bundle)")
   .action(
     async (
       action: string,
-      opts: { root?: string; port?: string; out?: string; title?: string; serve?: boolean; target?: string; duckdb?: string; analytics?: string },
+      opts: { root?: string; port?: string; out?: string; title?: string; serve?: boolean; target?: string; duckdb?: string },
     ) => {
       if (action === "dev") {
         await serveDashboard({ root: opts.root, port: Number(opts.port) });
@@ -244,11 +243,6 @@ program
       if (action === "bundle") {
         if (opts.target !== "pages" && opts.target !== "vercel") {
           throw new Error(`unknown --target '${opts.target}' (expected: pages | vercel)`);
-        }
-        if (opts.analytics && !/^G-[A-Z0-9]+$/i.test(opts.analytics)) {
-          throw new Error(
-            `--analytics expects a GA4 Measurement ID like G-XXXXXXXXXX, got '${opts.analytics}'`,
-          );
         }
         if (opts.duckdb !== "cdn" && opts.duckdb !== "bundled") {
           throw new Error(`unknown --duckdb '${opts.duckdb}' (expected: cdn | bundled)`);
@@ -260,7 +254,6 @@ program
           serve: opts.serve,
           target: opts.target,
           duckdb: opts.duckdb,
-          analytics: opts.analytics,
           // `dashboard dev` owns 4173/4174; default the bundle preview clear of
           // both so you can run the two side by side.
           port: opts.port === "4173" ? 4180 : Number(opts.port),

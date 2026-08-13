@@ -202,9 +202,12 @@ component whose CSS resolved to nothing, or a column of raw field names.
 
 ```bash
 malloyyo dashboard bundle --out docs
-# optional: add analytics + a title
-malloyyo dashboard bundle --out docs --title "My Site" --analytics G-XXXXXXXXXX
+# optional: set a title
+malloyyo dashboard bundle --out docs --title "My Site"
 ```
+
+Analytics is a project setting, not a flag — put a GA4 Measurement ID under
+`malloyyo.analytics` in `malloy-config.json` and every rebuild picks it up.
 
 `bundle` writes the HTML, `.nojekyll`, and assets into `docs/`, next to the
 parquet from step 2. The pages fetch `./*.parquet` relative to the site root, so

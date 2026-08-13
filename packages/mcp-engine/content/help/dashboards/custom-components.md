@@ -11,11 +11,21 @@ composes the runtime's widgets/hooks with your own React. You own layout, copy,
 and theming; the `.malloy` file still owns every query and filter. See also
 `yo_help dashboards/authoring` and `dashboards/vega-charts`.
 
+> **A custom component draws its OWN results.** It does not get Malloy's
+> renderer — there is no `Panel`/`CompositeDashboard`/`DefaultDashboard` to
+> import (importing one fails the bundle with `No matching export`, and the
+> iframe comes up blank). You pull rows with `useQuery` and render them, or draw
+> them with `<VegaChart>`. **If you want the renderer, don't write a component
+> at all** — a tag-only dashboard (no `.jsx`) gets the renderer, the auto-built
+> controls, and the grid for free, and it stays far more readable. Add a
+> component only when you need layout or charts the tags can't express.
+
 ```tsx
 import React from "react";
-import { Controls, Given, Search, Select, TimeRange, Panel, filters, useGiven } from "@malloyyo/dashboard";
+import { Controls, Given, Search, Select, TimeRange, VegaChart, filters, useQuery } from "@malloyyo/dashboard";
 
 export default function Dashboard({ dashboard, givens }) {
+  const { rows, loading, error } = useQuery({ query: "births_by_decade", givens });
   return (
     <div style={{ maxWidth: 860, margin: "0 auto", padding: 24 }}>
       <h1>{dashboard.title}</h1>
@@ -31,8 +41,15 @@ export default function Dashboard({ dashboard, givens }) {
         <Select given="MIN_SAMPLE"
           options={[10, 200, 1000].map(n => ({ value: filters.greaterThan(n), text: `> ${n}` }))} />
       </Controls>
-      <Panel givens={givens} />         {/* the dashboard itself (its tiles/query) */}
-      <Panel query="baby_names -> births_by_decade" givens={givens} />  {/* a specific query */}
+
+      {/* Chart a query straight from the dashboard file … */}
+      <VegaChart spec={spec} query="births_by_decade" givens={givens} />
+
+      {/* … or take its rows and render your own markup. */}
+      {error ? <p>{String(error)}</p> : null}
+      <ul style={{ opacity: loading ? 0.5 : 1 }}>
+        {(rows ?? []).map(r => <li key={r.decade}>{r.decade}: {r.births}</li>)}
+      </ul>
     </div>
   );
 }
@@ -69,12 +86,17 @@ From `@malloyyo/dashboard` (also handed to the component as props):
   `filters.values(src)`. The stock `<Select/>` does this automatically;
   `<Search/>` deliberately commits raw text (its input IS a filter
   expression).
-- `<Panel/>` runs against the DASHBOARD's own file: a bare `<Panel/>` renders
-  the whole dashboard (its tiles); `<Panel query="…"/>` runs a query defined in
-  the dashboard file (by name) or a `source -> view`; `<Panel malloy="…"/>` and
-  `runData(text, givens)` run arbitrary Malloy as a RESTRICTED query (no import /
-  given: / connection.* / raw SQL / ##! flags — the model's governed surface
-  only). `lint` checks each hard-coded `query="…"` still resolves.
+- **Getting results into your component.** `useQuery({query, givens})` and
+  `<VegaChart query="…" givens/>` both run against the DASHBOARD's own file:
+  `query="…"` names a query defined in that file, or a `source -> view`. Pass
+  `givens` so the query re-runs when a control changes. `useQuery` hands you
+  plain `rows` — build tiles, tables, whatever the design needs. `lint` checks
+  each hard-coded `query="…"` still resolves.
+- **Arbitrary Malloy** — `useQuery({malloy: "…"})`, `<VegaChart malloy="…"/>`
+  and `runData(text, givens)` run as a RESTRICTED query (no import / given: /
+  connection.* / raw SQL / ##! flags — the model's governed surface only).
+  Prefer a named `query="…"` in the dashboard file: it's linted, it's readable,
+  and the filtering stays next to the dashboard.
 
 ## Shareable view-state: `useUrlState`
 
@@ -131,10 +153,10 @@ setting them on a wrapper element (more specific than the runtime's `:root`):
 Vars: `--dash-font`, `--dash-bg`, `--dash-fg`, `--dash-muted`, `--dash-border`,
 `--dash-accent`, `--dash-accent-fg`, `--dash-control-bg`, `--dash-controls-bg`,
 `--dash-chip-bg`, `--dash-chip-fg`, `--dash-panel-bg`, `--dash-radius`,
-`--dash-danger`. `DefaultDashboard` also takes a `theme={{ accent, controlsBg }}`
-prop (camelCase keys → `--dash-*`). The results `<Panel>` keeps a light surface
-in both light/dark (the Malloy renderer has no dark theme) — override
-`--dash-panel-bg` if your renderer output is dark-safe.
+`--dash-danger`. `--dash-panel-bg` is the surface colour for result panels/cards;
+it stays light in both light and dark by default (a tag-only dashboard's Malloy
+renderer has no dark theme), so set it explicitly if your own markup is
+dark-safe.
 
 **Use `--dash-*` and nothing else.** A custom component renders in its own
 **iframe**, so CSS variables defined by the surrounding page — including the

@@ -14,7 +14,8 @@ Related: `yo_help dashboards/givens-and-controls` (filter controls),
 `dashboards/grid-layout` (columns/colspan/break), `dashboards/charts` (the
 `# bar_chart`/`# line_chart` tags and their channel rules),
 `dashboards/custom-components` (a flat `<name>.jsx`), `dashboards/vega-charts`
-(`<VegaChart>`).
+(`<VegaChart>`), `dashboards/publishing` (`malloyyo dashboard bundle` → a static
+site, and the landing page).
 
 > **Need a chart the `# bar_chart`/`# line_chart`/`# shape_map` tags can't do?**
 > Use the `<VegaChart>` COMPONENT (a Vega-Lite spec over query rows) — NOT a `#`
@@ -141,11 +142,17 @@ fails loudly, not at click time).
 
 ## Custom component (optional)
 
-For bespoke layout/charts, add a flat sibling `dashboards/<name>.jsx` (or
-`.tsx`). Only React + `@malloyyo/dashboard` importable (sandboxed). A bare
-`<Panel/>` renders the whole dashboard; a `<Panel query="…"/>` /
-`<VegaChart query="…"/>` runs a query DEFINED in this dashboard file (by name) or
-a `source -> view`. `lint` checks each `query="…"` still resolves. See `yo_help
+Most dashboards don't need one. A tag-only dashboard (no `.jsx`) gets Malloy's
+renderer, an auto-built control for every given, and the `# dashboard` grid for
+free — that's the readable form, so reach for a component only when you need
+layout or charts the tags can't express.
+
+When you do, add a flat sibling `dashboards/<name>.jsx` (or `.tsx`). Only React
++ `@malloyyo/dashboard` importable (sandboxed). **A component draws its own
+results** — it does NOT get the Malloy renderer, so pull rows with
+`useQuery({query, givens})` or chart them with `<VegaChart query="…" givens/>`;
+`query="…"` names a query DEFINED in this dashboard file, or a `source -> view`.
+`lint` checks each `query="…"` still resolves. See `yo_help
 dashboards/custom-components`.
 
 ## Rules
@@ -162,8 +169,10 @@ dashboards/custom-components`.
 `malloyyo dashboard dev` → open the URL; `.malloy`/`.jsx` edits hot-reload.
 `malloyyo lint` checks each dashboard file on its own: it compiles as its entry;
 each tile/query and `# suggest` compiles; `dashboard_columns` is a positive int;
-the component compiles and its `query="…"` resolve; no duplicate names, no
-orphaned component; every `# drill { to=… }` resolves. Tight loop: the local
+the component compiles, every name it imports from `@malloyyo/dashboard` really
+is exported, and its `query="…"` resolve; no duplicate names, nothing named
+`index` (reserved for the site's landing page), no orphaned component; every
+`# drill { to=… }` resolves. Tight loop: the local
 `malloyyo mcp --develop` server hot-reloads edits — `query(execute:false)` to
 compile-check, `execute:true` to run. Don't validate against a hosted/claude.ai
 connector — it serves the PUBLISHED model (stale until `malloyyo publish`).

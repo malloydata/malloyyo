@@ -2,10 +2,14 @@
 # Copyright (c) The Malloy Foundation
 # SPDX-License-Identifier: MIT
 #
-# Stand up an ephemeral Postgres, push the schema, and run the hosted-explore
-# integration test against it (test/hosted-explore.test.ts). Postgres is the
-# only external dep — the Malloy model runs on in-process DuckDB. Hermetic: the
-# container is created fresh and torn down on exit.
+# Stand up an ephemeral Postgres, push the schema, and run the integration tests
+# against it: the hosted-explore surface (test/hosted-explore.test.ts) and the
+# CLI publish flow (test/publish-flow.test.ts). Postgres is the only external
+# dep — the Malloy models run on in-process DuckDB. Hermetic: the container is
+# created fresh and torn down on exit.
+#
+# Point DATABASE_URL at your own Postgres and run the tsx lines by hand if you
+# don't have docker; the tests only need an empty database with the schema in it.
 #
 #   npm run test:hosted
 set -euo pipefail
@@ -55,3 +59,11 @@ npx tsx --test test/client-profile.test.ts
 
 echo "→ running hosted-explore test"
 npx tsx --test test/hosted-explore.test.ts
+
+# The publish test drives the REAL CLI binary, so build it (this also builds the
+# mcp-engine the CLI bundles against).
+echo "→ building the malloyyo CLI"
+npm run build -w packages/cli >/dev/null
+
+echo "→ running publish-flow test"
+npx tsx --test test/publish-flow.test.ts

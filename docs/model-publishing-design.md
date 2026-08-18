@@ -91,6 +91,7 @@ deployment** (main, staging, the Guild instance), so the commands take a **named
 
 ```
 malloyyo publish <target> [dir]      # push the model in <dir> (defaults to ".") to <target>
+malloyyo publish <target> --create-dataset   # …creating the dataset if it doesn't exist (§4.5)
 malloyyo status  <target>            # what's live on <target>: version, commit, compile state
 ```
 
@@ -241,14 +242,23 @@ client-side `--dry-run`, which never hits the server.)
   want general users pushing models at this stage. The population is already gated: a token
   exists only for allow-listed, signed-in users (`EMAIL_ALLOW_LIST`), and on top of that the
   caller must be an admin.
-- **New datasets — explicit, never auto-created.** A dataset is tied to **data in
-  MotherDuck**; a pushed model references its tables. Auto-creating a dataset on publish would
-  yield a model over an empty DB — which **fails the missing-table check every time** (§4.4).
-  So `publish` requires the configured `dataset` to **already exist**; missing → a clear error
-  (`dataset "mdw" not found — create it in the UI`), never a silent spawn (which would also
-  turn a config typo into junk datasets). Creation stays a separate, deliberate act (UI/ingest
-  today; a future explicit `malloyyo datasets create` / `publish --create` if needed) — like
-  `vercel projects add` vs `vercel deploy`.
+- **New datasets — never auto-created, but creatable on request.** Publishing to a missing
+  dataset is still an error (`dataset "mdw" not found — create it in the UI, or publish with
+  --create-dataset`), never a silent spawn: a config typo must not turn into a junk dataset.
+  The original rationale — a dataset is tied to **data in MotherDuck**, so an auto-created one
+  would be a model over an empty DB — no longer holds on its own, since models now attach their
+  own sources and the server compiles + introspects the pushed model before storing it; a model
+  that has no data to point at fails the missing-table check (§4.4) whether the dataset is new
+  or not. So the opt-in escape hatch is implemented as `publish --create-dataset` (server
+  `?create=1`) rather than a separate `datasets create` command — one round trip, and:
+  - the dataset is created **inside the same transaction as version 1**, and only **after the
+    model compiles** — a rejected publish creates nothing, so a typo'd or broken model can't
+    leave a husk behind;
+  - it is created **private**, owned by the token's user, with `status = ready`;
+  - the name must be a valid dataset name as configured (`nameToSlug(ref) === ref`), and a uuid
+    ref is refused — creating under a slugified variant would leave later publishes 404ing;
+  - on an existing dataset the flag is a no-op (just the next version), so it's safe to leave
+    in a CI command.
 - **Public/private — orthogonal to publish.** `datasets.isPublic` governs who can see/query
   the dataset, not who can publish to it. **Publish never changes visibility**, and visibility
   is **not** config-driven: a committed repo file must not be able to expose data (same
@@ -352,9 +362,10 @@ npm. They don't interfere.
   `publish <target>` selects one. Remaining nit: is the `dataset` a UUID or a
   human-friendly slug? A slug survives recreating the dataset and reads better in the
   committed config — worth resolving slug → id server-side.
-- **Who creates the dataset? — resolved (§4.5):** explicit, must pre-exist; `publish` never
-  auto-creates. A future `malloyyo datasets create` / `publish --create` is the opt-in path
-  if a pure-CLI/CI provisioning flow is wanted.
+- **Who creates the dataset? — resolved (§4.5):** never implicitly; a bare `publish` still
+  requires the dataset to pre-exist. `publish --create-dataset` is the explicit opt-in for a
+  pure-CLI/CI provisioning flow — private, owned by the token's user, created only once the
+  model compiles.
 - **Verifying tables exist — resolved (§4.4):** missing tables are a **hard failure**
   (reject, don't persist); the server introspects every declared source so "compiles" implies
   "queryable." Future `--allow-missing-tables` downgrades to a warning for publish-ahead-of-

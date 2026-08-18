@@ -25,7 +25,7 @@ function shortSha(sha?: string): string {
 async function publish(
   target: string,
   dir: string,
-  opts: { token?: string; dryRun?: boolean; skipLint?: boolean },
+  opts: { token?: string; dryRun?: boolean; skipLint?: boolean; createDataset?: boolean },
 ): Promise<void> {
   const root = resolve(dir);
   const t = resolveTarget(root, target);
@@ -55,7 +55,7 @@ async function publish(
   const provenance = git.sha
     ? `${git.branch}@${shortSha(git.sha)}${git.dirty ? " (dirty)" : ""}`
     : "(no git)";
-  console.log(`→ ${t.url}  dataset=${t.dataset}`);
+  console.log(`→ ${t.url}  dataset=${t.dataset}${opts.createDataset ? " (create if missing)" : ""}`);
   console.log(`  ${files.length} file(s)  ${provenance}`);
 
   if (opts.dryRun) {
@@ -63,7 +63,10 @@ async function publish(
     return;
   }
 
-  const res = await fetch(`${t.url}/api/datasets/${t.dataset}/model/push`, {
+  // ?create=1 makes the server create the dataset when it doesn't exist yet — but
+  // only after the model compiles, so a failed publish still creates nothing.
+  const push = `${t.url}/api/datasets/${t.dataset}/model/push${opts.createDataset ? "?create=1" : ""}`;
+  const res = await fetch(push, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${bearer}` },
     body: JSON.stringify(body),
@@ -72,6 +75,9 @@ async function publish(
 
   if (!res.ok || !out.ok) {
     throw new Error(`publish failed: ${out.error ?? `${res.status} ${res.statusText}`}`);
+  }
+  if (out.created) {
+    console.log(`✓ created dataset ${out.dataset ?? t.dataset} (private) — ${t.url}/datasets/${out.dataset ?? t.dataset}`);
   }
   console.log(
     `✓ published version ${out.version} — ${out.sources?.length ?? 0} source(s)` +
@@ -131,6 +137,7 @@ program
   .option("--token <token>", "bearer token (overrides login/env)")
   .option("--dry-run", "gather and report what would be sent, but don't POST")
   .option("--skip-lint", "skip the pre-publish dashboard lint")
+  .option("--create-dataset", "create the target dataset if it doesn't exist yet (private)")
   .description('push the Malloy model in <dir> (default ".") to <target>')
   .action(publish);
 

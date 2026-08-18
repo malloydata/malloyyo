@@ -7,6 +7,7 @@ import { db, datasets, malloyModels, malloyModelFiles, malloyArtifacts } from "@
 import { requireAdminBearer } from "@/lib/bearer-auth";
 import { resolveDatasetByRef } from "@/lib/mcp-tools";
 import { introspectModelFiles } from "@/lib/malloy";
+import { nameToSlug } from "@/lib/slug";
 import { logger, serializeErr } from "@/lib/logger";
 
 export const runtime = "nodejs";
@@ -48,6 +49,24 @@ function classifyCompileError(error: string, paths: Set<string>): "missing-impor
   return "compile";
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// A dataset can only be created under the name the config already targets: the same
+// ref has to resolve on every later publish, so we never silently slugify it into
+// something else, and a uuid ref has no name to create under.
+function creationError(ref: string): string | null {
+  if (UUID_RE.test(ref)) {
+    return `cannot create dataset "${ref}": --create-dataset needs a name, not a uuid — ` +
+      `point the target's "dataset" at the name you want`;
+  }
+  const slug = nameToSlug(ref);
+  if (slug !== ref) {
+    return `cannot create dataset "${ref}": dataset names are lowercase letters, digits ` +
+      `and underscores — use "${slug}"`;
+  }
+  return null;
+}
+
 function generatedBy(git: GitInfo): string {
   if (!git.repo && !git.sha) return "cli:local";
   const branch = git.branch ?? "?";
@@ -60,11 +79,28 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   if (!auth.ok) return json(auth.status, { ok: false, error: auth.error });
 
   const { id } = await ctx.params;
-  // Datasets must pre-exist — publish never auto-creates (design §4.5). `id` may be
-  // a dataset uuid OR a readable name (the ready dataset with that name, unique per
-  // server) — so malloy-config.json can target by name instead of a slug.
+  const params = new URL(req.url).searchParams;
+  const dryRun = params.get("dryRun") === "1";
+  // Publish never auto-creates a dataset (design §4.5): a config typo would otherwise
+  // spawn junk datasets. `?create=1` (CLI `--create-dataset`) is the deliberate opt-in,
+  // and even then the dataset is only created once the model compiles — a failed push
+  // leaves nothing behind.
+  const create = params.get("create") === "1";
+
+  // `id` may be a dataset uuid OR a readable name (the ready dataset with that name,
+  // unique per server) — so malloy-config.json can target by name instead of a slug.
   const ds = await resolveDatasetByRef(id);
-  if (!ds) return json(404, { ok: false, error: `dataset "${id}" not found` });
+  if (!ds && !create) {
+    return json(404, {
+      ok: false,
+      kind: "no-dataset",
+      error: `dataset "${id}" not found — create it in the UI, or publish with --create-dataset`,
+    });
+  }
+  if (!ds) {
+    const bad = creationError(id);
+    if (bad) return json(400, { ok: false, kind: "request", error: bad });
+  }
 
   let body: PushBody;
   try {
@@ -86,7 +122,6 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   }
 
   const git = body.git ?? {};
-  const dryRun = new URL(req.url).searchParams.get("dryRun") === "1";
 
   // Build the file map the same way the github path does: model files + malloy-config.json.
   const fileMap = new Map<string, string>(files.map((f) => [f.path, f.content]));
@@ -96,9 +131,10 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
 
   if (!result.ok) {
     const kind = classifyCompileError(result.error, new Set(fileMap.keys()));
-    logger.info("model push rejected", { datasetId: ds.id, kind, dryRun, error: result.error });
+    logger.info("model push rejected", { datasetId: ds?.id, kind, dryRun, error: result.error });
     // Record the failed attempt on the dataset — but never as a model version (§4.4).
-    if (!dryRun) {
+    // Nothing to record when the dataset doesn't exist yet: it isn't created either.
+    if (!dryRun && ds) {
       await db
         .update(datasets)
         .set({
@@ -113,15 +149,34 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   }
 
   if (dryRun) {
-    return json(200, { ok: true, dryRun: true, sources: result.sources, git });
+    return json(200, { ok: true, dryRun: true, sources: result.sources, git, ...(ds ? {} : { wouldCreate: true }) });
   }
 
   try {
     const created = await db.transaction(async (tx) => {
+      // Created here, not before the compile, so a rejected push leaves no dataset
+      // behind — and so the create + first version land in one transaction.
+      const target =
+        ds ??
+        (
+          await tx
+            .insert(datasets)
+            .values({
+              userId: auth.user.id,
+              name: id,
+              // Private by default: visibility is a deliberate act in the UI, never
+              // config-driven, and publish never changes it (§4.5).
+              isPublic: false,
+              status: "ready",
+              readyAt: new Date(),
+            })
+            .returning()
+        )[0];
+
       const [latest] = await tx
         .select({ version: malloyModels.version })
         .from(malloyModels)
-        .where(eq(malloyModels.datasetId, ds.id))
+        .where(eq(malloyModels.datasetId, target.id))
         .orderBy(desc(malloyModels.createdAt))
         .limit(1);
       const nextVersion = (latest?.version ?? 0) + 1;
@@ -130,7 +185,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       const [model] = await tx
         .insert(malloyModels)
         .values({
-          datasetId: ds.id,
+          datasetId: target.id,
           version: nextVersion,
           source: indexContent,
           generatedBy: generatedBy(git),
@@ -174,29 +229,41 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
           lastPublishBranch: git.branch ?? null,
           lastPublishError: null,
         })
-        .where(eq(datasets.id, ds.id));
+        .where(eq(datasets.id, target.id));
 
-      return model;
+      return { model, dataset: target };
     });
 
     logger.info("model push ok", {
-      datasetId: ds.id,
-      version: created.version,
+      datasetId: created.dataset.id,
+      createdDataset: !ds,
+      version: created.model.version,
       sourceCount: result.sources.length,
       fileCount: fileMap.size,
       dashboardCount: (body.dashboards ?? []).length,
-      generatedBy: created.generatedBy,
+      generatedBy: created.model.generatedBy,
     });
 
     return json(200, {
       ok: true,
-      version: created.version,
+      version: created.model.version,
       sources: result.sources,
-      compiledAt: created.compiledAt,
+      compiledAt: created.model.compiledAt,
       git,
+      ...(ds ? {} : { created: true, dataset: created.dataset.name, datasetId: created.dataset.id }),
     });
   } catch (err) {
-    logger.error("model push persist failed", { datasetId: ds.id, ...serializeErr(err) });
+    // Two publishes racing to create the same name: the partial unique index on
+    // (name) where status='ready' rejects the loser.
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!ds && /datasets_name_ready_unique|duplicate key/i.test(msg)) {
+      logger.info("model push create raced", { dataset: id });
+      return json(409, {
+        ok: false,
+        error: `a dataset named "${id}" was just created by someone else — publish again without --create-dataset`,
+      });
+    }
+    logger.error("model push persist failed", { datasetId: ds?.id ?? null, dataset: id, ...serializeErr(err) });
     return json(500, { ok: false, error: "failed to persist model" });
   }
 }

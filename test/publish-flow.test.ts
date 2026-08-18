@@ -39,6 +39,13 @@ import {
 import { POST as pushRoute } from "@/app/api/datasets/[id]/model/push/route";
 import { GET as statusRoute } from "@/app/api/datasets/[id]/model/status/route";
 
+// Everything this test creates is suffixed with a per-run id, and torn down in
+// after(): the suite is re-runnable against a database that already has rows,
+// and leaves none of its own behind (scripts/hosted-test.sh resets the schema
+// anyway — this makes a hand-run `tsx --test` just as safe).
+const RUN = randomBytes(3).toString("hex");
+const DS_MAIN = `petshop_cli_${RUN}`;
+
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 // The published artifact, not the sources: this is what `npm i -g @malloydata/malloyyo`
 // installs, so the test exercises the same bundle users run.
@@ -84,7 +91,7 @@ async function bootServer(): Promise<{ url: string; server: Server }> {
         const request = new Request(`http://127.0.0.1${req.url}`, {
           method: req.method,
           headers,
-          body: raw.length > 0 ? raw : undefined,
+          body: raw.length > 0 ? new Uint8Array(raw) : undefined,
         });
         const response = await route.handler(request, { params: Promise.resolve({ id }) });
         const out = Buffer.from(await response.arrayBuffer());
@@ -159,6 +166,9 @@ let serverUrl: string;
 let server: Server;
 let admin: User;
 let token: string;
+let clientId: string;
+/** Users seeded here; deleting them cascades to their datasets and models. */
+const seededUsers: string[] = [];
 /** Publish dirs made by makeProject(), cleaned up in after(). */
 const projects: string[] = [];
 
@@ -207,22 +217,24 @@ before(async () => {
 
   const [u] = await db
     .insert(users)
-    .values({ email: "publisher@test.local", slug: "publisher", isAdmin: true })
+    .values({ email: `publisher-${RUN}@test.local`, slug: `publisher-${RUN}`, isAdmin: true })
     .returning();
   admin = u;
+  seededUsers.push(u.id);
 
   // A real bearer token, minted the way the OAuth route mints one: the server
   // validates it against oauth_access_tokens, so auth is exercised for real.
   const [client] = await db
     .insert(oauthClients)
     .values({
-      name: "publish-flow-test",
+      name: `publish-flow-test-${RUN}`,
       redirectUris: ["http://127.0.0.1/cb"],
       tokenEndpointAuthMethod: "none",
       grantTypes: ["authorization_code"],
       responseTypes: ["code"],
     })
     .returning();
+  clientId = client.id;
   token = randomBytes(32).toString("base64url");
   await db.insert(oauthAccessTokens).values({
     tokenHash: createHash("sha256").update(token).digest("hex"),
@@ -239,30 +251,33 @@ before(async () => {
 after(async () => {
   await new Promise<void>((r) => server.close(() => r()));
   for (const dir of projects) rmSync(dir, { recursive: true, force: true });
+  // Cascades: users → datasets → models/files/artifacts, client → tokens.
+  for (const id of seededUsers) await db.delete(users).where(eq(users.id, id));
+  if (clientId) await db.delete(oauthClients).where(eq(oauthClients.id, clientId));
 });
 
 // ── tests ────────────────────────────────────────────────────────────────────
 
 test("publish to a missing dataset fails, creates nothing, and points at --create-dataset", async () => {
-  const dir = makeProject("ghost_ds");
+  const dir = makeProject(`ghost_ds_${RUN}`);
   const r = await runCli(["publish", "test", dir, "--token", token], dir);
 
   assert.notEqual(r.code, 0, `expected a non-zero exit\n${r.stdout}\n${r.stderr}`);
   const out = r.stdout + r.stderr;
-  assert.match(out, /dataset "ghost_ds" not found/);
+  assert.match(out, new RegExp(`dataset "ghost_ds_${RUN}" not found`));
   assert.match(out, /--create-dataset/);
-  assert.equal((await datasetRows("ghost_ds")).length, 0);
+  assert.equal((await datasetRows(`ghost_ds_${RUN}`)).length, 0);
 });
 
 test("publish --create-dataset creates a private dataset owned by the token's user, with v1", async () => {
-  const dir = makeProject("petshop_cli", { dashboard: true });
+  const dir = makeProject(DS_MAIN, { dashboard: true });
   const r = await runCli(["publish", "test", dir, "--token", token, "--create-dataset"], dir);
 
   assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`);
-  assert.match(r.stdout, /created dataset petshop_cli \(private\)/);
+  assert.match(r.stdout, new RegExp(`created dataset ${DS_MAIN} \\(private\\)`));
   assert.match(r.stdout, /published version 1/);
 
-  const rows = await datasetRows("petshop_cli");
+  const rows = await datasetRows(DS_MAIN);
   assert.equal(rows.length, 1);
   const ds = rows[0];
   assert.equal(ds.status, "ready");
@@ -296,20 +311,20 @@ test("publish --create-dataset creates a private dataset owned by the token's us
 });
 
 test("--create-dataset on an existing dataset publishes a new version instead of a second dataset", async () => {
-  const dir = makeProject("petshop_cli");
+  const dir = makeProject(DS_MAIN);
   const r = await runCli(["publish", "test", dir, "--token", token, "--create-dataset"], dir);
 
   assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`);
   assert.doesNotMatch(r.stdout, /created dataset/);
   assert.match(r.stdout, /published version 2/);
 
-  const rows = await datasetRows("petshop_cli");
+  const rows = await datasetRows(DS_MAIN);
   assert.equal(rows.length, 1, "the flag must be idempotent — no duplicate dataset");
   assert.equal((await models(rows[0].id)).length, 2);
 });
 
 test("a plain publish keeps working against the dataset the flag created", async () => {
-  const dir = makeProject("petshop_cli");
+  const dir = makeProject(DS_MAIN);
   const r = await runCli(["publish", "test", dir, "--token", token], dir);
 
   assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`);
@@ -317,85 +332,85 @@ test("a plain publish keeps working against the dataset the flag created", async
 
   const status = await runCli(["status", "test", "--token", token], dir);
   assert.equal(status.code, 0, `${status.stdout}\n${status.stderr}`);
-  assert.match(status.stdout, /dataset=petshop_cli/);
+  assert.match(status.stdout, new RegExp(`dataset=${DS_MAIN}`));
   assert.match(status.stdout, /version 3/);
   assert.match(status.stdout, /✓ compiled/);
 });
 
 test("--create-dataset on a model that doesn't compile leaves no dataset behind", async () => {
-  const dir = makeProject("broken_ds", { model: BROKEN });
+  const dir = makeProject(`broken_ds_${RUN}`, { model: BROKEN });
   const r = await runCli(["publish", "test", dir, "--token", token, "--create-dataset"], dir);
 
   assert.notEqual(r.code, 0, `expected a non-zero exit\n${r.stdout}\n${r.stderr}`);
   assert.equal(
-    (await datasetRows("broken_ds")).length,
+    (await datasetRows(`broken_ds_${RUN}`)).length,
     0,
     "the dataset is created only after the model compiles",
   );
 });
 
 test("--create-dataset rejects a name that isn't a usable dataset slug", async () => {
-  const dir = makeProject("Pet Shop");
+  const dir = makeProject(`Pet Shop ${RUN}`);
   const r = await runCli(["publish", "test", dir, "--token", token, "--create-dataset"], dir);
 
   assert.notEqual(r.code, 0, `expected a non-zero exit\n${r.stdout}\n${r.stderr}`);
   const out = r.stdout + r.stderr;
-  assert.match(out, /cannot create dataset "Pet Shop"/);
-  assert.match(out, /use "pet_shop"/);
-  assert.equal((await datasetRows("Pet Shop")).length, 0);
-  assert.equal((await datasetRows("pet_shop")).length, 0, "never silently create under a different name");
+  assert.match(out, new RegExp(`cannot create dataset "Pet Shop ${RUN}"`));
+  assert.match(out, new RegExp(`use "pet_shop_${RUN}"`));
+  assert.equal((await datasetRows(`Pet Shop ${RUN}`)).length, 0);
+  assert.equal(
+    (await datasetRows(`pet_shop_${RUN}`)).length,
+    0,
+    "never silently create under a different name",
+  );
 });
 
 test("a bad token can't create anything", async () => {
-  const dir = makeProject("unauth_ds");
+  const dir = makeProject(`unauth_ds_${RUN}`);
   const r = await runCli(["publish", "test", dir, "--token", "not-a-real-token", "--create-dataset"], dir);
 
   assert.notEqual(r.code, 0, `expected a non-zero exit\n${r.stdout}\n${r.stderr}`);
   assert.match(r.stdout + r.stderr, /invalid or revoked token/);
-  assert.equal((await datasetRows("unauth_ds")).length, 0);
+  assert.equal((await datasetRows(`unauth_ds_${RUN}`)).length, 0);
 });
 
 test("a non-admin token can't create anything", async () => {
   const [plain] = await db
     .insert(users)
-    .values({ email: "reader@test.local", slug: "reader" })
+    .values({ email: `reader-${RUN}@test.local`, slug: `reader-${RUN}` })
     .returning();
-  const [client] = await db
-    .select()
-    .from(oauthClients)
-    .where(eq(oauthClients.name, "publish-flow-test"))
-    .limit(1);
+  seededUsers.push(plain.id);
   const raw = randomBytes(32).toString("base64url");
   await db.insert(oauthAccessTokens).values({
     tokenHash: createHash("sha256").update(raw).digest("hex"),
-    clientId: client.id,
+    clientId,
     userId: plain.id,
     scope: "mcp",
     resource: null,
     expiresAt: new Date(Date.now() + 60 * 60 * 1000),
   });
 
-  const dir = makeProject("nonadmin_ds");
+  const dir = makeProject(`nonadmin_ds_${RUN}`);
   const r = await runCli(["publish", "test", dir, "--token", raw, "--create-dataset"], dir);
 
   assert.notEqual(r.code, 0, `expected a non-zero exit\n${r.stdout}\n${r.stderr}`);
   assert.match(r.stdout + r.stderr, /admin required/);
-  assert.equal((await datasetRows("nonadmin_ds")).length, 0);
+  assert.equal((await datasetRows(`nonadmin_ds_${RUN}`)).length, 0);
 });
 
 test("--dry-run never reaches the server, even with --create-dataset", async () => {
-  const dir = makeProject("dryrun_ds");
+  const dir = makeProject(`dryrun_ds_${RUN}`);
   const r = await runCli(["publish", "test", dir, "--token", token, "--create-dataset", "--dry-run"], dir);
 
   assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`);
   assert.match(r.stdout, /dry run — not sending/);
-  assert.equal((await datasetRows("dryrun_ds")).length, 0);
+  assert.equal((await datasetRows(`dryrun_ds_${RUN}`)).length, 0);
 });
 
 test("the dataset the flag created is addressable by name and unique among ready datasets", async () => {
   const rows = await db
     .select()
     .from(datasets)
-    .where(and(eq(datasets.name, "petshop_cli"), eq(datasets.status, "ready")));
+    .where(and(eq(datasets.name, DS_MAIN), eq(datasets.status, "ready")));
   assert.equal(rows.length, 1);
 });

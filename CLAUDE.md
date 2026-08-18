@@ -30,6 +30,38 @@ npx dotenv-cli -e local/staging -- npx drizzle-kit push
 
 See `local/CLAUDE.md` for instance-specific details (gitignored, private).
 
+**Node 24.** CI (`preflight.yml`, `cli-publish.yml`) and Vercel Functions run
+node 24, and `mise.toml` pins the checkout to it. A machine whose global default
+is older will otherwise build and test on a different runtime than ships.
+Non-interactive shells don't run mise's activate hook — use `mise exec -- <cmd>`.
+
+## Tests
+
+```bash
+bash scripts/preflight.sh   # everything offline-verifiable (what CI runs)
+npm run test:hosted         # the DB-backed integration tests
+npm test -w packages/cli    # CLI unit tests (pretest builds the bundle)
+```
+
+`test:hosted` (`scripts/hosted-test.sh`) runs `test/hosted-explore.test.ts` (the
+hosted explore surface) and `test/publish-flow.test.ts` (the CLI publish flow:
+the real `malloyyo` binary → HTTP → the real route handlers). It needs a
+Postgres and picks one in this order:
+
+1. `YO_TEST_DATABASE_URL` — an explicit throwaway DB. Deliberately **not** the
+   ambient `DATABASE_URL`, which usually points at a dev/staging branch.
+2. Docker — an ephemeral `postgres:16-alpine` container (the default, and what
+   CI uses).
+3. A locally installed Postgres (`initdb`/`pg_ctl`) in a temp dir — so the suite
+   runs where there's no Docker daemon (agent sandboxes, macOS runners).
+
+**It is destructive:** it drops and recreates the `public` schema before each
+test file. Pointing it at a real database is refused (non-local host, or a DB
+with rows) unless `YO_TEST_FORCE=1`. Other knobs: `YO_TEST_BACKEND`,
+`PG_TEST_PORT`, `YO_TEST_SKIP_CLI_BUILD=1` (the publish test runs
+`packages/cli/dist/index.js`; skip the rebuild if yours is current, or point
+`MALLOYYO_CLI_BIN` elsewhere).
+
 ## Commits & the DCO check
 
 This repo runs the Probot **DCO** app. It requires every commit to carry a

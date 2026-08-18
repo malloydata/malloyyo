@@ -1,0 +1,8 @@
+# Node version for this checkout. CI (preflight.yml, cli-publish.yml) and Vercel
+# Functions all run node 24; without a pin here a machine whose global default is
+# older builds and tests on a different runtime than the one that ships.
+#
+# mise reads this automatically on `cd`. Non-interactive shells don't run mise's
+# activate hook — use `mise exec -- <cmd>` there. nvm users: `nvm use 24`.
+[tools]
+node = "24"

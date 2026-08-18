@@ -15,8 +15,9 @@
 #                    (which also rebuilds the engine) — so "the CLI builds and
 #                    works" is proven, not assumed.
 #   3. server      — eslint, `next build` (the real type/route check), and the
-#                    hosted-explore integration test (test:hosted spins up an
-#                    EPHEMERAL Docker Postgres + in-process DuckDB, hermetic).
+#                    DB-backed integration tests (test:hosted brings up an
+#                    EPHEMERAL Postgres — Docker, or a local install when there's
+#                    no daemon — plus in-process DuckDB; hermetic either way).
 #
 # WHAT IT DOES NOT RUN — and why:
 #   scripts/e2e.ts. It posts to the admin-gated /api/datasets with NO auth
@@ -26,7 +27,8 @@
 #   it by hand against a live, signed-in instance when you actually want it:
 #       APP_BASE_URL=<url> npm run e2e
 #
-# REQUIREMENTS: node + a running Docker daemon (for the hosted Postgres). The
+# REQUIREMENTS: node + a Postgres for test:hosted (a Docker daemon, or a local
+# install — see scripts/hosted-test.sh for the order it tries). The
 # build step needs DATABASE_URL present (never connected to — db init is lazy);
 # it uses $ENV_FILE if that file exists, else a throwaway placeholder.
 set -uo pipefail
@@ -61,10 +63,18 @@ run() {  # run "label" cmd args...  — runs ALL steps, never stops early; the
   fi
 }
 
-# --- preflight of the preflight: Docker is needed for test:hosted ----------
-if ! docker info >/dev/null 2>&1; then
-  printf '%s✗ Docker is not running.%s test:hosted needs an ephemeral Postgres.\n' "$RED$BOLD" "$RESET" >&2
-  printf '  Start Docker Desktop and re-run.\n' >&2
+# --- preflight of the preflight: test:hosted needs SOME Postgres -----------
+# It prefers Docker, falls back to a locally installed Postgres (initdb/pg_ctl),
+# and takes an explicit YO_TEST_DATABASE_URL over both — so only bail when there
+# is no backend at all. See scripts/hosted-test.sh.
+if docker info >/dev/null 2>&1 || [ -n "${YO_TEST_DATABASE_URL:-}" ]; then
+  :
+elif command -v initdb >/dev/null 2>&1 || compgen -G "/usr/lib/postgresql/*/bin/initdb" >/dev/null \
+  || compgen -G "/opt/homebrew/opt/postgresql@*/bin/initdb" >/dev/null; then
+  printf '%s   (no Docker — test:hosted will use the locally installed Postgres)%s\n' "$DIM" "$RESET"
+else
+  printf '%s✗ No Postgres for test:hosted.%s Start Docker, install Postgres, or set\n' "$RED$BOLD" "$RESET" >&2
+  printf '  YO_TEST_DATABASE_URL to a THROWAWAY database, then re-run.\n' >&2
   exit 1
 fi
 

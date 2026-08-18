@@ -178,6 +178,17 @@ async function refresh(baseUrl: string, creds: Creds): Promise<Creds> {
   return updated;
 }
 
+/** Where a bearer token came from — decides what advice a 401 gets. */
+export type TokenSource = "flag" | "env" | "login";
+
+/** The source getAccessToken WILL use, without resolving the token itself.
+    Same precedence, so an auth failure can name the thing to fix. */
+export function tokenSource(target: Target, opts: { tokenFlag?: string }): TokenSource {
+  if (opts.tokenFlag) return "flag";
+  if (target.tokenEnv && process.env[target.tokenEnv]) return "env";
+  return "login";
+}
+
 /**
  * Resolve a bearer token for a target. Precedence:
  *   1. --token flag

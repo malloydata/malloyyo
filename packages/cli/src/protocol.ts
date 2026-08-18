@@ -51,6 +51,17 @@ export interface ModelStatus {
   compiledAt?: string | null;
   compileError?: string | null;
   git?: GitInfo;
+  /** True when this publish created the dataset (`--create-dataset`). */
+  created?: boolean;
+  /** Name/id of a dataset created by this publish. Set with `created`. */
+  dataset?: string;
+  datasetId?: string;
   /** Set when ok === false. */
   error?: string;
+  /** Discriminator on failures: "request" | "compile" | "missing-import" |
+      "connection" | "persist" | "no-dataset". */
+  kind?: string;
+  /** Env vars malloy-config.json references that aren't set on the SERVER.
+      Set with kind "connection". */
+  missingEnv?: string[];
 }

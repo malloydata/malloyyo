@@ -74,6 +74,21 @@ malloyyo publish main --dry-run # show what would be sent
 malloyyo status main            # what's live: version, commit, compile state
 ```
 
+The target dataset must already exist; publishing to a missing one fails rather than
+inventing it (a config typo would otherwise spawn junk datasets). To provision it from the
+CLI instead of the UI, opt in explicitly:
+
+```bash
+malloyyo publish main --create-dataset   # create the dataset if it isn't there yet
+```
+
+The dataset is created **only after the model compiles**, so a rejected publish still
+creates nothing, and it is created **private** — visibility is a deliberate act in the UI,
+and publishing never changes it. On an existing dataset the flag does nothing: you just get
+the next version. The dataset name comes from the target's `dataset` in the config, and must
+already be a valid name (lowercase letters, digits, underscores) — the CLI won't silently
+create it under a slugified variant that later publishes wouldn't find.
+
 `publish` exits non-zero on a server-side compile failure, so it's safe to gate CI on.
 
 **Token precedence:** `--token` flag → the `malloyyo_token` env var from config (for CI) →

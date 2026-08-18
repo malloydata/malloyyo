@@ -63,6 +63,9 @@ malloyyo login <target>     # one-time browser sign-in
 malloyyo publish <target>   # bundle *.malloy + malloy-config.json and push
 ```
 
+The dataset must exist first — create it in the UI, or add `--create-dataset` to the first
+publish (it creates a private dataset, and only once the model compiles).
+
 The CLI records the git commit it published from; Malloyyo compiles and introspects the model and stores a new version. If it doesn't compile, the push is rejected and the live model is left unchanged.
 
 Alternatively, **point Malloyyo at a GitHub repo** and it pulls `index.malloy` (and any imports) directly — a webhook endpoint (`/api/datasets/<id>/webhook/github`) refreshes it on every push.

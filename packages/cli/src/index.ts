@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import { resolve } from "node:path";
-import { resolveTarget, resolveInstance } from "./config.js";
+import { resolveTarget, resolveInstance, type Target } from "./config.js";
 import { gatherDirectory, gatherDashboards, gitInfo } from "./gather.js";
 import { lintDashboards, printLintReport } from "./lint.js";
-import { getAccessToken, login } from "./oauth.js";
+import { missingEnvRefs, missingEnvHint } from "./shared/env-refs.js";
+import { getAccessToken, login, tokenSource, type TokenSource } from "./oauth.js";
 import { serveMcp } from "./mcp.js";
 import { serveDashboard } from "./dashboard.js";
 import { bundleDashboards } from "./bundle.js";
@@ -22,6 +23,64 @@ function shortSha(sha?: string): string {
   return sha ? sha.slice(0, 7) : "";
 }
 
+/**
+ * Extra advice for a 401/403 from the server. The target resolved and the
+ * request got through — it's the CREDENTIAL that's wrong — so point at the
+ * thing that produced it rather than leaving "invalid or revoked token" as the
+ * whole message.
+ */
+function authHint(status: number, t: Target, source: TokenSource): string {
+  const login = `malloyyo login ${t.name}`;
+  if (status === 403) {
+    return `\n  The token is valid, but that account isn't an admin on ${t.url} —` +
+      `\n  publishing is admin-only. Ask an admin there to grant access.`;
+  }
+  switch (source) {
+    case "flag":
+      return `\n  That token came from --token. Drop the flag and run:  ${login}`;
+    case "env":
+      return `\n  That token came from $${t.tokenEnv}. Re-issue it, or unset it and run:  ${login}`;
+    default:
+      return `\n  Your saved login for ${t.url} is expired or revoked.\n  Run:  ${login}`;
+  }
+}
+
+/**
+ * What to DO about a rejected push, by the server's `kind`. The server's own
+ * message says what went wrong; this says where to fix it, since the same
+ * Malloy error means something different depending on whether a file didn't
+ * upload, a secret isn't set on that deployment, or the model is just wrong.
+ */
+function failureHint(out: ModelStatus, t: Target): string {
+  switch (out.kind) {
+    case "missing-import":
+      return `\n  A file the model imports wasn't in the upload. Publish from the directory` +
+        `\n  that holds index.malloy, and check the import path's spelling/case.`;
+    case "connection":
+      if (out.missingEnv?.length) {
+        const vars = out.missingEnv.map((v) => `$${v}`).join(", ");
+        return `\n  malloy-config.json references ${vars}, which ${out.missingEnv.length > 1 ? "are" : "is"} NOT set on ${t.url}.` +
+          `\n  Secrets don't travel with the model — set them in that deployment's environment` +
+          `\n  (Vercel: Settings → Environment Variables), then publish again.`;
+      }
+      return `\n  The server couldn't open the connection the model uses. Check the` +
+        `\n  \`connections\` block in malloy-config.json, and that ${t.url} can reach it.`;
+    case "persist":
+      return `\n  The model itself is fine — this failed writing to the server's database.` +
+        `\n  Retry; if it repeats, the message above is the database's own.`;
+    default:
+      return "";
+  }
+}
+
+/** Message for a failed publish/status response, with advice about what to fix. */
+function requestFailed(what: string, res: Response, out: ModelStatus, t: Target, source: TokenSource): Error {
+  const detail = out.error ?? `${res.status} ${res.statusText}`;
+  const hint =
+    res.status === 401 || res.status === 403 ? authHint(res.status, t, source) : failureHint(out, t);
+  return new Error(`${what} failed: ${detail}${hint}`);
+}
+
 async function publish(
   target: string,
   dir: string,
@@ -29,6 +88,7 @@ async function publish(
 ): Promise<void> {
   const root = resolve(dir);
   const t = resolveTarget(root, target);
+  const source = tokenSource(t, { tokenFlag: opts.token });
   const bearer = await getAccessToken(t, { tokenFlag: opts.token });
 
   const { files, config } = gatherDirectory(root);
@@ -44,7 +104,12 @@ async function publish(
       printLintReport(report);
     }
     if (!report.ok) {
-      throw new Error("dashboard lint failed — fix the above, or pass --skip-lint");
+      // A lint failure whose real cause is an unset secret reads as an
+      // inexplicable connection error — name the variable.
+      throw new Error(
+        "dashboard lint failed — fix the above, or pass --skip-lint" +
+          missingEnvHint(missingEnvRefs(config), "this shell"),
+      );
     }
   }
 
@@ -74,7 +139,7 @@ async function publish(
   const out = (await res.json().catch(() => ({}))) as ModelStatus;
 
   if (!res.ok || !out.ok) {
-    throw new Error(`publish failed: ${out.error ?? `${res.status} ${res.statusText}`}`);
+    throw requestFailed("publish", res, out, t, source);
   }
   if (out.created) {
     console.log(`✓ created dataset ${out.dataset ?? t.dataset} (private) — ${t.url}/datasets/${out.dataset ?? t.dataset}`);
@@ -87,12 +152,16 @@ async function publish(
 
 async function status(target: string, opts: { token?: string }): Promise<void> {
   const t = resolveTarget(resolve("."), target);
+  const source = tokenSource(t, { tokenFlag: opts.token });
   const bearer = await getAccessToken(t, { tokenFlag: opts.token });
   const res = await fetch(`${t.url}/api/datasets/${t.dataset}/model/status`, {
     headers: { authorization: `Bearer ${bearer}` },
   });
   if (!res.ok) {
-    throw new Error(`status failed: ${res.status} ${res.statusText}`);
+    // Same treatment as publish: read the server's own message, and say what to
+    // do about a bad credential instead of just printing "401 Unauthorized".
+    const body = (await res.json().catch(() => ({}))) as ModelStatus;
+    throw requestFailed("status", res, body, t, source);
   }
   const s = (await res.json()) as ModelStatus;
   const git = s.git;
@@ -146,13 +215,20 @@ program
   .argument("[dir]", "directory to lint", ".")
   .description("validate ./dashboards against the model (manifest, query, givens, Dashboard.tsx)")
   .action(async (dir: string) => {
-    const report = await lintDashboards(resolve(dir));
+    const root = resolve(dir);
+    const report = await lintDashboards(root);
     if (report.dashboards.length === 0) {
       console.log("no dashboards to lint");
       return;
     }
     printLintReport(report);
-    if (!report.ok) process.exit(1);
+    if (!report.ok) {
+      // Same diagnosis publish gives: an unset {env:…} secret surfaces here as a
+      // connection error with no hint of which variable is missing.
+      const hint = missingEnvHint(missingEnvRefs(gatherDirectory(root).config), "this shell");
+      if (hint) console.error(hint.replace(/^\n/, ""));
+      process.exit(1);
+    }
   });
 
 program

@@ -58,6 +58,10 @@ export interface ModelStatus {
   datasetId?: string;
   /** Set when ok === false. */
   error?: string;
-  /** Discriminator on failures: "request" | "compile" | "missing-import" | "no-dataset". */
+  /** Discriminator on failures: "request" | "compile" | "missing-import" |
+      "connection" | "persist" | "no-dataset". */
   kind?: string;
+  /** Env vars malloy-config.json references that aren't set on the SERVER.
+      Set with kind "connection". */
+  missingEnv?: string[];
 }

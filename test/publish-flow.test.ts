@@ -117,12 +117,12 @@ interface CliResult {
   stderr: string;
 }
 
-function runCli(args: string[], cwd: string): Promise<CliResult> {
+function runCli(args: string[], cwd: string, env: Record<string, string> = {}): Promise<CliResult> {
   return new Promise((resolve) => {
     execFile(
       process.execPath,
       [CLI, ...args],
-      { cwd, env: { ...process.env, NO_COLOR: "1" }, maxBuffer: 16 * 1024 * 1024 },
+      { cwd, env: { ...process.env, NO_COLOR: "1", ...env }, maxBuffer: 16 * 1024 * 1024 },
       (err, stdout, stderr) => {
         const code = err && typeof (err as NodeJS.ErrnoException).code === "number"
           ? ((err as unknown as { code: number }).code)
@@ -173,7 +173,16 @@ const seededUsers: string[] = [];
 const projects: string[] = [];
 
 /** A publishable model directory whose malloyyo target points at the test server. */
-function makeProject(dataset: string, opts: { model?: string; dashboard?: boolean } = {}): string {
+function makeProject(
+  dataset: string,
+  opts: {
+    model?: string;
+    dashboard?: boolean;
+    tokenEnv?: string;
+    /** Extra `connections` entries, e.g. one whose password is an unset env ref. */
+    connections?: Record<string, unknown>;
+  } = {},
+): string {
   // In os.tmpdir(), NOT the repo: gatherDirectory's git probe would otherwise
   // stamp this repo's commit onto the payload and make assertions drift.
   const dir = mkdtempSync(join(tmpdir(), "malloyyo-publish-"));
@@ -182,8 +191,16 @@ function makeProject(dataset: string, opts: { model?: string; dashboard?: boolea
     join(dir, "malloy-config.json"),
     JSON.stringify(
       {
-        connections: { duckdb: { is: "duckdb" } },
-        malloyyo: { targets: { test: { url: serverUrl, dataset } } },
+        connections: { duckdb: { is: "duckdb" }, ...(opts.connections ?? {}) },
+        malloyyo: {
+          targets: {
+            test: {
+              url: serverUrl,
+              dataset,
+              ...(opts.tokenEnv ? { malloyyo_token: { env: opts.tokenEnv } } : {}),
+            },
+          },
+        },
       },
       null,
       2,
@@ -349,6 +366,47 @@ test("--create-dataset on a model that doesn't compile leaves no dataset behind"
   );
 });
 
+test("a model whose config needs an unset secret says WHICH secret, not just the connect error", async () => {
+  // Port 1 so the connect fails instantly and identically everywhere — the point
+  // of the test is the env-var diagnosis, not the socket error.
+  const dir = makeProject(`secret_ds_${RUN}`, {
+    model: `source: needs_secret is pg.sql("select 1 as one")\n`,
+    connections: {
+      pg: {
+        is: "postgres",
+        host: "127.0.0.1",
+        port: 1,
+        database: "nope",
+        user: "nope",
+        password: { env: "MALLOYYO_TEST_SECRET_UNSET" },
+      },
+    },
+  });
+  // Malloy resolves an unset {env:…} to empty and fails at CONNECT time, so the
+  // raw error never mentions the secret. Both ends check for it explicitly.
+  // Locally first — the CLI lints before it sends, and that's where a developer
+  // meets the error.
+  const local = await runCli(["publish", "test", dir, "--token", token, "--create-dataset"], dir);
+  assert.notEqual(local.code, 0, `expected a non-zero exit\n${local.stdout}\n${local.stderr}`);
+  const localOut = local.stdout + local.stderr;
+  assert.match(localOut, /\$MALLOYYO_TEST_SECRET_UNSET/);
+  assert.match(localOut, /NOT set on this shell/);
+
+  // …and again from the server, for the case where the secret is set locally but
+  // not on the deployment (--skip-lint stands in for "it compiled here").
+  const remote = await runCli(
+    ["publish", "test", dir, "--token", token, "--create-dataset", "--skip-lint"],
+    dir,
+  );
+  assert.notEqual(remote.code, 0, `expected a non-zero exit\n${remote.stdout}\n${remote.stderr}`);
+  const remoteOut = remote.stdout + remote.stderr;
+  assert.match(remoteOut, /\$MALLOYYO_TEST_SECRET_UNSET/);
+  assert.match(remoteOut, /NOT set on http/);
+  assert.match(remoteOut, /Secrets don't travel with the model/);
+
+  assert.equal((await datasetRows(`secret_ds_${RUN}`)).length, 0);
+});
+
 test("--create-dataset rejects a name that isn't a usable dataset slug", async () => {
   const dir = makeProject(`Pet Shop ${RUN}`);
   const r = await runCli(["publish", "test", dir, "--token", token, "--create-dataset"], dir);
@@ -365,13 +423,42 @@ test("--create-dataset rejects a name that isn't a usable dataset slug", async (
   );
 });
 
-test("a bad token can't create anything", async () => {
+test("a bad token can't create anything, and the error says how to fix it", async () => {
   const dir = makeProject(`unauth_ds_${RUN}`);
   const r = await runCli(["publish", "test", dir, "--token", "not-a-real-token", "--create-dataset"], dir);
 
   assert.notEqual(r.code, 0, `expected a non-zero exit\n${r.stdout}\n${r.stderr}`);
-  assert.match(r.stdout + r.stderr, /invalid or revoked token/);
+  const out = r.stdout + r.stderr;
+  assert.match(out, /invalid or revoked token/);
+  // The target resolved fine — it's the credential that's wrong, so say so and
+  // name the command that fixes it.
+  assert.match(out, /came from --token/);
+  assert.match(out, /malloyyo login test/);
   assert.equal((await datasetRows(`unauth_ds_${RUN}`)).length, 0);
+});
+
+test("a bad token from the config's env var names that var, and still points at login", async () => {
+  const dir = makeProject(`envtoken_ds_${RUN}`, { tokenEnv: "MALLOYYO_TEST_TOKEN" });
+  const r = await runCli(["publish", "test", dir, "--create-dataset"], dir, {
+    MALLOYYO_TEST_TOKEN: "not-a-real-token",
+  });
+
+  assert.notEqual(r.code, 0, `expected a non-zero exit\n${r.stdout}\n${r.stderr}`);
+  const out = r.stdout + r.stderr;
+  assert.match(out, /invalid or revoked token/);
+  assert.match(out, /\$MALLOYYO_TEST_TOKEN/);
+  assert.match(out, /malloyyo login test/);
+  assert.equal((await datasetRows(`envtoken_ds_${RUN}`)).length, 0);
+});
+
+test("status reports the server's auth error, not a bare 401", async () => {
+  const dir = makeProject(DS_MAIN);
+  const r = await runCli(["status", "test", "--token", "not-a-real-token"], dir);
+
+  assert.notEqual(r.code, 0, `expected a non-zero exit\n${r.stdout}\n${r.stderr}`);
+  const out = r.stdout + r.stderr;
+  assert.match(out, /invalid or revoked token/);
+  assert.match(out, /malloyyo login test/);
 });
 
 test("a non-admin token can't create anything", async () => {
@@ -394,7 +481,11 @@ test("a non-admin token can't create anything", async () => {
   const r = await runCli(["publish", "test", dir, "--token", raw, "--create-dataset"], dir);
 
   assert.notEqual(r.code, 0, `expected a non-zero exit\n${r.stdout}\n${r.stderr}`);
-  assert.match(r.stdout + r.stderr, /admin required/);
+  const out = r.stdout + r.stderr;
+  assert.match(out, /admin required/);
+  // A 403 is a different problem from a 401 — logging in again won't help.
+  assert.match(out, /isn't an admin/);
+  assert.doesNotMatch(out, /malloyyo login/);
   assert.equal((await datasetRows(`nonadmin_ds_${RUN}`)).length, 0);
 });
 

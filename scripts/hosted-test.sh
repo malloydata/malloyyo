@@ -170,7 +170,10 @@ if command -v psql >/dev/null 2>&1; then
 elif [ -n "$PG_BIN" ] && [ -x "$PG_BIN/psql" ]; then
   PSQL=("$PG_BIN/psql" "$DATABASE_URL")
 elif [ "$MODE" = "docker" ]; then
-  PSQL=(docker exec -i "$CONTAINER" psql -U postgres -d postgres)
+  # -h 127.0.0.1 on purpose: over the container's unix socket we'd connect to the
+  # image's THROWAWAY init server and call it ready too early (see wait_for_pg).
+  # TCP needs a password where the socket is trust.
+  PSQL=(docker exec -i -e PGPASSWORD=test "$CONTAINER" psql -h 127.0.0.1 -U postgres -d postgres)
 else
   echo "✗ no psql client found — install the Postgres client tools" >&2
   exit 1

@@ -40,10 +40,46 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+      # The boot-time migrator reads /app/drizzle/meta/_journal.json at runtime
+      # (RUN_MIGRATIONS_ON_BOOT). The smoke below boots with a placeholder database and
+      # never sets that flag, so a missing journal — e.g. a .dockerignore exclusion
+      # keeping drizzle/meta out of the build context — would pass CI and fail
+      # readiness on every real deploy. Assert the file shipped.
+      - name: Migration journal ships in the image
+        run: docker run --rm malloyyo:ci test -f /app/drizzle/meta/_journal.json
+
+      # APP_BASE_URL is REQUIRED for a container deploy: without it the instance
+      # would derive the origin it hands out (OAuth discovery, /mcp
+      # WWW-Authenticate, /ltool share links) from a caller-controlled
+      # X-Forwarded-Host. Nothing in front of a container normalizes that header,
+      # so the app refuses to start instead. Assert the refusal, so a future
+      # "simplification" of the check can't quietly reopen the hole.
+      - name: Refuses to start without APP_BASE_URL
+        run: |
+          docker run -d --name malloyyo-noconfig \
+            -e DATABASE_URL="postgresql:///" malloyyo:ci
+          # It should exit on its own. Give it room, then require it to be gone.
+          for i in $(seq 1 15); do
+            running=$(docker inspect -f '{{.State.Running}}' malloyyo-noconfig 2>/dev/null || echo "false")
+            [ "$running" = "false" ] && break
+            sleep 2
+          done
+          logs=$(docker logs malloyyo-noconfig 2>&1 || true)
+          echo "----- container logs -----"; echo "$logs"
+          code=$(docker inspect -f '{{.State.ExitCode}}' malloyyo-noconfig 2>/dev/null || echo "")
+          docker rm -f malloyyo-noconfig >/dev/null 2>&1 || true
+          if [ "$running" != "false" ]; then echo "FAIL: container kept running with no APP_BASE_URL"; exit 1; fi
+          if [ "$code" = "0" ]; then echo "FAIL: expected a non-zero exit"; exit 1; fi
+          case "$logs" in
+            *APP_BASE_URL*) echo "OK: refused to start, naming APP_BASE_URL" ;;
+            *) echo "FAIL: exited without naming the missing variable"; exit 1 ;;
+          esac
+
       - name: Smoke test (boots + answers HTTP)
         run: |
           docker run -d --name malloyyo -p 3000:3000 \
-            -e DATABASE_URL="postgresql:///" malloyyo:ci
+            -e DATABASE_URL="postgresql:///" \
+            -e APP_BASE_URL="http://localhost:3000" malloyyo:ci
           ok=0
           for i in $(seq 1 30); do
             code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:3000/ || true)

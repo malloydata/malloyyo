@@ -95,6 +95,11 @@ run "cli: build + tests"           npm test -w packages/cli
 
 # --- 3. server -------------------------------------------------------------
 run "server: lint"                 npm run lint
+# The src/lib unit suite — pure-function tests, no DB, ~2s. It was absent from this
+# script for a long time, which meant every test under src/lib (including the ones
+# guarding the security fixes) passed or failed unnoticed. If it is not here, it is
+# not enforced anywhere: CI runs this file and nothing else runs `npm test`.
+run "server: unit tests"           npm test
 # Guard: no app PAGE may statically import the DuckDB path — a page render
 # function can't load libduckdb.so and 500s in prod (reference_ssr_page_duckdb_500).
 run "server: no DuckDB in pages"   node scripts/check-page-no-duckdb.mjs
@@ -105,6 +110,11 @@ else
   run "server: next build"         env DATABASE_URL="postgres://placeholder/preflight" npm run build
 fi
 run "server: hosted integration"   npm run test:hosted
+# The migration journal against a real Postgres: journal replay == schema.ts,
+# pre-journal databases converge, concurrent boots serialize, and a failed
+# migration fails /api/health on the real standalone server (which also proves
+# ./drizzle is traced into the bundle). Needs the `next build` above.
+run "server: migration journal"    npm run test:migrate
 
 # --- summary ---------------------------------------------------------------
 printf '\n%s━━ summary%s  %s(%ds total)%s\n' "$BOLD" "$RESET" "$DIM" "$((SECONDS - started))" "$RESET"

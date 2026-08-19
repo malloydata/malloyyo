@@ -41,9 +41,18 @@ export const env = {
       .map((e) => e.trim().toLowerCase())
       .filter(Boolean);
   },
-  // Optional — needed only for private GitHub repos.
+  // Optional — needed for private GitHub repos, and without any token public-repo
+  // fetches run against GitHub's anonymous 60/hour-per-IP budget, which on shared cloud
+  // egress is usually already spent by other tenants of the address.
+  //
+  // `GITHUB_TOKEN_FALLBACK` is a second name an operator can set platform-wide (Malloyyo
+  // hosting provisions a scopeless one into every instance); the user's own GITHUB_TOKEN
+  // always wins when present. Two names — rather than the platform writing GITHUB_TOKEN —
+  // so a user setting, replacing, emptying, or removing their token never collides with
+  // the platform's. `||` not `??`: an empty GITHUB_TOKEN means "unset", and must fall
+  // through rather than authenticate as nobody.
   get GITHUB_TOKEN() {
-    return process.env.GITHUB_TOKEN ?? "";
+    return process.env.GITHUB_TOKEN || process.env.GITHUB_TOKEN_FALLBACK || "";
   },
   // Optional GA4 Measurement ID (G-XXXXXXXXXX). Unset means this deployment
   // ships no third-party script and sets no cookies — the same default the

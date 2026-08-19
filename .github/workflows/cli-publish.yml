@@ -10,6 +10,14 @@ name: Publish malloyyo CLI
 # `@malloydata/malloyyo` on npmjs.com with a trusted publisher pointing at this
 # repo + this workflow, and leave token publishing enabled so an authorized
 # person can run the same `npm run release` from the command line.
+#
+# THE PUBLISHING REPOSITORY IS `malloydata/malloyyo`, AND ONLY IT. A fork inherits
+# both this workflow and the package name, so the job below refuses to run anywhere
+# else. Otherwise a merge to a fork's main can walk all the way to `npm publish` and
+# stop only because that fork happens not to have an npm credential — a protection
+# that lasts exactly as long as nobody adds one. The condition is on the repository
+# rather than on a secret being absent, because "auth is not configured here" is a
+# coincidence and "this is not the publishing repo" is the rule.
 
 on:
   push:
@@ -34,6 +42,9 @@ concurrency:
 
 jobs:
   release:
+    # The publishing repository, and only it. A fork inherits this workflow and the
+    # package name with it; see the note at the top.
+    if: github.repository == 'malloydata/malloyyo'
     runs-on: ubuntu-latest
     permissions:
       contents: write # commit the version bump + push the tag

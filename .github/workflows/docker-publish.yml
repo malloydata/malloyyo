@@ -34,6 +34,11 @@ env:
 
 jobs:
   publish:
+    # The publishing repository, and only it — the same guard cli-publish.yml carries, for
+    # the same reason. A fork inherits this workflow and, through `repository_owner`, a
+    # package name of its own, so every merge to a fork's main built and pushed a full
+    # server image that nothing pulls.
+    if: github.repository == 'malloydata/malloyyo'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

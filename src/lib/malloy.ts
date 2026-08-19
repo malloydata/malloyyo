@@ -616,8 +616,21 @@ export async function describeSourceFields(
   });
 }
 
-// Run using a file map (from DB-stored GitHub model files).
-export async function runMalloyFiles(
+// Run user-authored query text against a file map (from DB-stored GitHub model
+// files) — the /ltool web editor's path.
+//
+// Enforces core's restricted mode (`loadRestrictedQuery`): no import, no
+// `given:` declarations, no `connection.table/sql`, no raw-SQL forms, no `##!`
+// flags — rejected with 'restricted-construct-forbidden'. This is the same gate
+// the MCP explore surface and dashboards use, and it is what keeps arbitrary
+// DuckDB SQL (e.g. `read_text('/proc/self/environ')`) out of a surface that
+// accepts free-form text from any signed-in user.
+//
+// "Restricted" is in the name deliberately — see packages/mcp-engine/src/
+// restricted.ts — so an implementer cannot silently route user text back
+// through the open `loadQuery`. Restricted mode constrains QUERY text only:
+// models may still define `duckdb.sql(...)` sources, and querying them is fine.
+export async function runRestrictedMalloyFiles(
   files: Map<string, string>,
   entryPath: string,
   query: string,
@@ -627,7 +640,7 @@ export async function runMalloyFiles(
   return withRuntime(files, opts.cacheKey, async (runtime) => {
     const tBuild = Date.now();
     const { mm, persist } = await acquireModel(runtime, opts.cacheKey, entryPath);
-    const runner = mm.loadQuery(query);
+    const runner = mm.loadRestrictedQuery(query);
     const sql = await runner.getSQL();
     const tCompile = Date.now();
     const result = await runner.run({ rowLimit: opts.rowLimit ?? DEFAULT_ROW_LIMIT });
@@ -635,7 +648,7 @@ export async function runMalloyFiles(
     const rows = jsonRows(result);
     const stableResult = API.util.wrapResult(result);
     if (persist && opts.cacheKey) await persistModelDef(opts.cacheKey, () => mm.getModel());
-    logger.info("runMalloyFiles timing", {
+    logger.info("runRestrictedMalloyFiles timing", {
       entryPath,
       acquireRuntimeMs: tBuild - t0,
       compileMs: tCompile - tBuild,

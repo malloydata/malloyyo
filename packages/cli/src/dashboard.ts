@@ -27,6 +27,7 @@ import * as esbuild from "esbuild";
 import { makeRunner, type GivenSpec, type ModelRunner, type TileSpec } from "./host.js";
 import { initConnections } from "./connections.js";
 import { givensFromSearch, urlStateFromSearch } from "./shared/givens-url.js";
+import { safeJson } from "./shared/html.js";
 import { navHtml as sharedNav, NAV_CSS } from "./shared/nav.js";
 import {
   discoverDashboards,
@@ -140,7 +141,7 @@ function makeInPageBundler() {
 }
 
 const html = (body: string, title: string) =>
-  `<!doctype html><html><head><meta charset="utf-8"><title>${title}</title>` +
+  `<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title>` +
   `<meta name="viewport" content="width=device-width,initial-scale=1">` +
   `<style>${NAV_CSS}</style></head>` +
   `<body style="margin:0">${body}</body></html>`;
@@ -178,10 +179,10 @@ function inPageShell(
   return html(
     navHtml(dash, all) +
       `<div id="root"></div>` +
-      `<script>window.__DASHBOARD__=${JSON.stringify(info)};` +
-      `window.__GIVENS__=${JSON.stringify(givenSpecs)};` +
-      `window.__INITIAL_GIVENS__=${JSON.stringify(initialGivens)};` +
-      `window.__INITIAL_URLSTATE__=${JSON.stringify(initialUrlState)}</script>` +
+      `<script>window.__DASHBOARD__=${safeJson(info)};` +
+      `window.__GIVENS__=${safeJson(givenSpecs)};` +
+      `window.__INITIAL_GIVENS__=${safeJson(initialGivens)};` +
+      `window.__INITIAL_URLSTATE__=${safeJson(initialUrlState)}</script>` +
       `<script>try{new EventSource('/events').onmessage=()=>location.reload();}catch(e){}</script>` +
       `<script src="/inpage.js?d=${encodeURIComponent(dash.name)}"></script>`,
     dash.title,
@@ -206,8 +207,8 @@ function parentShell(
   // `allow-same-origin` gives it a real origin — its worker/wasm/font loads
   // succeed — while it stays cross-origin to this shell: it can't read us or
   // call /api/run directly, only postMessage. See docs/repo-artifacts.md §7/§8.
-  const d = JSON.stringify(dash.name);
-  const fb = JSON.stringify(frameBase);
+  const d = safeJson(dash.name);
+  const fb = safeJson(frameBase);
   const nav = navHtml(dash, all);
   return html(
     `<div style="display:flex;flex-direction:column;height:100vh">` +
@@ -303,10 +304,10 @@ function frameDoc(
   };
   return html(
     `<div id="root"></div>` +
-      `<script>window.__DASHBOARD__=${JSON.stringify(info)};` +
-      `window.__GIVENS__=${JSON.stringify(givenSpecs)};` +
-      `window.__INITIAL_GIVENS__=${JSON.stringify(initialGivens)};` +
-      `window.__INITIAL_URLSTATE__=${JSON.stringify(initialUrlState)}</script>` +
+      `<script>window.__DASHBOARD__=${safeJson(info)};` +
+      `window.__GIVENS__=${safeJson(givenSpecs)};` +
+      `window.__INITIAL_GIVENS__=${safeJson(initialGivens)};` +
+      `window.__INITIAL_URLSTATE__=${safeJson(initialUrlState)}</script>` +
       `<script src="/bundle.js?d=${encodeURIComponent(dash.name)}"></script>`,
     dash.title,
   );

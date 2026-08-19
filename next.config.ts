@@ -6,6 +6,44 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   // Emit .next/standalone (minimal server + traced node_modules) for the Docker image.
   output: "standalone",
+  async headers() {
+    // Baseline security response headers. There were none at all before this —
+    // Vercel supplied none either, so this is not a regression being fixed but
+    // a floor being set, and it matters more once the app runs as a plain
+    // container with no platform edge in front of it.
+    //
+    // Deliberately NOT a Content-Security-Policy for the app's own pages. That
+    // needs a per-request nonce threaded through the proxy and has to be
+    // verified against a real signed-in session before it can ship; a wrong CSP
+    // is a blank page. The one route that inlines request-derived data into a
+    // <script> — the dashboard frame — sends its own strict CSP at the
+    // response level, where it can be checked in isolation.
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          // Stop content-type sniffing turning a JSON/text response into an
+          // executable one.
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          // The app is authenticated and, until now, framable by anyone —
+          // which is the clickjacking precondition. Same-origin framing is
+          // required: the dashboard iframe embeds a route from this origin.
+          { key: "X-Frame-Options", value: "SAMEORIGIN" },
+          // Don't leak dataset ids or share slugs in the Referer on outbound
+          // links (dashboards can link out via `# link`).
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+          // Fly/Railway/nginx terminate TLS and generally do NOT add this.
+          // Ignored by browsers over plain http, so localhost is unaffected.
+          //
+          // No `includeSubDomains`: a self-hoster on foo.example.com would
+          // silently force https on every sibling subdomain they own, which is
+          // not this app's call to make and is painful to undo. No `preload`
+          // for the same reason, more so.
+          { key: "Strict-Transport-Security", value: "max-age=31536000" },
+        ],
+      },
+    ];
+  },
   async rewrites() {
     // Serve the discovery metadata at both the bare well-known path (older MCP
     // spec, 2025-03-26) AND the resource-scoped path variant. Current Claude

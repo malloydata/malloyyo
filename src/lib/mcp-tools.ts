@@ -4,7 +4,7 @@
 import { eq, and, desc, or, count } from "drizzle-orm";
 import { db, datasets, malloyModels, malloyModelFiles, savedQueries, history, favorites } from "@/db";
 import type { SourceInfo } from "./malloy";
-// NOTE: `runMalloyFiles` (and everything under ./malloy) pulls in
+// NOTE: `runRestrictedMalloyFiles` (and everything under ./malloy) pulls in
 // @malloydata/db-duckdb → @duckdb/node-api, whose native libduckdb.so loads at
 // import time. It's imported LAZILY (dynamic import at the two call sites below)
 // so modules that only READ the DB — notably loadSharedQuery, used by the
@@ -348,8 +348,8 @@ export async function runQueryForWeb(
   const files = await modelFileMap(model);
   const t0 = Date.now();
   try {
-    const { runMalloyFiles } = await import("./malloy"); // lazy — see import note above
-    const res = await runMalloyFiles(files, "index.malloy", malloyQuery, { rowLimit: maxRows, cacheKey: model.id });
+    const { runRestrictedMalloyFiles } = await import("./malloy"); // lazy — see import note above
+    const res = await runRestrictedMalloyFiles(files, "index.malloy", malloyQuery, { rowLimit: maxRows, cacheKey: model.id });
     const durationMs = Date.now() - t0;
     const capped = res.rows.slice(0, maxRows);
     const { slug } = await recordHistory({
@@ -404,8 +404,8 @@ export async function saveWebQuery(
 
   const t0 = Date.now();
   try {
-    const { runMalloyFiles } = await import("./malloy"); // lazy — see import note above
-    const res = await runMalloyFiles(files, "index.malloy", malloyQuery, { rowLimit: maxRows, cacheKey: model.id });
+    const { runRestrictedMalloyFiles } = await import("./malloy"); // lazy — see import note above
+    const res = await runRestrictedMalloyFiles(files, "index.malloy", malloyQuery, { rowLimit: maxRows, cacheKey: model.id });
     const durationMs = Date.now() - t0;
     const capped = res.rows.slice(0, maxRows);
     const { slug } = await recordHistory({

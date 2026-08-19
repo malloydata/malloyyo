@@ -19,9 +19,24 @@ import crypto from "node:crypto";
 
 const TTL_SECONDS = 300; // 5 min — ample to load the frame + bundle once.
 
+// The dashboard subsystem owns its own signing key, with AUTH_SECRET as the
+// compatibility fallback so existing deployments need no new configuration.
+//
+// Why it can't just read AUTH_SECRET: that var belongs to Auth.js, and an
+// instance authenticating some other way may legitimately not set it. Reading
+// it here made dashboards fail at RUNTIME with a 500 — not at startup, and only
+// on dashboard routes, which is the kind of break that ships. The dependency
+// was invisible: nothing about "dashboard iframe capability token" suggests it
+// stops working when you change how users sign in.
+//
+// Note for operators: setting DASHBOARD_TOKEN_SECRET on a running instance
+// invalidates in-flight frame tokens. Their TTL is 5 minutes, so the blast
+// radius is a dashboard open at that moment needing a refresh.
 function secret(): string {
-  const s = process.env.AUTH_SECRET;
-  if (!s) throw new Error("Missing required env var: AUTH_SECRET");
+  const s = process.env.DASHBOARD_TOKEN_SECRET ?? process.env.AUTH_SECRET;
+  if (!s) {
+    throw new Error("Missing required env var: DASHBOARD_TOKEN_SECRET (or AUTH_SECRET) — needed to sign dashboard frame tokens");
+  }
   return s;
 }
 

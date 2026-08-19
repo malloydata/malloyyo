@@ -81,8 +81,10 @@ its public surface:
   public.
 - Hide intermediates. A staging source you define only so other sources can build
   on it should not be exported.
-- The export list is the consumer's menu — exactly what the test window and real
-  consumers can query, nothing more.
+- The export list is the consumer's menu — what discovery (`list_sources`) shows
+  and what resolves by bare name. It curates; it does not enforce. A caller that
+  names the model explicitly can still reach a non-exported source, so keep
+  anything genuinely sensitive out of the model.
 
 ## The loop
 

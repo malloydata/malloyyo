@@ -1,5 +1,10 @@
 # Creating dashboards in Malloyyo
 
+> **Superseded by [Dashboards](guide/dashboards.md)** in the user guide, which
+> is the maintained version. This page is still accurate on the current
+> structure and goes deeper in places (the full `# artifact` tag options); keep
+> it for reference, but make edits to the guide.
+
 A Malloyyo dashboard is a **self-contained `.malloy` file in the `dashboards/`
 directory**. The file *is* the dashboard: it imports the parts of your model it
 needs, defines its query (with the filtering it applies), and tags it. There's
@@ -258,8 +263,10 @@ runtime sandboxes it):
 
 ```jsx
 // dashboards/overview.jsx
-import { Controls, Search, Panel, VegaChart } from "@malloyyo/dashboard";
+import { Controls, Search, VegaChart } from "@malloyyo/dashboard";
 
+// A custom component draws the data itself — there is no `<Panel>` / Malloy
+// renderer in the sandbox (`Panel` is not exported; importing it fails to bundle).
 export default function Dashboard({ dashboard, givens }) {
   return (
     <>
@@ -270,9 +277,11 @@ export default function Dashboard({ dashboard, givens }) {
 }
 ```
 
-- A **bare `<Panel/>`** renders the whole dashboard (its tiles). A `<Panel
-  query="…"/>` / `<VegaChart query="…"/>` runs a specific query **defined in this
-  dashboard file** (by name, e.g. `"overview"`) or any `source -> view`.
+- **Adding a component opts the dashboard OUT of the Malloy renderer** — you draw
+  the results. Want the renderer back? Delete the component and let the tag render
+  it. `<VegaChart query="…"/>` / `useQuery({query:"…"})` runs a specific query
+  **defined in this dashboard file** (by name, e.g. `"overview"`) or any
+  `source -> view`.
 - `lint` checks each component's `query="…"` still resolves — a component
   pointing at a renamed/removed query fails, not silently blank.
 - For `<VegaChart>` (a Vega-Lite spec over query rows) there is **no `# vega_lite`

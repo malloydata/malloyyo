@@ -4,7 +4,7 @@
 // chart code: it declares a plain Vega-Lite spec and points its encodings at the
 // query's output columns (name, births). The spec's own `data` is supplied by
 // the runtime from the query — any remote `data.url` would be stripped, since
-// the sandboxed frame has no network. See the model's `births_by_name` view.
+// the sandboxed frame has no network.
 import React from "react";
 import { Controls, Given, Select, MultiSelect, VegaChart } from "@malloyyo/dashboard";
 
@@ -42,9 +42,10 @@ export default function Dashboard({ dashboard, givens }) {
         <MultiSelect given="NAMES" placeholder="All names…" />
       </Controls>
 
-      {/* Runs `run: names -> births_by_name` as a restricted query; rows are
-          inlined into the spec as its dataset. */}
-      <VegaChart spec={spec} malloy="names -> births_by_name" givens={givens} />
+      {/* `query=` names a query defined in THIS dashboard file; it runs as a
+          restricted query and its rows are inlined into the spec's dataset.
+          `lint` checks this name still resolves. */}
+      <VegaChart spec={spec} query="births_by_name" givens={givens} />
     </div>
   );
 }

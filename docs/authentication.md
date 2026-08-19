@@ -1,5 +1,17 @@
 # Authentication
 
+Malloyyo signs users in one of two ways, decided by the environment rather than by
+a setting:
+
+| Deployment | Sign-in |
+|---|---|
+| **Self-hosted / open source** — the default, and all of this guide | NextAuth, exactly as documented below |
+| **Malloyyo-hosted** — an instance Malloyyo runs for one customer | A managed provider, configured by the control plane — see [the note below](#a-note-on-malloyyo-hosted-instances) |
+
+If you run Malloyyo yourself, the hosted path does not exist for you: it is off
+unless a control plane turns it on, and nothing about NextAuth changes when it
+does. The rest of this guide is written for your deployment.
+
 Malloyyo signs users in with [Auth.js (NextAuth v5)](https://authjs.dev), backed
 by the Drizzle Postgres adapter (`src/auth.ts`). Three OAuth / OIDC providers are
 supported:
@@ -30,15 +42,39 @@ configured.
   production URL and `http://localhost:3000/...` for local dev.
 - **`AUTH_SECRET`.** Signs session tokens and OAuth state. Generate one with
   `openssl rand -base64 32`. Required regardless of provider.
-- **Who gets in.** Sign-in is provider-agnostic once identity is established:
-  - `EMAIL_ALLOW_LIST` (optional, comma-separated) restricts sign-in to specific
-    email addresses. Unset = any account from a configured provider may sign in.
-  - `APP_ADMIN_EMAILS` (comma-separated) marks users as admins (create datasets,
-    publish, see everything). Both lists match on the account's **email**, so
-    they work identically across Google, Okta, and Microsoft.
-- **First sign-in** creates the user row and assigns a friendly slug
-  (`createUser` event in `src/auth.ts`). New providers store an `accounts` row
-  automatically via the Drizzle adapter — no schema or migration change.
+- **Who gets in: membership is data, not configuration.** Authentication
+  (a provider vouching for an identity) and membership (may this person use
+  *this* instance) are separate questions. Membership lives on the `users` row —
+  `status` is `pending`, `active`, or `disabled`; `role` is `owner`, `admin`, or
+  `member` — and every request re-reads the row (`src/lib/authorize.ts`), so
+  revoking someone takes effect on their next request, with no env edit and no
+  redeploy.
+  - **The first sign-in on a fresh instance becomes the `owner`** — active,
+    admin, no configuration needed.
+  - **Everyone after that is admitted by the instance's access policy**
+    (an admin setting, not an env var): `invite` (the default) leaves newcomers
+    `pending` until an admin approves them, and admits invited addresses
+    immediately; `open` admits anyone who can authenticate — with Google that is
+    **every Google account on earth**, so the server logs a loud warning at
+    startup when the policy is `open` and sign-in is enabled.
+  - **`EMAIL_ALLOW_LIST` is retired.** An existing database's list is migrated
+    once on upgrade — listed users stay active, listed addresses that never
+    arrived become open invitations, and every other existing user is
+    `disabled`, exactly the set the list was already refusing. After that the
+    variable is never read; leaving it set logs a startup warning naming any
+    disagreement with the database.
+  - **`BREAK_GLASS_EMAIL`** (optional, one address) is the emergency door: it
+    admits that address as an admin even when the database says no — for when
+    you disable your own account or lose the last admin. Set it, sign in, fix
+    the data, unset it. It is deliberately a different variable from the old
+    list: a leftover value is inert instead of quietly changing meaning.
+  - `APP_ADMIN_EMAILS` (comma-separated) still marks already-admitted users as
+    admins (create datasets, publish, see everything). It grants a role; it
+    cannot admit anyone.
+- **First sign-in** creates the user row and records the membership decision
+  (`createUser` event in `src/auth.ts` →
+  `src/lib/admission.ts`). New providers store an `accounts` row automatically
+  via the Drizzle adapter — no schema or migration change.
 
 ---
 
@@ -126,8 +162,8 @@ types** you picked during registration:
 - Leaving the issuer **unset** defaults to `common` (not `organizations`) — with
   a multitenant+personal registration this admits **any** Microsoft account,
   personal included. To allow work/school orgs but *not* personal accounts, set
-  the issuer to the `.../organizations/v2.0/` authority. Pair with
-  `EMAIL_ALLOW_LIST` to narrow further.
+  the issuer to the `.../organizations/v2.0/` authority. The instance's access
+  policy (invite/approve, in the admin UI) narrows further.
 - Setting the issuer to your **Directory (tenant) ID** locks sign-in to that one
   organization — the equivalent of the single-Okta-org setup. The tenant ID is
   on the Entra **Overview** page. Note the trailing `/v2.0/`.
@@ -146,6 +182,18 @@ Set `APP_BASE_URL` to the public URL the instance is served at — it's what OAu
 redirects resolve against. Behind a reverse proxy, use the external `https://…`
 URL.
 
+**This is a security control, not just configuration.** When it is set, it pins
+every origin the instance hands out: the Auth.js redirects (via `AUTH_URL`,
+which is defaulted from it), the OAuth discovery documents (`issuer`,
+`authorization_endpoint`, `token_endpoint`), the `WWW-Authenticate` header on
+`/mcp` 401s, and the `/ltool/<slug>` share links given to MCP clients. Leave it
+unset and all of those are derived from the request's `Host` /
+`X-Forwarded-Host` instead — headers the caller chooses unless the proxy in
+front overwrites them, which Fly, Railway, Coolify, and a default nginx do not.
+A spoofed value points a programmatic MCP client's `authorization_endpoint` at
+attacker infrastructure. Set it in production; leaving it unset is only
+appropriate for local development.
+
 ## Troubleshooting
 
 A provider is only enabled once **all** its required env vars are set — a
@@ -162,3 +210,16 @@ missing:
 If a provider's button doesn't appear, check that log line first. If **no**
 provider is configured, sign-in is disabled and the landing page says so.
 
+---
+
+## A note on Malloyyo-hosted instances
+
+Malloyyo also runs instances as a hosted service. Those sign in through a
+managed identity provider — registered as an additional Auth.js provider, so
+sessions work identically — configured by the control plane that provisions
+them.
+
+**None of it applies to a self-hosted install.** The path is inert unless the
+control plane sets the environment variables that enable it, so everything in
+this guide is simply how authentication works for you. There is nothing to
+disable and nothing to opt out of.

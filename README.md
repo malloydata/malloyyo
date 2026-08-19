@@ -56,12 +56,27 @@ Try [the demo server](https://malloyyo.vercel.app/) and "Explore further with Cl
 
 ### Adding a dataset
 
-Develop your model in a repo with an `index.malloy` at its root, then **publish it with the [`malloyyo` CLI](packages/cli)**:
+Develop your model in a repo with an `index.malloy` at its root, then **publish it with the [`malloyyo` CLI](packages/cli)**.
+
+First tell the repo where it publishes to. Nothing writes this for you — `malloy-config.json` is yours, and the CLI only ever reads it — so add a `malloyyo` block beside your connections:
+
+```json
+{
+  "connections": { "warehouse": { "is": "postgres", "host": "…" } },
+  "malloyyo": {
+    "targets": { "prod": { "url": "https://your-instance.example.com", "dataset": "orders" } }
+  }
+}
+```
+
+Then:
 
 ```bash
-malloyyo login <target>     # one-time browser sign-in
-malloyyo publish <target>   # bundle *.malloy + malloy-config.json and push
+malloyyo login              # one-time browser sign-in
+malloyyo publish            # bundle *.malloy + malloy-config.json and push
 ```
+
+Both take a target name (`malloyyo publish prod`) when the repo defines more than one.
 
 The dataset must exist first — create it in the UI, or add `--create-dataset` to the first
 publish (it creates a private dataset, and only once the model compiles).
@@ -148,24 +163,24 @@ The server compiles and introspects the model and stores a new version; a compil
 
 ## Deploy your own
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fmalloydata%2Fmalloyyo&env=DATABASE_URL,RUN_MIGRATIONS_ON_BOOT,AUTH_SECRET,AUTH_GOOGLE_ID,AUTH_GOOGLE_SECRET,APP_ADMIN_EMAILS,APP_BASE_URL,INSTANCE_NAME,INSTANCE_CODE&envDescription=Paste%20a%20Postgres%20DATABASE_URL%20and%20set%20RUN_MIGRATIONS_ON_BOOT%3D1.%20See%20the%20checklist%20for%20the%20rest.&envLink=https%3A%2F%2Fgithub.com%2Fmalloydata%2Fmalloyyo%23deploy-your-own&project-name=malloyyo&repository-name=malloyyo)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fmalloydata%2Fmalloyyo&env=DATABASE_URL,AUTH_SECRET,AUTH_GOOGLE_ID,AUTH_GOOGLE_SECRET,APP_ADMIN_EMAILS,APP_BASE_URL,INSTANCE_NAME,INSTANCE_CODE&envDescription=Paste%20a%20Postgres%20DATABASE_URL.%20See%20the%20checklist%20for%20the%20rest.&envLink=https%3A%2F%2Fgithub.com%2Fmalloydata%2Fmalloyyo%23deploy-your-own&project-name=malloyyo&repository-name=malloyyo)
 
 The button forks the repo into your GitHub and creates a Vercel project. The schema
-**self-initializes on first boot** (`RUN_MIGRATIONS_ON_BOOT=1`), so you never run a
-migration. The import screen prompts for these env vars:
+**creates and upgrades itself at boot** (migrations are on by default in production;
+set `RUN_MIGRATIONS_ON_BOOT=0` only if you want to manage the schema yourself), so
+you never run a migration. The import screen prompts for these env vars:
 
 1. **`DATABASE_URL`** — a Postgres connection string (you can get a free instance from
    [neon.tech](https://neon.tech)). **The build needs it, so paste one here.**
    *Prefer Vercel-managed storage? Finish the import with a temporary value, then add
    Postgres under the project's **Storage** tab — it overwrites `DATABASE_URL` — and
    redeploy.*
-2. **`RUN_MIGRATIONS_ON_BOOT`** = `1` — create the schema on first boot.
-3. **`AUTH_SECRET`** — `openssl rand -base64 32`.
-4. **`APP_ADMIN_EMAILS`** — your email (admins add datasets / publish).
-5. **`INSTANCE_NAME` / `INSTANCE_CODE`** — a display name + a short, unique slug (e.g. `gld`).
-6. **`AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET`** — for sign-in; you can leave these blank now
+2. **`AUTH_SECRET`** — `openssl rand -base64 32`.
+3. **`APP_ADMIN_EMAILS`** — your email (admins add datasets / publish).
+4. **`INSTANCE_NAME` / `INSTANCE_CODE`** — a display name + a short, unique slug (e.g. `gld`).
+5. **`AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET`** — for sign-in; you can leave these blank now
    and fill them after the first deploy (next step).
-7. **`APP_BASE_URL`** — your deployment's URL, e.g. `https://<yourproject>.vercel.app`.
+6. **`APP_BASE_URL`** — your deployment's URL, e.g. `https://<yourproject>.vercel.app`.
 
 **Then enable Google sign-in:** create a Google OAuth app (Google Cloud Console →
 Credentials → Web application), set its authorized redirect URI to
@@ -215,7 +230,7 @@ Okta and Microsoft Entra ID (Azure AD) sign-in are also supported — see
 
 ```bash
 npm install
-npx dotenv-cli -e local/main -- npx drizzle-kit push   # first run only
+npx dotenv-cli -e local/main -- npx tsx scripts/run-boot-migrations.ts   # first run only
 npx dotenv-cli -e local/main -- npm run dev
 ```
 

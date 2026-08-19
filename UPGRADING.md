@@ -2,6 +2,19 @@
 
 Steps an operator runs when pulling a new version of Malloyyo. Newest first.
 
+> **The schema upgrades itself now — the `psql` steps below are history.** Since
+> 2026-08-07 the `drizzle/` journal is applied at boot (`RUN_MIGRATIONS_ON_BOOT`,
+> on by default), so pulling a new version and restarting is the whole upgrade. A
+> failed migration fails the health check rather than serving a half-migrated
+> schema.
+>
+> The `drizzle/manual/*.sql` paths in the older entries below **no longer exist**:
+> those files were folded into the journal, and the directory was removed
+> 2026-08-12. Do not try to run them. A database that predates the journal is
+> detected at boot, baselined, and converged by the later entries — including from
+> a hand-run July-2026 upgrade, which `0003` and `0004` guard against explicitly.
+> The entries are kept for the context they carry about what each release changed.
+
 ## History + saved_queries redesign (2026-07-01)
 
 Flattens the `conversations` / `inquiries` / `tool_calls` / `queries` tables into

@@ -5,6 +5,11 @@
 packages/*/node_modules
 packages/*/dist
 
+# scratch worktrees Claude Code checks out for isolated agents. It creates these
+# inside the repo and does not always clean them up; each carries a full checkout
+# (and its own node_modules), so never let one near a `git add .`.
+/.claude/worktrees/
+
 # generated at build time by scripts/embed-content.ts (content/ is the source of truth)
 packages/*/src/content/generated.ts
 /.pnp

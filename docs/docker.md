@@ -22,8 +22,12 @@ and never connects at build time. Real values are supplied at **run** time.
 ## Run
 
 Point the container at a Postgres database and give it the auth/instance env it
-needs. The schema **self-initializes on first boot** when
-`RUN_MIGRATIONS_ON_BOOT=1`, so there is no separate migration step.
+needs. The schema **self-initializes on first boot and upgrades itself on every
+later one** — boot migrations are on by default in production (drizzle-orm's
+migrator applies the `drizzle/` journal), so there is no separate migration
+step and nothing to configure. If a migration fails, the instance stays up but
+reports unready — `GET /api/health` answers 503 with the error — instead of
+serving a half-migrated schema.
 
 ```bash
 docker run --rm -p 3000:3000 --env-file .env malloyyo
@@ -36,7 +40,6 @@ A minimal `.env` for a first boot:
 ```bash
 # --- required ---
 DATABASE_URL=postgresql://user:password@host/dbname?sslmode=require
-RUN_MIGRATIONS_ON_BOOT=1                 # create the schema on first boot
 AUTH_SECRET=...                          # openssl rand -base64 32
 APP_BASE_URL=http://localhost:3000       # the URL this instance is served at
 
@@ -61,6 +64,20 @@ For Google sign-in, add this **Authorized redirect URI** to your OAuth client
 <APP_BASE_URL>/api/auth/callback/google      # e.g. http://localhost:3000/api/auth/callback/google
 ```
 
+### If the container exits immediately
+
+```
+[startup] Missing required env var: APP_BASE_URL
+```
+
+Set `APP_BASE_URL` to the public URL the instance is served at, including the
+scheme (`https://malloyyo.example.com`). This is enforced rather than warned
+about: without it the instance advertises whatever origin a caller asks it to,
+which points MCP clients at an attacker's authorization server. It is required
+only for this deployment path — `npm run dev` and Vercel deployments both work
+without it, since neither sits behind a proxy that leaves the header
+caller-controlled.
+
 ## Environment reference
 
 See [`.env.local.example`](../.env.local.example) for the full, commented list.
@@ -69,16 +86,19 @@ The ones that matter for a container deploy:
 | Variable | Required | Notes |
 |---|---|---|
 | `DATABASE_URL` | ✅ | Postgres connection string (e.g. a free [Neon](https://neon.tech) instance). |
-| `RUN_MIGRATIONS_ON_BOOT` | first boot | `1` to create/upgrade the schema on startup. Safe to leave on (idempotent). |
+| `RUN_MIGRATIONS_ON_BOOT` | no (on by default) | The schema creates/upgrades itself on startup (the `drizzle/` migration journal; concurrent instances serialize on an advisory lock; an up-to-date database boots with a single lookup). Set `0` only to manage the schema out-of-band — e.g. the app runs under a database role without DDL rights, applied via `npx tsx scripts/run-boot-migrations.ts`. |
 | `AUTH_SECRET` | ✅ | Signs session tokens. `openssl rand -base64 32`. |
-| `APP_BASE_URL` | ✅ | The public URL the instance is served at; used for OAuth redirects. |
+| `APP_BASE_URL` | ✅ | The public URL the instance is served at. Pins every origin the instance hands out — OAuth redirects, the discovery documents, `/ltool` share links. **The container refuses to start without it**, because the alternative is deriving those from the request's `Host` / `X-Forwarded-Host`, which the caller controls behind a proxy that doesn't overwrite it. |
 | `AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET` | for sign-in | Google OAuth client. Sign-in is disabled until both are set. |
 | Okta / Microsoft Entra ID vars | optional | Additional sign-in providers. See [Authentication](authentication.md). |
 | `APP_ADMIN_EMAILS` | recommended | Comma-separated emails that are auto-admins (create datasets, publish). |
+| `GITHUB_WEBHOOK_SECRET` | recommended | Enables HMAC verification of GitHub's push webhook. Unset, the dataset UUID in the webhook URL is its only protection. Use the same value in the webhook's Secret field on GitHub. |
+| `DASHBOARD_TOKEN_SECRET` | optional | Signs dashboard frame tokens; defaults to `AUTH_SECRET`. |
 | `INSTANCE_NAME` / `INSTANCE_CODE` | optional | Display name + short slug; default `Malloyyo` / `main`. |
 | Analytical DB secret | per model | e.g. `MOTHERDUCK_TOKEN`, `BQ_JSON_KEY` — referenced by your model's `malloy-config.json`. |
-| `EMAIL_ALLOW_LIST` | optional | Restrict sign-in to specific emails (unset = open instance). |
-| `GITHUB_TOKEN` | optional | Only for loading models from private GitHub repos. |
+| `BREAK_GLASS_EMAIL` | optional | Emergency door: admits this one address as an admin even when the database says no. Membership itself is managed in /admin (first sign-in becomes the owner). |
+| `GITHUB_TOKEN` | optional | For private GitHub repos — and any token also lifts public-repo fetches off GitHub's anonymous 60/hour-per-IP budget, which shared cloud egress IPs have usually already spent. |
+| `GITHUB_TOKEN_FALLBACK` | optional | A platform-wide default token used only when `GITHUB_TOKEN` is unset or empty. Lets an operator authenticate public-repo fetches fleet-wide without claiming the `GITHUB_TOKEN` name from users. |
 
 ## Notes
 

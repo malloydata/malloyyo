@@ -240,8 +240,8 @@ client-side `--dry-run`, which never hits the server.)
   `users.isAdmin` (§4.3), consistent with today's `model/github` route. Owner-based
   publishing is a documented future loosening, intentionally **not** enabled yet — we don't
   want general users pushing models at this stage. The population is already gated: a token
-  exists only for allow-listed, signed-in users (`EMAIL_ALLOW_LIST`), and on top of that the
-  caller must be an admin.
+  exists only for signed-in users the instance admits (`users.status = 'active'`,
+  re-checked on every call), and on top of that the caller must be an admin.
 - **New datasets — never auto-created, but creatable on request.** Publishing to a missing
   dataset is still an error (`dataset "mdw" not found — create it in the UI, or publish with
   --create-dataset`), never a silent spawn: a config typo must not turn into a junk dataset.

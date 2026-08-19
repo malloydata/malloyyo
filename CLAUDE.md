@@ -93,26 +93,74 @@ trailer appended, then `git push --force-with-lease`.
 
 ## Database & migrations
 
-- **`drizzle-kit push` is INTERACTIVE.** When a change is risky (e.g. adding a
-  unique constraint to a table with existing rows) it prompts for confirmation
-  and **fails in a non-interactive shell** with `Interactive prompts require a
-  TTY terminal`. Either run it in a real terminal, or apply the change with a
-  hand-written SQL migration (below) instead.
-- **Do NOT run `drizzle-kit generate`.** This repo uses `push`, so the
-  `drizzle/meta` journal is stale relative to the live databases. `generate`
-  would diff against that stale snapshot and emit a bogus catch-up migration
-  that tries to re-create tables that already exist → it fails on apply.
-- **Data backfills / data-touching migrations go in `drizzle/manual/NNNN_*.sql`**
-  as hand-written, **idempotent** SQL (`ADD COLUMN IF NOT EXISTS`, guarded
-  `UPDATE`s, `CREATE … IF NOT EXISTS`). Run once per instance with psql, keeping
-  the DB URL out of logs:
+**The `drizzle/` journal is the schema path** (since 2026-08-07; before that,
+interactive `drizzle-kit push` + hand-run `drizzle/manual/` files, removed
+2026-08-12). Boot
+applies it with drizzle-orm's `migrate()` (src/lib/migrate.ts, called from
+src/instrumentation.ts): fresh databases replay the whole journal, existing
+ones get what's pending, concurrent boots serialize on a Postgres advisory
+lock (drizzle's migrator does NOT serialize itself — verified empirically),
+and a failure fails readiness — both health routes answer 503, never 200 over
+a broken migration. **On by default in production, off by default in dev**
+(`bootMigrationsEnabled()`): deployments need no flag, and `npm run dev`
+against a real instance's `local/<env>` database never applies a working
+tree's unmerged journal entries. `RUN_MIGRATIONS_ON_BOOT=0` opts a deployment
+out (schema managed out-of-band); `=1` opts a dev server in.
+
+## Two health routes, and which is which
+
+- **`GET /api/healthz` — local.** "Is this process alive and did it start up
+  correctly?" `migrationGateError()` plus a version string, and **no I/O at
+  all**. This is the one routine machinery may poll: hosted instances carry a
+  service check against it every 15 seconds. Answers
+  `{"status":"ok","version":…}` or a bare `{"status":"failed_startup",…}` 503.
+- **`GET /api/health` — deep.** "Is this instance correctly connected to its
+  dependencies?" The same readiness gate, then `SELECT 1`. Its callers are
+  deliberate ones: the deploy script's post-deploy check, the hosted roll's
+  verification gate, an operator diagnosing an alert.
+
+**Nothing on an interval may call the deep route.** It executes a query, and a
+hosted instance's Postgres scales to zero — a check every few seconds would
+hold every tenant's database awake permanently. That is the entire reason the
+two exist separately.
+
+- **To change the schema:** edit `src/db/schema.ts`, then `npx drizzle-kit
+  generate --name <what_changed>` (the meta snapshot is current, so generate
+  emits a correct increment), review, commit — that's it. New entries run
+  **exactly once** per database (journal-recorded, advisory-locked,
+  transactional), so plain generated SQL is fine; the idempotent/converge-safe
+  style in entries 0001-0012 was an adoption-era need (they re-run on
+  pre-journal databases), not an ongoing requirement. **Never edit an applied
+  journal file** — src/lib/migrate.test.ts pins their hashes and the journal's
+  strictly-increasing `when` order.
+- **To apply by hand** (managed instances, local first run — non-interactive,
+  keeps the DB URL out of logs):
   ```bash
-  npx dotenv-cli -e local/staging -- bash -c 'psql "$DATABASE_URL" -v code=stg -f drizzle/manual/0001_ltool_slugs.sql'
+  npx dotenv-cli -e local/staging -- npx tsx scripts/run-boot-migrations.ts
   ```
-  Parameterize per-instance values with psql vars (`-v name=value`, referenced
-  as `:'name'`), defaulting them with `\if :{?name} \else \set name … \endif`
-  so a passed `-v` isn't overridden. The schema column itself still lives in
-  `src/db/schema.ts` so fresh `push` installs stay correct.
+  `drizzle-kit push` is retired for schema changes: it records nothing in the
+  journal, which is exactly how the pre-2026-08 drift happened
+  (`0012_push_catchup.sql` is the archaeology it left behind).
+- **Existing databases that predate the journal**: a database with the app
+  schema but no `drizzle.__drizzle_migrations` is auto-baselined at 0000 on
+  boot, then converged by 0001+ — all written to no-op on newer vintages,
+  including databases kept current by hand-running the manual files (the
+  normal long-running self-hosted case: the app broke without a current
+  schema, so upgraded instances were hand-migrated). 0004 only backports when
+  0003 processed a pre-redesign database in the same run, so leftover July
+  `*_bak` backups are never re-read. Nothing to do per instance — the next
+  production boot converges it.
+- **`drizzle/manual/` is gone** (2026-08-12), along with the external workflow
+  that applied it. Every instance, managed or self-hosted,
+  gets its schema from the journal at boot. A hand-run data fix a journal cannot
+  carry has no path today and would need one built; `src/lib/migrate.test.ts`
+  carries the hashes the retired baseline file recorded, so an already-applied
+  migration still cannot be edited unnoticed.
+- **Verification:** `npm run test:migrate` (Docker + a prior `npm run build`;
+  wired into preflight) proves journal-replay == `drizzle-kit export` parity,
+  pre-journal converge + data survival, the 0001→0004 backport chain on a
+  May-2026-vintage database, concurrent-boot serialization, and the
+  failed-migration → health-503 → fix → 200 arc on the real standalone server.
 
 ## Instance identity
 

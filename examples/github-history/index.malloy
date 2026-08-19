@@ -1,0 +1,268 @@
+// GitHub history for malloydata/malloy and malloydata/malloyyo.
+//
+// Two independent sources feed one model. The git object graph gives commits,
+// the files each one touched, and tags; the GitHub API gives issues, pull
+// requests, and releases. They meet at two joins:
+//
+//   * a squash-merge subject carries `(#123)`, so a commit knows its PR --
+//     which is what puts real diff sizes behind PR metadata the API omits;
+//   * identities.parquet maps a commit author's email to a GitHub login, so
+//     one person's work adds up across their several addresses.
+//
+// Rebuild data/ with the scripts in extract/ -- see README.md.
+
+// ---------------------------------------------------------------------------
+// people
+// ---------------------------------------------------------------------------
+
+#" Git author emails, each resolved to a GitHub login where that was possible.
+#" One person usually commits under several addresses; `person` is the name to
+#" group by, and `match_source`/`confidence` say how the login was established.
+source: identities is duckdb.table('data/identities.parquet') extend {
+  primary_key: email
+
+  dimension:
+    #" The login where we have one, otherwise the name they commit under.
+    person is coalesce(login, name, email)
+    is_identified is login != null
+
+  measure:
+    address_count is count()
+    #" Commits made from this address.
+    commits_from_address is commits.sum()
+}
+
+// ---------------------------------------------------------------------------
+// the GitHub API side
+// ---------------------------------------------------------------------------
+
+#" Issues (not pull requests) filed on either repo, with body text and labels.
+source: issues is duckdb.table('data/issues.parquet') extend {
+  primary_key: url
+
+  dimension:
+    is_open is state = 'open'
+    #" Filed and never replied to.
+    is_unanswered is comment_count = 0
+
+  measure:
+    issue_count is count()
+    open_issues is count() { where: is_open }
+    unanswered is count() { where: is_unanswered }
+    #" Distinct people who filed issues.
+    reporters is count(author_login)
+    avg_comments is comment_count.avg()
+
+  #" Issue volume by label. Unlabelled issues group under null.
+  view: by_label is {
+    group_by: label is labels.each
+    aggregate: issue_count, open_issues
+    order_by: issue_count desc
+  }
+
+  #" Issues filed per month, and how many of them are still open.
+  view: opened_by_month is {
+    group_by: created_month is created_at.month
+    aggregate: issue_count, open_issues
+    order_by: created_month asc
+  }
+
+  #" Who files the most issues.
+  view: top_reporters is {
+    group_by: author_login
+    aggregate: issue_count, avg_comments
+    order_by: issue_count desc
+    limit: 25
+  }
+}
+
+#" Pull requests on either repo. Diff sizes are NOT here -- the list API omits
+#" them; join through `commits.pr` for the lines a PR actually changed.
+source: pull_requests is duckdb.table('data/pull_requests.parquet') extend {
+  primary_key: url
+
+  dimension:
+    is_open is state = 'open'
+    #" Hours from opening to merge; null for one that never landed.
+    hours_to_merge is hours(created_at to merged_at)
+    hours_to_close is hours(created_at to closed_at)
+    #" merged / open / closed unmerged.
+    outcome is pick 'merged' when is_merged
+                 pick 'open' when is_open
+                 else 'closed unmerged'
+
+  measure:
+    pr_count is count()
+    merged_prs is count() { where: is_merged }
+    merge_rate is count() { where: is_merged } / count()
+    fork_prs is count() { where: from_fork }
+    authors is count(author_login)
+    avg_hours_to_merge is hours_to_merge.avg()
+
+  #" Who opens pull requests, and how often they land.
+  view: by_author is {
+    group_by: author_login
+    aggregate: pr_count, merged_prs, merge_rate, avg_hours_to_merge
+    order_by: pr_count desc
+    limit: 25
+  }
+
+  #" Merge volume and turnaround per month.
+  view: merged_by_month is {
+    where: is_merged
+    group_by: merged_month is merged_at.month
+    aggregate: pr_count, avg_hours_to_merge
+    order_by: merged_month asc
+  }
+
+  #" Contributions arriving from forks -- the outside-contributor signal.
+  view: outside_contributions is {
+    where: from_fork
+    group_by: author_login, head_repo
+    aggregate: pr_count, merged_prs
+    order_by: pr_count desc
+    limit: 25
+  }
+}
+
+#" Published GitHub releases. `pr_numbers` is pulled out of the release notes,
+#" so a release can be joined to the pull requests it shipped.
+source: releases is duckdb.table('data/releases.parquet') extend {
+  measure:
+    release_count is count()
+    #" Pull requests named in the release notes.
+    prs_shipped is pr_numbers.count()
+
+  #" Releases per month.
+  view: cadence is {
+    group_by: published_month is published_at.month
+    aggregate: release_count, prs_shipped
+    order_by: published_month asc
+  }
+}
+
+#" Every git tag, annotated or not, with the version parsed out of its name.
+source: tags is duckdb.table('data/tags.parquet') extend {
+  measure: tag_count is count()
+
+  view: by_month is {
+    group_by: tagged_month is tagged_at.month
+    aggregate: tag_count
+    order_by: tagged_month asc
+  }
+}
+
+// ---------------------------------------------------------------------------
+// the git side
+// ---------------------------------------------------------------------------
+
+#" One row per file touched by a commit, with that file's share of the diff.
+source: commit_files is duckdb.table('data/commit_files.parquet') extend {
+  dimension:
+    #" Tests and docs first, then the top-level directory.
+    area is pick 'tests' when is_test
+              pick 'docs' when is_docs
+              pick '(root)' when top_dir = ''
+              else top_dir
+    churn is insertions + deletions
+
+  measure:
+    file_changes is count()
+    #" Distinct files, as opposed to the number of times they were touched.
+    files_touched is count(path)
+    lines_added is insertions.sum()
+    lines_removed is deletions.sum()
+    churn_total is churn.sum()
+
+  #" The files that change most often.
+  view: hottest_files is {
+    group_by: repo, path
+    aggregate: file_changes, churn_total
+    order_by: file_changes desc
+    limit: 25
+  }
+
+  #" Which file types the work goes into.
+  view: by_extension is {
+    group_by: extension
+    aggregate: file_changes, churn_total, files_touched
+    order_by: churn_total desc
+    limit: 25
+  }
+}
+
+#" Every commit on every ref of both repos, with its diffstat, the pull request
+#" it landed through, and the person who wrote it.
+source: commits is duckdb.table('data/commits.parquet') extend {
+  primary_key: sha
+  join_one: person is identities on author_email = person.email
+  join_one: pr is pull_requests on repo = pr.repo and pr_number = pr.pr_number
+  join_many: files is commit_files on repo = files.repo and sha = files.sha
+
+  dimension:
+    #" Conventional-commit type, where the author used one.
+    kind is coalesce(commit_type, 'untyped')
+    change_size is pick 'tiny' when insertions + deletions < 10
+                     pick 'small' when insertions + deletions < 100
+                     pick 'medium' when insertions + deletions < 1000
+                     else 'large'
+    landed_via_pr is pr_number != null
+
+  measure:
+    commit_count is count()
+    #" Distinct commit-author addresses (see identities for people).
+    committers is count(author_email)
+    lines_added is insertions.sum()
+    lines_removed is deletions.sum()
+    net_line_change is net_lines.sum()
+    total_files_changed is files_changed.sum()
+    merge_commits is count() { where: is_merge }
+    #" Commits carrying a Claude co-author trailer.
+    claude_assisted is count() { where: is_claude_assisted }
+
+  #" Commit and line volume per month.
+  view: by_month is {
+    group_by: authored_month is authored_at.month
+    aggregate: commit_count, lines_added, lines_removed, committers
+    order_by: authored_month asc
+  }
+
+  #" Who writes the code, with their addresses folded together.
+  view: top_contributors is {
+    group_by: who is person.person
+    aggregate: commit_count, lines_added, total_files_changed
+    order_by: commit_count desc
+    limit: 25
+  }
+
+  #" Conventional-commit type mix.
+  view: by_kind is {
+    group_by: kind
+    aggregate: commit_count, lines_added
+    order_by: commit_count desc
+  }
+
+  #" Where the churn lands, across tests, docs and the top-level directories.
+  view: hot_areas is {
+    group_by: area is files.area
+    aggregate: files.file_changes, files.churn_total, files.files_touched
+    order_by: churn_total desc
+    limit: 20
+  }
+
+  #" Merged pull requests with the diff the API does not give you: PR metadata
+  #" on the left, the real size of what landed on the right.
+  view: merged_pr_sizes is {
+    where: pr.is_merged
+    group_by: repo, pr_number
+    aggregate:
+      title is pr.title.max()
+      author is pr.author_login.max()
+      hours_to_merge is pr.hours_to_merge.max()
+      lines_added
+      lines_removed
+      total_files_changed
+    order_by: lines_added desc
+    limit: 25
+  }
+}

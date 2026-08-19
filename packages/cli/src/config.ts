@@ -103,12 +103,26 @@ function parseMalloyyoConfig(raw: Record<string, unknown>): {
  *   1. the `malloyyo` key in malloy-config.json
  *   2. a standalone malloyyo.json (whole file is the block)
  */
+/**
+ * The shape to add, shown with every "there is no config" error.
+ *
+ * Nothing in this toolchain writes `malloy-config.json` — it is the author's file, and
+ * the CLI and the MCP tools only ever read it — so a missing block is something only
+ * they can add. That makes this the first error a new user is likely to meet, and the
+ * one that most needs to carry its own fix rather than only its diagnosis.
+ */
+const TARGETS_BLOCK_EXAMPLE =
+  '  "malloyyo": {\n' +
+  '    "targets": { "prod": { "url": "https://<instance>", "dataset": "<dataset>" } }\n' +
+  "  }";
+
 function readTargetMap(dir: string): TargetMap {
   const raw = readMalloyyoBlock(dir);
   if (raw) return parseMalloyyoConfig(raw).targets;
   throw new Error(
     `No \`malloyyo\` config found in ${dir} ` +
-      `(looked for a "malloyyo" block in malloy-config.json, then malloyyo.json).`,
+      `(looked for a "malloyyo" block in malloy-config.json, then malloyyo.json).\n` +
+      `Add one to malloy-config.json:\n${TARGETS_BLOCK_EXAMPLE}`,
   );
 }
 
@@ -147,9 +161,40 @@ export function readSiteConfig(dir: string): SiteConfig {
 
 const normalizeUrl = (u: string): string => u.replace(/\/+$/, "");
 
-/** Resolve a named target's url/dataset (token is resolved separately — see oauth.ts). */
-export function resolveTarget(dir: string, name: string): Target {
+/**
+ * Resolve a named target's url/dataset (token is resolved separately — see oauth.ts).
+ *
+ * `name` may be omitted when the repo defines exactly one target, matching what `login`
+ * has always accepted — and what `cloud instance create` now tells people to run.
+ * Unlike login's rule, several targets sharing one URL is still ambiguous here: login
+ * needs only the instance, while publishing also needs the dataset, and two targets on
+ * one instance are precisely two different datasets.
+ */
+export function resolveTarget(dir: string, name?: string): Target {
   const targets = readTargetMap(dir);
+  const entries = Object.entries(targets);
+
+  if (name === undefined) {
+    if (entries.length === 0) {
+      // The one error a new customer is most likely to meet, so it carries the fix
+      // rather than the diagnosis: nothing in this toolchain writes malloy-config.json,
+      // so a missing block is something only they can add.
+      throw new Error(
+        `No publish targets defined. Add one to malloy-config.json:\n${TARGETS_BLOCK_EXAMPLE}`,
+      );
+    }
+    if (entries.length > 1) {
+      throw new Error(`Multiple targets — specify which: ${entries.map(([n]) => n).join(", ")}.`);
+    }
+    const [onlyName, onlyCfg] = entries[0];
+    return {
+      name: onlyName,
+      url: normalizeUrl(onlyCfg.url),
+      dataset: onlyCfg.dataset,
+      tokenEnv: onlyCfg.malloyyo_token?.env,
+    };
+  }
+
   const cfg = targets[name];
   if (!cfg) {
     const available = Object.keys(targets).join(", ") || "(none defined)";

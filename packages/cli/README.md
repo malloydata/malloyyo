@@ -96,3 +96,63 @@ your `malloyyo login` session. So interactively you just `login` once; in CI you
 var and never touch the browser.
 
 See `docs/model-publishing-design.md` in the repo for the full design.
+
+## Malloyyo-hosted instances (`malloyyo cloud`)
+
+For instances Malloyyo runs for you. Everything above works the same on one — a hosted
+instance is a URL you `login` to and `publish` at — and these commands are how you get one
+and configure it.
+
+```bash
+malloyyo cloud instance create acme    # provision acme.malloyyo.com, wait for it to come up
+malloyyo cloud instance list
+malloyyo cloud instance status acme
+malloyyo cloud instance delete acme    # reversible until it is destroyed
+```
+
+Name the instance the way you already know it — `acme`, the name in its URL and the one you
+`malloyyo login` to. Its ID works too, and is the one to use for an instance that has been
+fully destroyed, since its name is free for someone else to take.
+
+`create` prints each provisioning step as it finishes and ends with the URL to sign in at,
+which is the same URL you then `malloyyo login`. It provisions real infrastructure, so it
+takes minutes; if the command stops waiting, the work continues and `instance status` picks
+it up. Every command takes `--json` for a parseable answer instead of progress lines.
+
+### Warehouse secrets
+
+The credentials your Malloy models resolve connections from — the values behind
+`{ "env": "NAME" }` in `malloy-config.json`. Several in one command are applied together, and
+the command returns once they are live (your instance restarts briefly).
+
+```bash
+malloyyo cloud secrets set acme PG_HOST=db.example.com PG_USER=app PG_PASSWORD
+op read op://vault/pg/password | malloyyo cloud secrets set acme --stdin
+```
+
+A value typed as `NAME=value` lands in your shell history and is visible in `ps` while the
+command runs, so there are two ways not to type one: a **bare `NAME`** is prompted for with
+the input hidden, and **`--stdin`** reads `NAME=value` lines from a file, a CI variable, or a
+password manager. `NAME=value` stays for the parts that are not secrets — a host, a port, a
+user. Values are write-only: nothing in this CLI, and no endpoint behind it, reads one back.
+
+### Credentials
+
+`malloyyo cloud` authenticates with a machine credential Malloyyo issues when your account is
+created, read from the environment:
+
+```bash
+export MALLOYYO_CLIENT_ID=...
+export MALLOYYO_CLIENT_SECRET=...
+```
+
+That is the whole of it — there is nothing else to configure.
+
+It is separate from `malloyyo login`, which authenticates *you* to one instance. This one
+identifies your account to Malloyyo, and each command trades it for a short-lived access
+token carrying only the permissions that command needs: a `list` cannot create, and only
+`secrets set` can write secrets. The trade happens against Malloyyo's own API, so the CLI
+talks to nothing else. Your secret is held in memory for that request and is never logged,
+printed, or written to disk.
+
+`MALLOYYO_API_URL` overrides the built-in API address; you should not need to set it.

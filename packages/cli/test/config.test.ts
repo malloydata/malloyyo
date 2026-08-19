@@ -93,3 +93,49 @@ test("readSiteConfig ignores a malformed config instead of throwing", () => {
 test("readSiteConfig ignores a non-string analytics value", () => {
   withConfig({ analytics: 42 }, (dir) => assert.deepEqual(readSiteConfig(dir), {}));
 });
+
+// `publish` and `status` take the target optionally, so that the command
+// `cloud instance create` prints is runnable in the ordinary one-target repo.
+// Oracle: `login`'s long-standing rule for the same situation — resolve when
+// unambiguous, name the choices when not — with one deliberate divergence below.
+
+test("resolveTarget without a name resolves the sole target", () => {
+  withConfig({ targets: { prod: { url: "https://x.dev/", dataset: "d" } } }, (dir) => {
+    const t = resolveTarget(dir);
+    assert.equal(t.name, "prod");
+    assert.equal(t.dataset, "d");
+    // Trailing slash normalized, same as the named path.
+    assert.equal(t.url, "https://x.dev");
+  });
+});
+
+test("resolveTarget without a name refuses two targets even on one instance", () => {
+  // The divergence from `login`: it accepts several targets sharing a URL, because it
+  // needs only the instance. Publishing also needs the dataset, and two targets on one
+  // instance are exactly two different datasets — so this stays ambiguous.
+  withConfig(
+    {
+      targets: {
+        a: { url: "https://x.dev", dataset: "one" },
+        b: { url: "https://x.dev", dataset: "two" },
+      },
+    },
+    (dir) => {
+      assert.throws(() => resolveTarget(dir), /Multiple targets/);
+      assert.equal(resolveTarget(dir, "b").dataset, "two");
+    },
+  );
+});
+
+test("resolveTarget without a name carries the fix when no block exists", () => {
+  // Nothing in this toolchain writes malloy-config.json, so a missing block is
+  // something only the author can add — the error shows what to add.
+  withConfig({}, (dir) => {
+    assert.throws(() => resolveTarget(dir), (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /No publish targets defined/);
+      assert.match(error.message, /"malloyyo"/);
+      return true;
+    });
+  });
+});

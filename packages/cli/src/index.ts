@@ -6,6 +6,7 @@ import { gatherDirectory, gatherDashboards, gitInfo } from "./gather.js";
 import { lintDashboards, printLintReport } from "./lint.js";
 import { missingEnvRefs, missingEnvHint } from "./shared/env-refs.js";
 import { getAccessToken, login, tokenSource, type TokenSource } from "./oauth.js";
+import { apiFetch } from "./http.js";
 import { serveMcp } from "./mcp.js";
 import { serveDashboard } from "./dashboard.js";
 import { bundleDashboards } from "./bundle.js";
@@ -13,6 +14,7 @@ import { initCmd } from "./init.js";
 import { sqlCmd } from "./sql.js";
 import { launchCmd } from "./launch.js";
 import { clearCreds } from "./store.js";
+import { registerCloudCommands } from "./cloud/index.js";
 import type { PublishRequest, ModelStatus } from "./protocol.js";
 // Single source of truth: the build runs after the release bump, so esbuild
 // inlines the current package.json version (tree-shaken to just the string).
@@ -82,7 +84,7 @@ function requestFailed(what: string, res: Response, out: ModelStatus, t: Target,
 }
 
 async function publish(
-  target: string,
+  target: string | undefined,
   dir: string,
   opts: { token?: string; dryRun?: boolean; skipLint?: boolean; createDataset?: boolean },
 ): Promise<void> {
@@ -131,7 +133,7 @@ async function publish(
   // ?create=1 makes the server create the dataset when it doesn't exist yet — but
   // only after the model compiles, so a failed publish still creates nothing.
   const push = `${t.url}/api/datasets/${t.dataset}/model/push${opts.createDataset ? "?create=1" : ""}`;
-  const res = await fetch(push, {
+  const res = await apiFetch(push, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${bearer}` },
     body: JSON.stringify(body),
@@ -150,11 +152,11 @@ async function publish(
   );
 }
 
-async function status(target: string, opts: { token?: string }): Promise<void> {
+async function status(target: string | undefined, opts: { token?: string }): Promise<void> {
   const t = resolveTarget(resolve("."), target);
   const source = tokenSource(t, { tokenFlag: opts.token });
   const bearer = await getAccessToken(t, { tokenFlag: opts.token });
-  const res = await fetch(`${t.url}/api/datasets/${t.dataset}/model/status`, {
+  const res = await apiFetch(`${t.url}/api/datasets/${t.dataset}/model/status`, {
     headers: { authorization: `Bearer ${bearer}` },
   });
   if (!res.ok) {
@@ -201,7 +203,10 @@ program
 
 program
   .command("publish")
-  .argument("<target>", "named target from the `malloyyo` config block")
+  .argument(
+    "[target]",
+    "named target from the `malloyyo` config block; optional when the repo defines one",
+  )
   .argument("[dir]", "directory to publish", ".")
   .option("--token <token>", "bearer token (overrides login/env)")
   .option("--dry-run", "gather and report what would be sent, but don't POST")
@@ -233,9 +238,12 @@ program
 
 program
   .command("status")
-  .argument("<target>", "named target from the `malloyyo` config block")
+  .argument(
+    "[target]",
+    "named target from the `malloyyo` config block; optional when the repo defines one",
+  )
   .option("--token <token>", "bearer token (overrides login/env)")
-  .description("show what's live on <target>: version, commit, compile state")
+  .description("show what's live on the target: version, commit, compile state")
   .action(status);
 
 program
@@ -353,6 +361,11 @@ program
       throw new Error(`unknown dashboard action '${action}' (expected: dev | bundle)`);
     },
   );
+
+// `malloyyo cloud …` — managing Malloyyo-hosted instances. It sets `process.exitCode`
+// itself rather than throwing, because its failures are already phrased for the person
+// who typed the command.
+registerCloudCommands(program);
 
 program.parseAsync().catch((err: unknown) => {
   console.error(err instanceof Error ? err.message : String(err));

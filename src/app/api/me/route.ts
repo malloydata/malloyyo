@@ -2,13 +2,15 @@
 // SPDX-License-Identifier: MIT
 
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
 import { db, users, oauthAccessTokens, oauthRefreshTokens } from "@/db";
 import { eq, and, isNull, gt } from "drizzle-orm";
 import { isAdmin } from "@/lib/admin";
 import { getSettings } from "@/lib/settings";
 import { env } from "@/lib/env";
 import { configuredAuthProviders, partialAuthProviders } from "@/lib/auth-providers";
+import { getSessionUser, UnauthorizedError } from "@/lib/user";
+import { hostedSignIn } from "@/lib/hosted-auth-integration";
+import { signInPath, signOutPath } from "@/lib/auth-paths";
 
 export const runtime = "nodejs";
 
@@ -32,25 +34,58 @@ async function hasActiveClaudeConnection(userId: string): Promise<boolean> {
 }
 
 export async function GET() {
-  const session = await auth();
   const { tagline, signinNotice } = await getSettings();
-  if (!session?.user?.id) {
-    // Provider info is only needed to render the signed-out sign-in UI.
+
+  // A managed deployment's sign-in is owned by an integration; an ordinary one uses
+  // NextAuth, untouched. getSessionUser() picks, and on the managed path it also creates
+  // the local row for someone arriving for the first time.
+  const hosted = hostedSignIn();
+  let u: typeof users.$inferSelect | undefined;
+  // Someone signed in but not admitted: "pending" is waiting for approval,
+  // "disabled" is revoked. getSessionUser throws the reason; the landing page
+  // renders it instead of a sign-in button that would loop them straight back.
+  let accessState: "pending" | "disabled" | undefined;
+  try {
+    u = await getSessionUser();
+  } catch (err) {
+    if (!(err instanceof UnauthorizedError)) throw err;
+    if (err.message === "pending" || err.message === "disabled") accessState = err.message;
+  }
+
+  if (!u) {
+    // What the signed-out UI needs to render a sign-in, and nothing more.
     // `authMisconfigured` is a bare boolean — it never exposes which vars are
     // missing; the specifics go to the server logs (warnAuthConfig()).
-    const providers = configuredAuthProviders();
-    const authMisconfigured = partialAuthProviders().length > 0;
-    return NextResponse.json({ user: null, instanceName: env.INSTANCE_NAME, tagline, signinNotice, providers, authMisconfigured });
+    //
+    // `hostedSignIn` is likewise a bare boolean. It used to be an object carrying the
+    // integration's client configuration, which nothing ever read: the screens that need
+    // that configuration are server-rendered and receive it directly. Serving it here only
+    // published deployment details to unauthenticated callers for no one's benefit.
+    return NextResponse.json({
+      user: null,
+      instanceName: env.INSTANCE_NAME,
+      tagline,
+      signinNotice,
+      providers: hosted ? [] : configuredAuthProviders(),
+      // Where to send someone, decided on the server. The UI used to re-derive this from
+      // whether the integration's configuration was present, which was only true while
+      // signed out — so the header's sign-out fell back to NextAuth's endpoint on a managed
+      // deployment and landed on its configuration-error page. One owner, no duplicate.
+      signInPath: signInPath("/"),
+      signOutPath: signOutPath("/"),
+      authMisconfigured: hosted ? false : partialAuthProviders().length > 0,
+      hostedSignIn: hosted,
+      ...(accessState ? { accessState } : {}),
+    });
   }
-  const [u] = await db.select().from(users).where(eq(users.id, session.user.id));
-  const claudeConnected = u ? await hasActiveClaudeConnection(u.id) : false;
+  const claudeConnected = await hasActiveClaudeConnection(u.id);
   return NextResponse.json({
     instanceName: env.INSTANCE_NAME,
     tagline,
     signinNotice,
     claudeConnected,
-    user: u
-      ? { id: u.id, name: u.name, email: u.email, image: u.image, slug: u.slug, isAdmin: isAdmin(u) }
-      : null,
+    signInPath: signInPath("/"),
+    signOutPath: signOutPath("/"),
+    user: { id: u.id, name: u.name, email: u.email, image: u.image, isAdmin: isAdmin(u) },
   });
 }

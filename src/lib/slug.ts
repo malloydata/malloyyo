@@ -2,25 +2,17 @@
 // SPDX-License-Identifier: MIT
 
 import { customAlphabet } from "nanoid";
-import {
-  uniqueNamesGenerator,
-  adjectives,
-  animals,
-} from "unique-names-generator";
 import { env } from "./env";
 
-// Heroku-style friendly slug for the user-facing MCP path. ~525k combos
-// (≈1500 adjectives × ≈350 animals) — plenty of headroom while we have
-// only a single-tenant v0. When real auth lands, the slug stops being
-// the security boundary and friendliness wins outright.
-export function newUserSlug(): string {
-  return uniqueNamesGenerator({
-    dictionaries: [adjectives, animals],
-    separator: "-",
-    length: 2,
-    style: "lowerCase",
-  });
-}
+// Users used to get a Heroku-style slug here ("muddy-platypus"), because the MCP
+// endpoint lived at /mcp/<slug> and an unguessable path was standing in for
+// authentication on a single-tenant v0. That comment ended "when real auth lands,
+// the slug stops being the security boundary and friendliness wins outright" —
+// real auth landed, /mcp identifies the caller from the token, and nothing read
+// the slug afterwards. It was still minted on every sign-in and still shown in
+// the hosted Members table, where it meant nothing to anyone.
+//
+// The column went with it (drizzle/0014_drop_user_slug.sql).
 
 // Random URL-safe id, lowercase, no ambiguous chars. Reserved for future
 // per-dataset identifiers if we need them; datasets currently address by

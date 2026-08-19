@@ -100,3 +100,9 @@ export function warnAuthConfig(): void {
     console.info(`[auth] Sign-in enabled: ${ready.map((p) => p.name).join(", ")}.`);
   }
 }
+
+// The open-access warning that used to live here (Finding 5: providers ready,
+// no EMAIL_ALLOW_LIST) moved to src/lib/access-warnings.ts when membership
+// moved into the database — whether an instance is open is now a fact in
+// instance_settings, which this module (imported by the edge-compiled
+// src/auth.ts) must not read.

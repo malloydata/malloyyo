@@ -1,7 +1,8 @@
 // Copyright (c) The Malloy Foundation
 // SPDX-License-Identifier: MIT
 
-import { auth } from "@/auth";
+import { getSessionUserOrNull } from "@/lib/user";
+import { signInPath } from "@/lib/auth-paths";
 import { getOAuthClient, isRegisteredRedirect } from "@/lib/oauth/clients";
 import { signAuthz } from "@/lib/oauth/authz-blob";
 import { originFromRequest } from "@/lib/oauth/base-url";
@@ -46,17 +47,19 @@ export async function GET(request: Request): Promise<Response> {
   const scope = requestedScope || "mcp";
   if (scope !== "mcp") return redirectError(redirectUri, "invalid_scope", state, `Unsupported scope: ${scope}`);
 
-  const session = await auth();
-  if (!session?.user?.id) {
-    const callbackUrl = url.pathname + url.search;
+  // The local user row, whichever sign-in produced it. `userId` below is bound into the
+  // consent blob and compared on approval, so it must be this deployment's own user ID —
+  // never an external identifier, which is what a contributed provider's raw session may
+  // carry.
+  const user = await getSessionUserOrNull();
+  if (!user) {
     const origin = originFromRequest(request);
-    const signInUrl = new URL("/api/auth/signin", origin);
-    signInUrl.searchParams.set("callbackUrl", callbackUrl);
+    const signInUrl = new URL(signInPath(url.pathname + url.search), origin);
     return Response.redirect(signInUrl.toString(), 302);
   }
 
   const token = signAuthz({
-    userId: session.user.id,
+    userId: user.id,
     clientId, redirectUri, scope, codeChallenge, codeChallengeMethod: "S256",
     resource: resource || null, state: state || null,
   });

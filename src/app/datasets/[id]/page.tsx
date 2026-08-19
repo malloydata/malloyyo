@@ -12,7 +12,6 @@ type DatasetDetail = {
   statusError: string | null;
   createdAt: string;
   readyAt: string | null;
-  userSlug: string | null;
   isPublic: boolean;
   isAdmin: boolean;
   githubRepo: string | null;

@@ -2,17 +2,11 @@
 // SPDX-License-Identifier: MIT
 
 import { NextResponse } from "next/server";
-import { getSessionUser, UnauthorizedError } from "@/lib/user";
-import { isAdmin } from "@/lib/admin";
+import { requireAdmin } from "@/lib/admin";
+import { UnauthorizedError } from "@/lib/user";
 import { getSettings, updateSettings, SETTING_DEFAULTS, type InstanceSettingsView } from "@/lib/settings";
 
 export const runtime = "nodejs";
-
-async function requireAdmin() {
-  const me = await getSessionUser();
-  if (!isAdmin(me)) throw new UnauthorizedError("not authorized");
-  return me;
-}
 
 export async function GET() {
   try {

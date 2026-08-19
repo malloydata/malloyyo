@@ -13,6 +13,7 @@
 import { redirect, notFound } from "next/navigation";
 import { DatasetNav } from "@/components/DatasetNav";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
+import { signInPath } from "@/lib/auth-paths";
 // Only DB-backed helpers here (no Malloy/DuckDB) — a page render function can't
 // load libduckdb.so and 500s. The tag-only info + given specs (which DO need
 // Malloy) are fetched by TagOnlyDashboard from the /view API route. See
@@ -33,7 +34,7 @@ export default async function DashboardViewPage({
   } catch (err) {
     if (err instanceof UnauthorizedError) {
       const back = `/datasets/${id}/dashboard/${encodeURIComponent(name)}`;
-      redirect(`/api/auth/signin?callbackUrl=${encodeURIComponent(back)}`);
+      redirect(signInPath(back));
     }
     throw err;
   }

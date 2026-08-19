@@ -4,6 +4,7 @@
 import { eq } from "drizzle-orm";
 import { db, users, type User } from "@/db";
 import { isAdmin } from "@/lib/admin";
+import { authorize } from "@/lib/authorize";
 import { recordAccessTokenUse, validateAccessToken } from "@/lib/oauth/tokens";
 
 export type BearerAuthResult =
@@ -28,6 +29,10 @@ export async function requireAdminBearer(req: Request): Promise<BearerAuthResult
 
   const [user] = await db.select().from(users).where(eq(users.id, validated.userId)).limit(1);
   if (!user) return { ok: false, status: 401, error: "token user not found" };
+
+  // Same per-request authorization as the session and MCP paths: a disabled
+  // user's CLI token stops working now, not at expiry.
+  if (!authorize(user).allowed) return { ok: false, status: 403, error: "access revoked for this account" };
 
   void recordAccessTokenUse(validated.tokenHash);
 

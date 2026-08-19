@@ -5,7 +5,7 @@ import { db, users } from "@/db";
 import { eq } from "drizzle-orm";
 import { buildHostedExploreSurface } from "@/lib/mcp-host";
 import { recordAccessTokenUse, validateAccessToken } from "@/lib/oauth/tokens";
-import { isEmailAllowed } from "@/lib/user";
+import { authorize } from "@/lib/authorize";
 import { corsPreflight, withCors } from "@/lib/oauth/cors";
 import { originFromRequest } from "@/lib/oauth/base-url";
 import { logger } from "@/lib/logger";
@@ -83,10 +83,11 @@ export async function POST(req: Request) {
     return unauthorized("Token user not found", req);
   }
 
-  // Re-check the email allow-list on every call. The token alone proves the
-  // user once authenticated; this ensures a user removed from EMAIL_ALLOW_LIST
-  // loses MCP access immediately rather than at token expiry (up to 90 days).
-  if (!isEmailAllowed(user.email)) {
+  // Re-authorize on every call, against the row just read. The token alone
+  // proves the user once authenticated; this ensures someone disabled (or still
+  // pending) loses MCP access immediately rather than at token expiry (up to
+  // 90 days).
+  if (!authorize(user).allowed) {
     log.warn("mcp unauthorized", { reason: "not_allowed" });
     return unauthorized("Access revoked for this account", req);
   }

@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: MIT
 
 import { redirect } from "next/navigation";
-import { auth } from "@/auth";
+import { getSessionUserOrNull } from "@/lib/user";
+import { signInPath, signOutPath } from "@/lib/auth-paths";
 import { verifyAuthz } from "@/lib/oauth/authz-blob";
 import { getOAuthClient } from "@/lib/oauth/clients";
 
@@ -20,10 +21,8 @@ export default async function ConsentPage({ searchParams }: PageProps) {
   const authz = verifyAuthz(t);
   if (!authz) return <ErrorScreen message="This authorization request has expired or is invalid. Please retry from your client." />;
 
-  const session = await auth();
-  if (!session?.user?.id) {
-    redirect(`/api/auth/signin?callbackUrl=${encodeURIComponent(`/oauth/consent?t=${t}`)}`);
-  }
+  const user = await getSessionUserOrNull();
+  if (!user) redirect(signInPath(`/oauth/consent?t=${t}`));
 
   const client = await getOAuthClient(authz.clientId);
   if (!client) return <ErrorScreen message="The requesting client is no longer registered." />;
@@ -31,7 +30,7 @@ export default async function ConsentPage({ searchParams }: PageProps) {
   let redirectHost = "";
   try { redirectHost = new URL(authz.redirectUri).host; } catch { redirectHost = authz.redirectUri; }
 
-  const switchUrl = `/api/auth/signout?callbackUrl=${encodeURIComponent(`/api/auth/signin?callbackUrl=${encodeURIComponent(`/oauth/consent?t=${t}`)}`)}`;
+  const switchUrl = signOutPath(signInPath(`/oauth/consent?t=${t}`));
 
   return (
     <main className="mx-auto max-w-md px-6 py-16 font-mono text-sm space-y-6">
@@ -45,7 +44,7 @@ export default async function ConsentPage({ searchParams }: PageProps) {
         <div><span className="text-gray-500 dark:text-gray-400">Redirects back to:</span> <code className="break-all">{redirectHost}</code></div>
         <div className="flex items-center gap-2">
           <span className="text-gray-500 dark:text-gray-400">Signed in as:</span>
-          <span>{session.user.email ?? session.user.name}</span>
+          <span>{user.email ?? user.name}</span>
           <a href={switchUrl} className="text-blue-600 dark:text-blue-400 underline">Switch account</a>
         </div>
       </section>

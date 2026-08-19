@@ -27,13 +27,18 @@ export async function GET() {
     ? ne(datasets.status, "failed")
     : and(eq(datasets.isPublic, true), ne(datasets.status, "failed"));
 
-  // Whose favorites count: mine + every admin's (admin = is_admin column OR the
-  // APP_ADMIN_EMAILS allow-list, which isn't stored on the row).
+  // Whose favorites count: mine + every admin's (admin = role column, the
+  // legacy is_admin column, OR the APP_ADMIN_EMAILS list, which isn't stored
+  // on the row) — the same three sources isAdmin() consults.
   const adminEmails = env.APP_ADMIN_EMAILS.map((e) => e.toLowerCase());
   const adminUsers = await db
     .select({ id: users.id })
     .from(users)
-    .where(or(eq(users.isAdmin, true), adminEmails.length ? inArray(sql`lower(${users.email})`, adminEmails) : sql`false`));
+    .where(or(
+      inArray(users.role, ["owner", "admin"]),
+      eq(users.isAdmin, true),
+      adminEmails.length ? inArray(sql`lower(${users.email})`, adminEmails) : sql`false`,
+    ));
   const allowedFavoriters = [...new Set([...(me ? [me.id] : []), ...adminUsers.map((u) => u.id)])];
   if (allowedFavoriters.length === 0) return NextResponse.json([]);
 

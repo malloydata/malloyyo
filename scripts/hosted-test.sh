@@ -156,7 +156,7 @@ case "$MODE" in
     # initdb always creates a `postgres` database, whoever the bootstrap user is.
     export DATABASE_URL="postgres://${PGUSER_NAME}@127.0.0.1:${PORT}/postgres"
     echo "→ starting Postgres from $PG_BIN (port $PORT, data in $PGDATA_DIR)"
-    $PG_AS "$PG_BIN/initdb -D $PGDATA_DIR -U $PGUSER_NAME --auth=trust" >"$PG_RUN_DIR/initdb.log" 2>&1 ||
+    $PG_AS "$PG_BIN/initdb -D $PGDATA_DIR -U $PGUSER_NAME --auth=trust --locale=C --encoding=UTF8" >"$PG_RUN_DIR/initdb.log" 2>&1 ||
       { echo "✗ initdb failed:"; cat "$PG_RUN_DIR/initdb.log"; exit 1; }
     $PG_AS "$PG_BIN/pg_ctl -D $PGDATA_DIR -o '-p $PORT -c listen_addresses=127.0.0.1' -l $PG_RUN_DIR/server.log start" >/dev/null
     ;;
@@ -218,6 +218,19 @@ reset_schema() {
 
 echo "→ running client-profile unit test (no DB)"
 npx tsx --test test/client-profile.test.ts
+
+echo "→ running integration-settings test"
+reset_schema
+npx tsx --test test/integration-settings.test.ts
+
+echo "→ running access-control test (allow-list seeding + admission)"
+npx tsx --test test/access-control.test.ts
+
+echo "→ running roster test (queue, invitations, role/status actions)"
+npx tsx --test test/roster.test.ts
+
+echo "→ running lent-capabilities test (disable mirror + roster facts)"
+npx tsx --test test/lent-capabilities.test.ts
 
 echo "→ running hosted-explore test"
 reset_schema

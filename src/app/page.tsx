@@ -68,7 +68,6 @@ type Me = {
   name: string | null;
   email: string | null;
   image: string | null;
-  slug: string | null;
   isAdmin: boolean;
 };
 
@@ -87,6 +86,18 @@ export default function HomePage() {
   const [signinNotice, setSigninNotice] = useState("");
   const [providers, setProviders] = useState<AuthProvider[]>([]);
   const [authMisconfigured, setAuthMisconfigured] = useState(false);
+  // True where an integration owns sign-in, false on an ordinary install. It swaps the
+  // provider buttons for a single link to the integration's own sign-in screen.
+  const [hostedSignIn, setHostedSignIn] = useState(false);
+  // Where sign-in and sign-out live, decided by the server rather than re-derived here.
+  // /api/me answers for both signed-in and signed-out callers, so these stay correct in
+  // states this component cannot tell apart on its own.
+  const [signInHref, setSignInHref] = useState("/api/auth/signin");
+  const [signOutHref, setSignOutHref] = useState("/api/auth/signout");
+  // Signed in but not admitted: "pending" (waiting for approval) or "disabled"
+  // (revoked). Decided by the server; swaps the sign-in prompt for an
+  // explanation, since signing in again would just loop back here.
+  const [accessState, setAccessState] = useState<"pending" | "disabled" | null>(null);
   const [claudeConnected, setClaudeConnected] = useState(false);
   const [sources, setSources] = useState<SourceSummary[] | null>(null);
   const [favQueries, setFavQueries] = useState<FavQuery[]>([]);
@@ -108,6 +119,10 @@ export default function HomePage() {
     if (typeof meJson.signinNotice === "string") setSigninNotice(meJson.signinNotice);
     if (Array.isArray(meJson.providers)) setProviders(meJson.providers);
     if (typeof meJson.authMisconfigured === "boolean") setAuthMisconfigured(meJson.authMisconfigured);
+    setHostedSignIn(meJson.hostedSignIn === true);
+    if (typeof meJson.signInPath === "string") setSignInHref(meJson.signInPath);
+    if (typeof meJson.signOutPath === "string") setSignOutHref(meJson.signOutPath);
+    setAccessState(meJson.accessState === "pending" || meJson.accessState === "disabled" ? meJson.accessState : null);
     if (typeof meJson.claudeConnected === "boolean") setClaudeConnected(meJson.claudeConnected);
     if (meJson.user) {
       const [srcRes, favRes, dashRes] = await Promise.all([
@@ -182,10 +197,31 @@ export default function HomePage() {
             </p>
           )}
         </div>
-        <SignInOut me={me} />
+        <SignInOut me={me} signInHref={signInHref} signOutHref={signOutHref} />
       </header>
 
-      {!me ? (
+      {!me && accessState ? (
+        <section className="border border-gray-200 dark:border-gray-800 rounded p-6 text-center space-y-3">
+          {accessState === "pending" ? (
+            <>
+              <p className="text-gray-700 dark:text-gray-300">
+                You&rsquo;re signed in — your account is waiting for an administrator&rsquo;s approval.
+              </p>
+              <p className="text-gray-500 dark:text-gray-400 text-xs leading-relaxed">
+                Check back once you&rsquo;ve been approved, or ask whoever runs this instance.
+              </p>
+            </>
+          ) : (
+            <p className="text-gray-700 dark:text-gray-300">
+              Your access to this instance has been turned off. If that seems wrong, ask
+              whoever runs this instance.
+            </p>
+          )}
+          <a href={signOutHref} className="inline-block text-xs underline text-gray-500 dark:text-gray-400">
+            Sign out
+          </a>
+        </section>
+      ) : !me ? (
         <section className="border border-gray-200 dark:border-gray-800 rounded p-6 text-center space-y-3">
           <p className="text-gray-700 dark:text-gray-300">Sign in to view datasets.</p>
           {signinNotice && (
@@ -196,7 +232,17 @@ export default function HomePage() {
               a helpful message rather than a button that would fail — a partial
               config points the operator at the server logs, which name the exact
               missing env var. */}
-          {providers.length > 0 ? (
+          {hostedSignIn ? (
+            /* The integration's own screen decides which methods it offers — an email
+               link, OAuth, or an SSO connection an administrator configured. Nothing
+               here needs to know which. */
+            <a
+              href={signInHref}
+              className="inline-block w-full max-w-xs rounded bg-black text-white dark:bg-white dark:text-black px-4 py-2 text-center hover:opacity-90"
+            >
+              Sign in
+            </a>
+          ) : providers.length > 0 ? (
             <div className="flex flex-col items-center gap-2">
               {providers.map((p) => (
                 <button
@@ -252,9 +298,14 @@ export default function HomePage() {
                   const { bySource, order } = groupBySource(favByDataset.get(dsId) ?? []);
                   const withQuestions = new Set(order.filter((k) => k !== ""));
                   const additional = (g?.sources ?? []).filter((s) => !withQuestions.has(s.source));
+                  // No `overflow-hidden` on this card, deliberately: the source menus below
+                  // are absolutely positioned, and an overflow-hidden ancestor clips them —
+                  // the menu opened inside the card and was cut off at its edge, with
+                  // nothing to expand and nothing to scroll. The rounded corners it was
+                  // there for are kept by rounding the header itself.
                   return (
-                    <div key={dsId} className="border border-gray-200 dark:border-gray-800 rounded overflow-hidden">
-                      <div className="flex items-center justify-between gap-3 px-3 py-2 bg-gray-50 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-800">
+                    <div key={dsId} className="border border-gray-200 dark:border-gray-800 rounded">
+                      <div className="flex items-center justify-between gap-3 px-3 py-2 rounded-t bg-gray-50 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-800">
                         <span className="flex items-center gap-2 min-w-0 flex-1">
                           <span className="font-semibold truncate">{g?.name ?? "dataset"}</span>
                           {g?.githubRepo && <GitHubLink repo={g.githubRepo} />}
@@ -562,12 +613,21 @@ function McpSetup({ instanceName }: { instanceName: string }) {
   );
 }
 
-function SignInOut({ me }: { me: Me | null }) {
+// Both hrefs come from /api/me rather than being decided here. Where an integration owns
+// sign-in, NextAuth's endpoints are dead ends: /api/auth/signin has no providers
+// configured, and /api/auth/signout answers with its configuration-error page. Deriving
+// that in the browser is what broke — the signal this used was present only while signed
+// out, so sign-out reverted to NextAuth exactly when somebody had a session to end.
+function SignInOut({
+  me,
+  signInHref,
+  signOutHref,
+}: { me: Me | null; signInHref: string; signOutHref: string }) {
   if (!me) {
     return (
       // NextAuth API endpoint, not a page route — full-page nav intended.
-      // eslint-disable-next-line @next/next/no-html-link-for-pages
-      <a href="/api/auth/signin"
+
+      <a href={signInHref}
         className="rounded bg-black text-white dark:bg-white dark:text-black text-xs px-3 py-1.5 whitespace-nowrap">
         Sign in
       </a>
@@ -582,8 +642,8 @@ function SignInOut({ me }: { me: Me | null }) {
       <div className="flex flex-col items-end">
         <span className="text-gray-700 dark:text-gray-300">{me.name ?? me.email}</span>
         {/* NextAuth API endpoint, not a page route — full-page nav intended. */}
-        {/* eslint-disable-next-line @next/next/no-html-link-for-pages */}
-        <a href="/api/auth/signout" className="text-gray-500 dark:text-gray-400 hover:underline">sign out</a>
+        { }
+        <a href={signOutHref} className="text-gray-500 dark:text-gray-400 hover:underline">sign out</a>
       </div>
     </div>
   );

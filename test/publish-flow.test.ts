@@ -234,7 +234,13 @@ before(async () => {
 
   const [u] = await db
     .insert(users)
-    .values({ email: `publisher-${RUN}@test.local`, slug: `publisher-${RUN}`, isAdmin: true })
+    .values({
+      email: `publisher-${RUN}@test.local`,
+      slug: `publisher-${RUN}`,
+      status: "active",
+      role: "admin",
+      isAdmin: true,
+    })
     .returning();
   admin = u;
   seededUsers.push(u.id);
@@ -464,7 +470,7 @@ test("status reports the server's auth error, not a bare 401", async () => {
 test("a non-admin token can't create anything", async () => {
   const [plain] = await db
     .insert(users)
-    .values({ email: `reader-${RUN}@test.local`, slug: `reader-${RUN}` })
+    .values({ email: `reader-${RUN}@test.local`, slug: `reader-${RUN}`, status: "active" })
     .returning();
   seededUsers.push(plain.id);
   const raw = randomBytes(32).toString("base64url");

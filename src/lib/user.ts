@@ -4,7 +4,7 @@
 import { db, users, type User } from "@/db";
 import { eq } from "drizzle-orm";
 import { auth } from "@/auth";
-import { newUserSlug } from "./slug";
+import { authorize } from "./authorize";
 
 export class UnauthorizedError extends Error {
   constructor(msg: string) {
@@ -13,28 +13,23 @@ export class UnauthorizedError extends Error {
   }
 }
 
-/**
- * Returns the currently signed-in user, ensuring they have a slug.
- * Throws UnauthorizedError if no session exists.
- */
-// Fail-open by design: an unset EMAIL_ALLOW_LIST allows any authenticated user.
-// Exported so the MCP endpoint (which authorizes by OAuth token, not session)
-// enforces the same allow-list the web routes do — otherwise removing a user
-// from the list wouldn't cut off their existing MCP tokens.
-export function isEmailAllowed(email: string | null | undefined): boolean {
-  const allowList = process.env.EMAIL_ALLOW_LIST;
-  if (!allowList) return true;
-  const allowed = allowList.split(",").map((e) => e.trim().toLowerCase());
-  return allowed.includes((email ?? "").toLowerCase());
+/** getSessionUser(), but null instead of throwing — for routes that offer a sign-in. */
+export async function getSessionUserOrNull(): Promise<User | null> {
+  try {
+    return await getSessionUser();
+  } catch (err) {
+    if (err instanceof UnauthorizedError) return null;
+    throw err;
+  }
 }
 
 export async function getSessionUser(): Promise<User> {
+  // One session system for every deployment. On a hosted instance the row was created (and
+  // its admin role reconciled) by the sign-in provider's authorize(); by the time a request
+  // carries a session, the user exists.
   const session = await auth();
   if (!session?.user?.id) {
     throw new UnauthorizedError("not signed in");
-  }
-  if (!isEmailAllowed(session.user.email)) {
-    throw new UnauthorizedError("not authorized");
   }
   const [u] = await db
     .select()
@@ -43,23 +38,12 @@ export async function getSessionUser(): Promise<User> {
     .limit(1);
   if (!u) throw new UnauthorizedError("user not found");
 
-  if (!u.slug) {
-    for (let attempt = 0; attempt < 5; attempt++) {
-      try {
-        const [updated] = await db
-          .update(users)
-          .set({ slug: newUserSlug() })
-          .where(eq(users.id, u.id))
-          .returning();
-        return updated;
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        if (!/users_slug_unique|duplicate key/i.test(msg) || attempt === 4) {
-          throw err;
-        }
-      }
-    }
-  }
+  // Authorization, against the row just read — never against session claims.
+  // This per-request read is what makes revocation instant: a `disabled` row
+  // refuses the very next request, whatever the session token still says.
+  const authz = authorize(u);
+  if (!authz.allowed) throw new UnauthorizedError(authz.reason);
+
   return u;
 }
 
@@ -68,17 +52,6 @@ export async function getDefaultUser(): Promise<User> {
   const existing = await db.select().from(users).limit(1);
   if (existing.length > 0) return existing[0];
 
-  for (let attempt = 0; attempt < 5; attempt++) {
-    try {
-      const [created] = await db
-        .insert(users)
-        .values({ slug: newUserSlug() })
-        .returning();
-      return created;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (!/users_slug_unique|duplicate key/i.test(msg) || attempt === 4) throw err;
-    }
-  }
-  throw new Error("unreachable");
+  const [created] = await db.insert(users).values({ status: "active" }).returning();
+  return created;
 }

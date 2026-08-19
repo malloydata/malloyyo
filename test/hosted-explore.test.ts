@@ -37,7 +37,7 @@ let user: User;
 
 before(async () => {
   // Fresh container ⇒ empty schema. Seed one user + a READY dataset + a model.
-  const [u] = await db.insert(users).values({ email: "fox@test.local", slug: "fox" }).returning();
+  const [u] = await db.insert(users).values({ email: "fox@test.local" }).returning();
   user = u;
   const [ds] = await db
     .insert(datasets)

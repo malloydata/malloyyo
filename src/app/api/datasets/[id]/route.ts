@@ -3,7 +3,7 @@
 
 import { NextResponse } from "next/server";
 import { and, desc, eq } from "drizzle-orm";
-import { db, datasets, malloyModels, malloyModelFiles, malloyArtifacts, users } from "@/db";
+import { db, datasets, malloyModels, malloyModelFiles, malloyArtifacts } from "@/db";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
 
@@ -36,7 +36,6 @@ export async function GET(
   // last-publish detail (incl. failure text) is management-only — don't expose to public viewers.
   const canManage = me ? isAdmin(me) || ds.userId === me.id : false;
 
-  const [user] = await db.select().from(users).where(eq(users.id, ds.userId));
   const [model] = await db.select().from(malloyModels)
     .where(eq(malloyModels.datasetId, ds.id))
     .orderBy(desc(malloyModels.createdAt))
@@ -72,7 +71,6 @@ export async function GET(
     githubRepo: ds.githubRepo ?? null,
     githubBranch: ds.githubBranch ?? null,
     githubUseToken: ds.githubUseToken,
-    userSlug: user?.slug ?? null,
     isAdmin: me ? isAdmin(me) : false,
     dashboards,
     lastPublish:

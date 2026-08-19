@@ -23,7 +23,7 @@
   },
   "scripts": {
     "build:engine": "cd ../mcp-engine && npm run build",
-    "build": "npm run build:engine && esbuild src/index.ts --bundle --platform=node --format=esm --external:commander --external:esbuild --external:@malloydata/* --external:@modelcontextprotocol/* --outfile=dist/index.js && node scripts/copy-frame-src.mjs",
+    "build": "npm run build:engine && esbuild src/index.ts --bundle --platform=node --format=esm --external:commander --external:esbuild --external:@malloydata/* --external:@modelcontextprotocol/* --external:@inquirer/* --outfile=dist/index.js && node scripts/copy-frame-src.mjs",
     "dev": "tsx src/index.ts",
     "typecheck": "tsc --noEmit",
     "pretest": "npm run build",
@@ -33,6 +33,7 @@
   },
   "dependencies": {
     "@duckdb/duckdb-wasm": "1.33.1-dev45.0",
+    "@inquirer/password": "^5.1.1",
     "@malloydata/db-duckdb": "^0.0.430",
     "@malloydata/malloy": "^0.0.430",
     "@malloydata/malloy-connections": "^0.0.430",

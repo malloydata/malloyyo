@@ -35,16 +35,40 @@ export const datasetStatus = pgEnum("dataset_status", [
   "failed",
 ]);
 
-// Shared with Auth.js via @auth/drizzle-adapter. slug is malloyyo-specific
-// (the /mcp/<slug> path segment) assigned on first sign-in.
+// Membership is a fact about a person, recorded durably — the row, not an env
+// var, answers "may they use this instance." `pending` is a newcomer awaiting
+// approval; `disabled` is revocation, effective on the next request because
+// every request re-reads the row (src/lib/authorize.ts).
+export const userStatus = pgEnum("user_status", ["pending", "active", "disabled"]);
+
+// owner = provisioned the instance (always ≥1 admin, not demotable by non-owners);
+// admin = invite/revoke/manage; member = ordinary use. Where sign-in is owned by
+// an integration this column mirrors the provider's role claim (like is_admin);
+// it is authoritative only for the application's own sign-in.
+export const userRole = pgEnum("user_role", ["owner", "admin", "member"]);
+
+// Shared with Auth.js via @auth/drizzle-adapter.
 export const users = pgTable("users", {
   id: uuid("id").primaryKey().defaultRandom(),
-  slug: text("slug").unique(),
   name: text("name"),
   email: text("email").unique(),
   emailVerified: timestamp("email_verified", { withTimezone: true, mode: "date" }),
   image: text("image"),
   isAdmin: boolean("is_admin").notNull().default(false),
+  // Fail-closed default: a row minted by any path that forgets to decide lands
+  // `pending`, never `active`. The paths that do decide: the createUser event
+  // (src/lib/admission.ts) for the application's own sign-in, and
+  // findOrCreateExternalUser for an integration's.
+  status: userStatus("status").notNull().default("pending"),
+  role: userRole("role").notNull().default("member"),
+  // The stable subject identifier from an external identity provider, for deployments
+  // whose sign-in is provided by one rather than by the OAuth providers above. Null
+  // everywhere else, and nothing about the default NextAuth path reads it.
+  //
+  // It exists because email is not a reliable key for such providers: a sign-in may
+  // reveal no address at all (enterprise SSO commonly does not), and a subject identifier
+  // survives the person changing theirs. See docs/authentication.md.
+  externalAccountId: text("external_account_id").unique(),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .default(sql`now()`),
@@ -401,6 +425,32 @@ export const oauthRefreshTokens = pgTable(
   ],
 );
 
+// A standing invitation: an address an admin admitted before the person ever
+// arrived. Consumed on first sign-in (acceptedAt set, the new row lands
+// `active`). A separate table rather than a placeholder `users` row on purpose:
+// Auth.js refuses an OAuth sign-in whose email matches an existing unlinked
+// user (OAuthAccountNotLinked), so a placeholder would block the very sign-in
+// it meant to permit.
+export const invitations = pgTable(
+  "invitations",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    // Stored lowercase; matched case-insensitively at sign-in.
+    email: text("email").notNull(),
+    role: userRole("role").notNull().default("member"),
+    invitedById: uuid("invited_by_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .default(sql`now()`),
+    acceptedAt: timestamp("accepted_at", { withTimezone: true }),
+    acceptedById: uuid("accepted_by_id").references(() => users.id, { onDelete: "set null" }),
+  },
+  (t) => [
+    // One OPEN invitation per address; accepted ones are history and may repeat.
+    uniqueIndex("invitations_email_open_unique").on(t.email).where(sql`accepted_at IS NULL`),
+  ],
+);
+
 // Per-instance, editable presentation settings. Keyed by INSTANCE_CODE so
 // several instances sharing one DB stay distinct. Currently just the front-page
 // tagline; a null/absent row means "use the built-in default".
@@ -408,10 +458,35 @@ export const instanceSettings = pgTable("instance_settings", {
   instanceCode: text("instance_code").primaryKey(),
   tagline: text("tagline"),
   signinNotice: text("signin_notice"),
+  // Who may join: 'open' | 'invite' (see src/lib/access-policy.ts). Text rather
+  // than an enum so a future policy ('domain') is data, not a schema migration.
+  // Null means the safe default, 'invite' — except on databases upgraded from
+  // the EMAIL_ALLOW_LIST era, where seeding records the equivalent policy
+  // explicitly (src/lib/access-upgrade.ts).
+  accessPolicy: text("access_policy"),
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .notNull()
     .default(sql`now()`),
 });
+
+// The settings namespace lent to an authentication integration (see
+// src/lib/hosted-auth.ts): key/value per instance, reached only through
+// src/lib/integration-settings.ts. Separate from instance_settings on purpose —
+// that table is the application's, typed column by column; this one belongs to
+// code the application does not own, so its keys are data and adding one is not
+// a migration. Absence of a row means unset.
+export const integrationSettings = pgTable(
+  "integration_settings",
+  {
+    instanceCode: text("instance_code").notNull(),
+    key: text("key").notNull(),
+    value: text("value").notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .default(sql`now()`),
+  },
+  (t) => [primaryKey({ columns: [t.instanceCode, t.key] })],
+);
 
 export type Dataset = typeof datasets.$inferSelect;
 export type NewDataset = typeof datasets.$inferInsert;
@@ -421,7 +496,11 @@ export type MalloyModelFile = typeof malloyModelFiles.$inferSelect;
 export type SavedQuery = typeof savedQueries.$inferSelect;
 export type HistoryRow = typeof history.$inferSelect;
 export type User = typeof users.$inferSelect;
+export type UserStatus = (typeof userStatus.enumValues)[number];
+export type UserRole = (typeof userRole.enumValues)[number];
+export type Invitation = typeof invitations.$inferSelect;
 export type OAuthClient = typeof oauthClients.$inferSelect;
 export type OAuthAccessToken = typeof oauthAccessTokens.$inferSelect;
 export type Favorite = typeof favorites.$inferSelect;
 export type InstanceSettings = typeof instanceSettings.$inferSelect;
+export type IntegrationSetting = typeof integrationSettings.$inferSelect;

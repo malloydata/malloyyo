@@ -68,6 +68,13 @@ const nextConfig: NextConfig = {
     "esbuild",
   ],
   outputFileTracingIncludes: {
+    // The migration journal, applied at boot by src/lib/migrate.ts when
+    // RUN_MIGRATIONS_ON_BOOT is set. instrumentation.ts runs in every server
+    // function, so trace it into all of them. ("/*" matches only one path
+    // segment — it would miss /api/health — hence "/**".)
+    "/**": [
+      "./drizzle/**/*",
+    ],
     "/mcp": [
       "./node_modules/@duckdb/node-bindings*/**/*",
     ],

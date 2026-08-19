@@ -10,4 +10,7 @@ local/
 **/node_modules
 .next
 .vercel
-drizzle/meta
+# drizzle/meta must NOT be excluded: the boot-time migrator reads
+# drizzle/meta/_journal.json at runtime (next.config.ts traces ./drizzle into the
+# standalone output, which can only carry what this context contains). Excluding it
+# builds an image that fails readiness on every boot with RUN_MIGRATIONS_ON_BOOT.

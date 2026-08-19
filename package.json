@@ -12,8 +12,7 @@
     "dashboard-vendor": "node scripts/build-dashboard-vendor.mjs",
     "malloy-update": "node scripts/malloy-update.mjs",
     "preflight": "bash scripts/preflight.sh",
-    "build": "npm run build -w packages/mcp-engine && node scripts/gen-baseline.mjs && node scripts/build-dashboard-vendor.mjs && next build",
-    "db:baseline": "node scripts/gen-baseline.mjs",
+    "build": "npm run build -w packages/mcp-engine && node scripts/build-dashboard-vendor.mjs && next build",
     "start": "next start",
     "deploy": "bash scripts/deploy.sh",
     "lint": "eslint",
@@ -21,7 +20,8 @@
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",
     "e2e": "tsx scripts/e2e.ts",
-    "test": "tsx --test src/lib/*.test.ts",
+    "test:migrate": "bash scripts/migrate-test.sh",
+    "test": "tsx --test 'src/lib/*.test.ts' 'src/lib/**/*.test.ts'",
     "test:hosted": "bash scripts/hosted-test.sh"
   },
   "dependencies": {

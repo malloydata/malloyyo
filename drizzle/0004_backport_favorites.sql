@@ -1,16 +1,28 @@
+-- 0004_backport_favorites — folded into the journal 2026-08-07 from
+-- drizzle/manual/ (originally applied by hand with psql, July 2026).
+--
 -- Backport favorited queries from the pre-redesign backups (created by
 -- 0003_history_redesign.sql) into the durable saved_queries + favorites tables,
 -- so users' favorites survive the greenfield. History itself is disposable and
 -- is intentionally NOT backported.
 --
--- Idempotent, and a clean no-op on a fresh install (where *_bak don't exist).
--- Run AFTER 0003, per instance:
---   psql "$DATABASE_URL" -f drizzle/manual/0004_backport_favorites.sql
+-- Idempotent, and a clean no-op wherever the *_bak tables don't exist (fresh
+-- replays, and any database whose vintage postdates the redesign).
 
 SET search_path TO public;
 
 DO $$
 BEGIN
+  -- Only backport when 0003 processed a pre-redesign database IN THIS SAME
+  -- migration run (its session-scoped marker, same transaction). *_bak tables
+  -- without the marker are leftovers of a hand-run July-2026 redesign on a
+  -- database that was kept current outside the journal — its favorites were
+  -- already backported once, and re-inserting from the backups would resurrect
+  -- rows the user has deleted since.
+  IF to_regclass('pg_temp._malloyyo_0003_redesigned') IS NULL THEN
+    RAISE NOTICE 'backport: 0003 did not process old tables in this run — nothing to backport';
+    RETURN;
+  END IF;
   IF to_regclass('public.favorites_bak') IS NULL
      OR to_regclass('public.inquiries_bak') IS NULL
      OR to_regclass('public.tool_calls_bak') IS NULL THEN

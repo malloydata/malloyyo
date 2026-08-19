@@ -8,6 +8,104 @@
       "when": 1778531085421,
       "tag": "0000_handy_malcolm_colcord",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1780858887000,
+      "tag": "0001_ltool_slugs",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1781192465000,
+      "tag": "0002_model_publish",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1782933107000,
+      "tag": "0003_history_redesign",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1782933108000,
+      "tag": "0004_backport_favorites",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1783021387000,
+      "tag": "0005_instance_settings",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1783021388000,
+      "tag": "0006_signin_notice",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1783109750000,
+      "tag": "0007_compiled_model_def",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1783199868000,
+      "tag": "0008_malloy_artifacts",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1783206896000,
+      "tag": "0009_dataset_name_unique_ready",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1785786927000,
+      "tag": "0010_external_account_id",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1785971001000,
+      "tag": "0011_integration_settings",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1786060800000,
+      "tag": "0012_push_catchup",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1786159912776,
+      "tag": "0013_access_control",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1786501075582,
+      "tag": "0014_drop_user_slug",
+      "breakpoints": true
     }
   ]
 }

@@ -26,6 +26,7 @@ import {
   type Dashboard,
 } from "./discover.js";
 import { navHtml as sharedNav, NAV_CSS } from "./shared/nav.js";
+import { safeJson } from "./shared/html.js";
 import { serveStatic } from "./static-server.js";
 
 const require = createRequire(import.meta.url);
@@ -228,12 +229,12 @@ ${analyticsSnippet(analytics)}
 ${navFor(dash, all, cleanUrls)}
 <div id="root"></div>
 <script>
-window.__DASHBOARD__ = ${JSON.stringify(info)};
+window.__DASHBOARD__ = ${safeJson(info)};
 // Given SPECS (label/type/default/suggest) are introspected from the model's
 // given: declarations at BUILD time — the runtime reads them from here to draw
 // controls and seed initial values. Without them there are no controls and
 // every given starts empty.
-window.__GIVENS__ = ${JSON.stringify(givenSpecs)};
+window.__GIVENS__ = ${safeJson(givenSpecs)};
 // __INITIAL_GIVENS__ is NOT set here on purpose: the entry bundle sets it from
 // location.search using shared/givens-url, the same encoder the dev server uses.
 // An inline copy is what drifted last time (it stripped the dollar-sign prefix
@@ -260,7 +261,7 @@ function indexPage(
   const link = (n: string) => (cleanUrls ? `./${encodeURIComponent(n)}` : `./${encodeURIComponent(n)}.html`);
   const body = custom
     ? `<div id="root"></div>\n` +
-      `<script>window.__DASHBOARDS__ = ${JSON.stringify(
+      `<script>window.__DASHBOARDS__ = ${safeJson(
         dashboards.map((d) => ({ name: d.name, title: d.title, description: d.description, href: link(d.name) })),
       )};</script>\n` +
       `<script type="module" src="./assets/index.js"></script>`

@@ -1,4 +1,5 @@
-// GitHub history for malloydata/malloy and malloydata/malloyyo.
+// GitHub history for malloydata/malloy, malloydata/malloy-vscode-extension
+// and malloydata/malloyyo.
 //
 // Two independent sources feed one model. The git object graph gives commits,
 // the files each one touched, and tags; the GitHub API gives issues, pull
@@ -36,7 +37,7 @@ source: identities is duckdb.table('data/identities.parquet') extend {
 // the GitHub API side
 // ---------------------------------------------------------------------------
 
-#" Issues (not pull requests) filed on either repo, with body text and labels.
+#" Issues (not pull requests) filed on any of the repos, with body and labels.
 source: issues is duckdb.table('data/issues.parquet') extend {
   primary_key: url
 
@@ -76,7 +77,7 @@ source: issues is duckdb.table('data/issues.parquet') extend {
   }
 }
 
-#" Pull requests on either repo. Diff sizes are NOT here -- the list API omits
+#" Pull requests across the repos. Diff sizes are NOT here -- the list API omits
 #" them; join through `commits.pr` for the lines a PR actually changed.
 source: pull_requests is duckdb.table('data/pull_requests.parquet') extend {
   primary_key: url
@@ -191,7 +192,7 @@ source: commit_files is duckdb.table('data/commit_files.parquet') extend {
   }
 }
 
-#" Every commit on every ref of both repos, with its diffstat, the pull request
+#" Every commit on every ref of every repo, with its diffstat, the pull request
 #" it landed through, and the person who wrote it.
 source: commits is duckdb.table('data/commits.parquet') extend {
   primary_key: sha

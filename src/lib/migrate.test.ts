@@ -108,11 +108,14 @@ test("no already-applied journal file has been edited", () => {
 // scripts/migrate-test.sh).
 const savedFlag = process.env.RUN_MIGRATIONS_ON_BOOT;
 const savedNodeEnv = process.env.NODE_ENV;
+const savedVercel = process.env.VERCEL;
 afterEach(() => {
   if (savedFlag === undefined) delete process.env.RUN_MIGRATIONS_ON_BOOT;
   else process.env.RUN_MIGRATIONS_ON_BOOT = savedFlag;
   if (savedNodeEnv === undefined) delete process.env.NODE_ENV;
   else process.env.NODE_ENV = savedNodeEnv;
+  if (savedVercel === undefined) delete process.env.VERCEL;
+  else process.env.VERCEL = savedVercel;
   delete globalThis.__malloyyoMigrationOutcome__;
 });
 
@@ -135,6 +138,28 @@ test("bootMigrationsEnabled: explicit setting always wins", () => {
     process.env.RUN_MIGRATIONS_ON_BOOT = off;
     assert.equal(bootMigrationsEnabled(), false, `expected ${JSON.stringify(off)} to disable`);
   }
+});
+
+// A function cannot finish a migration — it is frozen mid-run and the gate then
+// reports "have not run" forever. On Vercel the BUILD applies the journal
+// (`vercel-build`), so boot must stand down without anyone having to set a flag.
+test("bootMigrationsEnabled: off on Vercel, where the build migrates instead", () => {
+  delete process.env.RUN_MIGRATIONS_ON_BOOT;
+  process.env.NODE_ENV = "production";
+  process.env.VERCEL = "1";
+  assert.equal(bootMigrationsEnabled(), false);
+
+  // …and the readiness gate follows, so a correctly-migrated instance is ready.
+  assert.equal(migrationGateError(), null);
+
+  // An operator who really wants boot migrations on Vercel can still say so.
+  process.env.RUN_MIGRATIONS_ON_BOOT = "1";
+  assert.equal(bootMigrationsEnabled(), true);
+
+  // Off Vercel, production is unchanged: still on by default.
+  delete process.env.RUN_MIGRATIONS_ON_BOOT;
+  delete process.env.VERCEL;
+  assert.equal(bootMigrationsEnabled(), true);
 });
 
 test("migrationGateError: instances not running boot migrations are never gated", () => {

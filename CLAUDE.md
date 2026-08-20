@@ -102,10 +102,49 @@ ones get what's pending, concurrent boots serialize on a Postgres advisory
 lock (drizzle's migrator does NOT serialize itself — verified empirically),
 and a failure fails readiness — both health routes answer 503, never 200 over
 a broken migration. **On by default in production, off by default in dev**
-(`bootMigrationsEnabled()`): deployments need no flag, and `npm run dev`
-against a real instance's `local/<env>` database never applies a working
-tree's unmerged journal entries. `RUN_MIGRATIONS_ON_BOOT=0` opts a deployment
-out (schema managed out-of-band); `=1` opts a dev server in.
+(`bootMigrationsEnabled()`): `npm run dev` against a real instance's
+`local/<env>` database never applies a working tree's unmerged journal
+entries. `RUN_MIGRATIONS_ON_BOOT=0` opts a deployment out (schema managed
+out-of-band); `=1` opts a dev server in.
+
+**Boot migrations only work where the process keeps running.** They complete
+on a long-lived server — a VM, a container on a host, Kubernetes — and they do
+NOT complete on a per-invocation runtime (Vercel Functions, Lambda) or a
+container platform that throttles CPU between requests (Cloud Run, Container
+Apps, Fargate scaled to zero). The server answers requests before `register()`
+resolves (`next start` prints `Ready` in ~50ms, then migrates for ~12s), so
+the instance is frozen mid-migration, nothing lands, and `migrationGateError()`
+reports "boot migrations have not run" forever. Verified on Vercel 2026-08-20:
+the `drizzle` schema was created, the journal table never was, and six cold
+starts made no further progress.
+
+**On Vercel the journal is applied by the BUILD**, via the `vercel-build`
+script — Vercel runs it in place of `build` when present, with the project's
+own env vars, so `DATABASE_URL` is already there:
+
+```json
+"vercel-build": "tsx scripts/run-boot-migrations.ts && npm run build"
+```
+
+A build takes as long as it takes, so the migration finishes; a failed
+migration fails the build, so nothing ships onto a schema it can't run on. It
+covers **every** Vercel build — dashboard redeploys and git-triggered deploys
+included, not just `npm run deploy`. `npm run build` is untouched, so the
+Docker image and CI are unaffected.
+
+Each Vercel environment also needs **`RUN_MIGRATIONS_ON_BOOT=0`**. This is not
+optional: without it the functions still attempt a boot migration and still get
+frozen, so `/api/healthz` reports `failed_startup` even when the schema is
+current and the app is serving correctly (verified 2026-08-20).
+
+**Ordering matters.** The build migrates before the new code is promoted, which
+is safe for additive entries. An entry that REMOVES something the *currently
+live* version still selects takes that version down for the length of the
+deploy — 0014 drops `users.slug`, and the live build still lists that column in
+`bearer-auth.ts`, `app/mcp/route.ts`, `api/me`, and sign-in, so the outage
+spans MCP auth and sign-in rather than one legacy route. Check the pending
+entries and plan a window; for future drops, remove the column in a release
+*after* the one that stopped selecting it.
 
 ## Two health routes, and which is which
 

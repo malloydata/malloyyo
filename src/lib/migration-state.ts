@@ -31,6 +31,15 @@ export function bootMigrationsEnabled(): boolean {
   const v = process.env.RUN_MIGRATIONS_ON_BOOT?.trim().toLowerCase();
   if (v === "0" || v === "false") return false;
   if (v) return true;
+  // On Vercel the journal is applied by the BUILD (the `vercel-build` script),
+  // because a function cannot finish one: the response returns while the
+  // migration is still running, the instance is frozen, and the gate below then
+  // reports "have not run" for the life of the deployment — a permanent 503 on
+  // a database that is perfectly fine. Deciding it here rather than through an
+  // env var means every Vercel project gets it right, including one-click
+  // deploys that never see our deployment checklist. An explicit
+  // RUN_MIGRATIONS_ON_BOOT=1 still overrides, above.
+  if (process.env.VERCEL) return false;
   return process.env.NODE_ENV === "production";
 }
 

@@ -1,0 +1,41 @@
+# Ask the private cloud repository to compose this exact public application commit with
+# its private hosted-auth package. The hosted OCI artifact is built and stored there; no
+# hosting library or provider credential enters this repository.
+
+name: Rebuild staging hosted instance image
+run-name: Rebuild staging hosted instance image / ${{ github.sha }}
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+  workflow_dispatch: {}
+
+concurrency:
+  group: rebuild-staging-hosted-instance-image
+  cancel-in-progress: true
+
+# The dispatch uses a fine-grained token that can write Actions only in
+# bporterfield/malloyyo-cloud. This workflow's own token needs no repository permissions.
+permissions: {}
+
+jobs:
+  dispatch:
+    if: github.repository == 'malloydata/malloyyo'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Dispatch the private hosted-image build
+        env:
+          GH_TOKEN: ${{ secrets.MALLOYYO_CLOUD_DISPATCH_TOKEN }}
+          APP_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          gh workflow run build-hosted-instance-image.yml \
+            --repo bporterfield/malloyyo-cloud \
+            --ref main \
+            --field app_ref="$APP_SHA" \
+            --field environment=staging
+          echo "Dispatched staging hosted-image build for malloydata/malloyyo@$APP_SHA"

@@ -30,12 +30,29 @@ echo "▶ Target Vercel project: $PROJECT"
 echo "▶ Building @malloyyo/mcp-engine…"
 ( cd packages/mcp-engine && npm run build >/dev/null )
 
-# 3. Deploy. `vercel --prod` builds remotely using the project's own env vars and
+# 3. Apply the drizzle/ journal BEFORE the new code is live, so it boots onto a
+#    current schema. This is a deploy step rather than a boot step because boot
+#    migrations cannot complete on a per-invocation runtime — the instance is
+#    frozen mid-migration and the app then serves 503 forever. See
+#    scripts/migrate-deploy.sh. Serving instances set RUN_MIGRATIONS_ON_BOOT=0.
+#
+#    Safe for additive migrations. One that REMOVES something the currently-live
+#    version still reads breaks it for the length of the deploy — check the
+#    pending entries and plan a window before running this.
+#    SKIP_MIGRATIONS=1 to deploy without touching the schema.
+if [ "${SKIP_MIGRATIONS:-0}" = "1" ]; then
+  echo "▶ SKIP_MIGRATIONS=1 — not applying the journal"
+else
+  echo "▶ Applying the migration journal to $PROJECT's database…"
+  bash scripts/migrate-deploy.sh
+fi
+
+# 4. Deploy. `vercel --prod` builds remotely using the project's own env vars and
 #    uploads this working tree (incl. the engine dist we just built).
 echo "▶ vercel --prod (this checkout's tree → $PROJECT)…"
 vercel --prod --yes
 
-# 4. Verify the production alias is healthy.
+# 5. Verify the production alias is healthy.
 URL="https://${PROJECT}.vercel.app"
 CODE=$(curl -s -o /dev/null -w '%{http_code}' "$URL/api/health" || echo "000")
 echo "▶ ${URL}/api/health → ${CODE}"

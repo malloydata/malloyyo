@@ -22,7 +22,8 @@
     "e2e": "tsx scripts/e2e.ts",
     "test:migrate": "bash scripts/migrate-test.sh",
     "test": "tsx --test 'src/lib/*.test.ts' 'src/lib/**/*.test.ts'",
-    "test:hosted": "bash scripts/hosted-test.sh"
+    "test:hosted": "bash scripts/hosted-test.sh",
+    "migrate:deploy": "bash scripts/migrate-deploy.sh"
   },
   "dependencies": {
     "@auth/drizzle-adapter": "^1.11.2",

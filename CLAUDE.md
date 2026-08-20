@@ -102,10 +102,36 @@ ones get what's pending, concurrent boots serialize on a Postgres advisory
 lock (drizzle's migrator does NOT serialize itself — verified empirically),
 and a failure fails readiness — both health routes answer 503, never 200 over
 a broken migration. **On by default in production, off by default in dev**
-(`bootMigrationsEnabled()`): deployments need no flag, and `npm run dev`
-against a real instance's `local/<env>` database never applies a working
-tree's unmerged journal entries. `RUN_MIGRATIONS_ON_BOOT=0` opts a deployment
-out (schema managed out-of-band); `=1` opts a dev server in.
+(`bootMigrationsEnabled()`): `npm run dev` against a real instance's
+`local/<env>` database never applies a working tree's unmerged journal
+entries. `RUN_MIGRATIONS_ON_BOOT=0` opts a deployment out (schema managed
+out-of-band); `=1` opts a dev server in.
+
+**Boot migrations only work where the process keeps running.** They complete
+on a long-lived server — a VM, a container on a host, Kubernetes — and they do
+NOT complete on a per-invocation runtime (Vercel Functions, Lambda) or a
+container platform that throttles CPU between requests (Cloud Run, Container
+Apps, Fargate scaled to zero). The server answers requests before `register()`
+resolves (`next start` prints `Ready` in ~50ms, then migrates for ~12s), so
+the instance is frozen mid-migration, nothing lands, and `migrationGateError()`
+reports "boot migrations have not run" forever. Verified on Vercel 2026-08-20:
+the `drizzle` schema was created, the journal table never was, and six cold
+starts made no further progress.
+
+**So the schema is applied as a DEPLOY STEP**, not at boot:
+
+```bash
+npm run migrate:deploy        # scripts/migrate-deploy.sh — resolves the DB from
+                              # the linked Vercel project, or $DATABASE_URL
+```
+
+`npm run deploy` runs it automatically before shipping the new code
+(`SKIP_MIGRATIONS=1` to skip). Serving instances set `RUN_MIGRATIONS_ON_BOOT=0`
+so the readiness gate stays green. **Ordering matters:** migrating first is
+safe for additive entries, but one that REMOVES something the currently-live
+version still reads (0014 drops `users.slug`, which the older per-user
+`/mcp/<slug>` code path uses) breaks the old version for the length of the
+deploy — check the pending entries and plan a window.
 
 ## Two health routes, and which is which
 

@@ -19,7 +19,7 @@ export const runtime = "nodejs";
 
 export default function AdminLayout({ children }: { children: ReactNode }) {
   return (
-    <main className="mx-auto max-w-3xl px-6 py-16 font-mono text-sm space-y-8">
+    <main className="mx-auto w-full max-w-3xl px-6 py-16 font-mono text-sm space-y-8">
       <header>
         <Link href="/" className="text-xs text-gray-500 dark:text-gray-400 hover:underline">
           ← all datasets

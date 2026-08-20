@@ -1,17 +1,18 @@
-name: docker-publish
+name: Publish self-hosted Docker image
 
-# Publishes the hosted-instance server image to GHCR on every merge to main — the same
-# release signal cli-publish.yml uses. Hosted deployments pull this image by digest, so a
-# merge to main mints the image a new instance gets. PRs do not publish — docker.yml already
-# proves the build boots there — and doc-only changes are filtered out.
+# Publishes the open-source server image to GHCR for self-hosters on every merge to main —
+# the same release signal cli-publish.yml uses. Malloyyo-hosted instances do not use this
+# artifact; the private cloud repository composes and stores their image separately. PRs do
+# not publish — docker.yml already proves the build boots there — and doc-only changes are
+# filtered out.
 #
 # The image builds with placeholder DATABASE_URL/MOTHERDUCK_TOKEN (baked into the Dockerfile;
 # db init is lazy and never connects at build), so no secrets are needed to publish. The push
 # uses the built-in GITHUB_TOKEN — no extra credentials.
 #
 # One-time after the first run: set the GHCR package `malloyyo-server` to Public
-# (org → Packages → malloyyo-server → Package settings → Change visibility), so hosts pull it
-# without registry auth.
+# (org → Packages → malloyyo-server → Package settings → Change visibility), so self-hosters
+# can pull it without registry auth.
 
 on:
   push:
@@ -73,7 +74,7 @@ jobs:
           {
             echo "### Image published"
             echo ""
-            echo "Immutable reference for a hosted deployment to pin:"
+            echo "Immutable reference for a self-hosted deployment to pin:"
             echo ""
             echo '```'
             echo "${IMAGE}@${DIGEST}"

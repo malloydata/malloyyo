@@ -4,12 +4,12 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { eq, desc, ne, and } from "drizzle-orm";
-import { db, datasets, malloyModels, malloyModelFiles, users } from "@/db";
+import { db, datasets, users } from "@/db";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
 import { nameToSlug } from "@/lib/slug";
-import { GitHubURLReader, fetchGitHubFile, parseGitHubRepo } from "@/lib/github";
-import { introspectModelWithReader } from "@/lib/malloy";
+import { parseGitHubRepo } from "@/lib/github";
+import { refreshGitHubModel } from "@/lib/github-refresh";
 import { logger, serializeErr } from "@/lib/logger";
 
 export const runtime = "nodejs";
@@ -50,9 +50,8 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: `a dataset named "${name}" already exists on this server` }, { status: 409 });
   }
 
-  let owner: string, repo: string;
   try {
-    ({ owner, repo } = parseGitHubRepo(body.githubRepo));
+    parseGitHubRepo(body.githubRepo);
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 400 });
   }
@@ -73,47 +72,14 @@ export async function POST(req: Request) {
     .returning();
 
   try {
-    const reader = new GitHubURLReader(owner, repo, branch, body.useToken);
-
-    let malloyConfig: string | undefined;
-    try {
-      malloyConfig = await fetchGitHubFile(owner, repo, branch, "malloy-config.json", {
-        useToken: body.useToken,
-      });
-    } catch { /* Not present — fine. */ }
-
-    const result = await introspectModelWithReader(reader, "index.malloy", malloyConfig);
-
+    // Initial creation and every later refresh must ingest the same repository shape.
+    // Keeping a second root-model-only loader here once made a newly created dataset omit
+    // dashboards until somebody manually refreshed it.
+    const result = await refreshGitHubModel(id);
     if (!result.ok) {
       logger.error("dataset model introspection failed", { datasetId: id, repo: body.githubRepo, branch, error: result.error });
       await db.update(datasets).set({ status: "failed", statusError: result.error }).where(eq(datasets.id, id));
       return NextResponse.json({ id: row.id, error: result.error, status: "failed" }, { status: 422 });
-    }
-
-    const indexContent = reader.fetched.get("index.malloy") ?? "";
-    const [model] = await db
-      .insert(malloyModels)
-      .values({
-        datasetId: id,
-        version: 1,
-        source: indexContent,
-        generatedBy: `github:${body.githubRepo}@${branch}`,
-        compiledAt: new Date(),
-        sources: result.sources,
-      })
-      .returning();
-
-    const allFiles = new Map(reader.fetched);
-    if (malloyConfig) allFiles.set("malloy-config.json", malloyConfig);
-
-    if (allFiles.size > 0) {
-      await db.insert(malloyModelFiles).values(
-        Array.from(allFiles.entries()).map(([path, content]) => ({
-          modelId: model.id,
-          path,
-          content,
-        })),
-      );
     }
 
     await db.update(datasets).set({ status: "ready", readyAt: new Date() }).where(eq(datasets.id, id));

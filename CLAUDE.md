@@ -123,19 +123,19 @@ script — Vercel runs it in place of `build` when present, with the project's
 own env vars, so `DATABASE_URL` is already there:
 
 ```json
-"vercel-build": "tsx scripts/run-boot-migrations.ts && npm run build"
+"vercel-build": "tsx scripts/vercel-build.ts"
 ```
 
-A build takes as long as it takes, so the migration finishes; a failed
-migration fails the build, so nothing ships onto a schema it can't run on. It
-covers **every** Vercel build — dashboard redeploys and git-triggered deploys
-included, not just `npm run deploy`. `npm run build` is untouched, so the
-Docker image and CI are unaffected.
+The script builds first, then applies the journal only for Production by default. A
+compile failure therefore cannot mutate the database, while a migration failure still
+fails the Vercel build before publication. Vercel caps the whole build step at 45 minutes.
+Preview and custom environments skip migrations unless their isolated database is opted
+in with `RUN_MIGRATIONS_ON_BUILD=1`; Production can opt out with `=0` only when another
+release process owns its schema.
 
-Each Vercel environment also needs **`RUN_MIGRATIONS_ON_BOOT=0`**. This is not
-optional: without it the functions still attempt a boot migration and still get
-frozen, so `/api/healthz` reports `failed_startup` even when the schema is
-current and the app is serving correctly (verified 2026-08-20).
+Boot migrations are disabled unconditionally whenever `VERCEL` is present. A stale
+`RUN_MIGRATIONS_ON_BOOT=1` cannot override this: without the guard Functions still freeze
+mid-migration and `/api/healthz` reports `failed_startup` even when the schema is current.
 
 **Ordering matters.** The build migrates before the new code is promoted, which
 is safe for additive entries. An entry that REMOVES something the *currently
@@ -231,11 +231,12 @@ Defaults are `Malloyyo`/`main`. Set both in the Vercel env (per environment)
 
 **To deploy: `npm run deploy`** (`scripts/deploy.sh`) from the working tree you
 want live. The script encodes the whole procedure — build the engine `dist/`
-(gitignored), `vercel --prod`, then a `/api/health` check. The root `build`
-script also builds the engine, so remote/git-based builds work without the
-local pre-build (fixed 2026-07-06 — before that, external deploys failed with
-`Cannot resolve @malloyyo/mcp-engine`). Don't re-derive the steps; run the one
-command.
+(gitignored), create a staged Production deployment with `--skip-domain`, probe
+that deployment's `/api/health`, then promote it and check the Production alias.
+The root `build` script also builds the engine, so remote/git-based builds work
+without the local pre-build (fixed 2026-07-06 — before that, external deploys
+failed with `Cannot resolve @malloyyo/mcp-engine`). Don't re-derive the steps;
+run the one command.
 
 **Which project** is decided by the gitignored `.vercel` link
 (`vercel link --project <name>`), so each checkout/instance targets its own

@@ -4,7 +4,9 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import Script from "next/script";
+import { TelemetryPageView } from "@/components/TelemetryPageView";
 import { env } from "@/lib/env";
+import { telemetryPageTrackingEnabled } from "@/lib/telemetry";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -52,6 +54,7 @@ export default function RootLayout({
     >
       <body className="min-h-full flex flex-col">
         {children}
+        {telemetryPageTrackingEnabled() ? <TelemetryPageView /> : null}
         <Analytics id={env.ANALYTICS_ID} />
       </body>
     </html>

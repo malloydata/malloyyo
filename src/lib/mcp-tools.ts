@@ -13,6 +13,11 @@ import type { SourceInfo } from "./malloy";
 import { env } from "./env";
 import { parseSlug, instanceSlug } from "./slug";
 import { logger, serializeErr } from "./logger";
+import {
+  captureTelemetry,
+  historyTelemetryEvent,
+  type QueryEntrypoint,
+} from "./telemetry";
 
 // NOTE: the MCP tool surface (tool descriptors, server instructions, and the
 // callTool dispatcher) USED to live here. It has been deleted — the deployed
@@ -154,6 +159,7 @@ async function resolveSession(userId: string): Promise<{ sessionId: string; sequ
 
 export type RecordHistoryFields = {
   userId: string;
+  entrypoint?: QueryEntrypoint;
   datasetId?: string | null;
   toolName: string;
   question?: string | null;
@@ -176,6 +182,7 @@ export type RecordHistoryFields = {
 // failed attempts included. Never throws: a failed audit insert must not break
 // the call it records (but it IS surfaced to the logger).
 export async function recordHistory(fields: RecordHistoryFields): Promise<{ slug: string | null }> {
+  let recordedSlug: string | null = null;
   try {
     const datasetId = fields.datasetId ?? null;
     const { sessionId, sequence } = await resolveSession(fields.userId);
@@ -198,15 +205,21 @@ export async function recordHistory(fields: RecordHistoryFields): Promise<{ slug
       authorModel: fields.authorModel ?? null,
       slug,
     });
-    return { slug };
+    recordedSlug = slug;
   } catch (e) {
     logger.error("history insert failed", {
       toolName: fields.toolName,
       userId: fields.userId,
       error: serializeErr(e).message,
     });
-    return { slug: null };
   }
+  captureHistoryTelemetry(fields);
+  return { slug: recordedSlug };
+}
+
+function captureHistoryTelemetry(fields: RecordHistoryFields): void {
+  const event = historyTelemetryEvent(fields);
+  if (event) void captureTelemetry(event, fields.userId);
 }
 
 // Promote a shareable run (by its history slug) into a durable saved_query, or
@@ -353,7 +366,7 @@ export async function runQueryForWeb(
     const durationMs = Date.now() - t0;
     const capped = res.rows.slice(0, maxRows);
     const { slug } = await recordHistory({
-      userId, datasetId: ds.id, toolName: "query", question: opts.question ?? null,
+      userId, entrypoint: "ltool", datasetId: ds.id, toolName: "query", question: opts.question ?? null,
       source, malloyInput: malloyQuery, compiledSql: res.sql, rowCount: res.rowCount, durationMs,
       executed: true, userAgent: opts.userAgent, authorModel: opts.authorModel, mintSlug: true,
     });
@@ -371,7 +384,7 @@ export async function runQueryForWeb(
     const durationMs = Date.now() - t0;
     const msg = err instanceof Error ? err.message : String(err);
     await recordHistory({
-      userId, datasetId: ds.id, toolName: "query", question: opts.question ?? null,
+      userId, entrypoint: "ltool", datasetId: ds.id, toolName: "query", question: opts.question ?? null,
       source, malloyInput: malloyQuery, durationMs, executed: true, error: msg,
       userAgent: opts.userAgent, authorModel: opts.authorModel,
     });
@@ -409,17 +422,23 @@ export async function saveWebQuery(
     const durationMs = Date.now() - t0;
     const capped = res.rows.slice(0, maxRows);
     const { slug } = await recordHistory({
-      userId, datasetId: ds.id, toolName: "query", question: title,
+      userId, entrypoint: "ltool", datasetId: ds.id, toolName: "query", question: title,
       source, malloyInput: malloyQuery, compiledSql: res.sql, rowCount: res.rowCount, durationMs,
       executed: true, userAgent: opts.userAgent, authorModel: opts.authorModel ?? "human", mintSlug: true,
     });
-    if (slug) await promoteToSaved(slug);
+    const saved = slug ? await promoteToSaved(slug) : null;
+    if (saved) {
+      void captureTelemetry(
+        { event: "query saved", properties: { entrypoint: "ltool" } },
+        userId,
+      );
+    }
     return { ok: true, slug, rows: capped, sql: res.sql, rowCount: res.rowCount, truncated: res.rowCount > capped.length, durationMs, stableResult: res.stableResult };
   } catch (err) {
     const durationMs = Date.now() - t0;
     const msg = err instanceof Error ? err.message : String(err);
     await recordHistory({
-      userId, datasetId: ds.id, toolName: "query", question: title,
+      userId, entrypoint: "ltool", datasetId: ds.id, toolName: "query", question: title,
       source, malloyInput: malloyQuery, durationMs, executed: true, error: msg,
       userAgent: opts.userAgent, authorModel: opts.authorModel ?? "human",
     });

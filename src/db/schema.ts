@@ -456,6 +456,10 @@ export const invitations = pgTable(
 // tagline; a null/absent row means "use the built-in default".
 export const instanceSettings = pgTable("instance_settings", {
   instanceCode: text("instance_code").primaryKey(),
+  // Stable, anonymous identity for this installation. Hosted analytics use the
+  // control-plane tenant id as their instance id, but still use this random UUID
+  // as the salt when pseudonymizing local users.
+  telemetryId: uuid("telemetry_id").notNull().defaultRandom(),
   tagline: text("tagline"),
   signinNotice: text("signin_notice"),
   // Who may join: 'open' | 'invite' (see src/lib/access-policy.ts). Text rather

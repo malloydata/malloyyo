@@ -152,7 +152,12 @@ diff -u /tmp/migrate-test-export.txt /tmp/migrate-test-journal.txt \
 [ "$(count_migrations journal_fresh)" = "$JOURNAL_ENTRIES" ] || fail "expected $JOURNAL_ENTRIES applied migrations"
 boot journal_fresh >/dev/null   # second boot: everything applied, nothing re-runs
 [ "$(count_migrations journal_fresh)" = "$JOURNAL_ENTRIES" ] || fail "re-boot re-applied migrations"
-echo "✓ parity (and re-boot is a no-op)"
+telemetry_id_before="$(psql_db journal_fresh -At -c "INSERT INTO instance_settings (instance_code) VALUES ('telemetry-proof') RETURNING telemetry_id")"
+[ -n "$telemetry_id_before" ] || fail "instance settings did not generate a telemetry id"
+psql_db journal_fresh -c "UPDATE instance_settings SET tagline = 'updated' WHERE instance_code = 'telemetry-proof'" >/dev/null
+telemetry_id_after="$(psql_db journal_fresh -At -c "SELECT telemetry_id FROM instance_settings WHERE instance_code = 'telemetry-proof'")"
+[ "$telemetry_id_before" = "$telemetry_id_after" ] || fail "settings update replaced the stable telemetry id"
+echo "✓ parity (re-boot is a no-op; telemetry identity survives settings updates)"
 
 # --- 2. CONVERGE -----------------------------------------------------------
 # The pre-journal vintage is FIXED at entry 0012 — journal adoption ended the

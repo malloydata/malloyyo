@@ -95,6 +95,8 @@ The ones that matter for a container deploy:
 | `GITHUB_WEBHOOK_SECRET` | recommended | Enables HMAC verification of GitHub's push webhook. Unset, the dataset UUID in the webhook URL is its only protection. Use the same value in the webhook's Secret field on GitHub. |
 | `DASHBOARD_TOKEN_SECRET` | optional | Signs dashboard frame tokens; defaults to `AUTH_SECRET`. |
 | `INSTANCE_NAME` / `INSTANCE_CODE` | optional | Display name + short slug; default `Malloyyo` / `main`. |
+| `MALLOYYO_TELEMETRY_DISABLED` | optional | Set `1` to disable Malloyyo's minimal product telemetry on a self-hosted instance. See [Product telemetry](telemetry.md). |
+| `MALLOYYO_TELEMETRY_DEBUG` | optional | Set `1` to print sanitized events without sending them on a self-hosted instance. |
 | Analytical DB secret | per model | e.g. `MOTHERDUCK_TOKEN`, `BQ_JSON_KEY` — referenced by your model's `malloy-config.json`. |
 | `BREAK_GLASS_EMAIL` | optional | Emergency door: admits this one address as an admin even when the database says no. Membership itself is managed in /admin (first sign-in becomes the owner). |
 | `GITHUB_TOKEN` | optional | For private GitHub repos — and any token also lifts public-repo fetches off GitHub's anonymous 60/hour-per-IP budget, which shared cloud egress IPs have usually already spent. |

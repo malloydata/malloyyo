@@ -7,6 +7,7 @@ import { db, datasets } from "@/db";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
 import { refreshGitHubModel } from "@/lib/github-refresh";
+import { captureTelemetry } from "@/lib/telemetry";
 
 export const runtime = "nodejs";
 
@@ -27,6 +28,20 @@ export async function POST(
   if (!ds.githubRepo) return NextResponse.json({ error: "dataset has no github_repo configured" }, { status: 400 });
 
   const result = await refreshGitHubModel(id);
+  void captureTelemetry(
+    {
+      event: "model published",
+      properties: {
+        method: "github_refresh",
+        outcome: result.ok ? "success" : "error",
+        created_dataset: false,
+        source_count: result.ok ? result.sources.length : 0,
+        file_count: result.ok ? result.fileCount : 0,
+        dashboard_count: result.ok ? result.dashboardCount : 0,
+      },
+    },
+    me.id,
+  );
   if (!result.ok) return NextResponse.json({ ok: false, error: result.error }, { status: 400 });
   return NextResponse.json({ ok: true, model: result });
 }

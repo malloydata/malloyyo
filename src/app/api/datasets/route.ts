@@ -11,6 +11,7 @@ import { nameToSlug } from "@/lib/slug";
 import { parseGitHubRepo } from "@/lib/github";
 import { refreshGitHubModel } from "@/lib/github-refresh";
 import { logger, serializeErr } from "@/lib/logger";
+import { captureTelemetry } from "@/lib/telemetry";
 
 export const runtime = "nodejs";
 
@@ -77,14 +78,56 @@ export async function POST(req: Request) {
     // dashboards until somebody manually refreshed it.
     const result = await refreshGitHubModel(id);
     if (!result.ok) {
+      void captureTelemetry(
+        {
+          event: "model published",
+          properties: {
+            method: "github_create",
+            outcome: "error",
+            created_dataset: true,
+            source_count: 0,
+            file_count: 0,
+            dashboard_count: 0,
+          },
+        },
+        user.id,
+      );
       logger.error("dataset model introspection failed", { datasetId: id, repo: body.githubRepo, branch, error: result.error });
       await db.update(datasets).set({ status: "failed", statusError: result.error }).where(eq(datasets.id, id));
       return NextResponse.json({ id: row.id, error: result.error, status: "failed" }, { status: 422 });
     }
 
     await db.update(datasets).set({ status: "ready", readyAt: new Date() }).where(eq(datasets.id, id));
+    void captureTelemetry(
+      {
+        event: "model published",
+        properties: {
+          method: "github_create",
+          outcome: "success",
+          created_dataset: true,
+          source_count: result.sources.length,
+          file_count: result.fileCount,
+          dashboard_count: result.dashboardCount,
+        },
+      },
+      user.id,
+    );
     return NextResponse.json({ id: row.id, name, status: "ready", sources: result.sources });
   } catch (err) {
+    void captureTelemetry(
+      {
+        event: "model published",
+        properties: {
+          method: "github_create",
+          outcome: "error",
+          created_dataset: true,
+          source_count: 0,
+          file_count: 0,
+          dashboard_count: 0,
+        },
+      },
+      user.id,
+    );
     logger.error("POST /api/datasets uncaught error", { datasetId: id, ...serializeErr(err) });
     const msg = err instanceof Error ? err.message : String(err);
     await db.update(datasets).set({ status: "failed", statusError: msg }).where(eq(datasets.id, id)).catch(() => {});

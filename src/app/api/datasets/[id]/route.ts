@@ -6,6 +6,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { db, datasets, malloyModels, malloyModelFiles, malloyArtifacts } from "@/db";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
+import { captureTelemetry } from "@/lib/telemetry";
 
 export const runtime = "nodejs";
 
@@ -140,5 +141,6 @@ export async function DELETE(
   if (!ds) return NextResponse.json({ error: "not found" }, { status: 404 });
 
   await db.delete(datasets).where(eq(datasets.id, id));
+  void captureTelemetry({ event: "dataset removed", properties: {} }, me.id);
   return NextResponse.json({ ok: true });
 }

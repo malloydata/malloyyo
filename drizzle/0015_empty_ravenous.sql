@@ -1,0 +1,1 @@
+ALTER TABLE "instance_settings" ADD COLUMN "telemetry_id" uuid DEFAULT gen_random_uuid() NOT NULL;

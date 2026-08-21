@@ -12,6 +12,7 @@ import { isProviderReady, warnAuthConfig } from "@/lib/auth-providers";
 import { configuredOrigin } from "@/lib/oauth/base-url";
 import { hostedIntegration } from "@/lib/hosted-auth-integration";
 import { APP_SESSION_MAX_AGE_SECONDS } from "@/lib/app-session";
+import { captureTelemetry } from "@/lib/telemetry";
 
 // A managed deployment's sign-in is owned by an integration (src/lib/hosted-auth.ts); an
 // ordinary install is untouched below this line. One session system either way: the
@@ -153,6 +154,18 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     // the sessions that carry no address, and revoking anyone meant a redeploy.
   },
   events: {
+    async signIn({ user, isNewUser }) {
+      void captureTelemetry(
+        {
+          event: "user signed in",
+          properties: {
+            auth_mode: hosted ? "hosted" : "self_hosted",
+            first_login: isNewUser === true,
+          },
+        },
+        user.id,
+      );
+    },
     // First sign-in: decide membership. Auth.js awaits this event before the
     // session exists, so the admission decision (owner bootstrap / invitation /
     // policy) lands before the first authorized request reads the row.

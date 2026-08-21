@@ -6,6 +6,7 @@ import { eq, and } from "drizzle-orm";
 import { db, favorites } from "@/db";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { promoteToSaved } from "@/lib/mcp-tools";
+import { captureTelemetry } from "@/lib/telemetry";
 
 export const runtime = "nodejs";
 
@@ -33,9 +34,11 @@ export async function POST(req: Request) {
 
   if (existing.length > 0) {
     await db.delete(favorites).where(and(eq(favorites.userId, user.id), eq(favorites.savedQueryId, saved.id)));
+    void captureTelemetry({ event: "query favorite changed", properties: { favorited: false } }, user.id);
     return NextResponse.json({ isFavorited: false });
   } else {
     await db.insert(favorites).values({ userId: user.id, savedQueryId: saved.id });
+    void captureTelemetry({ event: "query favorite changed", properties: { favorited: true } }, user.id);
     return NextResponse.json({ isFavorited: true });
   }
 }

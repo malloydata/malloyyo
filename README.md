@@ -167,10 +167,16 @@ The server compiles and introspects the model and stores a new version; a compil
 
 [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fmalloydata%2Fmalloyyo&env=DATABASE_URL,AUTH_SECRET,AUTH_GOOGLE_ID,AUTH_GOOGLE_SECRET,APP_ADMIN_EMAILS,APP_BASE_URL,INSTANCE_NAME,INSTANCE_CODE&envDescription=Paste%20a%20Postgres%20DATABASE_URL.%20See%20the%20checklist%20for%20the%20rest.&envLink=https%3A%2F%2Fgithub.com%2Fmalloydata%2Fmalloyyo%23deploy-your-own&project-name=malloyyo&repository-name=malloyyo)
 
-The button forks the repo into your GitHub and creates a Vercel project. The schema
-**creates and upgrades itself at boot** (migrations are on by default in production;
-set `RUN_MIGRATIONS_ON_BOOT=0` only if you want to manage the schema yourself), so
-you never run a migration. The import screen prompts for these env vars:
+The button forks the repo into your GitHub and creates a Vercel project. A Production
+build compiles the application and then applies the journal before Vercel can publish
+that deployment, so you never run a migration manually. Boot migrations are disabled on
+Vercel because Functions cannot reliably finish startup work after an invocation returns.
+
+Preview builds do not migrate by default: a Preview branch may share Production's
+`DATABASE_URL`, and unmerged code must not advance that database. Give Preview its own
+database and set `RUN_MIGRATIONS_ON_BUILD=1` in the Preview environment if you want its
+schema applied automatically. Set `RUN_MIGRATIONS_ON_BUILD=0` in Production only when a
+separate release process owns the schema. The import screen prompts for these env vars:
 
 1. **`DATABASE_URL`** — a Postgres connection string (you can get a free instance from
    [neon.tech](https://neon.tech)). **The build needs it, so paste one here.**

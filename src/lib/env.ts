@@ -61,4 +61,19 @@ export const env = {
   get ANALYTICS_ID() {
     return process.env.ANALYTICS_ID ?? "";
   },
+  // Malloyyo product telemetry is distinct from the deployment owner's optional
+  // GA4 configuration above. The hosted control plane sets the immutable tenant
+  // and account IDs; their presence also makes the self-hosted opt-out inapplicable.
+  get MALLOYYO_TENANT_ID() {
+    return process.env.MALLOYYO_TENANT_ID ?? "";
+  },
+  get MALLOYYO_ACCOUNT_ID() {
+    return process.env.MALLOYYO_ACCOUNT_ID ?? "";
+  },
+  get MALLOYYO_TELEMETRY_DISABLED() {
+    return process.env.MALLOYYO_TELEMETRY_DISABLED === "1";
+  },
+  get MALLOYYO_TELEMETRY_DEBUG() {
+    return process.env.MALLOYYO_TELEMETRY_DEBUG === "1";
+  },
 };

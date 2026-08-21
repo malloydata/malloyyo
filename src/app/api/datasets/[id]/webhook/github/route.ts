@@ -7,6 +7,7 @@ import { db, datasets } from "@/db";
 import { refreshGitHubModel } from "@/lib/github-refresh";
 import { logger, serializeErr } from "@/lib/logger";
 import { verifyGitHubSignature } from "@/lib/github-webhook";
+import { captureTelemetry } from "@/lib/telemetry";
 
 export const runtime = "nodejs";
 
@@ -37,9 +38,34 @@ export async function POST(
   // Run refresh after the response is sent so GitHub gets a quick 200.
   // `after()` uses waitUntil so Vercel keeps the function alive until done.
   after(
-    refreshGitHubModel(id).catch((err) =>
-      logger.error("webhook refresh failed", { datasetId: id, ...serializeErr(err) }),
-    ),
+    refreshGitHubModel(id)
+      .then((result) =>
+        captureTelemetry({
+          event: "model published",
+          properties: {
+            method: "github_webhook",
+            outcome: result.ok ? "success" : "error",
+            created_dataset: false,
+            source_count: result.ok ? result.sources.length : 0,
+            file_count: result.ok ? result.fileCount : 0,
+            dashboard_count: result.ok ? result.dashboardCount : 0,
+          },
+        }),
+      )
+      .catch((err) => {
+        void captureTelemetry({
+          event: "model published",
+          properties: {
+            method: "github_webhook",
+            outcome: "error",
+            created_dataset: false,
+            source_count: 0,
+            file_count: 0,
+            dashboard_count: 0,
+          },
+        });
+        logger.error("webhook refresh failed", { datasetId: id, ...serializeErr(err) });
+      }),
   );
 
   return NextResponse.json({ ok: true, message: "refresh triggered" });

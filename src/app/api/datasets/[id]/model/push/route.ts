@@ -9,6 +9,7 @@ import { resolveDatasetByRef } from "@/lib/mcp-tools";
 import { introspectModelFiles } from "@/lib/malloy";
 import { nameToSlug } from "@/lib/slug";
 import { logger, serializeErr } from "@/lib/logger";
+import { captureTelemetry } from "@/lib/telemetry";
 
 export const runtime = "nodejs";
 
@@ -185,6 +186,22 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
         })
         .where(eq(datasets.id, ds.id));
     }
+    if (!dryRun) {
+      void captureTelemetry(
+        {
+          event: "model published",
+          properties: {
+            method: "cli_push",
+            outcome: "error",
+            created_dataset: false,
+            source_count: 0,
+            file_count: files.length,
+            dashboard_count: body.dashboards?.length ?? 0,
+          },
+        },
+        auth.user.id,
+      );
+    }
     return json(400, {
       ok: false,
       kind,
@@ -289,6 +306,21 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       generatedBy: created.model.generatedBy,
     });
 
+    void captureTelemetry(
+      {
+        event: "model published",
+        properties: {
+          method: "cli_push",
+          outcome: "success",
+          created_dataset: !ds,
+          source_count: result.sources.length,
+          file_count: fileMap.size,
+          dashboard_count: body.dashboards?.length ?? 0,
+        },
+      },
+      auth.user.id,
+    );
+
     return json(200, {
       ok: true,
       version: created.model.version,
@@ -301,6 +333,20 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     // Two publishes racing to create the same name: the partial unique index on
     // (name) where status='ready' rejects the loser.
     const msg = err instanceof Error ? err.message : String(err);
+    void captureTelemetry(
+      {
+        event: "model published",
+        properties: {
+          method: "cli_push",
+          outcome: "error",
+          created_dataset: false,
+          source_count: result.sources.length,
+          file_count: fileMap.size,
+          dashboard_count: body.dashboards?.length ?? 0,
+        },
+      },
+      auth.user.id,
+    );
     if (!ds && /datasets_name_ready_unique|duplicate key/i.test(msg)) {
       logger.info("model push create raced", { dataset: id });
       return json(409, {

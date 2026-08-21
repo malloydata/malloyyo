@@ -4,6 +4,7 @@
 import { NextResponse } from "next/server";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { runDashboard } from "@/lib/dashboards/engine";
+import { captureTelemetry } from "@/lib/telemetry";
 
 export const runtime = "nodejs";
 
@@ -35,6 +36,20 @@ export async function POST(req: Request) {
   if (!datasetId || !name) {
     return NextResponse.json({ ok: false, error: "datasetId and name are required" }, { status: 400 });
   }
+  const startedAt = Date.now();
   const result = await runDashboard(user.id, datasetId, name, { query, malloy }, givens ?? {});
+  void captureTelemetry(
+    {
+      event: "query ran",
+      properties: {
+        entrypoint: "dashboard",
+        outcome: result.ok ? "success" : "error",
+        duration_ms: Date.now() - startedAt,
+        author_kind: "human",
+        client_family: "browser",
+      },
+    },
+    user.id,
+  );
   return NextResponse.json(result);
 }

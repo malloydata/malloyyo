@@ -194,6 +194,13 @@ Credentials → Web application), set its authorized redirect URI to
 
 After that, sign in with the admin email and add a dataset.
 
+Malloyyo sends a small allowlist of anonymized, server-side product-usage events by
+default. It never sends query text, SQL, results, URLs, email addresses, or raw user IDs.
+Self-hosters can stop all Malloyyo product telemetry by setting
+`MALLOYYO_TELEMETRY_DISABLED=1`, or inspect the sanitized events without sending them by
+setting `MALLOYYO_TELEMETRY_DEBUG=1`. See [Product telemetry](docs/telemetry.md) for the
+exact event/property allowlist, privacy boundaries, and pseudonymous identities.
+
 > Your model's `malloy-config.json` references your analytical database's secret from an
 > env var (e.g. `ANALYTICAL_DATABASE_SECRET` — see [Developing Malloy models](#developing-malloy-models)). Set that var on the project so the server can connect. `GITHUB_TOKEN` is optional (private-repo model pulls).
 
@@ -214,6 +221,7 @@ AUTH_SECRET=...                        # openssl rand -base64 32
 AUTH_GOOGLE_ID=...                     # Google OAuth client ID
 AUTH_GOOGLE_SECRET=...                 # Google OAuth client secret
 # GITHUB_TOKEN=github_pat_...          # Optional; needed for private repos
+# MALLOYYO_TELEMETRY_DISABLED=1        # Optional; self-hosted product telemetry opt-out
 ```
 
 **Google sign-in** needs a Google OAuth app — Google Cloud Console → APIs & Services →

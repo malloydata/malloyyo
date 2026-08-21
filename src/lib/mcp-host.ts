@@ -315,6 +315,7 @@ export function buildHostedExploreSurface(
     const record = (extra: Partial<RecordHistoryFields>) =>
       recordHistory({
         userId: user.id,
+        entrypoint: "mcp",
         toolName: name,
         source: strArg(args.source),
         durationMs: Date.now() - start,

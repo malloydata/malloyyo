@@ -83,7 +83,9 @@ publish (it creates a private dataset, and only once the model compiles).
 
 The CLI records the git commit it published from; Malloyyo compiles and introspects the model and stores a new version. If it doesn't compile, the push is rejected and the live model is left unchanged.
 
-Alternatively, **point Malloyyo at a GitHub repo** and it pulls `index.malloy` (and any imports) directly — a webhook endpoint (`/api/datasets/<id>/webhook/github`) refreshes it on every push.
+Alternatively, **point Malloyyo at a GitHub repo** and it pulls `index.malloy` (and any
+imports) plus dashboard artifacts under `dashboards/` directly — a webhook endpoint
+(`/api/datasets/<id>/webhook/github`) refreshes them on every push.
 
 ### The two databases
 

@@ -107,6 +107,18 @@ The ones that matter for a container deploy:
 - **Port / host.** The image listens on `3000` and binds `0.0.0.0` (both baked
   in via `ENV`). Map it with `-p <host>:3000`, or override `PORT`.
 - **Non-root.** The container runs as the unprivileged `node` user.
+- **Writable home directory.** DuckDB keeps its extension store in
+  `$HOME/.duckdb` and resolves that from the `HOME` variable itself, so a
+  container whose home is missing or read-only fails the first extension
+  autoload (httpfs for an `https://`/`s3://` source, spatial, …) with an
+  `IO Error` that never mentions `HOME`. The image's `node` user has one, but
+  running as a uid with no passwd entry (Kubernetes `runAsUser: 1234567`), with
+  `--read-only`, or with `--user` and no matching `/home/…` does not. Malloyyo
+  checks at startup and relocates `HOME` to a private directory under the
+  system temp dir when it isn't usable, logging what it did — the same fix as
+  passing `-e HOME=/tmp`, which also still works. If the temp dir isn't
+  writable either it says so instead of failing later on an unrelated-looking
+  error; mount a writable volume (`--tmpfs /tmp`) in that case.
 - **Behind a reverse proxy / TLS.** Terminate TLS at your proxy and set
   `APP_BASE_URL` to the external `https://…` URL so OAuth redirects resolve.
 - **Persistence.** Nothing to mount — state is in Postgres and your analytical

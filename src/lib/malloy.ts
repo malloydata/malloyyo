@@ -4,7 +4,7 @@
 import * as malloy from "@malloydata/malloy";
 import { API, type GivenValue } from "@malloydata/malloy";
 import { DuckDBConnection as MalloyDuckDBConnection } from "@malloydata/db-duckdb";
-import { jsonRows } from "@malloyyo/mcp-engine";
+import { describeHomeFix, ensureWritableHome, jsonRows } from "@malloyyo/mcp-engine";
 import { hostname, networkInterfaces } from "node:os";
 import { randomBytes } from "node:crypto";
 import { env } from "./env";
@@ -12,9 +12,21 @@ import type { GitHubURLReader } from "./github";
 import { logger, serializeErr } from "./logger";
 import { readModelDef, writeModelDef, packModelDef, unpackModelDef, extractModelDef, rehydrateModel } from "./model-cache";
 
-// DuckDB extension autoloading requires a writable home directory. Vercel/Lambda
-// functions may have HOME unset or empty — default to /tmp which is always writable.
-if (!process.env["HOME"]) process.env["HOME"] = "/tmp";
+// DuckDB extension autoloading requires a writable home directory ($HOME/.duckdb),
+// and DuckDB reads HOME itself. Vercel/Lambda leave it unset or empty; a
+// container run as a uid with no passwd entry (Kubernetes `runAsUser`), or with
+// a read-only root filesystem, leaves it pointing somewhere unwritable. Either
+// way the first extension autoload dies with an IO error that never mentions
+// HOME — so detect it here, before any connection is opened, and relocate to a
+// writable directory (the manual `HOME=/tmp` workaround, done automatically).
+{
+  const fix = ensureWritableHome();
+  const note = describeHomeFix(fix);
+  if (note) {
+    if (fix.error) logger.error(note);
+    else logger.warn(note);
+  }
+}
 
 // Per-serverless-instance identity, for cold-start vs warm-reuse diagnostics.
 // INSTANCE_ID is minted once per instance (a fresh cold instance => a new id),

@@ -29,6 +29,7 @@ import path from "node:path";
 import url from "node:url";
 import { createRequire } from "node:module";
 import { getRegisteredConnectionTypes } from "@malloydata/malloy";
+import { describeHomeFix, ensureWritableHome } from "@malloyyo/mcp-engine";
 
 /** The convenience package whose import registers every backend. */
 const CONNECTIONS_PKG = "@malloydata/malloy-connections";
@@ -237,6 +238,12 @@ async function register(): Promise<ConnectionTypesResult> {
   const here = selfDir();
   const failures: { pkg: string; error: string }[] = [];
 
+  // Before the DuckDB backend loads: DuckDB resolves its extension store from
+  // $HOME, so an unset/read-only home turns the first extension autoload into
+  // an IO error that says nothing about HOME. Relocating the variable now is
+  // enough — the connection itself needs no configuration.
+  homeFix = describeHomeFix(ensureWritableHome());
+
   try {
     await import(CONNECTIONS_PKG);
   } catch (bulk) {
@@ -290,6 +297,10 @@ function failureDetail(failures: { pkg: string; error: string }[]): string {
 /** Set once `warnConnectionIssues` has run, so repeat calls stay quiet. */
 let warned = false;
 
+/** What `ensureWritableHome` did, if it's worth mentioning — filled in by
+    `register`, printed once by `warnConnectionIssues`. */
+let homeFix: string | null = null;
+
 /** Set once the full duplicate report has been printed, so every later error
     points back at it instead of repeating it. */
 let warnedAboutDuplicates = false;
@@ -309,6 +320,7 @@ let warnedAboutDuplicates = false;
 export function warnConnectionIssues(result: ConnectionTypesResult): void {
   if (warned) return;
   warned = true;
+  if (homeFix) console.error(`note: ${homeFix}`);
   if (result.duplicates) {
     warnedAboutDuplicates = true;
     console.error(

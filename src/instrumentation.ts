@@ -23,6 +23,19 @@ export async function register(): Promise<void> {
   const { assertStartupConfig } = await import("@/lib/startup");
   assertStartupConfig();
 
+  // DuckDB stores its extensions in $HOME/.duckdb and resolves that from the
+  // HOME variable, so a container run without a writable home (Kubernetes
+  // `runAsUser` with no passwd entry, `--read-only`, a serverless sandbox)
+  // fails on the first extension autoload with an IO error that never names
+  // HOME. Normalize it at boot — before any connection — and say so once in
+  // the startup log rather than leaving it to be diagnosed per query.
+  const { describeHomeFix, ensureWritableHome } = await import("@malloyyo/mcp-engine");
+  const homeNote = describeHomeFix(ensureWritableHome());
+  if (homeNote) {
+    const { logger } = await import("@/lib/logger");
+    logger.warn(homeNote);
+  }
+
   const { bootMigrationsEnabled, recordMigrationOutcome } = await import("@/lib/migration-state");
   if (bootMigrationsEnabled()) {
     // Dynamic import so postgres/drizzle aren't pulled into non-nodejs runtimes.

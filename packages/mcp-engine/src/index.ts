@@ -97,6 +97,14 @@ export {
   gateConfigProblems,
 } from './problems';
 export { prepareSource, type PreparedSource, type SourceInput } from './prepare-source';
+export {
+  describeHomeFix,
+  ensureWritableHome,
+  homeDirProblem,
+  resetWritableHomeCache,
+  type EnsureHomeOptions,
+  type HomeFix,
+} from './duckdb-home';
 
 // Layer 3 — turnkey surfaces
 export {

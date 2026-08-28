@@ -27,6 +27,11 @@ const eslintConfig = defineConfig([
     // Browser shims aliased into those bundles (CJS, no types by design).
     "packages/cli/src/shims/**",
     "examples/**",
+    // Test fixtures are INPUTS to the CLI's own checks, not source: v2-landing-broken
+    // holds a deliberately unparseable landing page so lint.test.ts can prove the
+    // parse error is reported. Linting them makes a fixture's whole purpose a build
+    // failure.
+    "packages/cli/test/fixtures/**",
     // Generated at build time (react + renderer vendor bundle for dashboards).
     "public/dashboard-vendor.js",
   ]),

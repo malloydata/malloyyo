@@ -5,8 +5,9 @@
 // its own entry (catching undefined tiles / missing imports / unresolved givens
 // loudly, at the line), each tile compiles, `dashboard_columns` is a positive
 // int, each referenced given's `# suggest {…}` compiles, the component compiles,
-// no duplicate names, no orphaned component. `index.malloy` is validated
-// separately as the MCP/ltool surface.
+// no duplicate names, no orphaned component. `dashboards/index.jsx` is the
+// static bundle's landing page, not an orphan — it is parsed, not published.
+// `index.malloy` is validated separately as the MCP/ltool surface.
 
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -40,6 +41,23 @@ function componentQueryLiterals(source: string): string[] {
   return [...out];
 }
 
+/** Syntax-check the static bundle's landing page (`dashboards/index.jsx|tsx`).
+ *
+ * Only a parse: it is ordinary React that never sees Malloy, so there is no
+ * scope to resolve `query="…"` against — unlike a dashboard component, whose
+ * literals are checked against its dashboard. esbuild.transform is the same
+ * check the bundler's own pass would fail on, just moved earlier. */
+function landingPageErrors(dir: string, file: string): string[] {
+  const ext = file.endsWith(".tsx") ? "tsx" : "jsx";
+  try {
+    esbuild.transformSync(readFileSync(join(dir, file), "utf8"), { loader: ext, jsx: "automatic" });
+    return [];
+  } catch (e) {
+    const msg = (e as { errors?: Array<{ text: string }> }).errors?.map((x) => x.text).join("; ") ?? String(e);
+    return [`${file}: ${msg}`];
+  }
+}
+
 export async function lintDashboards(root: string): Promise<LintReport> {
   const abs = resolve(root);
   const runner = await makeRunner(abs);
@@ -69,15 +87,33 @@ async function runLint(abs: string, runner: ModelRunner): Promise<LintReport> {
   const malloyBases = new Set(malloyFiles.map((f) => f.slice(0, -".malloy".length)));
 
   // Orphaned component: a `dashboards/<name>.jsx|tsx` with no `<name>.malloy`.
+  //
+  // `index.jsx|tsx` is the ONE exception, and it is not an orphan: the bundler
+  // reads it as the static site's written landing page (bundle.ts, "A repo may
+  // ship `dashboards/index.jsx|tsx` as a written landing page"). It is plain
+  // React with no Malloy and no query by design — that is the whole point of it
+  // — so demanding an `index.malloy` beside it asks for a dashboard nobody wants.
+  // Treating it as an orphan made `lint` fail, and publish gates on lint, so a
+  // repo that bundled perfectly could not be published at all.
+  //
+  // An `index.malloy` that DOES exist is a dashboard named "index", and its
+  // component is this same file; the check below already passes in that case,
+  // and the loop over malloyFiles lints the pair normally.
   for (const c of entries.filter((f) => /\.(jsx|tsx)$/.test(f)).sort()) {
     const cbase = c.replace(/\.(jsx|tsx)$/, "");
-    if (!malloyBases.has(cbase)) {
-      dashboards.push({
-        name: c,
-        errors: [`component "${c}" has no matching "${cbase}.malloy" dashboard`],
-        warnings: [],
-      });
+    if (malloyBases.has(cbase)) continue;
+    if (cbase === "index") {
+      // Not published — the hosted app has its own home page, and gatherDashboards
+      // only ever walks .malloy files — but it still has to compile, or `bundle`
+      // fails later with the same error this could have given now.
+      dashboards.push({ name: c, errors: landingPageErrors(dir, c), warnings: [] });
+      continue;
     }
+    dashboards.push({
+      name: c,
+      errors: [`component "${c}" has no matching "${cbase}.malloy" dashboard`],
+      warnings: [],
+    });
   }
 
   const seenNames = new Map<string, string>(); // resolved name → declaring file

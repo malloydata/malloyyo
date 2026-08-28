@@ -48,6 +48,14 @@ test('lint v2: passes a good dashboard, catches a bad tile, bad columns, and an 
   assert.ok(ghost, 'orphaned component reported');
   assert.match(ghost!.errors[0], /no matching "ghost\.malloy"/);
 
+  // ...but index.jsx is NOT an orphan. It is the static bundle's landing page:
+  // plain React with no Malloy and no query BY DESIGN, so there is no
+  // index.malloy to match and demanding one blocked publish on a repo that
+  // bundled fine. It is still reported, so the author can see it was recognised.
+  const landing = byName.get('index.jsx');
+  assert.ok(landing, 'landing page reported');
+  assert.deepEqual(landing!.errors, [], 'a valid landing page is not an error');
+
   // Link check: bad.jsx hard-codes query="nope", which doesn't resolve.
   assert.ok(
     bad!.errors.some((e) => /bad\.jsx: query "nope"/.test(e) && /doesn't resolve/.test(e)),
@@ -61,4 +69,26 @@ test('lint v2: passes a good dashboard, catches a bad tile, bad columns, and an 
 
   // Any error fails the whole lint (publish is blocked).
   assert.equal(report.ok, false, 'lint fails when a dashboard has errors');
+});
+
+test('lint v2: a landing page alone is publishable, and a broken one still fails', async () => {
+  // The bug this covers: `publish` gates on lint, so an unfixable lint error on
+  // dashboards/index.jsx meant a repo could be bundled but never published.
+  const ok = await lintDashboards(path.join(here, 'fixtures', 'v2-lint'));
+  assert.ok(
+    ok.dashboards.find((d) => d.name === 'index.jsx'),
+    'the landing page is discovered rather than silently skipped',
+  );
+
+  // Exempting it from the orphan check must not make it unchecked: it is
+  // compiled by `bundle`, so a syntax error should surface at lint time — with
+  // the file named — instead of at bundle time.
+  const broken = await lintDashboards(path.join(here, 'fixtures', 'v2-landing-broken'));
+  assert.equal(broken.ok, false, 'a landing page that cannot parse fails lint');
+  const d = broken.dashboards.find((x) => x.name === 'index.jsx');
+  assert.ok(d, 'the broken landing page is reported');
+  assert.equal(d!.errors.length, 1);
+  assert.match(d!.errors[0], /^index\.jsx: /, 'the error names the file');
+  // Not the orphan message — that was the wrong diagnosis for this file.
+  assert.doesNotMatch(d!.errors[0], /no matching/);
 });

@@ -32,6 +32,8 @@
 // If you add a new value to this document, it must be model-derived and go
 // through safeJson(). Request-derived state belongs in FRAME_BOOTSTRAP.
 
+import { normalizeImageHosts } from "./image-hosts";
+
 /** JSON for embedding inside an inline <script>. Escaping `<` (and `>` for
     symmetry) is what closes the XSS hole: `</script` can no longer appear in
     the output, so the element cannot be terminated early. The two line
@@ -111,13 +113,25 @@ export const FRAME_BOOTSTRAP = `(function(){
     constructor; it grants nothing to an attacker who cannot get script running
     in the first place. `'self'` is deliberately NOT used — in a sandboxed
     document the origin is opaque, so `'self'` matches nothing and would block
-    our own bundle. */
-export function frameCsp(nonce: string): string {
+    our own bundle.
+
+    `img-src` stays default-deny (`data: blob:`) and is widened ONLY by hosts a
+    repo names in malloy-config.json's `malloyyo.image_hosts`. Dashboards that
+    build <img src> out of a model column need that, and a blanket `https:`
+    would hand every dashboard on the server an exfil channel out through image
+    URLs — `connect-src 'none'` closes the others. image-hosts.ts is the
+    validator and the trust boundary; read it before touching this. */
+export function frameCsp(nonce: string, imageHosts?: readonly string[]): string {
+  // Re-validated HERE, not trusted from the caller: these strings come from a
+  // repo's malloy-config.json by way of the DB, and this is where they enter a
+  // response header. normalizeImageHosts re-emits each one from scratch, so
+  // nothing an author wrote can append a directive of its own. See image-hosts.ts.
+  const hosts = normalizeImageHosts(imageHosts);
   return [
     "default-src 'none'",
     `script-src 'nonce-${nonce}' 'unsafe-eval'`,
     "style-src 'unsafe-inline'",
-    "img-src data: blob:",
+    ["img-src data: blob:", ...hosts].join(" "),
     "font-src data:",
     "connect-src 'none'",
     "base-uri 'none'",

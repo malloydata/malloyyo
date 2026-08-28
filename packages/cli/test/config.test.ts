@@ -239,3 +239,18 @@ test("a target with no url names both fixes instead of crashing", () => {
     );
   });
 });
+
+test("image_hosts is a known setting, not an unknown key or a target", () => {
+  // It is read by the server (it widens the dashboard frame's img-src), never by
+  // the CLI — but it lives in this block, so it has to be known here or every
+  // publish warns about it. It must also not be mistaken for a publish target.
+  withConfig(
+    { image_hosts: ["image.tmdb.org"], targets: { prod: { url: "https://x.dev", dataset: "d" } } },
+    (dir) => {
+      assert.equal(resolveTarget(dir, "prod").dataset, "d");
+      assert.throws(() => resolveTarget(dir, "image_hosts"), /Unknown target/);
+      // Still exactly one target, so the unambiguous-target rule is unaffected.
+      assert.equal(resolveInstance(dir).url, "https://x.dev");
+    },
+  );
+});

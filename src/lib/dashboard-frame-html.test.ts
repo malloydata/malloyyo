@@ -181,3 +181,32 @@ test("frameNonce is fresh per call", () => {
   const seen = new Set(Array.from({ length: 50 }, () => frameNonce()));
   assert.equal(seen.size, 50);
 });
+
+test("img-src stays default-deny when the repo names no hosts", () => {
+  // The default has to survive the allowlist landing: a dashboard that never
+  // declared anything must not silently gain remote image loading.
+  for (const csp of [frameCsp("N"), frameCsp("N", []), frameCsp("N", undefined)]) {
+    assert.match(csp, /(^|; )img-src data: blob:(;|$)/);
+  }
+});
+
+test("declared hosts are appended to img-src and nowhere else", () => {
+  const csp = frameCsp("N", ["image.tmdb.org", "*.cdn.example.com"]);
+  assert.match(csp, /(^|; )img-src data: blob: https:\/\/image\.tmdb\.org https:\/\/\*\.cdn\.example\.com(;|$)/);
+  // The other directives are untouched — in particular nothing gained a host.
+  assert.match(csp, /(^|; )connect-src 'none'(;|$)/);
+  assert.match(csp, /(^|; )default-src 'none'(;|$)/);
+});
+
+test("a host string cannot inject a second directive", () => {
+  // The escalation this allowlist would otherwise enable. frameCsp re-validates
+  // rather than trusting its caller, so the payload never reaches the header.
+  const csp = frameCsp("N", ["x; script-src 'unsafe-inline'", "image.tmdb.org"]);
+  assert.equal(csp.match(/script-src/g)?.length, 1);
+  assert.equal(csp.match(/img-src/g)?.length, 1);
+  assert.equal(/'unsafe-inline'/.test(csp.split("; ").find((d) => d.startsWith("script-src")) ?? ""), false);
+  // The one valid host still made it — a bad neighbour doesn't void the list.
+  assert.match(csp, /img-src data: blob: https:\/\/image\.tmdb\.org(;|$)/);
+  // And the containment is intact.
+  assert.match(csp, /(^|; )sandbox allow-scripts/);
+});

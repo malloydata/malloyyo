@@ -20,7 +20,8 @@ import { dashboardGivenSpecs, runRestricted, type DashboardGivenSpec } from "@ma
 import { db, malloyArtifacts } from "@/db";
 import { findByDatasetRef, modelFileMap } from "@/lib/mcp-tools";
 import { runNamedMalloyFiles, withModelRuntime, fileUrl } from "@/lib/malloy";
-import { getDashboard, type DashboardDetail } from "./meta";
+import { getDashboard, modelConfigJson, type DashboardDetail } from "./meta";
+import { imageHostsFromConfig } from "./image-hosts";
 
 export type { DashboardDetail };
 
@@ -155,6 +156,10 @@ export interface DashboardViewData {
   dash: DashboardDetail;
   info: Record<string, unknown>;
   givenSpecs: unknown[];
+  /** Validated `img-src` hosts from the repo's malloy-config.json. Only the
+      sandboxed frame route uses these (it sends the CSP); the in-page tag-only
+      renderer runs in the trusted document and has no such restriction. */
+  imageHosts: string[];
 }
 
 export async function dashboardViewData(
@@ -189,7 +194,7 @@ export async function dashboardViewData(
     givens: dash.manifest.givens,
     autorun: dash.manifest.autorun,
   };
-  return { dash, info, givenSpecs };
+  return { dash, info, givenSpecs, imageHosts: imageHostsFromConfig(await modelConfigJson(dash.modelId)) };
 }
 
 export type DashboardGivensResult =

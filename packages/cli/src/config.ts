@@ -162,6 +162,26 @@ export function readSiteConfig(dir: string): SiteConfig {
 const normalizeUrl = (u: string): string => u.replace(/\/+$/, "");
 
 /**
+ * A target's url, or a message saying where to put one.
+ *
+ * `url` is required, but nothing validates malloy-config.json on the way in, so a target
+ * written without one used to reach normalizeUrl as undefined and fail with
+ * "Cannot read properties of undefined (reading 'replace')" — a stack-shaped error for a
+ * one-line config mistake. It also now has a second fix worth naming: the instance can
+ * come from the command line instead of the file.
+ */
+function targetUrl(name: string, cfg: TargetConfig): string {
+  if (typeof cfg.url !== "string" || cfg.url === "") {
+    throw new Error(
+      `Target "${name}" has no "url" in malloy-config.json. Add one:\n` +
+        `  "malloyyo": { "targets": { "${name}": { "url": "https://<instance>", "dataset": "<dataset>" } } }\n` +
+        `Or name the instance on the command line:  malloyyo publish -i https://<instance>`,
+    );
+  }
+  return normalizeUrl(cfg.url);
+}
+
+/**
  * Resolve a named target's url/dataset (token is resolved separately — see oauth.ts).
  *
  * `name` may be omitted when the repo defines exactly one target, matching what `login`
@@ -189,7 +209,7 @@ export function resolveTarget(dir: string, name?: string): Target {
     const [onlyName, onlyCfg] = entries[0];
     return {
       name: onlyName,
-      url: normalizeUrl(onlyCfg.url),
+      url: targetUrl(onlyName, onlyCfg),
       dataset: onlyCfg.dataset,
       tokenEnv: onlyCfg.malloyyo_token?.env,
     };
@@ -202,7 +222,7 @@ export function resolveTarget(dir: string, name?: string): Target {
   }
   return {
     name,
-    url: normalizeUrl(cfg.url),
+    url: targetUrl(name, cfg),
     dataset: cfg.dataset,
     tokenEnv: cfg.malloyyo_token?.env,
   };
@@ -231,13 +251,59 @@ export function resolveInstance(dir: string, arg?: string): { name: string; url:
       const available = entries.map(([n]) => n).join(", ") || "(none defined)";
       throw new Error(`Unknown target "${arg}". Pass a target name, a URL, or one of: ${available}`);
     }
-    return { name: arg, url: normalizeUrl(cfg.url) };
+    return { name: arg, url: targetUrl(arg, cfg) };
   }
 
   // No arg: only allowed when unambiguous.
   if (entries.length === 0) throw new Error("No targets defined. Pass a target name or a URL.");
-  if (entries.length === 1) return { name: entries[0][0], url: normalizeUrl(entries[0][1].url) };
-  const urls = new Set(entries.map(([, c]) => normalizeUrl(c.url)));
+  if (entries.length === 1) return { name: entries[0][0], url: targetUrl(entries[0][0], entries[0][1]) };
+  const urls = new Set(entries.map(([n, c]) => targetUrl(n, c)));
   if (urls.size === 1) return { name: entries.map(([n]) => n).join("/"), url: [...urls][0] };
   throw new Error(`Multiple targets — specify which: ${entries.map(([n]) => n).join(", ")} (or a URL).`);
+}
+
+/**
+ * The target `publish` will push to: the config's, with `--instance`/`--dataset` on top.
+ *
+ * A target is two independent facts — WHICH instance and WHICH dataset — so each is
+ * overridable on its own, and supplying BOTH skips the config entirely. That last case is
+ * the point of the flags: publishing a repo to an instance it has no target for (a fresh
+ * `cloud instance create`, a colleague's instance, a one-off) previously meant editing
+ * malloy-config.json, which is the author's committed file and usually not what they want
+ * to change to run one command.
+ *
+ *   malloyyo publish -i https://gravity.malloyyo.com --dataset movies --create-dataset
+ *
+ * `--instance` takes the same argument `login` does — a URL, used as-is with no config
+ * read, or the name of a configured target, whose url is borrowed.
+ */
+export function resolvePublishTarget(
+  dir: string,
+  name?: string,
+  overrides: { instance?: string; dataset?: string } = {},
+): Target {
+  const { instance, dataset } = overrides;
+
+  if (instance === undefined && dataset === undefined) return resolveTarget(dir, name);
+
+  // Fully specified, and no target named: nothing to read. This is the shape that works
+  // in a repo whose malloy-config.json has no `malloyyo` block at all.
+  if (instance !== undefined && dataset !== undefined && name === undefined) {
+    const resolved = resolveInstance(dir, instance);
+    return { name: resolved.name, url: resolved.url, dataset };
+  }
+
+  const base = resolveTarget(dir, name);
+  if (instance === undefined) return { ...base, dataset: dataset as string };
+
+  const resolved = resolveInstance(dir, instance);
+  return {
+    name: resolved.name,
+    url: resolved.url,
+    dataset: dataset ?? base.dataset,
+    // tokenEnv is deliberately NOT carried over. It names a credential for the
+    // CONFIGURED instance, and this is a different one — sending that token to another
+    // host is both wrong and a leak. Falling through to --token or the stored login for
+    // the new URL is the safe default.
+  };
 }

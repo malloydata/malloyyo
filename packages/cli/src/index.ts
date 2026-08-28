@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { Command } from "commander";
 import { resolve } from "node:path";
-import { resolveTarget, resolveInstance, type Target } from "./config.js";
+import { resolveTarget, resolveInstance, resolvePublishTarget, type Target } from "./config.js";
 import { gatherDirectory, gatherDashboards, gitInfo } from "./gather.js";
 import { lintDashboards, printLintReport } from "./lint.js";
 import { missingEnvRefs, missingEnvHint } from "./shared/env-refs.js";
@@ -83,13 +83,39 @@ function requestFailed(what: string, res: Response, out: ModelStatus, t: Target,
   return new Error(`${what} failed: ${detail}${hint}`);
 }
 
+/**
+ * Named after the flags it explains, since `--instance`/`--dataset` are the part of this
+ * command that isn't guessable from the argument list alone.
+ */
+const PUBLISH_HELP = `Target resolution:
+  The instance and dataset normally come from the \`malloyyo\` block in
+  malloy-config.json. Either can be overridden, and giving BOTH means the
+  config is never read — so a repo with no targets (or none for this
+  instance) can be published without editing its committed config:
+
+    malloyyo publish -i https://gravity.malloyyo.com --dataset movies --create-dataset
+
+  -i takes what \`login\` takes: a URL, or the name of a configured target
+  whose url should be borrowed. Authenticate the same way as always:
+  \`malloyyo login <url>\`, or pass --token.`;
+
 async function publish(
   target: string | undefined,
   dir: string,
-  opts: { token?: string; dryRun?: boolean; skipLint?: boolean; createDataset?: boolean },
+  opts: {
+    token?: string;
+    dryRun?: boolean;
+    skipLint?: boolean;
+    createDataset?: boolean;
+    instance?: string;
+    dataset?: string;
+  },
 ): Promise<void> {
   const root = resolve(dir);
-  const t = resolveTarget(root, target);
+  const t = resolvePublishTarget(root, target, {
+    instance: opts.instance,
+    dataset: opts.dataset,
+  });
   const source = tokenSource(t, { tokenFlag: opts.token });
   const bearer = await getAccessToken(t, { tokenFlag: opts.token });
 
@@ -208,11 +234,17 @@ program
     "named target from the `malloyyo` config block; optional when the repo defines one",
   )
   .argument("[dir]", "directory to publish", ".")
+  .option(
+    "-i, --instance <instance>",
+    "instance URL, or a configured target name to borrow the url from; overrides the config",
+  )
+  .option("--dataset <dataset>", "dataset to publish into; overrides the config")
   .option("--token <token>", "bearer token (overrides login/env)")
   .option("--dry-run", "gather and report what would be sent, but don't POST")
   .option("--skip-lint", "skip the pre-publish dashboard lint")
   .option("--create-dataset", "create the target dataset if it doesn't exist yet (private)")
   .description('push the Malloy model in <dir> (default ".") to <target>')
+  .addHelpText("after", `\n${PUBLISH_HELP}\n`)
   .action(publish);
 
 program

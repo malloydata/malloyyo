@@ -28,6 +28,19 @@ export const env = {
   get INSTANCE_NAME() {
     return process.env.INSTANCE_NAME ?? "Malloyyo";
   },
+  // The commit this build was made from, when the platform says so. Vercel sets
+  // VERCEL_GIT_COMMIT_SHA on every build of a git-connected project (including a
+  // `vercel --prod` from a working tree, where it reflects the local HEAD).
+  // GIT_COMMIT_SHA is the portable spelling a self-hosted deployment can set in
+  // its own environment — it is read at runtime, so a Docker image takes it from
+  // `-e GIT_COMMIT_SHA=…` with no rebuild and no Dockerfile change.
+  //
+  // Absent is a normal state, not an error: `npm run dev` has neither, and the
+  // UI simply shows the version alone.
+  get BUILD_SHA(): string | undefined {
+    const sha = process.env.GIT_COMMIT_SHA ?? process.env.VERCEL_GIT_COMMIT_SHA;
+    return sha && /^[0-9a-f]{7,40}$/i.test(sha) ? sha.toLowerCase() : undefined;
+  },
   // Short slug prefix for this deployment (e.g. main / stg / gld). Prefixed
   // onto shareable query slugs so a slug from one instance fails loudly when
   // handed to another.

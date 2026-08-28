@@ -29,15 +29,20 @@ export interface SiteConfig {
  *
  *   { "malloyyo": {
  *       "analytics": "G-XXXXXXXXXX",
+ *       "image_hosts": ["image.tmdb.org"],
  *       "targets": { "prod": { "url": …, "dataset": … } }
  *   } }
+ *
+ * `image_hosts` is read by the SERVER, not by this file: it widens the dashboard
+ * frame's `img-src` so a dashboard can show remote images. Listed here only so the
+ * unknown-key warning below doesn't fire on a legitimate setting.
  *
  * The old shape put targets directly at the top level, which made the block an
  * open map: a mistyped setting silently became a publish target, and there was
  * nowhere to put project settings. That shape still works and still warns —
  * see parseMalloyyoConfig.
  */
-const KNOWN_KEYS = new Set(["analytics", "targets"]);
+const KNOWN_KEYS = new Set(["analytics", "targets", "image_hosts"]);
 
 /** A target is an object with a string `url`. Only used to tell a legacy
     top-level target apart from a mistyped key, so the warning can say which. */

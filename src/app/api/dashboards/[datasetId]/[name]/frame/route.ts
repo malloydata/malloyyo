@@ -31,7 +31,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ datasetId: stri
     // path and the in-page tag-only renderer stay in lockstep.
     const view = await dashboardViewData(user.id, datasetId, name);
     if (!view) return new Response("dashboard not found", { status: 404 });
-    const { dash, info, givenSpecs } = view;
+    const { dash, info, givenSpecs, imageHosts } = view;
     // The shareable-link state (`?$given=…`, `?~viewstate=…`) is deliberately
     // NOT read here. It is already on this document's own URL, so the frame
     // parses location.search itself (frame-html.ts: FRAME_BOOTSTRAP) and the
@@ -53,7 +53,17 @@ export async function GET(req: Request, ctx: { params: Promise<{ datasetId: stri
         // The sandbox is enforced by THIS response, not only by whoever embeds
         // it: the route is reachable as a top-level navigation (proxy.ts:29
         // passes /api/ straight through), where no iframe attribute applies.
-        "content-security-policy": frameCsp(nonce),
+        // img-src is widened only by hosts the repo named in malloy-config.json;
+        // frameCsp re-validates them, since this is where they enter a header.
+        "content-security-policy": frameCsp(nonce, imageHosts),
+        // No Referrer-Policy here on purpose. An allowed image host could
+        // otherwise learn the dashboard URL and its ?$given=… state from the
+        // Referer of every image it serves — but next.config.ts already sends
+        // `strict-origin-when-cross-origin` for every path, which strips path
+        // and query cross-origin, and this document's origin is opaque
+        // (sandbox), so browsers send no Referer from it at all. A header set
+        // here would also be overridden by the config's, so it would read as
+        // protection while doing nothing.
         "x-content-type-options": "nosniff",
       },
     });

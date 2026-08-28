@@ -13,7 +13,7 @@
 // This module must NEVER import ./engine or @/lib/malloy (statically or lazily).
 
 import { and, eq, asc, desc } from "drizzle-orm";
-import { db, datasets, malloyArtifacts } from "@/db";
+import { db, datasets, malloyArtifacts, malloyModelFiles } from "@/db";
 import { visibleDatasetWhere, findByDatasetRef, latestModel } from "@/lib/mcp-tools";
 
 export interface DashboardSummary {
@@ -83,3 +83,19 @@ export async function getDashboard(userId: string, datasetId: string, name: stri
     iframe; a non-empty source is a custom dashboard that runs sandboxed. */
 export const isCustomDashboard = (dash: Pick<DashboardDetail, "source">): boolean =>
   (dash.source ?? "").trim().length > 0;
+
+/** A model's malloy-config.json, if it shipped one.
+ *
+ * The config travels as an ordinary model file — the CLI publish route stores it
+ * under that path (api/datasets/[id]/model/push), and the GitHub refresh does the
+ * same — so there is no column to add and no migration. Returns the raw text;
+ * callers parse what they need (image-hosts.ts, and poolSizeFromConfig's reader
+ * in @/lib/malloy, are both shaped that way). */
+export async function modelConfigJson(modelId: string): Promise<string | undefined> {
+  const [row] = await db
+    .select({ content: malloyModelFiles.content })
+    .from(malloyModelFiles)
+    .where(and(eq(malloyModelFiles.modelId, modelId), eq(malloyModelFiles.path, "malloy-config.json")))
+    .limit(1);
+  return row?.content;
+}

@@ -279,6 +279,41 @@ export default function Dashboard({ dashboard, givens }) {
   tag** — it's a component. See `yo_help dashboards/vega-charts` and
   `dashboards/custom-components`.
 
+### Remote images
+
+A published dashboard runs under a default-deny CSP, so an `<img>` pointing at
+another host is **blocked** — even though the same dashboard shows the image
+fine from `malloyyo dashboard dev` and from a static bundle, neither of which
+sends a CSP. Symptom, in the browser console:
+
+```
+Loading the image 'https://image.tmdb.org/...' violates the following
+Content Security Policy directive: "img-src data: blob:".
+```
+
+Name the hosts in **`malloy-config.json`** — once per repo, covering every
+dashboard in it:
+
+```json
+{
+  "malloyyo": {
+    "image_hosts": ["image.tmdb.org", "*.cdn.example.com"]
+  }
+}
+```
+
+Then republish; the frame's `img-src` gains exactly those hosts. `https://` is
+implied and added for you, a leading `*.` matches subdomains, and up to 8 hosts
+are allowed. An entry that isn't a plain hostname is dropped and the rest still
+apply, so a typo costs you that one host's images rather than the render.
+
+This is an allowlist rather than a blanket `https:` on purpose: dashboard code
+is untrusted, `connect-src` is `'none'`, and an image URL is the one remaining
+way it could smuggle row data to a third party. Naming the hosts means you chose
+who can receive them.
+
+---
+
 ---
 
 ## 6. `index.malloy` and lint

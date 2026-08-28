@@ -10,7 +10,12 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { readSiteConfig, resolveTarget, resolveInstance } from "../src/config.js";
+import {
+  readSiteConfig,
+  resolveTarget,
+  resolveInstance,
+  resolvePublishTarget,
+} from "../src/config.js";
 
 function withConfig(malloyyo: unknown, fn: (dir: string) => void) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "malloyyo-cfg-"));
@@ -137,5 +142,100 @@ test("resolveTarget without a name carries the fix when no block exists", () => 
       assert.match(error.message, /"malloyyo"/);
       return true;
     });
+  });
+});
+
+// --instance/--dataset. The rule under test is that the two halves of a target are
+// independently overridable, and that supplying both means the config is never opened —
+// that last part is the whole point, since it's what lets a repo publish to an instance
+// its committed malloy-config.json says nothing about.
+
+test("no overrides: identical to resolveTarget", () => {
+  withConfig({ targets: { prod: { url: "https://x.dev/", dataset: "d" } } }, (dir) => {
+    assert.deepEqual(resolvePublishTarget(dir, "prod"), resolveTarget(dir, "prod"));
+    assert.deepEqual(resolvePublishTarget(dir, undefined, {}), resolveTarget(dir));
+  });
+});
+
+test("instance + dataset: config is never read", () => {
+  // No malloy-config.json in this directory at all — resolveTarget would throw here.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "malloyyo-nocfg-"));
+  try {
+    assert.throws(() => resolveTarget(dir), /No `malloyyo` config found/);
+    assert.deepEqual(
+      resolvePublishTarget(dir, undefined, {
+        instance: "https://gravity.malloyyo.com/",
+        dataset: "movies",
+      }),
+      { name: "https://gravity.malloyyo.com", url: "https://gravity.malloyyo.com", dataset: "movies" },
+    );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("each half overrides on its own", () => {
+  withConfig({ targets: { prod: { url: "https://x.dev", dataset: "d" } } }, (dir) => {
+    // Dataset only: the configured instance, a different dataset.
+    assert.deepEqual(resolvePublishTarget(dir, undefined, { dataset: "other" }), {
+      name: "prod",
+      url: "https://x.dev",
+      dataset: "other",
+      tokenEnv: undefined,
+    });
+    // Instance only: the configured dataset, somewhere else.
+    const moved = resolvePublishTarget(dir, undefined, { instance: "https://y.dev" });
+    assert.equal(moved.url, "https://y.dev");
+    assert.equal(moved.dataset, "d");
+  });
+});
+
+test("--instance may name a configured target, borrowing its url", () => {
+  withConfig(
+    {
+      targets: {
+        prod: { url: "https://prod.dev", dataset: "d" },
+        stg: { url: "https://stg.dev", dataset: "s" },
+      },
+    },
+    (dir) => {
+      // prod's dataset, staging's host.
+      const t = resolvePublishTarget(dir, "prod", { instance: "stg" });
+      assert.equal(t.url, "https://stg.dev");
+      assert.equal(t.dataset, "d");
+      assert.throws(() => resolvePublishTarget(dir, "prod", { instance: "nope" }), /Unknown target/);
+    },
+  );
+});
+
+test("a redirected publish drops the config's token env var", () => {
+  // The var names a credential for the CONFIGURED host; sending it to another one would
+  // leak it. Overriding only the dataset stays on that host, so it keeps the var.
+  withConfig(
+    { targets: { prod: { url: "https://x.dev", dataset: "d", malloyyo_token: { env: "TOK" } } } },
+    (dir) => {
+      assert.equal(resolveTarget(dir, "prod").tokenEnv, "TOK");
+      assert.equal(resolvePublishTarget(dir, "prod", { dataset: "other" }).tokenEnv, "TOK");
+      assert.equal(
+        resolvePublishTarget(dir, "prod", { instance: "https://y.dev" }).tokenEnv,
+        undefined,
+      );
+    },
+  );
+});
+
+test("a target with no url names both fixes instead of crashing", () => {
+  // Used to throw "Cannot read properties of undefined (reading 'replace')".
+  withConfig({ targets: { movies: { dataset: "movies" } } }, (dir) => {
+    assert.throws(() => resolveTarget(dir, "movies"), /has no "url"/);
+    assert.throws(() => resolveTarget(dir, "movies"), /malloyyo publish -i/);
+    // ...and the flags are a way past it, without touching the file.
+    assert.equal(
+      resolvePublishTarget(dir, undefined, {
+        instance: "https://gravity.malloyyo.com",
+        dataset: "movies",
+      }).url,
+      "https://gravity.malloyyo.com",
+    );
   });
 });

@@ -121,16 +121,45 @@ function groupSourcesByDataset(
 
 function SourceFilterPicker({
   value,
+  currentDatasetRef,
   sources,
   onChange,
 }: {
   value: string;
+  /** The dataset the current query belongs to, as an id OR a name — BOTH occur:
+      a replayed history item carries the recorded uuid, while a deep link
+      carries the readable name (`/ltool?dataset=babynames`). `value` is a bare
+      source NAME and names are not unique across datasets — two can each define
+      "orders" — so without this the picker cannot tell WHICH "orders" is
+      selected: it would mark both and scroll to whichever came first. */
+  currentDatasetRef?: string | null;
   sources: SourceOption[];
   onChange: (source: string, option?: SourceOption) => void;
 }) {
   const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const selectedRef = useRef<HTMLButtonElement>(null);
   const [pos, setPos] = useState<{ top: number; left: number; width: number } | null>(null);
+
+  /** Is this row the selected one? By dataset too when we know which — matching
+      the ref against both the id and the name, since either may reach us. */
+  const isSelected = (s: SourceOption) =>
+    s.source === value &&
+    (!currentDatasetRef || (!s.datasetId && !s.model) || s.datasetId === currentDatasetRef || s.model === currentDatasetRef);
+
+  // Open centred on where you already are, not at the top of the list. With one
+  // group per dataset the list is long, and landing on "All sources" every time
+  // means scrolling to find your own dataset before you can pick a sibling
+  // source in it — which is the common move. Scrolls the list box only, never
+  // the page.
+  useEffect(() => {
+    if (!open) return;
+    const el = selectedRef.current;
+    const box = listRef.current;
+    if (!el || !box) return;
+    box.scrollTop = Math.max(0, el.offsetTop - box.clientHeight / 2 + el.clientHeight / 2);
+  }, [open]);
 
   const toggle = () => {
     if (open) { setOpen(false); return; }
@@ -158,6 +187,7 @@ function SourceFilterPicker({
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
           <div
+            ref={listRef}
             className="fixed z-50 max-h-80 overflow-y-auto rounded-md border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950 shadow-lg py-1"
             style={{ top: pos.top, left: pos.left, width: Math.max(pos.width, 224) }}
           >
@@ -180,8 +210,9 @@ function SourceFilterPicker({
                 {group.sources.map((s) => (
                   <button
                     key={`${s.datasetId ?? ""}/${s.source}`}
+                    ref={isSelected(s) ? selectedRef : undefined}
                     onClick={() => { onChange(s.source, s); setOpen(false); }}
-                    className={`block w-full text-left pl-5 pr-2 py-1.5 hover:bg-gray-100 dark:hover:bg-gray-800/60 ${s.source === value ? "bg-gray-50 dark:bg-gray-900" : ""}`}
+                    className={`block w-full text-left pl-5 pr-2 py-1.5 hover:bg-gray-100 dark:hover:bg-gray-800/60 ${isSelected(s) ? "bg-gray-50 dark:bg-gray-900" : ""}`}
                   >
                     <span className="block font-mono text-[11px] text-gray-800 dark:text-gray-200 truncate">{s.source}</span>
                     {s.description && (
@@ -631,6 +662,7 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
           {/* Source filter — narrows the list to one Malloy source */}
           <SourceFilterPicker
             value={sourceFilter}
+            currentDatasetRef={selected?.datasetId ?? null}
             sources={sources}
             onChange={(src, opt) => {
               setSourceFilter(src);

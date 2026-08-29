@@ -12,7 +12,10 @@ type AuthProvider = { id: string; name: string };
 type SourceSummary = {
   source: string;
   description: string | null;
-  model: string;
+  /** The dataset's NAME — what links carry and what a reader recognises. */
+  dataset: string;
+  /** Its id. Internal only: it keys the grouping below and never reaches a URL
+      or the screen (see the dataset-name links, which all use `dataset`). */
   datasetId: string;
   status: string;
   isPublic: boolean;
@@ -41,7 +44,7 @@ function groupByDataset(list: SourceSummary[]): DatasetGroup[] {
   for (const s of list) {
     let g = map.get(s.datasetId);
     if (!g) {
-      g = { datasetId: s.datasetId, name: s.model, isPublic: s.isPublic, status: s.status, githubRepo: s.githubRepo ?? null, ownerEmail: s.ownerEmail, ownerName: s.ownerName, sources: [] };
+      g = { datasetId: s.datasetId, name: s.dataset, isPublic: s.isPublic, status: s.status, githubRepo: s.githubRepo ?? null, ownerEmail: s.ownerEmail, ownerName: s.ownerName, sources: [] };
       map.set(s.datasetId, g);
     }
     g.sources.push(s);

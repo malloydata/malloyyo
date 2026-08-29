@@ -46,7 +46,7 @@ export function DatasetNav({
   const [claudeConnected, setClaudeConnected] = useState(false);
   // Switcher: every visible dataset (from /api/sources, grouped). The landing
   // page is decided by /datasets/<name> itself, so no dashboard list is needed.
-  const [sources, setSources] = useState<{ datasetId: string; model: string; status: string }[]>([]);
+  const [sources, setSources] = useState<{ datasetId: string; dataset: string; status: string }[]>([]);
   const [switcherOpen, setSwitcherOpen] = useState(false);
 
   useEffect(() => {
@@ -101,9 +101,9 @@ export function DatasetNav({
       if (s.status !== "ready" || seen.has(s.datasetId)) continue;
       seen.set(s.datasetId, {
         datasetId: s.datasetId,
-        name: s.model,
+        name: s.dataset,
         // By NAME (readable, resolves via findByDatasetRef), not the slug.
-        href: `/datasets/${encodeURIComponent(s.model)}`,
+        href: `/datasets/${encodeURIComponent(s.dataset)}`,
       });
     }
     return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));

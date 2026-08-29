@@ -49,7 +49,11 @@ export async function GET() {
   const result: Array<{
     source: string;
     description: string | null;
-    model: string;
+    /** The DATASET's name. It was called `model` from this file's first commit,
+        back when a dataset and "a Malloy model" were the same idea. They are not
+        any more — `malloy_models` is a different table holding the versioned
+        model rows for a dataset — so the old name pointed at the wrong thing. */
+    dataset: string;
     datasetId: string;
     status: string;
     isPublic: boolean;
@@ -69,7 +73,7 @@ export async function GET() {
     const sources = normalizeSources(latestModel?.sources);
     const base = {
       datasetId: ds.id,
-      model: ds.name,
+      dataset: ds.name,
       status: ds.status,
       isPublic: ds.isPublic,
       // "owner/repo" the model came from: the dataset's configured GitHub repo,

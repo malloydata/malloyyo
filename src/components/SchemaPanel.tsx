@@ -113,11 +113,13 @@ function JoinSection({ join, prefix }: { join: FieldNode; prefix?: string }) {
 export type SourceOption = {
   source: string;
   description: string | null;
-  /** The dataset this source belongs to — its name, and its id for deep links.
-      Optional: the schema panel's own picker shows one model's sources and has
-      no use for it, but ltool's filter lists EVERY dataset's sources and has to
-      group them (and two datasets may each define an "orders"). */
-  model?: string;
+  /** The dataset this source belongs to — its NAME, which is what links carry
+      and what a reader recognises. Optional: the schema panel's own picker shows
+      one dataset's sources and has no use for it, but ltool's filter lists EVERY
+      dataset's sources and has to group them (and two datasets may each define
+      an "orders"). */
+  dataset?: string;
+  /** Its id. Internal only — never put this in a URL or on screen. */
   datasetId?: string;
 };
 

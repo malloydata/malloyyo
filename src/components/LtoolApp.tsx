@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 "use client";
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback, useRef, useMemo } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import dynamic from "next/dynamic";
@@ -104,13 +104,13 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
     a blank heading rather than disappearing. */
 function groupSourcesByDataset(
   sources: SourceOption[],
-): Array<{ key: string; model: string; sources: SourceOption[] }> {
-  const groups = new Map<string, { key: string; model: string; sources: SourceOption[] }>();
+): Array<{ key: string; dataset: string; sources: SourceOption[] }> {
+  const groups = new Map<string, { key: string; dataset: string; sources: SourceOption[] }>();
   for (const s of sources) {
-    const key = s.datasetId ?? s.model ?? "";
+    const key = s.datasetId ?? s.dataset ?? "";
     let g = groups.get(key);
     if (!g) {
-      g = { key, model: s.model ?? "other", sources: [] };
+      g = { key, dataset: s.dataset ?? "other", sources: [] };
       groups.set(key, g);
     }
     g.sources.push(s);
@@ -146,7 +146,7 @@ function SourceFilterPicker({
       the ref against both the id and the name, since either may reach us. */
   const isSelected = (s: SourceOption) =>
     s.source === value &&
-    (!currentDatasetRef || (!s.datasetId && !s.model) || s.datasetId === currentDatasetRef || s.model === currentDatasetRef);
+    (!currentDatasetRef || (!s.datasetId && !s.dataset) || s.datasetId === currentDatasetRef || s.dataset === currentDatasetRef);
 
   // Open centred on where you already are, not at the top of the list. With one
   // group per dataset the list is long, and landing on "All sources" every time
@@ -205,7 +205,7 @@ function SourceFilterPicker({
             {groupSourcesByDataset(sources).map((group) => (
               <div key={group.key}>
                 <div className="px-2 pt-2 pb-0.5 text-[10px] uppercase tracking-wide text-gray-400 dark:text-gray-500 truncate">
-                  {group.model}
+                  {group.dataset}
                 </div>
                 {group.sources.map((s) => (
                   <button
@@ -351,7 +351,7 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
   useEffect(() => {
     fetch("/api/sources")
       .then((r) => r.json())
-      .then((d: Array<{ source: string; description?: string | null; model?: string; datasetId?: string }>) => {
+      .then((d: Array<{ source: string; description?: string | null; dataset?: string; datasetId?: string }>) => {
         if (!Array.isArray(d)) return;
         // Keyed by DATASET + source, not source alone. Deduping on the bare name
         // silently dropped a source when two datasets both defined one called
@@ -366,7 +366,7 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
             opts.push({
               source: s.source,
               description: s.description ?? null,
-              model: s.model,
+              dataset: s.dataset,
               datasetId: s.datasetId,
             });
           }
@@ -375,6 +375,16 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
       })
       .catch(() => {});
   }, []);
+
+  // The selected query's dataset as a NAME, for anything that builds a URL. A
+  // replayed history item records the uuid, so translate through the source list
+  // — an id must never reach the address bar.
+  const selectedDatasetName = useMemo(() => {
+    const ref = selected?.datasetId;
+    if (!ref) return null;
+    const hit = sources.find((s) => s.datasetId === ref || s.dataset === ref);
+    return hit?.dataset ?? null;
+  }, [selected?.datasetId, sources]);
 
   const runQuery = useCallback(async (src: string, malloy: string, datasetId?: string | null, baseSlug?: string | null, question?: string | null) => {
     if (!src || !malloy.trim()) return;
@@ -890,7 +900,7 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
             {result?.stableResult && (
               <div className="space-y-2">
                 <p className="text-[11px] text-gray-500 dark:text-gray-400 uppercase tracking-wide font-semibold">Results</p>
-                <MalloyResultView stableResult={result.stableResult} datasetId={selected.datasetId} />
+                <MalloyResultView stableResult={result.stableResult} datasetRef={selectedDatasetName} />
               </div>
             )}
 

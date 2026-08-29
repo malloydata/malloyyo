@@ -256,6 +256,7 @@ export function normalizePagePath(pathname: string): string {
   if (/^\/admin\/x\/[^/]+$/.test(path)) return "/admin/x/:slug";
   if (/^\/datasets\/[^/]+\/dashboard\/[^/]+$/.test(path)) return "/datasets/:id/dashboard/:name";
   if (/^\/datasets\/[^/]+\/questions$/.test(path)) return "/datasets/:id/questions";
+  if (/^\/datasets\/[^/]+\/config$/.test(path)) return "/datasets/:id/config";
   if (/^\/datasets\/[^/]+$/.test(path)) return "/datasets/:id";
   if (/^\/ltool\/[^/]+$/.test(path)) return "/ltool/:slug";
   return "/other";

@@ -38,6 +38,10 @@ export function DatasetNav({
     gitDirty?: boolean | null;
     files?: { path: string }[] | null;
   } | null>(null);
+  // For the "Query" item: ltool addresses a dataset by ID (the route param may be
+  // a NAME) and seeds a starter `run: <source> ->` from the source it is handed.
+  const [datasetUuid, setDatasetUuid] = useState<string | null>(null);
+  const [modelSources, setModelSources] = useState<string[]>([]);
   const [instanceName, setInstanceName] = useState("Malloyyo");
   const [claudeConnected, setClaudeConnected] = useState(false);
   // Switcher: every visible dataset (from /api/sources, grouped) with its landing
@@ -51,6 +55,8 @@ export function DatasetNav({
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (d?.name) setDatasetName(d.name);
+        if (d?.id) setDatasetUuid(d.id);
+        if (Array.isArray(d?.malloyModel?.sources)) setModelSources(d.malloyModel.sources);
         if (Array.isArray(d?.dashboards)) setDashboards(d.dashboards);
         if (d) {
           setRepo({
@@ -215,6 +221,25 @@ export function DatasetNav({
           </svg>
           AI Q&amp;A
         </Link>
+        {/* Write a query. Sits beside AI Q&A because they are the same kind of
+            thing — a way into the data that isn't a dashboard someone built in
+            advance. ltool takes the dataset by ID (the route param may be a
+            name) and opens on a `run: <source> ->` starter, so passing the first
+            source is what makes this land on a query rather than a blank picker. */}
+        <Link
+          href={`/ltool?${new URLSearchParams({
+            ...(datasetUuid ? { dataset: datasetUuid } : {}),
+            ...(modelSources[0] ? { source: modelSources[0] } : {}),
+          }).toString()}`}
+          title="Write a Malloy query against this dataset in ltool"
+          className={`inline-flex items-center gap-1 ${pill(false)}`}
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d="M8 6l-5 6 5 6" />
+            <path d="M16 6l5 6-5 6" />
+          </svg>
+          Query
+        </Link>
       </div>
 
       {/* Right-hand group: where this came from, how it's set up, then the
@@ -235,7 +260,7 @@ export function DatasetNav({
           </a>
         )}
         <Link
-          href={`/datasets/${encodeURIComponent(datasetName || datasetId)}`}
+          href={`/datasets/${encodeURIComponent(datasetName || datasetId)}/config`}
           title="Dataset configuration — model version, files, GitHub settings"
           className={`${pill(false)} inline-flex items-center gap-1.5`}
         >

@@ -326,7 +326,7 @@ export default function HomePage() {
                             Explore in Claude
                           </button>
                           <Link
-                            href={`/datasets/${encodeURIComponent(g?.name ?? dsId)}`}
+                            href={`/datasets/${encodeURIComponent(g?.name ?? dsId)}/config`}
                             title="Configure dataset"
                             aria-label="Configure dataset"
                             className="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
@@ -396,7 +396,7 @@ export default function HomePage() {
                                 {qs.length > 8 && (
                                   <li className="flex items-start gap-2">
                                     <span className="flex-shrink-0 w-[1ch]" aria-hidden />
-                                    <Link href={`/datasets/${encodeURIComponent(g?.name ?? dsId)}`} className="text-[11px] text-gray-400 dark:text-gray-500 hover:underline">
+                                    <Link href={`/datasets/${encodeURIComponent(g?.name ?? dsId)}/questions`} className="text-[11px] text-gray-400 dark:text-gray-500 hover:underline">
                                       +{qs.length - 8} more →
                                     </Link>
                                   </li>

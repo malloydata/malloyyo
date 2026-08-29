@@ -35,7 +35,7 @@ export function visibleDatasetWhere(userId: string) {
 }
 
 // Normalize DB sources column — legacy string[] or new {name, description?}[] format.
-function normalizeSources(raw: unknown): SourceInfo[] {
+export function normalizeSources(raw: unknown): SourceInfo[] {
   if (!Array.isArray(raw)) return [];
   return raw.map((s) =>
     typeof s === "string" ? { name: s, description: null } : { name: String(s.name), description: s.description ?? null }

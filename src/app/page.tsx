@@ -307,7 +307,20 @@ export default function HomePage() {
                     <div key={dsId} className="border border-gray-200 dark:border-gray-800 rounded">
                       <div className="flex items-center justify-between gap-3 px-3 py-2 rounded-t bg-gray-50 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-800">
                         <span className="flex items-center gap-2 min-w-0 flex-1">
-                          <span className="font-semibold truncate">{g?.name ?? "dataset"}</span>
+                          {/* The dataset name is the way IN. /datasets/<name> is
+                              not a page — it redirects to whatever the dataset
+                              actually offers (its About page, else its first
+                              dashboard, else Q&A, else ltool on its first
+                              source), so this one link is right for every
+                              dataset without the home page having to know which
+                              tier applies. See @/lib/dataset-landing. */}
+                          <Link
+                            href={`/datasets/${encodeURIComponent(g?.name ?? dsId)}`}
+                            title={`Open ${g?.name ?? "dataset"}`}
+                            className="font-semibold truncate hover:underline"
+                          >
+                            {g?.name ?? "dataset"}
+                          </Link>
                           {g?.githubRepo && <GitHubLink repo={g.githubRepo} />}
                         </span>
                         <div className="flex items-center gap-2 flex-shrink-0">

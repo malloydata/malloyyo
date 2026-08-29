@@ -44,10 +44,9 @@ export function DatasetNav({
   const [modelSources, setModelSources] = useState<string[]>([]);
   const [instanceName, setInstanceName] = useState("Malloyyo");
   const [claudeConnected, setClaudeConnected] = useState(false);
-  // Switcher: every visible dataset (from /api/sources, grouped) with its landing
-  // page (first dashboard from /api/dashboards, else the Q&A page).
+  // Switcher: every visible dataset (from /api/sources, grouped). The landing
+  // page is decided by /datasets/<name> itself, so no dashboard list is needed.
   const [sources, setSources] = useState<{ datasetId: string; model: string; status: string }[]>([]);
-  const [allDashboards, setAllDashboards] = useState<{ datasetId: string; name: string }[]>([]);
   const [switcherOpen, setSwitcherOpen] = useState(false);
 
   useEffect(() => {
@@ -85,35 +84,31 @@ export function DatasetNav({
       .then((r) => (r.ok ? r.json() : []))
       .then((d) => setSources(Array.isArray(d) ? d : []))
       .catch(() => {});
-    fetch("/api/dashboards")
-      .then((r) => (r.ok ? r.json() : []))
-      .then((d) => setAllDashboards(Array.isArray(d) ? d : []))
-      .catch(() => {});
   }, []);
 
   // One entry per visible, ready dataset — deduped from the flat sources list
-  // (dataset name = model name, as the home page does), each pointing at its
-  // first dashboard or, failing that, its AI Q&A page. Sorted by name.
+  // (dataset name = model name, as the home page does), sorted by name.
+  //
+  // Every entry points at `/datasets/<name>`, which is not a page: it redirects
+  // to whatever that dataset actually offers (About, else its first dashboard,
+  // else Q&A, else ltool on its first source — @/lib/dataset-landing). This used
+  // to reimplement the first two tiers here from /api/dashboards, which meant a
+  // dataset with neither landed on an empty Q&A page, and meant the same
+  // decision lived in two places and could drift. One redirect hop is cheaper
+  // than that.
   const switchTargets = useMemo<SwitchTarget[]>(() => {
-    const firstDash = new Map<string, string>();
-    for (const d of allDashboards) {
-      if (!firstDash.has(d.datasetId)) firstDash.set(d.datasetId, d.name);
-    }
     const seen = new Map<string, SwitchTarget>();
     for (const s of sources) {
       if (s.status !== "ready" || seen.has(s.datasetId)) continue;
-      const dash = firstDash.get(s.datasetId);
       seen.set(s.datasetId, {
         datasetId: s.datasetId,
         name: s.model,
-        // Link by dataset NAME (readable, resolves via findByDatasetRef), not the slug.
-        href: dash
-          ? `/datasets/${encodeURIComponent(s.model)}/dashboard/${encodeURIComponent(dash)}`
-          : `/datasets/${encodeURIComponent(s.model)}/questions`,
+        // By NAME (readable, resolves via findByDatasetRef), not the slug.
+        href: `/datasets/${encodeURIComponent(s.model)}`,
       });
     }
     return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));
-  }, [sources, allDashboards]);
+  }, [sources]);
 
   // Seed a new Claude chat on this dataset (matches the home page's link). When
   // the connector isn't linked yet, send them to set it up.

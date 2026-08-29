@@ -634,14 +634,16 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
             sources={sources}
             onChange={(src, opt) => {
               setSourceFilter(src);
-              // A source nobody has asked anything of yet would otherwise filter
-              // the sidebar down to nothing and leave the editor on "Select a
-              // query from the sidebar" — the same dead end an empty dataset
-              // had. There is nothing to select, so offer the thing they came
-              // to do instead.
-              if (src && !items.some((i) => i.source === src)) {
-                openScratch(src, opt?.datasetId ?? null);
-              }
+              // Switching to a source opens a fresh query against it — always,
+              // not just when it has no history. Picking a source is stating
+              // what you want to ask about, and leaving the previous source's
+              // query sitting in the editor answers a different question than
+              // the sidebar is now showing. The filtered history is still right
+              // there to click if the answer already exists.
+              //
+              // "All sources" (empty) is the exception: that clears the filter
+              // rather than choosing a subject, so it leaves the editor alone.
+              if (src) openScratch(src, opt?.datasetId ?? null);
             }}
           />
           {/* Tabs + scope toggle */}

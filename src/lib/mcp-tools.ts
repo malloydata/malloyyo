@@ -354,7 +354,12 @@ export async function runQueryForWeb(
 ): Promise<WebRunResult> {
   // When the caller knows the dataset (an ltool replay carries the recorded
   // dataset_id), resolve by it — unambiguous. Else fall back to source name.
-  const found = datasetId ? await findByDatasetId(userId, datasetId) : await findBySource(userId, source);
+  //
+  // By REF, not by id: a recorded dataset_id is a uuid, but a link a person can
+  // read carries the dataset's NAME (`/ltool?dataset=babynames`), and
+  // findByDatasetRef takes either. Resolving only by id made a named link fail
+  // in the ugliest way available — Postgres refusing to cast the name to uuid.
+  const found = datasetId ? await findByDatasetRef(userId, datasetId) : await findBySource(userId, source);
   if (!found) return { ok: false, error: `source '${source}' not found` };
   const { ds, model } = found;
   if (ds.status !== "ready") return { ok: false, error: `source '${source}' is not ready` };
@@ -409,7 +414,8 @@ export async function saveWebQuery(
   datasetId?: string | null,
   opts: WebRunOpts = {},
 ): Promise<WebSaveResult> {
-  const found = datasetId ? await findByDatasetId(userId, datasetId) : await findBySource(userId, source);
+  // By ref, for the same reason as runQueryForWeb above.
+  const found = datasetId ? await findByDatasetRef(userId, datasetId) : await findBySource(userId, source);
   if (!found) return { ok: false, error: `source '${source}' not found` };
   const { ds, model } = found;
   if (ds.status !== "ready") return { ok: false, error: `source '${source}' is not ready` };

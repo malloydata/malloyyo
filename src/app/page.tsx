@@ -5,6 +5,7 @@
 import { useEffect, useState } from "react";
 import { signIn } from "next-auth/react";
 import Link from "next/link";
+import { QueryIcon } from "@/components/QueryIcon";
 
 type AuthProvider = { id: string; name: string };
 
@@ -388,10 +389,12 @@ export default function HomePage() {
                                       claude
                                     </button>
                                     <Link
-                                      href={`/ltool?source=${encodeURIComponent(srcKey)}&dataset=${dsId}`}
-                                      className="px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-900"
+                                      href={`/ltool?source=${encodeURIComponent(srcKey)}&dataset=${encodeURIComponent(g?.name ?? dsId)}`}
+                                      title={`Write a Malloy query against ${srcKey}`}
+                                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-900"
                                     >
-                                      ltool
+                                      <QueryIcon size={10} />
+                                      Query
                                     </Link>
                                   </div>
                                 )}
@@ -426,7 +429,7 @@ export default function HomePage() {
                             )}
                             <div className="flex flex-wrap gap-x-3 gap-y-1">
                               {additional.map((s, i) => (
-                                <SourceMenu key={`${s.source}-${i}`} source={s.source} datasetId={dsId} instanceName={instanceName}
+                                <SourceMenu key={`${s.source}-${i}`} source={s.source} datasetRef={g?.name ?? dsId} instanceName={instanceName}
                                   claudeConnected={claudeConnected} onClaude={exploreWithClaude} className="text-xs" />
                               ))}
                             </div>
@@ -498,14 +501,16 @@ function GitHubLink({ repo }: { repo: string }) {
 // source with Claude or ltool.
 function SourceMenu({
   source,
-  datasetId,
+  datasetRef,
   instanceName,
   claudeConnected,
   onClaude,
   className,
 }: {
   source: string;
-  datasetId: string;
+  /** Dataset NAME where we have one, else its id — /api/run resolves either, and
+      the name is what belongs in a link someone might read or share. */
+  datasetRef: string;
   instanceName: string;
   claudeConnected: boolean;
   onClaude: (source: string) => void;
@@ -535,10 +540,11 @@ function SourceMenu({
               Explore with Claude
             </button>
             <Link
-              href={`/ltool?source=${encodeURIComponent(source)}&dataset=${datasetId}`}
-              className="block w-full text-left text-xs px-3 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-900 border-t border-gray-100 dark:border-gray-900"
+              href={`/ltool?source=${encodeURIComponent(source)}&dataset=${encodeURIComponent(datasetRef)}`}
+              className="flex w-full items-center gap-1.5 text-left text-xs px-3 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-900 border-t border-gray-100 dark:border-gray-900"
             >
-              Explore with ltool
+              <QueryIcon size={11} />
+              Write a query
             </Link>
           </div>
         </>

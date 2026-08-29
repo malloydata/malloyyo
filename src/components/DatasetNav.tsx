@@ -5,6 +5,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { dashboardSourceUrl } from "@/lib/github-source-link";
+import { QueryIcon } from "@/components/QueryIcon";
 
 // A dataset the switcher can jump to, with the landing page it opens: its first
 // dashboard, or the AI Q&A page when it has none.
@@ -38,9 +39,8 @@ export function DatasetNav({
     gitDirty?: boolean | null;
     files?: { path: string }[] | null;
   } | null>(null);
-  // For the "Query" item: ltool addresses a dataset by ID (the route param may be
-  // a NAME) and seeds a starter `run: <source> ->` from the source it is handed.
-  const [datasetUuid, setDatasetUuid] = useState<string | null>(null);
+  // For the "Query" item: ltool seeds a starter `run: <source> ->` from the
+  // source it is handed. The dataset goes by NAME — /api/run resolves either.
   const [modelSources, setModelSources] = useState<string[]>([]);
   const [instanceName, setInstanceName] = useState("Malloyyo");
   const [claudeConnected, setClaudeConnected] = useState(false);
@@ -54,7 +54,6 @@ export function DatasetNav({
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (d?.name) setDatasetName(d.name);
-        if (d?.id) setDatasetUuid(d.id);
         if (Array.isArray(d?.malloyModel?.sources)) setModelSources(d.malloyModel.sources);
         if (Array.isArray(d?.dashboards)) setDashboards(d.dashboards);
         if (d) {
@@ -223,16 +222,13 @@ export function DatasetNav({
             source is what makes this land on a query rather than a blank picker. */}
         <Link
           href={`/ltool?${new URLSearchParams({
-            ...(datasetUuid ? { dataset: datasetUuid } : {}),
+            dataset: datasetName || datasetId,
             ...(modelSources[0] ? { source: modelSources[0] } : {}),
           }).toString()}`}
           title="Write a Malloy query against this dataset in ltool"
           className={`inline-flex items-center gap-1 ${pill(false)}`}
         >
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-            <path d="M8 6l-5 6 5 6" />
-            <path d="M16 6l5 6-5 6" />
-          </svg>
+          <QueryIcon />
           Query
         </Link>
       </div>

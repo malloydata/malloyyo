@@ -71,7 +71,6 @@ export default async function DatasetLandingPage({ params }: { params: Promise<{
 
   redirect(
     datasetLandingPath(ref, {
-      datasetId: found.ds.id,
       dashboards,
       hasQuestions: questions,
       firstSource: normalizeSources(found.model.sources)[0]?.name ?? null,

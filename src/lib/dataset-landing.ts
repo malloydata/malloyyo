@@ -26,8 +26,6 @@
 
 /** What the dataset has to offer, as far as the landing decision cares. */
 export interface DatasetLandingInput {
-  /** The dataset's id — ltool addresses datasets by id, not by name. */
-  datasetId: string;
   /** Dashboards in nav order (About first, when present). */
   dashboards: readonly { name: string }[];
   /** Whether any question has been answered against this dataset. */
@@ -51,10 +49,11 @@ export function datasetLandingPath(ref: string, input: DatasetLandingInput): str
 
   if (input.hasQuestions) return `${base}/questions`;
 
-  // ltool takes the dataset by ID and the source by name. Selecting the first
+  // ltool takes the dataset by ref — the same readable name the reader arrived
+  // with, since /api/run resolves either that or an id. Selecting the first
   // source matters more than it looks: ltool with no source is a blank picker,
   // which is the same dead end the config page was.
-  const params = new URLSearchParams({ dataset: input.datasetId });
+  const params = new URLSearchParams({ dataset: ref });
   if (input.firstSource) params.set("source", input.firstSource);
   return `/ltool?${params.toString()}`;
 }

@@ -110,7 +110,16 @@ function JoinSection({ join, prefix }: { join: FieldNode; prefix?: string }) {
   );
 }
 
-export type SourceOption = { source: string; description: string | null };
+export type SourceOption = {
+  source: string;
+  description: string | null;
+  /** The dataset this source belongs to — its name, and its id for deep links.
+      Optional: the schema panel's own picker shows one model's sources and has
+      no use for it, but ltool's filter lists EVERY dataset's sources and has to
+      group them (and two datasets may each define an "orders"). */
+  model?: string;
+  datasetId?: string;
+};
 
 // A compact dropdown for switching which source's schema is shown. Each row is
 // more than a name — the source's description sits dimmed beneath it.

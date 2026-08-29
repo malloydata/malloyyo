@@ -98,6 +98,27 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
 // Full-width dropdown for filtering the sidebar list by Malloy source. Value ""
 // means "all sources". Rendered in a portal on document.body so the menu escapes
 // the sidebar's overflow-hidden clip.
+/** Sources bucketed under the dataset that defines them, datasets in the order
+    the API listed them (most-recently-used first) and sources alphabetical
+    within each. A source with no dataset — older API responses — collects under
+    a blank heading rather than disappearing. */
+function groupSourcesByDataset(
+  sources: SourceOption[],
+): Array<{ key: string; model: string; sources: SourceOption[] }> {
+  const groups = new Map<string, { key: string; model: string; sources: SourceOption[] }>();
+  for (const s of sources) {
+    const key = s.datasetId ?? s.model ?? "";
+    let g = groups.get(key);
+    if (!g) {
+      g = { key, model: s.model ?? "other", sources: [] };
+      groups.set(key, g);
+    }
+    g.sources.push(s);
+  }
+  for (const g of groups.values()) g.sources.sort((a, b) => a.source.localeCompare(b.source));
+  return [...groups.values()];
+}
+
 function SourceFilterPicker({
   value,
   sources,
@@ -105,7 +126,7 @@ function SourceFilterPicker({
 }: {
   value: string;
   sources: SourceOption[];
-  onChange: (source: string) => void;
+  onChange: (source: string, option?: SourceOption) => void;
 }) {
   const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
@@ -146,17 +167,29 @@ function SourceFilterPicker({
             >
               <span className="block text-[11px] text-gray-600 dark:text-gray-400">All sources</span>
             </button>
-            {sources.map((s) => (
-              <button
-                key={s.source}
-                onClick={() => { onChange(s.source); setOpen(false); }}
-                className={`block w-full text-left px-2 py-1.5 hover:bg-gray-100 dark:hover:bg-gray-800/60 ${s.source === value ? "bg-gray-50 dark:bg-gray-900" : ""}`}
-              >
-                <span className="block font-mono text-[11px] text-gray-800 dark:text-gray-200 truncate">{s.source}</span>
-                {s.description && (
-                  <span className="block text-[10px] text-gray-400 dark:text-gray-500 leading-snug line-clamp-2">{s.description}</span>
-                )}
-              </button>
+            {/* Grouped by dataset, sources indented beneath it. Flat, the list
+                read as arbitrary — it was in API order, which is dataset order,
+                but with nothing marking where one dataset ended and the next
+                began there was no way to see that. A source name alone also
+                isn't unique across datasets. */}
+            {groupSourcesByDataset(sources).map((group) => (
+              <div key={group.key}>
+                <div className="px-2 pt-2 pb-0.5 text-[10px] uppercase tracking-wide text-gray-400 dark:text-gray-500 truncate">
+                  {group.model}
+                </div>
+                {group.sources.map((s) => (
+                  <button
+                    key={`${s.datasetId ?? ""}/${s.source}`}
+                    onClick={() => { onChange(s.source, s); setOpen(false); }}
+                    className={`block w-full text-left pl-5 pr-2 py-1.5 hover:bg-gray-100 dark:hover:bg-gray-800/60 ${s.source === value ? "bg-gray-50 dark:bg-gray-900" : ""}`}
+                  >
+                    <span className="block font-mono text-[11px] text-gray-800 dark:text-gray-200 truncate">{s.source}</span>
+                    {s.description && (
+                      <span className="block text-[10px] text-gray-400 dark:text-gray-500 leading-snug line-clamp-2">{s.description}</span>
+                    )}
+                  </button>
+                ))}
+              </div>
             ))}
           </div>
         </>,
@@ -287,14 +320,24 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
   useEffect(() => {
     fetch("/api/sources")
       .then((r) => r.json())
-      .then((d: Array<{ source: string; description?: string | null }>) => {
+      .then((d: Array<{ source: string; description?: string | null; model?: string; datasetId?: string }>) => {
         if (!Array.isArray(d)) return;
+        // Keyed by DATASET + source, not source alone. Deduping on the bare name
+        // silently dropped a source when two datasets both defined one called
+        // "orders", and left the survivor attributed to whichever dataset the
+        // API happened to list first.
         const seen = new Set<string>();
         const opts: SourceOption[] = [];
         for (const s of d) {
-          if (s.source && !seen.has(s.source)) {
-            seen.add(s.source);
-            opts.push({ source: s.source, description: s.description ?? null });
+          const key = `${s.datasetId ?? ""}/${s.source}`;
+          if (s.source && !seen.has(key)) {
+            seen.add(key);
+            opts.push({
+              source: s.source,
+              description: s.description ?? null,
+              model: s.model,
+              datasetId: s.datasetId,
+            });
           }
         }
         setSources(opts);
@@ -369,9 +412,34 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
     return () => { cancelled = true; };
   }, [initialSlug, runQuery]);
 
-  // Deep-link to a DATASET and/or a SOURCE (the front page's "ltool" button, the
+  // Open an editable scratch query. Nothing is minted here: it carries
+  // `id: null, slug: null`, and /api/run mints the slug when it is actually run
+  // — so the editor is writable immediately and the query becomes a real,
+  // shareable thing only once it has produced a result. Never auto-runs; a
+  // starter is incomplete and a blank one more so.
+  const openScratch = useCallback((src: string | null, dsId: string | null) => {
+    autoFallback.current = false;
+    const starter = src ? `run: ${src} -> ` : "";
+    setSelected({
+      id: null, slug: null,
+      question: src ? `Explore ${src}` : "New query",
+      createdAt: new Date().toISOString(), source: src, datasetId: dsId,
+      malloyQuery: starter, rowCount: null, durationMs: null,
+      authorName: null, isFavorited: false, favoriteCount: 0,
+    });
+    setQuery(starter);
+    setSource(src ?? "");
+    setSchemaSource(src ?? "");
+    // Expand to show the schema only when there IS a source to show one for.
+    setExpanded(Boolean(src));
+    setEditedTitle(null);
+    setResult(null);
+    setRunError(null);
+  }, []);
+
+  // Deep-link to a DATASET and/or a SOURCE (the front page's "Query" chip, the
   // dashboard nav's "Query" item, and the empty-dataset tier of the
-  // /datasets/<ref> landing chain): open an editable scratch query.
+  // /datasets/<ref> landing chain).
   //
   // The source is optional. It used to be required, and that left the one case
   // that needs this most at a dead end: arrive on a dataset that has no saved
@@ -379,35 +447,12 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
   // renders "Select a query from the sidebar" — with no query to select and no
   // way to write one. A dataset whose model declares no sources reaches ltool
   // with no `source` at all, which is precisely a freshly loaded dataset.
-  //
-  // Nothing is minted here: the scratch carries `id: null, slug: null`, and the
-  // slug is minted server-side by /api/run when it is actually run. So the
-  // editor is writable immediately and the query only becomes a real, shareable
-  // thing once it has produced a result.
-  //
-  // No auto-run either way — a starter is incomplete, and a blank one more so.
   useEffect(() => {
     if (initialSlug || (!initialSource && !initialDatasetId)) return;
-    autoFallback.current = false;
-    const starter = initialSource ? `run: ${initialSource} -> ` : "";
     // Intentional one-time init of the editor from the deep-link props on mount.
     // eslint-disable-next-line react-hooks/set-state-in-effect
-    setSelected({
-      id: null, slug: null,
-      question: initialSource ? `Explore ${initialSource}` : "New query",
-      createdAt: new Date().toISOString(), source: initialSource ?? null, datasetId: initialDatasetId ?? null,
-      malloyQuery: starter, rowCount: null, durationMs: null,
-      authorName: null, isFavorited: false, favoriteCount: 0,
-    });
-    setQuery(starter);
-    setSource(initialSource ?? "");
-    setSchemaSource(initialSource ?? "");
-    // Expand to show the schema only when there IS a source to show one for.
-    setExpanded(Boolean(initialSource));
-    setEditedTitle(null);
-    setResult(null);
-    setRunError(null);
-  }, [initialSlug, initialSource, initialDatasetId]);
+    openScratch(initialSource ?? null, initialDatasetId ?? null);
+  }, [initialSlug, initialSource, initialDatasetId, openScratch]);
 
   function selectItem(item: HistoryItem) {
     setSelected(item);
@@ -584,7 +629,21 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
             </button>
           </div>
           {/* Source filter — narrows the list to one Malloy source */}
-          <SourceFilterPicker value={sourceFilter} sources={sources} onChange={setSourceFilter} />
+          <SourceFilterPicker
+            value={sourceFilter}
+            sources={sources}
+            onChange={(src, opt) => {
+              setSourceFilter(src);
+              // A source nobody has asked anything of yet would otherwise filter
+              // the sidebar down to nothing and leave the editor on "Select a
+              // query from the sidebar" — the same dead end an empty dataset
+              // had. There is nothing to select, so offer the thing they came
+              // to do instead.
+              if (src && !items.some((i) => i.source === src)) {
+                openScratch(src, opt?.datasetId ?? null);
+              }
+            }}
+          />
           {/* Tabs + scope toggle */}
           <div className="flex items-center gap-1">
             <TabButton active={view === "history"} onClick={() => { autoFallback.current = false; setView("history"); }}>History</TabButton>

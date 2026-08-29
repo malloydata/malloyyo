@@ -19,5 +19,10 @@ export async function GET(req: Request) {
   }
   const datasetId = new URL(req.url).searchParams.get("datasetId");
   const list = datasetId ? await listDashboards(user.id, datasetId) : await listAllDashboards(user.id);
-  return NextResponse.json(list);
+  // The summaries carry the dataset id for server-side callers; the wire form
+  // identifies a dataset by NAME, which is what links are built from and what
+  // the front page joins on.
+  return NextResponse.json(
+    list.map(({ datasetName, name, title }) => ({ dataset: datasetName, name, title })),
+  );
 }

@@ -119,8 +119,6 @@ export type SourceOption = {
       dataset's sources and has to group them (and two datasets may each define
       an "orders"). */
   dataset?: string;
-  /** Its id. Internal only — never put this in a URL or on screen. */
-  datasetId?: string;
 };
 
 // A compact dropdown for switching which source's schema is shown. Each row is

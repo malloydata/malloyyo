@@ -29,7 +29,6 @@ export async function GET() {
       status: datasets.status,
       isPublic: datasets.isPublic,
       githubRepo: datasets.githubRepo,
-      ownerEmail: users.email,
       ownerName: users.name,
     })
     .from(datasets)
@@ -46,20 +45,24 @@ export async function GET() {
     );
   }
 
+  // DATASET-FIRST: each dataset once, with the sources it offers.
+  //
+  // This used to be a flat list of sources with the dataset's five fields copied
+  // onto every row — 44 rows for eight datasets here — and both callers began by
+  // regrouping it back into exactly this shape. The endpoint returned the
+  // inverse of what anyone wanted, and the duplication was the only reason a
+  // dataset id had to ride along as a join key.
+  //
+  // No dataset id: nothing outside the server needs one. Links address a dataset
+  // by NAME, which is unique per server (see findByDatasetRef), so the name is
+  // also the key the front page joins dashboards and questions on.
   const result: Array<{
-    source: string;
-    description: string | null;
-    /** The DATASET's name. It was called `model` from this file's first commit,
-        back when a dataset and "a Malloy model" were the same idea. They are not
-        any more — `malloy_models` is a different table holding the versioned
-        model rows for a dataset — so the old name pointed at the wrong thing. */
     dataset: string;
-    datasetId: string;
     status: string;
     isPublic: boolean;
     githubRepo: string | null;
-    ownerEmail?: string | null;
     ownerName?: string | null;
+    sources: Array<{ source: string; description: string | null }>;
   }> = [];
 
   for (const ds of dsList) {
@@ -70,28 +73,23 @@ export async function GET() {
       .orderBy(desc(malloyModels.createdAt))
       .limit(1);
 
-    const sources = normalizeSources(latestModel?.sources);
-    const base = {
-      datasetId: ds.id,
+    const declared = normalizeSources(latestModel?.sources);
+    result.push({
       dataset: ds.name,
       status: ds.status,
       isPublic: ds.isPublic,
       // "owner/repo" the model came from: the dataset's configured GitHub repo,
       // or the git remote recorded by a CLI publish.
       githubRepo: ds.githubRepo ?? latestModel?.gitRepo ?? null,
-      ownerEmail: admin ? ds.ownerEmail : undefined,
-      ownerName: admin ? ds.ownerName : undefined,
-    };
-
-    if (sources.length === 0) {
-      result.push({ source: ds.name, description: null, ...base });
-    } else if (sources.length === 1) {
-      result.push({ source: sources[0].name, description: sources[0].description, ...base });
-    } else {
-      for (const src of sources) {
-        result.push({ source: src.name, description: src.description, ...base });
-      }
-    }
+      ...(admin ? { ownerName: ds.ownerName } : {}),
+      // A model that declares nothing still gets one row, named for the dataset,
+      // so it appears in the catalogue at all rather than silently vanishing.
+      // Long-standing behaviour, kept.
+      sources:
+        declared.length === 0
+          ? [{ source: ds.name, description: null }]
+          : declared.map((src) => ({ source: src.name, description: src.description })),
+    });
   }
 
   return NextResponse.json(result);

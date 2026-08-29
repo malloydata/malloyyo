@@ -451,3 +451,12 @@ export async function saveWebQuery(
     return { ok: false, error: msg };
   }
 }
+
+/** A dataset's display name from its id, or null. For turning a STORED id (a
+    recorded query's dataset_id) into the ref a link or a re-run should carry —
+    ids belong to the database, not to URLs or to the browser. */
+export async function datasetNameById(id: string): Promise<string | null> {
+  if (!UUID_RE.test(id)) return id; // already a ref
+  const [ds] = await db.select({ name: datasets.name }).from(datasets).where(eq(datasets.id, id)).limit(1);
+  return ds?.name ?? null;
+}

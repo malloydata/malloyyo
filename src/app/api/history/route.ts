@@ -55,7 +55,9 @@ export async function GET(req: Request) {
         question: savedQueries.question,
         createdAt: savedQueries.createdAt,
         source: savedQueries.source,
-        datasetId: savedQueries.datasetId,
+        // The dataset by NAME. An id has no use in the browser — links are built
+        // from the name — and shipping one only invites it into a URL.
+        dataset: datasets.name,
         malloyQuery: savedQueries.malloySource,
         rowCount: sql<number | null>`null`,
         durationMs: sql<number | null>`null`,
@@ -67,6 +69,7 @@ export async function GET(req: Request) {
       })
       .from(savedQueries)
       .leftJoin(users, eq(users.id, savedQueries.userId))
+      .leftJoin(datasets, eq(datasets.id, savedQueries.datasetId))
       // scope filters WHOSE favorites — mine vs anyone's.
       .where(scope === "me" ? sqFavByMe(user.id) : sqAnyFav())
       .orderBy(desc(savedQueries.createdAt))
@@ -83,7 +86,7 @@ export async function GET(req: Request) {
       question: history.question,
       createdAt: history.createdAt,
       source: history.source,
-      datasetId: history.datasetId,
+      dataset: datasets.name,
       malloyQuery: history.malloyInput,
       rowCount: history.rowCount,
       durationMs: history.durationMs,
@@ -99,6 +102,7 @@ export async function GET(req: Request) {
     })
     .from(history)
     .leftJoin(users, eq(users.id, history.userId))
+    .leftJoin(datasets, eq(datasets.id, history.datasetId))
     .where(
       and(
         inArray(history.toolName, RUN_LABELS),

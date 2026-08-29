@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 "use client";
-import { useEffect, useState, useCallback, useRef, useMemo } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
 import dynamic from "next/dynamic";
@@ -27,7 +27,9 @@ type HistoryItem = {
   question: string | null;
   createdAt: string;
   source: string | null;
-  datasetId: string | null;
+  /** The dataset's NAME. Everything the client does with it — build a drill
+      link, re-run the query — takes a ref, and an id has no business here. */
+  dataset: string | null;
   malloyQuery: string | null;
   rowCount: number | null;
   durationMs: number | null;
@@ -107,7 +109,7 @@ function groupSourcesByDataset(
 ): Array<{ key: string; dataset: string; sources: SourceOption[] }> {
   const groups = new Map<string, { key: string; dataset: string; sources: SourceOption[] }>();
   for (const s of sources) {
-    const key = s.datasetId ?? s.dataset ?? "";
+    const key = s.dataset ?? "";
     let g = groups.get(key);
     if (!g) {
       g = { key, dataset: s.dataset ?? "other", sources: [] };
@@ -146,7 +148,7 @@ function SourceFilterPicker({
       the ref against both the id and the name, since either may reach us. */
   const isSelected = (s: SourceOption) =>
     s.source === value &&
-    (!currentDatasetRef || (!s.datasetId && !s.dataset) || s.datasetId === currentDatasetRef || s.dataset === currentDatasetRef);
+    (!currentDatasetRef || !s.dataset || s.dataset === currentDatasetRef);
 
   // Open centred on where you already are, not at the top of the list. With one
   // group per dataset the list is long, and landing on "All sources" every time
@@ -209,7 +211,7 @@ function SourceFilterPicker({
                 </div>
                 {group.sources.map((s) => (
                   <button
-                    key={`${s.datasetId ?? ""}/${s.source}`}
+                    key={`${s.dataset ?? ""}/${s.source}`}
                     ref={isSelected(s) ? selectedRef : undefined}
                     onClick={() => { onChange(s.source, s); setOpen(false); }}
                     className={`block w-full text-left pl-5 pr-2 py-1.5 hover:bg-gray-100 dark:hover:bg-gray-800/60 ${isSelected(s) ? "bg-gray-50 dark:bg-gray-900" : ""}`}
@@ -351,24 +353,15 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
   useEffect(() => {
     fetch("/api/sources")
       .then((r) => r.json())
-      .then((d: Array<{ source: string; description?: string | null; dataset?: string; datasetId?: string }>) => {
+      .then((d: Array<{ dataset: string; sources?: Array<{ source: string; description?: string | null }> }>) => {
         if (!Array.isArray(d)) return;
-        // Keyed by DATASET + source, not source alone. Deduping on the bare name
-        // silently dropped a source when two datasets both defined one called
-        // "orders", and left the survivor attributed to whichever dataset the
-        // API happened to list first.
-        const seen = new Set<string>();
+        // Flattened FROM the grouped catalogue, carrying each source's dataset so
+        // the picker can group it back and tell two same-named sources apart —
+        // two datasets may each define an "orders".
         const opts: SourceOption[] = [];
-        for (const s of d) {
-          const key = `${s.datasetId ?? ""}/${s.source}`;
-          if (s.source && !seen.has(key)) {
-            seen.add(key);
-            opts.push({
-              source: s.source,
-              description: s.description ?? null,
-              dataset: s.dataset,
-              datasetId: s.datasetId,
-            });
+        for (const ds of d) {
+          for (const s of ds.sources ?? []) {
+            if (s.source) opts.push({ source: s.source, description: s.description ?? null, dataset: ds.dataset });
           }
         }
         setSources(opts);
@@ -376,17 +369,7 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
       .catch(() => {});
   }, []);
 
-  // The selected query's dataset as a NAME, for anything that builds a URL. A
-  // replayed history item records the uuid, so translate through the source list
-  // — an id must never reach the address bar.
-  const selectedDatasetName = useMemo(() => {
-    const ref = selected?.datasetId;
-    if (!ref) return null;
-    const hit = sources.find((s) => s.datasetId === ref || s.dataset === ref);
-    return hit?.dataset ?? null;
-  }, [selected?.datasetId, sources]);
-
-  const runQuery = useCallback(async (src: string, malloy: string, datasetId?: string | null, baseSlug?: string | null, question?: string | null) => {
+  const runQuery = useCallback(async (src: string, malloy: string, dataset?: string | null, baseSlug?: string | null, question?: string | null) => {
     if (!src || !malloy.trim()) return;
     setRunning(true);
     setResult(null);
@@ -396,7 +379,7 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
         method: "POST",
         headers: { "content-type": "application/json" },
         // baseSlug lets the server decide author_model (inherit vs 'human').
-        body: JSON.stringify({ source: src, malloy, datasetId, baseSlug, question }),
+        body: JSON.stringify({ source: src, malloy, dataset, baseSlug, question }),
       });
       const json = await res.json();
       if (!res.ok) {
@@ -427,7 +410,7 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
         const authoredByMe: boolean = body.authoredByMe ?? false;
         const item: HistoryItem = {
           id: null, slug: initialSlug, question: body.question ?? null,
-          createdAt: new Date().toISOString(), source: body.source ?? null, datasetId: body.datasetId ?? null,
+          createdAt: new Date().toISOString(), source: body.source ?? null, dataset: body.dataset ?? null,
           malloyQuery: body.malloy ?? null, rowCount: null, durationMs: null,
           authorName: null, mine: authoredByMe, isFavorited: favoritedByMe, favoriteCount,
         };
@@ -447,7 +430,7 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
           setView("history");
           setScope(authoredByMe ? "me" : "all");
         }
-        if (body.source && body.malloy) runQuery(body.source, body.malloy, body.datasetId, initialSlug, body.question ?? null);
+        if (body.source && body.malloy) runQuery(body.source, body.malloy, body.dataset, initialSlug, body.question ?? null);
       })
       .catch((e) => { if (!cancelled) setRunError(e instanceof Error ? e.message : String(e)); });
     return () => { cancelled = true; };
@@ -458,13 +441,13 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
   // — so the editor is writable immediately and the query becomes a real,
   // shareable thing only once it has produced a result. Never auto-runs; a
   // starter is incomplete and a blank one more so.
-  const openScratch = useCallback((src: string | null, dsId: string | null) => {
+  const openScratch = useCallback((src: string | null, dsRef: string | null) => {
     autoFallback.current = false;
     const starter = src ? `run: ${src} -> ` : "";
     setSelected({
       id: null, slug: null,
       question: src ? `Explore ${src}` : "New query",
-      createdAt: new Date().toISOString(), source: src, datasetId: dsId,
+      createdAt: new Date().toISOString(), source: src, dataset: dsRef,
       malloyQuery: starter, rowCount: null, durationMs: null,
       authorName: null, isFavorited: false, favoriteCount: 0,
     });
@@ -509,7 +492,7 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
     setRunError(null);
     mainRef.current?.scrollTo({ top: 0 });
     if (item.malloyQuery && item.source) {
-      runQuery(item.source, item.malloyQuery, item.datasetId, item.slug, item.question);
+      runQuery(item.source, item.malloyQuery, item.dataset, item.slug, item.question);
     }
   }
 
@@ -601,7 +584,7 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
   // new history entry (fresh slug) under the edited title; otherwise just run.
   async function handleRun() {
     if (!source || !query.trim()) return;
-    if (!isModified) { runQuery(source, query, selected?.datasetId, selected?.slug, selected?.question); return; }
+    if (!isModified) { runQuery(source, query, selected?.dataset, selected?.slug, selected?.question); return; }
     const title = (editedTitle ?? modifiedDefaultTitle).trim() || query.trim().slice(0, 80);
     setRunning(true);
     setResult(null);
@@ -610,7 +593,7 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
       const res = await fetch("/api/run", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ source, malloy: query, save: true, title, datasetId: selected?.datasetId, baseSlug: selected?.slug ?? null }),
+        body: JSON.stringify({ source, malloy: query, save: true, title, dataset: selected?.dataset, baseSlug: selected?.slug ?? null }),
       });
       const json = await res.json();
       if (!res.ok) { setRunError(json.error ?? "query failed"); return; }
@@ -621,7 +604,7 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
         question: title,
         createdAt: new Date().toISOString(),
         source,
-        datasetId: selected?.datasetId ?? null,
+        dataset: selected?.dataset ?? null,
         malloyQuery: query,
         rowCount: json.rowCount ?? null,
         durationMs: json.durationMs ?? null,
@@ -672,7 +655,7 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
           {/* Source filter — narrows the list to one Malloy source */}
           <SourceFilterPicker
             value={sourceFilter}
-            currentDatasetRef={selected?.datasetId ?? null}
+            currentDatasetRef={selected?.dataset ?? null}
             sources={sources}
             onChange={(src, opt) => {
               setSourceFilter(src);
@@ -685,7 +668,7 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
               //
               // "All sources" (empty) is the exception: that clears the filter
               // rather than choosing a subject, so it leaves the editor alone.
-              if (src) openScratch(src, opt?.datasetId ?? null);
+              if (src) openScratch(src, opt?.dataset ?? null);
             }}
           />
           {/* Tabs + scope toggle */}
@@ -900,7 +883,7 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
             {result?.stableResult && (
               <div className="space-y-2">
                 <p className="text-[11px] text-gray-500 dark:text-gray-400 uppercase tracking-wide font-semibold">Results</p>
-                <MalloyResultView stableResult={result.stableResult} datasetRef={selectedDatasetName} />
+                <MalloyResultView stableResult={result.stableResult} datasetRef={selected.dataset} />
               </div>
             )}
 

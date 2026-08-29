@@ -9,7 +9,7 @@ import { QueryIcon } from "@/components/QueryIcon";
 
 // A dataset the switcher can jump to, with the landing page it opens: its first
 // dashboard, or the AI Q&A page when it has none.
-type SwitchTarget = { datasetId: string; name: string; href: string };
+type SwitchTarget = { name: string; href: string };
 
 // The horizontal menu shared by a dataset's dashboard-style pages: the dashboard
 // views and the AI Q&A page. It reads like:
@@ -46,7 +46,7 @@ export function DatasetNav({
   const [claudeConnected, setClaudeConnected] = useState(false);
   // Switcher: every visible dataset (from /api/sources, grouped). The landing
   // page is decided by /datasets/<name> itself, so no dashboard list is needed.
-  const [sources, setSources] = useState<{ datasetId: string; dataset: string; status: string }[]>([]);
+  const [catalog, setCatalog] = useState<{ dataset: string; status: string }[]>([]);
   const [switcherOpen, setSwitcherOpen] = useState(false);
 
   useEffect(() => {
@@ -81,12 +81,13 @@ export function DatasetNav({
       .catch(() => {});
     fetch("/api/sources")
       .then((r) => (r.ok ? r.json() : []))
-      .then((d) => setSources(Array.isArray(d) ? d : []))
+      .then((d) => setCatalog(Array.isArray(d) ? d : []))
       .catch(() => {});
   }, []);
 
-  // One entry per visible, ready dataset — deduped from the flat sources list
-  // (dataset name = model name, as the home page does), sorted by name.
+  // One entry per visible, ready dataset. The catalogue is already one row per
+  // dataset, so there is nothing to dedupe — it used to be a flat source list
+  // that had to be collapsed here first.
   //
   // Every entry points at `/datasets/<name>`, which is not a page: it redirects
   // to whatever that dataset actually offers (About, else its first dashboard,
@@ -96,18 +97,15 @@ export function DatasetNav({
   // decision lived in two places and could drift. One redirect hop is cheaper
   // than that.
   const switchTargets = useMemo<SwitchTarget[]>(() => {
-    const seen = new Map<string, SwitchTarget>();
-    for (const s of sources) {
-      if (s.status !== "ready" || seen.has(s.datasetId)) continue;
-      seen.set(s.datasetId, {
-        datasetId: s.datasetId,
-        name: s.dataset,
-        // By NAME (readable, resolves via findByDatasetRef), not the slug.
-        href: `/datasets/${encodeURIComponent(s.dataset)}`,
-      });
-    }
-    return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));
-  }, [sources]);
+    return catalog
+      .filter((d) => d.status === "ready")
+      .map((d) => ({
+        name: d.dataset,
+        // By NAME (readable, resolves via findByDatasetRef), not an id.
+        href: `/datasets/${encodeURIComponent(d.dataset)}`,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [catalog]);
 
   // Seed a new Claude chat on this dataset (matches the home page's link). When
   // the connector isn't linked yet, send them to set it up.
@@ -169,10 +167,10 @@ export function DatasetNav({
                 <p className="px-3 py-1.5 text-gray-400">no datasets</p>
               ) : (
                 switchTargets.map((t) => {
-                  const current = t.datasetId === datasetId || t.name === datasetName;
+                  const current = t.name === datasetName || t.name === datasetId;
                   return (
                     <Link
-                      key={t.datasetId}
+                      key={t.name}
                       href={t.href}
                       onClick={() => setSwitcherOpen(false)}
                       className={`block px-3 py-1.5 truncate hover:bg-gray-100 dark:hover:bg-gray-800/60 ${

@@ -9,48 +9,24 @@ import { QueryIcon } from "@/components/QueryIcon";
 
 type AuthProvider = { id: string; name: string };
 
-type SourceSummary = {
-  source: string;
-  description: string | null;
-  /** The dataset's NAME — what links carry and what a reader recognises. */
-  dataset: string;
-  /** Its id. Internal only: it keys the grouping below and never reaches a URL
-      or the screen (see the dataset-name links, which all use `dataset`). */
-  datasetId: string;
-  status: string;
-  isPublic: boolean;
-  // "owner/repo" the model was published from, null when not from GitHub.
-  githubRepo: string | null;
-  ownerEmail?: string | null;
-  ownerName?: string | null;
-};
+type SourceSummary = { source: string; description: string | null };
 
-// The front page is organized BY DATASET: the flat /api/sources list is grouped
-// under its dataset (model = dataset name), so each dataset is a section with
-// its exported sources listed beneath.
+// The front page is organized BY DATASET, and /api/sources now returns it that
+// way — each dataset once, with the sources it offers. It used to return a flat
+// source list carrying the dataset's fields on every row, and this file's first
+// job was to undo that; the regrouping went with it.
+//
+// A dataset is identified by NAME throughout: it is unique per server, it is
+// what every link carries, and it is the key the questions and dashboards below
+// are joined on. No id reaches this file.
 type DatasetGroup = {
-  datasetId: string;
-  name: string;
+  dataset: string;
   isPublic: boolean;
   status: string;
   githubRepo: string | null;
-  ownerEmail?: string | null;
   ownerName?: string | null;
   sources: SourceSummary[];
 };
-
-function groupByDataset(list: SourceSummary[]): DatasetGroup[] {
-  const map = new Map<string, DatasetGroup>();
-  for (const s of list) {
-    let g = map.get(s.datasetId);
-    if (!g) {
-      g = { datasetId: s.datasetId, name: s.dataset, isPublic: s.isPublic, status: s.status, githubRepo: s.githubRepo ?? null, ownerEmail: s.ownerEmail, ownerName: s.ownerName, sources: [] };
-      map.set(s.datasetId, g);
-    }
-    g.sources.push(s);
-  }
-  return [...map.values()];
-}
 
 // Group a dataset's questions by their source, preserving the input's
 // most-recently-used order (both the source order and the questions within
@@ -76,7 +52,7 @@ type Me = {
 };
 
 type FavQuery = {
-  datasetId: string;
+  dataset: string;
   source: string;
   slug: string | null;
   question: string;
@@ -103,9 +79,9 @@ export default function HomePage() {
   // explanation, since signing in again would just loop back here.
   const [accessState, setAccessState] = useState<"pending" | "disabled" | null>(null);
   const [claudeConnected, setClaudeConnected] = useState(false);
-  const [sources, setSources] = useState<SourceSummary[] | null>(null);
+  const [sources, setSources] = useState<DatasetGroup[] | null>(null);
   const [favQueries, setFavQueries] = useState<FavQuery[]>([]);
-  const [dashboards, setDashboards] = useState<Array<{ datasetId: string; name: string; title: string }>>([]);
+  const [dashboards, setDashboards] = useState<Array<{ dataset: string; name: string; title: string }>>([]);
   // Claude connect-instructions modal — shown when clicking a source's Claude
   // button before the connector is linked. claudeTargetUrl is the explore chat
   // to continue to after setup.
@@ -146,28 +122,28 @@ export default function HomePage() {
   const favByDataset = new Map<string, FavQuery[]>();
   const datasetOrder: string[] = [];
   for (const q of favQueries) {
-    let list = favByDataset.get(q.datasetId);
-    if (!list) { list = []; favByDataset.set(q.datasetId, list); datasetOrder.push(q.datasetId); }
+    let list = favByDataset.get(q.dataset);
+    if (!list) { list = []; favByDataset.set(q.dataset, list); datasetOrder.push(q.dataset); }
     list.push(q);
   }
 
-  // Every source grouped by dataset, plus a lookup for dataset metadata.
-  const datasetGroups = sources ? groupByDataset(sources) : [];
-  const datasetById = new Map(datasetGroups.map((g) => [g.datasetId, g]));
+  // The catalogue arrives grouped; just index it for lookup by name.
+  const datasetGroups: DatasetGroup[] = sources ?? [];
+  const datasetByName = new Map(datasetGroups.map((g) => [g.dataset, g]));
 
   // Dashboards grouped by dataset, for the per-dataset row below.
   const dashByDataset = new Map<string, Array<{ name: string; title: string }>>();
   for (const d of dashboards) {
-    let arr = dashByDataset.get(d.datasetId);
-    if (!arr) { arr = []; dashByDataset.set(d.datasetId, arr); }
+    let arr = dashByDataset.get(d.dataset);
+    if (!arr) { arr = []; dashByDataset.set(d.dataset, arr); }
     arr.push({ name: d.name, title: d.title });
   }
 
   // Datasets to render: those with questions first (recency order), then any
   // remaining datasets (their sources still show, just with no questions).
-  const orderedDatasetIds = [
+  const orderedDatasetNames = [
     ...datasetOrder,
-    ...datasetGroups.map((g) => g.datasetId).filter((id) => !favByDataset.has(id)),
+    ...datasetGroups.map((g) => g.dataset).filter((n) => !favByDataset.has(n)),
   ];
 
   // claude.ai chats seeded via this instance's MCP tools — one per source, one
@@ -293,13 +269,13 @@ export default function HomePage() {
             </div>
             {sources === null ? (
               <p className="text-gray-500 dark:text-gray-400 text-xs">loading…</p>
-            ) : orderedDatasetIds.length === 0 ? (
+            ) : orderedDatasetNames.length === 0 ? (
               <p className="text-gray-500 dark:text-gray-400 text-xs">No sources yet.</p>
             ) : (
               <div className="space-y-4">
-                {orderedDatasetIds.map((dsId) => {
-                  const g = datasetById.get(dsId);
-                  const { bySource, order } = groupBySource(favByDataset.get(dsId) ?? []);
+                {orderedDatasetNames.map((dsName) => {
+                  const g = datasetByName.get(dsName);
+                  const { bySource, order } = groupBySource(favByDataset.get(dsName) ?? []);
                   const withQuestions = new Set(order.filter((k) => k !== ""));
                   const additional = (g?.sources ?? []).filter((s) => !withQuestions.has(s.source));
                   // No `overflow-hidden` on this card, deliberately: the source menus below
@@ -308,7 +284,7 @@ export default function HomePage() {
                   // nothing to expand and nothing to scroll. The rounded corners it was
                   // there for are kept by rounding the header itself.
                   return (
-                    <div key={dsId} className="border border-gray-200 dark:border-gray-800 rounded">
+                    <div key={dsName} className="border border-gray-200 dark:border-gray-800 rounded">
                       <div className="flex items-center justify-between gap-3 px-3 py-2 rounded-t bg-gray-50 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-800">
                         <span className="flex items-center gap-2 min-w-0 flex-1">
                           {/* The dataset name is the way IN. /datasets/<name> is
@@ -319,11 +295,11 @@ export default function HomePage() {
                               dataset without the home page having to know which
                               tier applies. See @/lib/dataset-landing. */}
                           <Link
-                            href={`/datasets/${encodeURIComponent(g?.name ?? dsId)}`}
-                            title={`Open ${g?.name ?? "dataset"}`}
+                            href={`/datasets/${encodeURIComponent(g?.dataset ?? dsName)}`}
+                            title={`Open ${g?.dataset ?? "dataset"}`}
                             className="font-semibold truncate hover:underline"
                           >
-                            {g?.name ?? "dataset"}
+                            {g?.dataset ?? "dataset"}
                           </Link>
                           {g?.githubRepo && <GitHubLink repo={g.githubRepo} />}
                         </span>
@@ -336,14 +312,14 @@ export default function HomePage() {
                           )}
                           <button
                             type="button"
-                            onClick={() => openClaude(claudeExploreDatasetUrl(g?.name ?? "dataset"))}
+                            onClick={() => openClaude(claudeExploreDatasetUrl(g?.dataset ?? "dataset"))}
                             title={claudeConnected ? `Open a Claude chat on ${instanceName}` : `Connect ${instanceName} to Claude first`}
                             className="text-[11px] px-2 py-0.5 rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950 hover:bg-gray-100 dark:hover:bg-gray-900"
                           >
                             Explore in Claude
                           </button>
                           <Link
-                            href={`/datasets/${encodeURIComponent(g?.name ?? dsId)}/config`}
+                            href={`/datasets/${encodeURIComponent(g?.dataset ?? dsName)}/config`}
                             title="Configure dataset"
                             aria-label="Configure dataset"
                             className="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
@@ -356,13 +332,13 @@ export default function HomePage() {
                         </div>
                       </div>
 
-                      {(dashByDataset.get(dsId)?.length ?? 0) > 0 && (
+                      {(dashByDataset.get(dsName)?.length ?? 0) > 0 && (
                         <div className="px-3 py-2 border-b border-gray-200 dark:border-gray-800 flex flex-wrap items-center gap-2">
                           <span className="text-[10px] uppercase tracking-wide text-gray-400 dark:text-gray-500">dashboards</span>
-                          {dashByDataset.get(dsId)!.map((d) => (
+                          {dashByDataset.get(dsName)!.map((d) => (
                             <Link
                               key={d.name}
-                              href={`/datasets/${encodeURIComponent(g?.name ?? dsId)}/dashboard/${encodeURIComponent(d.name)}`}
+                              href={`/datasets/${encodeURIComponent(g?.dataset ?? dsName)}/dashboard/${encodeURIComponent(d.name)}`}
                               className="text-xs px-2 py-0.5 rounded border border-gray-300 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-900"
                             >
                               {d.title}
@@ -378,7 +354,7 @@ export default function HomePage() {
                             <div key={srcKey || "(unspecified)"} className="px-3 py-2">
                               <div className="flex items-center justify-between gap-2">
                                 <span className="font-semibold text-xs truncate">
-                                  {srcKey || <span className="text-gray-500 dark:text-gray-400">{g?.name}</span>}
+                                  {srcKey || <span className="text-gray-500 dark:text-gray-400">{g?.dataset}</span>}
                                 </span>
                                 {srcKey && (
                                   <div className="flex items-center gap-1.5 flex-shrink-0 text-[10px] text-gray-400 dark:text-gray-500">
@@ -392,7 +368,7 @@ export default function HomePage() {
                                       claude
                                     </button>
                                     <Link
-                                      href={`/ltool?source=${encodeURIComponent(srcKey)}&dataset=${encodeURIComponent(g?.name ?? dsId)}`}
+                                      href={`/ltool?source=${encodeURIComponent(srcKey)}&dataset=${encodeURIComponent(g?.dataset ?? dsName)}`}
                                       title={`Write a Malloy query against ${srcKey}`}
                                       className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-900"
                                     >
@@ -415,7 +391,7 @@ export default function HomePage() {
                                 {qs.length > 8 && (
                                   <li className="flex items-start gap-2">
                                     <span className="flex-shrink-0 w-[1ch]" aria-hidden />
-                                    <Link href={`/datasets/${encodeURIComponent(g?.name ?? dsId)}/questions`} className="text-[11px] text-gray-400 dark:text-gray-500 hover:underline">
+                                    <Link href={`/datasets/${encodeURIComponent(g?.dataset ?? dsName)}/questions`} className="text-[11px] text-gray-400 dark:text-gray-500 hover:underline">
                                       +{qs.length - 8} more →
                                     </Link>
                                   </li>
@@ -432,7 +408,7 @@ export default function HomePage() {
                             )}
                             <div className="flex flex-wrap gap-x-3 gap-y-1">
                               {additional.map((s, i) => (
-                                <SourceMenu key={`${s.source}-${i}`} source={s.source} datasetRef={g?.name ?? dsId} instanceName={instanceName}
+                                <SourceMenu key={`${s.source}-${i}`} source={s.source} datasetRef={g?.dataset ?? dsName} instanceName={instanceName}
                                   claudeConnected={claudeConnected} onClaude={exploreWithClaude} className="text-xs" />
                               ))}
                             </div>

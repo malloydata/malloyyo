@@ -20,6 +20,7 @@ import { makeRunner, type ModelRunner } from "./host.js";
 import { readSiteConfig } from "./config.js";
 import {
   discoverDashboards,
+  rendersNoData,
   resolveRuntimeDir,
   hostAliasPlugin,
   browserBuildBase,
@@ -259,14 +260,17 @@ function indexPage(
   analytics: string | undefined,
 ): string {
   const link = (n: string) => (cleanUrls ? `./${encodeURIComponent(n)}` : `./${encodeURIComponent(n)}.html`);
+  // The About page is this page — it must not list itself among the dashboards
+  // it is introducing, in the cards or in the custom landing's injected list.
+  const listed = dashboards.filter((d) => !rendersNoData(d));
   const body = custom
     ? `<div id="root"></div>\n` +
       `<script>window.__DASHBOARDS__ = ${safeJson(
-        dashboards.map((d) => ({ name: d.name, title: d.title, description: d.description, href: link(d.name) })),
+        listed.map((d) => ({ name: d.name, title: d.title, description: d.description, href: link(d.name) })),
       )};</script>\n` +
       `<script type="module" src="./assets/index.js"></script>`
     : `<main class="index"><h1>${esc(title)}</h1><ul>` +
-      dashboards
+      listed
         .map(
           (d) =>
             `<li><a href="${link(d.name)}"><strong>${esc(d.title || d.name)}</strong>` +
@@ -524,6 +528,10 @@ export async function bundleDashboards(opts: BundleOptions = {}): Promise<void> 
   // Introspect each dashboard's given specs from the model — the same call the
   // dev server makes per page load (resolveGivens), done once at build time.
   for (const d of dashboards) {
+    // The About page has no page of its own — it IS index.html, written below.
+    // It also has no query, so the given introspection under here would throw
+    // on it ("dashboard index: …") rather than produce anything.
+    if (rendersNoData(d)) continue;
     let specs: unknown[] = [];
     let tileSpecs: unknown[] | undefined;
     if (d.tiles && d.entryFile) {

@@ -70,3 +70,25 @@ export function navHtml(
     .join("");
   return `<nav class="dash-nav">${brand}<span class="sep"></span>${links}</nav>`;
 }
+
+/** The sibling list a host injects as `window.__DASHBOARDS__`, in nav order and
+    excluding the current page.
+ *
+ * Same shape and same link-shape callback as `navHtml`, because it answers the
+ * same question in component form: an About page (or any dashboard) that wants
+ * to link to the others gets `props.dashboards` and never has to know whether it
+ * is running under the dev server, the hosted frame, or a static bundle. */
+export function siblingList<T extends NavDashboard & { description?: string }>(
+  current: string,
+  all: readonly T[],
+  href: (name: string) => string,
+): Array<{ name: string; title: string; description?: string; href: string }> {
+  return all
+    .filter((d) => d.name !== current)
+    .map((d) => ({
+      name: d.name,
+      title: d.title || d.name,
+      ...(d.description ? { description: d.description } : {}),
+      href: href(d.name),
+    }));
+}

@@ -28,9 +28,10 @@ import { makeRunner, type GivenSpec, type ModelRunner, type TileSpec } from "./h
 import { initConnections } from "./connections.js";
 import { givensFromSearch, urlStateFromSearch } from "./shared/givens-url.js";
 import { safeJson } from "./shared/html.js";
-import { navHtml as sharedNav, NAV_CSS } from "./shared/nav.js";
+import { navHtml as sharedNav, siblingList, NAV_CSS } from "./shared/nav.js";
 import {
   discoverDashboards,
+  rendersNoData,
   hostAliasPlugin,
   resolveRuntimeDir,
   type Dashboard,
@@ -149,6 +150,10 @@ const html = (body: string, title: string) =>
 /** The dev server's link shape for the shared switcher: `/?d=<name>`. The bar
     itself (markup, brand, styling) lives in shared/nav so dev and every bundle
     target render the same thing. */
+/** Dev-server link shape, the same one navHtml uses. */
+const devSiblings = (dash: Dashboard, all: Dashboard[]) =>
+  siblingList(dash.name, all, (n) => `/?d=${encodeURIComponent(n)}`);
+
 function navHtml(dash: Dashboard, all: Dashboard[]): string {
   return sharedNav(dash.name, all, (n) => `/?d=${encodeURIComponent(n)}`);
 }
@@ -180,6 +185,7 @@ function inPageShell(
     navHtml(dash, all) +
       `<div id="root"></div>` +
       `<script>window.__DASHBOARD__=${safeJson(info)};` +
+      `window.__DASHBOARDS__=${safeJson(devSiblings(dash, all))};` +
       `window.__GIVENS__=${safeJson(givenSpecs)};` +
       `window.__INITIAL_GIVENS__=${safeJson(initialGivens)};` +
       `window.__INITIAL_URLSTATE__=${safeJson(initialUrlState)}</script>` +
@@ -281,6 +287,7 @@ function urlStateFromUrl(url: URL): Record<string, string> {
 
 function frameDoc(
   dash: Dashboard,
+  all: Dashboard[],
   givenSpecs: GivenSpec[],
   initialGivens: Record<string, string>,
   initialUrlState: Record<string, string>,
@@ -305,6 +312,7 @@ function frameDoc(
   return html(
     `<div id="root"></div>` +
       `<script>window.__DASHBOARD__=${safeJson(info)};` +
+      `window.__DASHBOARDS__=${safeJson(devSiblings(dash, all))};` +
       `window.__GIVENS__=${safeJson(givenSpecs)};` +
       `window.__INITIAL_GIVENS__=${safeJson(initialGivens)};` +
       `window.__INITIAL_URLSTATE__=${safeJson(initialUrlState)}</script>` +
@@ -356,6 +364,11 @@ export async function serveDashboard(opts: {
   async function resolveGivens(
     dash: Dashboard,
   ): Promise<{ ok: true; union: GivenSpec[]; tiles?: TileSpec[] } | { ok: false; error: string }> {
+    // The About page runs no query, so there is nothing to introspect and no
+    // entry file to compile. Asking anyway would compile the model to answer a
+    // question about a query that does not exist, then report its absence as a
+    // "model error" printed over the page the author wrote.
+    if (rendersNoData(dash)) return { ok: true, union: [] };
     if (dash.tiles && dash.entryFile) {
       const t = await runner.dashboardTiles(dash.entryFile, dash.tiles);
       return { ok: true, union: t.union, tiles: t.tiles };
@@ -419,7 +432,7 @@ export async function serveDashboard(opts: {
               html(`<pre style="color:crimson;padding:16px">model error: ${esc(g.error)}</pre>`, dash.title));
           }
           return send(200, "text/html; charset=utf-8",
-            frameDoc(dash, g.union, givensFromUrl(url), urlStateFromUrl(url), g.tiles));
+            frameDoc(dash, dashboards, g.union, givensFromUrl(url), urlStateFromUrl(url), g.tiles));
         }
         if (url.pathname === "/bundle.js") {
           return send(200, "application/javascript; charset=utf-8", await bundle(pick(url)));

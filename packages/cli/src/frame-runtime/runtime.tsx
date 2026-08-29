@@ -10,6 +10,7 @@
 //
 // Injected frame globals (read lazily — script order differs between hosts):
 //   window.__DASHBOARD__        { name, query, title, description? }  (the # artifact tag)
+//   window.__DASHBOARDS__       [{ name, title, description?, href }]  (the siblings, nav order)
 //   window.__GIVENS__           given specs introspected from the model's given: decls
 //   window.__INITIAL_GIVENS__   URL-seeded given values ($-prefixed) for shareable links
 //   window.__INITIAL_URLSTATE__ URL-seeded useUrlState view-state (~-prefixed)
@@ -33,6 +34,13 @@ import { combineTiles } from "./combine";
 export { filters };
 
 export const dashboardInfo = () => window.__DASHBOARD__ || {};
+
+/** The dashboard's SIBLINGS: `[{ name, title, description?, href }]`, in nav
+    order, with this one excluded. Every host injects it (dev server, hosted
+    frame, static bundle), so a component that links to other dashboards — the
+    About page's card list, a "see also" — is written once and works on all
+    three. Empty when a host supplies nothing, so reading it is always safe. */
+export const dashboardList = () => window.__DASHBOARDS__ || [];
 export const givenSpecs = () => window.__GIVENS__ || [];
 
 // ── host bridge ─────────────────────────────────────────────────────
@@ -936,6 +944,7 @@ function Root({ Dashboard, extraProps }) {
       <UrlStateCtx.Provider value={urlCtx}>
         <Dashboard
           dashboard={dashboardInfo()}
+          dashboards={dashboardList()}
           givenSpecs={givenSpecs()}
           givens={committed}
           setGiven={setGiven}
@@ -966,6 +975,20 @@ function Root({ Dashboard, extraProps }) {
 // stays legible; override --dash-panel-bg if your renderer output is dark-safe.
 const THEME_CSS = `
 :root {
+  /* The static site's variable names, aliased onto the theme.
+     A written page (the About page, most obviously) is authored against the
+     bundle's site.css, which names them --bg/--fg/--card/--line/--muted/--accent.
+     The same component also runs here — under the dev server and in the hosted
+     frame — where only --dash-* exists, so without these it renders with
+     transparent cards and invisible borders: technically fine, visibly broken.
+     Defined first and with plain names so a page may still override them. */
+  --bg: var(--dash-bg, #ffffff);
+  --fg: var(--dash-fg, #111418);
+  --card: var(--dash-panel-bg, #ffffff);
+  --line: var(--dash-border, #e5e7eb);
+  --muted: var(--dash-muted, #6b7280);
+  --accent: var(--dash-accent, #1573a1);
+
   --dash-font: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   --dash-bg: #ffffff;
   --dash-fg: #171717;
@@ -1029,8 +1052,61 @@ function injectTheme(bodyReset) {
     `rootEl` (defaults to #root, the sandboxed iframe's mount node). The tag-only
     in-page host passes its own container so the dashboard mounts directly in the
     trusted page — no iframe. */
+/**
+ * Route a click on a sibling link through the host's navigate bridge.
+ *
+ * A written page (the About page) links to its siblings as ordinary anchors —
+ * that is what makes the same component work as a plain static page in a
+ * `dashboard bundle`. Inside a framed host it is NOT a plain page: the document
+ * is a sandboxed iframe on its own origin, so a relative href navigates the
+ * FRAME to a URL that does not exist there (the dev server answers "not found"
+ * on the frame port), and a top-level href would need allow-top-navigation,
+ * which the sandbox deliberately withholds.
+ *
+ * The bridge already solves this for drill: only the trusted parent knows the
+ * environment's dashboard shape (hosted /datasets/:id/dashboard/:slug vs local
+ * /?d=slug). So intercept the click and hand the parent a NAME, exactly as drill
+ * does. The anchor keeps its href, so the static build is untouched and the link
+ * still shows a real target on hover.
+ *
+ * Deliberately capture-phase and non-destructive: modified clicks (new tab,
+ * download) and anchors that aren't siblings fall through untouched.
+ */
+/** Installed once per document. `mount()` runs again on every client-side
+    navigation between tag-only dashboards (TagOnlyDashboard unmounts the React
+    root and re-mounts), and a listener added per mount is never removed — so
+    without this each visit would add another handler and one click would fire
+    navigate once per handler. injectTheme guards itself the same way. */
+let siblingLinksInstalled = false;
+
+function interceptSiblingLinks() {
+  if (typeof document === "undefined" || siblingLinksInstalled) return;
+  siblingLinksInstalled = true;
+  document.addEventListener(
+    "click",
+    (e: any) => {
+      if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      const a = e.target && e.target.closest ? e.target.closest("a[href]") : null;
+      if (!a || a.target === "_blank" || a.hasAttribute("download")) return;
+      // dashboardList() is read HERE, per click, not captured at mount: the
+      // header's rule is that injected globals are read lazily because script
+      // order differs between hosts, and a host that sets __DASHBOARDS__ after
+      // the bundle runs would otherwise get no interception at all — silently,
+      // which is the very failure this exists to prevent.
+      // Matched on the authored attribute, which is what the host injected.
+      const href = a.getAttribute("href");
+      const hit = dashboardList().find((d: any) => d && d.href === href);
+      if (!hit) return;
+      e.preventDefault();
+      host.navigate(hit.name, {});
+    },
+    true,
+  );
+}
+
 export function mount(Dashboard, extraProps, rootEl: any = null, opts: any = {}) {
   injectTheme(opts.bodyReset !== false);
+  interceptSiblingLinks();
   window.addEventListener("error", (e) => {
     if (isBenign(e && e.message)) return;
     showFatal((e.error && e.error.stack) || e.message);

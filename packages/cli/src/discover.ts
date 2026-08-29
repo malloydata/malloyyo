@@ -110,6 +110,16 @@ export async function discoverDashboards(root: string, runner: ModelRunner): Pro
       .find((p) => fs.existsSync(p));
     dashboards.push({ ...res.artifact, name: res.artifact.name || base, entryFile, tsxPath: component });
   }
+  // The written front door goes FIRST — it is the introduction, and `dashboard
+  // dev` serves the first dashboard at `/`.
+  //
+  // Added after the loop, and only if nothing already answers to its name. A
+  // `## artifact { name="index" }` tag on any other file resolves to the same
+  // name, and two dashboards sharing one name shadow each other silently
+  // (`pick()` takes the first, the bundle writes one page over the other). The
+  // real dashboard wins — it has a query and a page; the About page yields.
+  const about = aboutPage(root);
+  if (about && !dashboards.some((d) => d.name === about.name)) dashboards.unshift(about);
   return dashboards;
 }
 
@@ -140,3 +150,44 @@ export function browserBuildBase(): Pick<
     },
   };
 }
+
+/** The name and title an About page gets when the repo ships no `index.malloy`.
+    "index" matches the file it comes from and the `index.html` the bundle already
+    emits for it; "About" is what a reader sees. */
+export const ABOUT_NAME = "index";
+export const ABOUT_TITLE = "About";
+
+/**
+ * The repo's written front door: `dashboards/index.jsx|tsx` with no
+ * `index.malloy` beside it.
+ *
+ * It is a dashboard in every way that matters — repo-authored React, rendered by
+ * the same runtime, in the same sandbox — except that it runs no query. Until now
+ * only `bundle` knew about it (as a hardcoded filename), so the page an author
+ * wrote to explain their data was invisible on the dev server and never even
+ * uploaded by `publish`. Returning it here puts it in front of every surface at
+ * once, FIRST, because it is the introduction: `dashboard dev` picks the first
+ * dashboard for `/`, and the nav lists them in order.
+ *
+ * `query: ""` with no `tiles` is the marker for "renders no data". Nothing
+ * downstream should introspect givens for it — there is no query to introspect.
+ *
+ * An `index.malloy` that DOES exist wins: that is an ordinary dashboard named
+ * "index", discovered by the loop above, and this returns null so it is not
+ * shadowed by a second entry of the same name.
+ */
+export function aboutPage(root: string): Dashboard | null {
+  const dir = path.join(root, "dashboards");
+  if (fs.existsSync(path.join(dir, "index.malloy"))) return null;
+  const component = ["jsx", "tsx"]
+    .map((ext) => path.join(dir, `index.${ext}`))
+    .find((p) => fs.existsSync(p));
+  if (!component) return null;
+  return { name: ABOUT_NAME, query: "", title: ABOUT_TITLE, tsxPath: component };
+}
+
+/** True for a dashboard that renders no data — the About page today. Callers use
+    it to skip given introspection and query compilation, both of which need a
+    query that by definition isn't there. */
+export const rendersNoData = (d: Pick<Dashboard, "query" | "tiles">): boolean =>
+  !d.query && (!d.tiles || d.tiles.length === 0);

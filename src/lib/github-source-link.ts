@@ -52,11 +52,19 @@ export type SourceLinkInput = {
 /** The path of the dashboard's .malloy within the repo, or null if not found. */
 export function dashboardSourcePath(name: string, files?: { path: string }[] | null): string | null {
   const wanted = `${name}.malloy`.toLowerCase();
-  const matches = files?.filter((f) => f.path.toLowerCase().split("/").pop() === wanted) ?? [];
-  // A dashboard's file lives under dashboards/. Matching on the BASENAME alone
-  // linked a dashboard named "index" to the repo-root index.malloy — the model's
-  // MCP surface, a different file that happens to share the name. Prefer the
-  // dashboards/ one; fall back to a unique match elsewhere (v1 layouts).
+  const matches = (files ?? []).filter((f) => {
+    const path = f.path.toLowerCase();
+    if (path.split("/").pop() !== wanted) return false;
+    // The repo-ROOT index.malloy is the model's MCP/ltool entry point, never a
+    // dashboard's source. It is the only file that can collide by basename with
+    // a dashboard while being a different thing entirely, and the About page —
+    // which exists precisely BECAUSE there is no dashboards/index.malloy — hits
+    // it every time. Excluded outright, so `name === "index"` falls through to
+    // "no link" rather than to a link at the wrong file.
+    return path !== "index.malloy";
+  });
+  // A dashboard's file lives under dashboards/; prefer that, and fall back to a
+  // match elsewhere for v1 layouts.
   const hit = matches.find((f) => f.path.toLowerCase().startsWith("dashboards/")) ?? matches[0];
   if (hit) return hit.path;
   // No file list (or a v1 model whose dashboard lives in index.malloy): the v2

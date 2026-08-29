@@ -169,7 +169,7 @@ function SourcePicker({
             ) : (
               sources.map((s) => (
                 <button
-                  key={s.source}
+                  key={`${s.dataset ?? ""}/${s.source}`}
                   onClick={() => { onChange(s.source); setOpen(false); }}
                   className={`block w-full text-left px-2 py-1.5 hover:bg-gray-100 dark:hover:bg-gray-800/60 ${
                     s.source === value ? "bg-gray-50 dark:bg-gray-900" : ""

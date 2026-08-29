@@ -47,9 +47,12 @@ export async function refreshGitHubModel(datasetId: string): Promise<RefreshResu
   // is the server-side equivalent of the CLI's per-file `artifactForFile`
   // discovery. Non-fatal: a broken dashboard never fails the model refresh.
   const dashboards: Array<{ base: string; artifact: ArtifactInfo }> = [];
+  // Needed twice: to compile each dashboard below, and to tell whether the repo
+  // has a dashboards/index.malloy when deciding about the About page.
+  let bases: string[] = [];
   try {
     const entries = await listGitHubDir(owner, repo, branch, "dashboards", { useToken: ds.githubUseToken });
-    const bases = entries
+    bases = entries
       .filter((e) => e.type === "file" && e.name.endsWith(".malloy"))
       .map((e) => e.name.slice(0, -".malloy".length))
       .sort();
@@ -141,7 +144,14 @@ export async function refreshGitHubModel(datasetId: string): Promise<RefreshResu
     // name, and malloy_artifacts has no unique (model_id, name) — two rows would
     // both insert, and getDashboard's unordered `.limit(1)` would then serve
     // whichever Postgres happened to return.
-    if (!rows.some((r) => r.name === ABOUT_NAME)) {
+    // Two guards, because there are two ways "index" can already be taken and
+    // each misses the other. By FILE: a `dashboards/index.malloy` tagged
+    // `name="overview"` publishes as `overview` while index.jsx is its
+    // component — no row is called `index`, but the About page must not exist
+    // (the CLI's aboutPage() agrees, and would produce nothing here). By NAME: a
+    // tag on some other file can resolve to `index`, and malloy_artifacts has no
+    // unique (model_id, name).
+    if (!bases.includes(ABOUT_NAME) && !rows.some((r) => r.name === ABOUT_NAME)) {
       for (const ext of ["jsx", "tsx"]) {
         try {
           const source = await fetchGitHubFile(owner, repo, branch, `dashboards/${ABOUT_NAME}.${ext}`, {

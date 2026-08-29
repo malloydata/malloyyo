@@ -1,7 +1,7 @@
 // Copyright (c) The Malloy Foundation
 // SPDX-License-Identifier: MIT
 
-import { eq, and, desc, or, count } from "drizzle-orm";
+import { eq, and, desc, or, count, sql } from "drizzle-orm";
 import { db, datasets, malloyModels, malloyModelFiles, savedQueries, history, favorites } from "@/db";
 import type { SourceInfo } from "./malloy";
 // NOTE: `runRestrictedMalloyFiles` (and everything under ./malloy) pulls in
@@ -84,10 +84,15 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
     uuid links keep working. */
 export async function findByDatasetRef(userId: string, ref: string) {
   if (UUID_RE.test(ref)) return findByDatasetId(userId, ref);
+  // READY first. The unique index on `name` is partial (ready only), so a stuck
+  // `modeling` row may share a name with the live dataset; an unordered limit(1)
+  // could then resolve a readable link to the half-built one and fail with
+  // "not ready".
   const [ds] = await db
     .select()
     .from(datasets)
     .where(and(visibleDatasetWhere(userId), eq(datasets.name, ref)))
+    .orderBy(sql`case when ${datasets.status} = 'ready' then 0 else 1 end`, desc(datasets.createdAt))
     .limit(1);
   if (!ds) return null;
   const model = await latestModel(ds.id);

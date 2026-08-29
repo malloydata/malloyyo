@@ -65,7 +65,19 @@ export async function GET() {
     sources: Array<{ source: string; description: string | null }>;
   }> = [];
 
+  // Names are unique only among READY datasets — datasets_name_ready_unique is
+  // partial — while this list includes everything not-failed. A creation stuck
+  // in `modeling` can therefore share a name with the live dataset, and since
+  // the name is now the key every caller joins and renders on, two rows with one
+  // name merge a card, duplicate a React key, and hide one of them. Keep the
+  // ready one; a half-built namesake is not what anyone means by that name.
+  const byName = new Map<string, (typeof dsList)[number]>();
   for (const ds of dsList) {
+    const held = byName.get(ds.name);
+    if (!held || (held.status !== "ready" && ds.status === "ready")) byName.set(ds.name, ds);
+  }
+
+  for (const ds of byName.values()) {
     const [latestModel] = await db
       .select({ sources: malloyModels.sources, gitRepo: malloyModels.gitRepo })
       .from(malloyModels)

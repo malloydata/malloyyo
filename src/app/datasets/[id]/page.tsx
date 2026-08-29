@@ -16,20 +16,34 @@
 // from here (check-page-no-duckdb fails the build if you do).
 
 import { redirect } from "next/navigation";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, isNotNull, sql } from "drizzle-orm";
 import { db, history, savedQueries } from "@/db";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { findByDatasetRef, normalizeSources } from "@/lib/mcp-tools";
 import { listDashboards } from "@/lib/dashboards/meta";
 import { datasetLandingPath } from "@/lib/dataset-landing";
 import { signInPath } from "@/lib/auth-paths";
+import { RUN_LABELS } from "@/lib/tool-names";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-/** Has anyone asked anything of this dataset? Either store counts — a saved
-    query is a question someone kept, a history row is one that was answered.
-    EXISTS rather than a count: the answer is a boolean and these tables grow. */
+/**
+ * Will the Q&A page have anything to show?
+ *
+ * The predicate has to match what `datasetQuestions` (api/history) actually
+ * LISTS, not merely what exists. A looser test sends the reader to a page that
+ * says "no questions" — the dead end this whole chain exists to avoid — and it
+ * is easy to be looser by accident: a failed MCP `query` still records a history
+ * row carrying a question, with an error and no slug, and the Q&A page correctly
+ * ignores it.
+ *
+ * So the history side mirrors that filter exactly: an executed run, no error,
+ * and a slug (the page links each question to its shared answer, so a row
+ * without one cannot be rendered).
+ *
+ * EXISTS rather than a count — the answer is a boolean and these tables grow.
+ */
 async function hasQuestions(datasetId: string): Promise<boolean> {
   const [saved] = await db
     .select({ n: sql<number>`1` })
@@ -40,7 +54,15 @@ async function hasQuestions(datasetId: string): Promise<boolean> {
   const [asked] = await db
     .select({ n: sql<number>`1` })
     .from(history)
-    .where(and(eq(history.datasetId, datasetId), sql`${history.question} is not null`))
+    .where(
+      and(
+        eq(history.datasetId, datasetId),
+        inArray(history.toolName, RUN_LABELS),
+        eq(history.executed, true),
+        isNull(history.error),
+        isNotNull(history.slug),
+      ),
+    )
     .limit(1);
   return Boolean(asked);
 }

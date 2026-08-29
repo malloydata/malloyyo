@@ -369,25 +369,41 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
     return () => { cancelled = true; };
   }, [initialSlug, runQuery]);
 
-  // Deep-link to a SOURCE (the front page "ltool" button): open the editor on
-  // that source with a starter query, expanded so its schema/fields show. No
-  // auto-run — the starter is incomplete.
+  // Deep-link to a DATASET and/or a SOURCE (the front page's "ltool" button, the
+  // dashboard nav's "Query" item, and the empty-dataset tier of the
+  // /datasets/<ref> landing chain): open an editable scratch query.
+  //
+  // The source is optional. It used to be required, and that left the one case
+  // that needs this most at a dead end: arrive on a dataset that has no saved
+  // queries yet and the sidebar is empty, nothing is selected, and the editor
+  // renders "Select a query from the sidebar" — with no query to select and no
+  // way to write one. A dataset whose model declares no sources reaches ltool
+  // with no `source` at all, which is precisely a freshly loaded dataset.
+  //
+  // Nothing is minted here: the scratch carries `id: null, slug: null`, and the
+  // slug is minted server-side by /api/run when it is actually run. So the
+  // editor is writable immediately and the query only becomes a real, shareable
+  // thing once it has produced a result.
+  //
+  // No auto-run either way — a starter is incomplete, and a blank one more so.
   useEffect(() => {
-    if (initialSlug || !initialSource) return;
+    if (initialSlug || (!initialSource && !initialDatasetId)) return;
     autoFallback.current = false;
-    const starter = `run: ${initialSource} -> `;
-    // Intentional one-time init of the editor from the source prop on mount.
+    const starter = initialSource ? `run: ${initialSource} -> ` : "";
+    // Intentional one-time init of the editor from the deep-link props on mount.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setSelected({
-      id: null, slug: null, question: `Explore ${initialSource}`,
-      createdAt: new Date().toISOString(), source: initialSource, datasetId: initialDatasetId ?? null,
+      id: null, slug: null,
+      question: initialSource ? `Explore ${initialSource}` : "New query",
+      createdAt: new Date().toISOString(), source: initialSource ?? null, datasetId: initialDatasetId ?? null,
       malloyQuery: starter, rowCount: null, durationMs: null,
       authorName: null, isFavorited: false, favoriteCount: 0,
     });
     setQuery(starter);
-    setSource(initialSource);
-    setSchemaSource(initialSource);
-    setExpanded(true);
+    setSource(initialSource ?? "");
+    setSchemaSource(initialSource ?? "");
+    // Expand to show the schema only when there IS a source to show one for.
+    setExpanded(Boolean(initialSource));
     setEditedTitle(null);
     setResult(null);
     setRunError(null);

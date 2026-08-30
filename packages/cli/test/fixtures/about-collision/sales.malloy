@@ -1,0 +1,3 @@
+source: sales is duckdb.sql("SELECT 'CA' as st, 10 as amt UNION ALL SELECT 'NY', 20") extend {
+  view: totals is { aggregate: total is sum(amt) }
+}

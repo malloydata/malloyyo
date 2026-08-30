@@ -3,7 +3,7 @@
 
 import { NextResponse } from "next/server";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
-import { loadSharedQuery, sharedQueryListContext } from "@/lib/mcp-tools";
+import { datasetNameById, loadSharedQuery, sharedQueryListContext } from "@/lib/mcp-tools";
 
 export const runtime = "nodejs";
 
@@ -31,7 +31,9 @@ export async function GET(
   return NextResponse.json({
     instance: res.instance,
     source: res.source,
-    datasetId: res.datasetId,
+    // By name: the client uses this to build links and to re-run, and both take
+    // a ref. The stored id stays on the server.
+    dataset: res.datasetId ? await datasetNameById(res.datasetId) : null,
     question: res.question,
     malloy: res.malloy,
     favoritedByMe: ctxFlags?.favoritedByMe ?? false,

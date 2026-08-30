@@ -35,7 +35,7 @@ export function visibleDatasetWhere(userId: string) {
 }
 
 // Normalize DB sources column — legacy string[] or new {name, description?}[] format.
-function normalizeSources(raw: unknown): SourceInfo[] {
+export function normalizeSources(raw: unknown): SourceInfo[] {
   if (!Array.isArray(raw)) return [];
   return raw.map((s) =>
     typeof s === "string" ? { name: s, description: null } : { name: String(s.name), description: s.description ?? null }
@@ -84,6 +84,10 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
     uuid links keep working. */
 export async function findByDatasetRef(userId: string, ref: string) {
   if (UUID_RE.test(ref)) return findByDatasetId(userId, ref);
+  // No status tiebreaker needed here, though the catalogue endpoint needs one:
+  // visibleDatasetWhere already restricts to `ready`, and the unique index on
+  // `name` is partial on exactly that status — so at most one row can match. A
+  // half-built namesake is excluded by the WHERE, not ordered against.
   const [ds] = await db
     .select()
     .from(datasets)
@@ -354,7 +358,12 @@ export async function runQueryForWeb(
 ): Promise<WebRunResult> {
   // When the caller knows the dataset (an ltool replay carries the recorded
   // dataset_id), resolve by it — unambiguous. Else fall back to source name.
-  const found = datasetId ? await findByDatasetId(userId, datasetId) : await findBySource(userId, source);
+  //
+  // By REF, not by id: a recorded dataset_id is a uuid, but a link a person can
+  // read carries the dataset's NAME (`/ltool?dataset=babynames`), and
+  // findByDatasetRef takes either. Resolving only by id made a named link fail
+  // in the ugliest way available — Postgres refusing to cast the name to uuid.
+  const found = datasetId ? await findByDatasetRef(userId, datasetId) : await findBySource(userId, source);
   if (!found) return { ok: false, error: `source '${source}' not found` };
   const { ds, model } = found;
   if (ds.status !== "ready") return { ok: false, error: `source '${source}' is not ready` };
@@ -409,7 +418,8 @@ export async function saveWebQuery(
   datasetId?: string | null,
   opts: WebRunOpts = {},
 ): Promise<WebSaveResult> {
-  const found = datasetId ? await findByDatasetId(userId, datasetId) : await findBySource(userId, source);
+  // By ref, for the same reason as runQueryForWeb above.
+  const found = datasetId ? await findByDatasetRef(userId, datasetId) : await findBySource(userId, source);
   if (!found) return { ok: false, error: `source '${source}' not found` };
   const { ds, model } = found;
   if (ds.status !== "ready") return { ok: false, error: `source '${source}' is not ready` };
@@ -444,4 +454,13 @@ export async function saveWebQuery(
     });
     return { ok: false, error: msg };
   }
+}
+
+/** A dataset's display name from its id, or null. For turning a STORED id (a
+    recorded query's dataset_id) into the ref a link or a re-run should carry —
+    ids belong to the database, not to URLs or to the browser. */
+export async function datasetNameById(id: string): Promise<string | null> {
+  if (!UUID_RE.test(id)) return id; // already a ref
+  const [ds] = await db.select({ name: datasets.name }).from(datasets).where(eq(datasets.id, id)).limit(1);
+  return ds?.name ?? null;
 }

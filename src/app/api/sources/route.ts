@@ -29,7 +29,6 @@ export async function GET() {
       status: datasets.status,
       isPublic: datasets.isPublic,
       githubRepo: datasets.githubRepo,
-      ownerEmail: users.email,
       ownerName: users.name,
     })
     .from(datasets)
@@ -46,19 +45,39 @@ export async function GET() {
     );
   }
 
+  // DATASET-FIRST: each dataset once, with the sources it offers.
+  //
+  // This used to be a flat list of sources with the dataset's five fields copied
+  // onto every row — 44 rows for eight datasets here — and both callers began by
+  // regrouping it back into exactly this shape. The endpoint returned the
+  // inverse of what anyone wanted, and the duplication was the only reason a
+  // dataset id had to ride along as a join key.
+  //
+  // No dataset id: nothing outside the server needs one. Links address a dataset
+  // by NAME, which is unique per server (see findByDatasetRef), so the name is
+  // also the key the front page joins dashboards and questions on.
   const result: Array<{
-    source: string;
-    description: string | null;
-    model: string;
-    datasetId: string;
+    dataset: string;
     status: string;
     isPublic: boolean;
     githubRepo: string | null;
-    ownerEmail?: string | null;
     ownerName?: string | null;
+    sources: Array<{ source: string; description: string | null }>;
   }> = [];
 
+  // Names are unique only among READY datasets — datasets_name_ready_unique is
+  // partial — while this list includes everything not-failed. A creation stuck
+  // in `modeling` can therefore share a name with the live dataset, and since
+  // the name is now the key every caller joins and renders on, two rows with one
+  // name merge a card, duplicate a React key, and hide one of them. Keep the
+  // ready one; a half-built namesake is not what anyone means by that name.
+  const byName = new Map<string, (typeof dsList)[number]>();
   for (const ds of dsList) {
+    const held = byName.get(ds.name);
+    if (!held || (held.status !== "ready" && ds.status === "ready")) byName.set(ds.name, ds);
+  }
+
+  for (const ds of byName.values()) {
     const [latestModel] = await db
       .select({ sources: malloyModels.sources, gitRepo: malloyModels.gitRepo })
       .from(malloyModels)
@@ -66,28 +85,23 @@ export async function GET() {
       .orderBy(desc(malloyModels.createdAt))
       .limit(1);
 
-    const sources = normalizeSources(latestModel?.sources);
-    const base = {
-      datasetId: ds.id,
-      model: ds.name,
+    const declared = normalizeSources(latestModel?.sources);
+    result.push({
+      dataset: ds.name,
       status: ds.status,
       isPublic: ds.isPublic,
       // "owner/repo" the model came from: the dataset's configured GitHub repo,
       // or the git remote recorded by a CLI publish.
       githubRepo: ds.githubRepo ?? latestModel?.gitRepo ?? null,
-      ownerEmail: admin ? ds.ownerEmail : undefined,
-      ownerName: admin ? ds.ownerName : undefined,
-    };
-
-    if (sources.length === 0) {
-      result.push({ source: ds.name, description: null, ...base });
-    } else if (sources.length === 1) {
-      result.push({ source: sources[0].name, description: sources[0].description, ...base });
-    } else {
-      for (const src of sources) {
-        result.push({ source: src.name, description: src.description, ...base });
-      }
-    }
+      ...(admin ? { ownerName: ds.ownerName } : {}),
+      // A model that declares nothing still gets one row, named for the dataset,
+      // so it appears in the catalogue at all rather than silently vanishing.
+      // Long-standing behaviour, kept.
+      sources:
+        declared.length === 0
+          ? [{ source: ds.name, description: null }]
+          : declared.map((src) => ({ source: src.name, description: src.description })),
+    });
   }
 
   return NextResponse.json(result);

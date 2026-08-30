@@ -2,6 +2,7 @@ import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { execFileSync } from "node:child_process";
 import { makeRunner } from "./host.js";
+import { aboutPage } from "./discover.js";
 import type { ModelFile, GitInfo, DashboardPayload } from "./protocol.js";
 
 const SKIP_DIRS = new Set(["node_modules", ".git"]);
@@ -89,6 +90,25 @@ export async function gatherDashboards(dir: string): Promise<DashboardPayload[]>
         name: a.name || base,
         manifest,
         source: component ? readFileSync(component, "utf8") : "",
+      });
+    }
+    // The written front door, first — same order the dev server and the bundle
+    // use. It has no `.malloy`, so it carries no entryFile, query or tiles: the
+    // manifest is a title, and the component is the whole dashboard. Until now
+    // it was never uploaded at all, which is why a published dataset had no
+    // introduction even when the repo shipped one.
+    //
+    // Added after the loop, and only if no artifact already resolved to its
+    // name — an artifact's name comes from its `## artifact { name= }` tag, not
+    // its filename, so checking for `dashboards/index.malloy` alone would miss a
+    // tag that names some other file "index" and would publish two artifacts
+    // sharing one name.
+    const about = aboutPage(dir);
+    if (about?.tsxPath && !payloads.some((p) => p.name === about.name)) {
+      payloads.unshift({
+        name: about.name,
+        manifest: { title: about.title },
+        source: readFileSync(about.tsxPath, "utf8"),
       });
     }
     return payloads;

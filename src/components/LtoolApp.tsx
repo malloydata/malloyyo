@@ -27,7 +27,9 @@ type HistoryItem = {
   question: string | null;
   createdAt: string;
   source: string | null;
-  datasetId: string | null;
+  /** The dataset's NAME. Everything the client does with it — build a drill
+      link, re-run the query — takes a ref, and an id has no business here. */
+  dataset: string | null;
   malloyQuery: string | null;
   rowCount: number | null;
   durationMs: number | null;
@@ -98,18 +100,68 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
 // Full-width dropdown for filtering the sidebar list by Malloy source. Value ""
 // means "all sources". Rendered in a portal on document.body so the menu escapes
 // the sidebar's overflow-hidden clip.
+/** Sources bucketed under the dataset that defines them, datasets in the order
+    the API listed them (most-recently-used first) and sources alphabetical
+    within each. A source with no dataset — older API responses — collects under
+    a blank heading rather than disappearing. */
+function groupSourcesByDataset(
+  sources: SourceOption[],
+): Array<{ key: string; dataset: string; sources: SourceOption[] }> {
+  const groups = new Map<string, { key: string; dataset: string; sources: SourceOption[] }>();
+  for (const s of sources) {
+    const key = s.dataset ?? "";
+    let g = groups.get(key);
+    if (!g) {
+      g = { key, dataset: s.dataset ?? "other", sources: [] };
+      groups.set(key, g);
+    }
+    g.sources.push(s);
+  }
+  for (const g of groups.values()) g.sources.sort((a, b) => a.source.localeCompare(b.source));
+  return [...groups.values()];
+}
+
 function SourceFilterPicker({
   value,
+  currentDatasetRef,
   sources,
   onChange,
 }: {
   value: string;
+  /** The dataset the current query belongs to, as an id OR a name — BOTH occur:
+      a replayed history item carries the recorded uuid, while a deep link
+      carries the readable name (`/ltool?dataset=babynames`). `value` is a bare
+      source NAME and names are not unique across datasets — two can each define
+      "orders" — so without this the picker cannot tell WHICH "orders" is
+      selected: it would mark both and scroll to whichever came first. */
+  currentDatasetRef?: string | null;
   sources: SourceOption[];
-  onChange: (source: string) => void;
+  onChange: (source: string, option?: SourceOption) => void;
 }) {
   const [open, setOpen] = useState(false);
   const btnRef = useRef<HTMLButtonElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const selectedRef = useRef<HTMLButtonElement>(null);
   const [pos, setPos] = useState<{ top: number; left: number; width: number } | null>(null);
+
+  /** Is this row the selected one? By dataset too when we know which — matching
+      the ref against both the id and the name, since either may reach us. */
+  const isSelected = (s: SourceOption) =>
+    s.source === value &&
+    (!currentDatasetRef || !s.dataset || s.dataset === currentDatasetRef);
+
+  // Open centred on where you already are, not at the top of the list. With one
+  // group per dataset the list is long, and landing on "All sources" every time
+  // means scrolling to find your own dataset before you can pick a sibling
+  // source in it — which is the common move. Scrolls the list box only, never
+  // the page.
+  useEffect(() => {
+    if (!open) return;
+    const el = selectedRef.current;
+    const box = listRef.current;
+    if (!el || !box) return;
+    box.scrollTop = Math.max(0, el.offsetTop - box.clientHeight / 2 + el.clientHeight / 2);
+  }, [open]);
 
   const toggle = () => {
     if (open) { setOpen(false); return; }
@@ -137,6 +189,7 @@ function SourceFilterPicker({
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
           <div
+            ref={listRef}
             className="fixed z-50 max-h-80 overflow-y-auto rounded-md border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950 shadow-lg py-1"
             style={{ top: pos.top, left: pos.left, width: Math.max(pos.width, 224) }}
           >
@@ -146,17 +199,30 @@ function SourceFilterPicker({
             >
               <span className="block text-[11px] text-gray-600 dark:text-gray-400">All sources</span>
             </button>
-            {sources.map((s) => (
-              <button
-                key={s.source}
-                onClick={() => { onChange(s.source); setOpen(false); }}
-                className={`block w-full text-left px-2 py-1.5 hover:bg-gray-100 dark:hover:bg-gray-800/60 ${s.source === value ? "bg-gray-50 dark:bg-gray-900" : ""}`}
-              >
-                <span className="block font-mono text-[11px] text-gray-800 dark:text-gray-200 truncate">{s.source}</span>
-                {s.description && (
-                  <span className="block text-[10px] text-gray-400 dark:text-gray-500 leading-snug line-clamp-2">{s.description}</span>
-                )}
-              </button>
+            {/* Grouped by dataset, sources indented beneath it. Flat, the list
+                read as arbitrary — it was in API order, which is dataset order,
+                but with nothing marking where one dataset ended and the next
+                began there was no way to see that. A source name alone also
+                isn't unique across datasets. */}
+            {groupSourcesByDataset(sources).map((group) => (
+              <div key={group.key}>
+                <div className="px-2 pt-2 pb-0.5 text-[10px] uppercase tracking-wide text-gray-400 dark:text-gray-500 truncate">
+                  {group.dataset}
+                </div>
+                {group.sources.map((s) => (
+                  <button
+                    key={`${s.dataset ?? ""}/${s.source}`}
+                    ref={isSelected(s) ? selectedRef : undefined}
+                    onClick={() => { onChange(s.source, s); setOpen(false); }}
+                    className={`block w-full text-left pl-5 pr-2 py-1.5 hover:bg-gray-100 dark:hover:bg-gray-800/60 ${isSelected(s) ? "bg-gray-50 dark:bg-gray-900" : ""}`}
+                  >
+                    <span className="block font-mono text-[11px] text-gray-800 dark:text-gray-200 truncate">{s.source}</span>
+                    {s.description && (
+                      <span className="block text-[10px] text-gray-400 dark:text-gray-500 leading-snug line-clamp-2">{s.description}</span>
+                    )}
+                  </button>
+                ))}
+              </div>
             ))}
           </div>
         </>,
@@ -287,14 +353,15 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
   useEffect(() => {
     fetch("/api/sources")
       .then((r) => r.json())
-      .then((d: Array<{ source: string; description?: string | null }>) => {
+      .then((d: Array<{ dataset: string; sources?: Array<{ source: string; description?: string | null }> }>) => {
         if (!Array.isArray(d)) return;
-        const seen = new Set<string>();
+        // Flattened FROM the grouped catalogue, carrying each source's dataset so
+        // the picker can group it back and tell two same-named sources apart —
+        // two datasets may each define an "orders".
         const opts: SourceOption[] = [];
-        for (const s of d) {
-          if (s.source && !seen.has(s.source)) {
-            seen.add(s.source);
-            opts.push({ source: s.source, description: s.description ?? null });
+        for (const ds of d) {
+          for (const s of ds.sources ?? []) {
+            if (s.source) opts.push({ source: s.source, description: s.description ?? null, dataset: ds.dataset });
           }
         }
         setSources(opts);
@@ -302,7 +369,7 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
       .catch(() => {});
   }, []);
 
-  const runQuery = useCallback(async (src: string, malloy: string, datasetId?: string | null, baseSlug?: string | null, question?: string | null) => {
+  const runQuery = useCallback(async (src: string, malloy: string, dataset?: string | null, baseSlug?: string | null, question?: string | null) => {
     if (!src || !malloy.trim()) return;
     setRunning(true);
     setResult(null);
@@ -312,7 +379,7 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
         method: "POST",
         headers: { "content-type": "application/json" },
         // baseSlug lets the server decide author_model (inherit vs 'human').
-        body: JSON.stringify({ source: src, malloy, datasetId, baseSlug, question }),
+        body: JSON.stringify({ source: src, malloy, dataset, baseSlug, question }),
       });
       const json = await res.json();
       if (!res.ok) {
@@ -343,7 +410,7 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
         const authoredByMe: boolean = body.authoredByMe ?? false;
         const item: HistoryItem = {
           id: null, slug: initialSlug, question: body.question ?? null,
-          createdAt: new Date().toISOString(), source: body.source ?? null, datasetId: body.datasetId ?? null,
+          createdAt: new Date().toISOString(), source: body.source ?? null, dataset: body.dataset ?? null,
           malloyQuery: body.malloy ?? null, rowCount: null, durationMs: null,
           authorName: null, mine: authoredByMe, isFavorited: favoritedByMe, favoriteCount,
         };
@@ -363,35 +430,53 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
           setView("history");
           setScope(authoredByMe ? "me" : "all");
         }
-        if (body.source && body.malloy) runQuery(body.source, body.malloy, body.datasetId, initialSlug, body.question ?? null);
+        if (body.source && body.malloy) runQuery(body.source, body.malloy, body.dataset, initialSlug, body.question ?? null);
       })
       .catch((e) => { if (!cancelled) setRunError(e instanceof Error ? e.message : String(e)); });
     return () => { cancelled = true; };
   }, [initialSlug, runQuery]);
 
-  // Deep-link to a SOURCE (the front page "ltool" button): open the editor on
-  // that source with a starter query, expanded so its schema/fields show. No
-  // auto-run — the starter is incomplete.
-  useEffect(() => {
-    if (initialSlug || !initialSource) return;
+  // Open an editable scratch query. Nothing is minted here: it carries
+  // `id: null, slug: null`, and /api/run mints the slug when it is actually run
+  // — so the editor is writable immediately and the query becomes a real,
+  // shareable thing only once it has produced a result. Never auto-runs; a
+  // starter is incomplete and a blank one more so.
+  const openScratch = useCallback((src: string | null, dsRef: string | null) => {
     autoFallback.current = false;
-    const starter = `run: ${initialSource} -> `;
-    // Intentional one-time init of the editor from the source prop on mount.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+    const starter = src ? `run: ${src} -> ` : "";
     setSelected({
-      id: null, slug: null, question: `Explore ${initialSource}`,
-      createdAt: new Date().toISOString(), source: initialSource, datasetId: initialDatasetId ?? null,
+      id: null, slug: null,
+      question: src ? `Explore ${src}` : "New query",
+      createdAt: new Date().toISOString(), source: src, dataset: dsRef,
       malloyQuery: starter, rowCount: null, durationMs: null,
       authorName: null, isFavorited: false, favoriteCount: 0,
     });
     setQuery(starter);
-    setSource(initialSource);
-    setSchemaSource(initialSource);
-    setExpanded(true);
+    setSource(src ?? "");
+    setSchemaSource(src ?? "");
+    // Expand to show the schema only when there IS a source to show one for.
+    setExpanded(Boolean(src));
     setEditedTitle(null);
     setResult(null);
     setRunError(null);
-  }, [initialSlug, initialSource, initialDatasetId]);
+  }, []);
+
+  // Deep-link to a DATASET and/or a SOURCE (the front page's "Query" chip, the
+  // dashboard nav's "Query" item, and the empty-dataset tier of the
+  // /datasets/<ref> landing chain).
+  //
+  // The source is optional. It used to be required, and that left the one case
+  // that needs this most at a dead end: arrive on a dataset that has no saved
+  // queries yet and the sidebar is empty, nothing is selected, and the editor
+  // renders "Select a query from the sidebar" — with no query to select and no
+  // way to write one. A dataset whose model declares no sources reaches ltool
+  // with no `source` at all, which is precisely a freshly loaded dataset.
+  useEffect(() => {
+    if (initialSlug || (!initialSource && !initialDatasetId)) return;
+    // Intentional one-time init of the editor from the deep-link props on mount.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    openScratch(initialSource ?? null, initialDatasetId ?? null);
+  }, [initialSlug, initialSource, initialDatasetId, openScratch]);
 
   function selectItem(item: HistoryItem) {
     setSelected(item);
@@ -407,7 +492,7 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
     setRunError(null);
     mainRef.current?.scrollTo({ top: 0 });
     if (item.malloyQuery && item.source) {
-      runQuery(item.source, item.malloyQuery, item.datasetId, item.slug, item.question);
+      runQuery(item.source, item.malloyQuery, item.dataset, item.slug, item.question);
     }
   }
 
@@ -499,7 +584,7 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
   // new history entry (fresh slug) under the edited title; otherwise just run.
   async function handleRun() {
     if (!source || !query.trim()) return;
-    if (!isModified) { runQuery(source, query, selected?.datasetId, selected?.slug, selected?.question); return; }
+    if (!isModified) { runQuery(source, query, selected?.dataset, selected?.slug, selected?.question); return; }
     const title = (editedTitle ?? modifiedDefaultTitle).trim() || query.trim().slice(0, 80);
     setRunning(true);
     setResult(null);
@@ -508,7 +593,7 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
       const res = await fetch("/api/run", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ source, malloy: query, save: true, title, datasetId: selected?.datasetId, baseSlug: selected?.slug ?? null }),
+        body: JSON.stringify({ source, malloy: query, save: true, title, dataset: selected?.dataset, baseSlug: selected?.slug ?? null }),
       });
       const json = await res.json();
       if (!res.ok) { setRunError(json.error ?? "query failed"); return; }
@@ -519,7 +604,7 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
         question: title,
         createdAt: new Date().toISOString(),
         source,
-        datasetId: selected?.datasetId ?? null,
+        dataset: selected?.dataset ?? null,
         malloyQuery: query,
         rowCount: json.rowCount ?? null,
         durationMs: json.durationMs ?? null,
@@ -568,7 +653,24 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
             </button>
           </div>
           {/* Source filter — narrows the list to one Malloy source */}
-          <SourceFilterPicker value={sourceFilter} sources={sources} onChange={setSourceFilter} />
+          <SourceFilterPicker
+            value={sourceFilter}
+            currentDatasetRef={selected?.dataset ?? null}
+            sources={sources}
+            onChange={(src, opt) => {
+              setSourceFilter(src);
+              // Switching to a source opens a fresh query against it — always,
+              // not just when it has no history. Picking a source is stating
+              // what you want to ask about, and leaving the previous source's
+              // query sitting in the editor answers a different question than
+              // the sidebar is now showing. The filtered history is still right
+              // there to click if the answer already exists.
+              //
+              // "All sources" (empty) is the exception: that clears the filter
+              // rather than choosing a subject, so it leaves the editor alone.
+              if (src) openScratch(src, opt?.dataset ?? null);
+            }}
+          />
           {/* Tabs + scope toggle */}
           <div className="flex items-center gap-1">
             <TabButton active={view === "history"} onClick={() => { autoFallback.current = false; setView("history"); }}>History</TabButton>
@@ -781,7 +883,7 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
             {result?.stableResult && (
               <div className="space-y-2">
                 <p className="text-[11px] text-gray-500 dark:text-gray-400 uppercase tracking-wide font-semibold">Results</p>
-                <MalloyResultView stableResult={result.stableResult} datasetId={selected.datasetId} />
+                <MalloyResultView stableResult={result.stableResult} datasetRef={selected.dataset} />
               </div>
             )}
 

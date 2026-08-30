@@ -22,6 +22,7 @@ import { findByDatasetRef, modelFileMap } from "@/lib/mcp-tools";
 import { runNamedMalloyFiles, withModelRuntime, fileUrl } from "@/lib/malloy";
 import { getDashboard, modelConfigJson, type DashboardDetail } from "./meta";
 import { imageHostsFromConfig } from "./image-hosts";
+import { rendersNoData } from "./about";
 
 export type { DashboardDetail };
 
@@ -171,10 +172,19 @@ export async function dashboardViewData(
   if (!dash) return null;
   // For a COMPOSITE dashboard, one pass yields both the union (controls) and
   // each tile's given NAMES; single-query dashboards use dashboardGivens.
-  const composite = Array.isArray(dash.manifest.tiles) ? await dashboardTileSpecs(userId, datasetId, name) : null;
+  // A page that runs no data (the About page) has no query to introspect and no
+  // entry file to compile. Skipping is not just an optimisation: dashboardGivens
+  // would fall back to index.malloy, compile the model, fail to find a query
+  // that does not exist, and the failure would be swallowed — paying a full
+  // model compile per load to learn nothing.
+  const noData = rendersNoData(dash.manifest);
+  const composite =
+    !noData && Array.isArray(dash.manifest.tiles) ? await dashboardTileSpecs(userId, datasetId, name) : null;
   let givenSpecs: unknown[] = [];
   let tileSpecs: unknown[] | undefined;
-  if (composite) {
+  if (noData) {
+    // nothing to resolve
+  } else if (composite) {
     if (composite.ok) {
       givenSpecs = composite.union;
       tileSpecs = composite.tiles;

@@ -18,6 +18,7 @@
 
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { dashboardViewData } from "@/lib/dashboards/engine";
+import { listDashboards } from "@/lib/dashboards/meta";
 import { mintFrameToken } from "@/lib/dashboards/frame-token";
 import { frameCsp, frameHtml, frameNonce } from "@/lib/dashboards/frame-html";
 
@@ -45,8 +46,23 @@ export async function GET(req: Request, ctx: { params: Promise<{ datasetId: stri
     // Escaping and the CSP live in frame-html.ts — read the header there before
     // adding anything to this document. JSON.stringify alone is NOT safe in a
     // script element, and only model-derived values belong in there at all.
+    // The siblings, so a written page (the About page most obviously) can link to
+    // the other dashboards without knowing this environment's URL shape. The
+    // runtime intercepts clicks on these hrefs and routes them through the
+    // navigate bridge, because the frame is sandboxed onto its own origin and
+    // cannot follow them itself.
+    const siblings = (await listDashboards(user.id, datasetId))
+      .filter((d) => d.name !== name)
+      .map((d) => ({
+        name: d.name,
+        title: d.title,
+        // Same fields the dev server and the bundle inject, so one component
+        // renders identically on all three.
+        ...(d.description ? { description: d.description } : {}),
+        href: `/datasets/${encodeURIComponent(datasetId)}/dashboard/${encodeURIComponent(d.name)}`,
+      }));
     const nonce = frameNonce();
-    const html = frameHtml({ title: dash.title, info, givenSpecs, bundleUrl, nonce });
+    const html = frameHtml({ title: dash.title, info, siblings, givenSpecs, bundleUrl, nonce });
     return new Response(html, {
       headers: {
         "content-type": "text/html; charset=utf-8",

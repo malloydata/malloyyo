@@ -13,7 +13,7 @@ export const runtime = "nodejs";
 // Saved queries favorited by the CALLER or by an ADMIN — not everyone's
 // favorites — scoped to datasets the caller can see (same visibility as
 // /api/sources). One row per qualifying saved query with its total favorite
-// count, most-favorited first. The front page groups these by (datasetId,
+// count, most-favorited first. The front page groups these by (dataset,
 // source) and lists a few under each source.
 export async function GET() {
   let me;
@@ -53,7 +53,10 @@ export async function GET() {
 
   const rows = await db
     .select({
-      datasetId: savedQueries.datasetId,
+      // By NAME, not id: the front page joins these against the source
+      // catalogue and the dashboard list, and a dataset name is unique per
+      // server — so the join needs no uuid and none reaches the browser.
+      dataset: datasets.name,
       source: savedQueries.source,
       slug: savedQueries.slug,
       question: savedQueries.question,

@@ -15,12 +15,18 @@
 import { and, eq, asc, desc } from "drizzle-orm";
 import { db, datasets, malloyArtifacts, malloyModelFiles } from "@/db";
 import { visibleDatasetWhere, findByDatasetRef, latestModel } from "@/lib/mcp-tools";
+import { aboutFirst } from "./about";
 
 export interface DashboardSummary {
   datasetId: string;
   datasetName: string;
   name: string;
   title: string;
+  /** The artifact's `#"` doc line, when it has one. Carried on the SUMMARY, not
+      just the detail, because the sibling list the frame injects is built from
+      summaries — and without it a written page's cards render as bare titles on
+      the hosted app while showing their subtitles in dev and in the bundle. */
+  description?: string;
 }
 
 export interface DashboardDetail extends DashboardSummary {
@@ -30,11 +36,31 @@ export interface DashboardDetail extends DashboardSummary {
 }
 
 async function artifactsForModel(modelId: string) {
-  return db
+  const rows = await db
     .select()
     .from(malloyArtifacts)
     .where(eq(malloyArtifacts.modelId, modelId))
     .orderBy(asc(malloyArtifacts.name));
+  // The About page leads, whatever it sorts as by name — it is the introduction,
+  // and the switcher lands on a dataset's first dashboard.
+  return aboutFirst(rows);
+}
+
+/** One artifact row as a listing entry. The description lives in the manifest,
+    so both listings go through here rather than each remembering to read it. */
+function summary(
+  datasetId: string,
+  datasetName: string,
+  a: { name: string; title: string | null; manifest: Record<string, unknown> },
+): DashboardSummary {
+  const description = a.manifest?.description;
+  return {
+    datasetId,
+    datasetName,
+    name: a.name,
+    title: a.title ?? a.name,
+    ...(typeof description === "string" && description ? { description } : {}),
+  };
 }
 
 /** Dashboards on a single dataset's current (latest) model, if visible. */
@@ -42,7 +68,7 @@ export async function listDashboards(userId: string, datasetId: string): Promise
   const found = await findByDatasetRef(userId, datasetId);
   if (!found) return [];
   const rows = await artifactsForModel(found.model.id);
-  return rows.map((a) => ({ datasetId, datasetName: found.ds.name, name: a.name, title: a.title ?? a.name }));
+  return rows.map((a) => summary(datasetId, found.ds.name, a));
 }
 
 /** Every visible dataset's current dashboards — for the home page. */
@@ -53,7 +79,7 @@ export async function listAllDashboards(userId: string): Promise<DashboardSummar
     const model = await latestModel(ds.id);
     if (!model) continue;
     const rows = await artifactsForModel(model.id);
-    for (const a of rows) out.push({ datasetId: ds.id, datasetName: ds.name, name: a.name, title: a.title ?? a.name });
+    for (const a of rows) out.push(summary(ds.id, ds.name, a));
   }
   return out;
 }

@@ -6,6 +6,7 @@ import { modelArtifact, type ArtifactInfo } from "@malloyyo/mcp-engine";
 import { db, datasets, malloyModels, malloyModelFiles, malloyArtifacts } from "@/db";
 import { GitHubURLReader, fetchGitHubFile, listGitHubDir, parseGitHubRepo } from "./github";
 import { introspectModelWithReader, withReaderRuntime, fileUrl, type SourceInfo } from "./malloy";
+import { ABOUT_NAME, ABOUT_TITLE } from "@/lib/dashboards/about";
 import { logger } from "./logger";
 
 export type RefreshResult =
@@ -46,9 +47,12 @@ export async function refreshGitHubModel(datasetId: string): Promise<RefreshResu
   // is the server-side equivalent of the CLI's per-file `artifactForFile`
   // discovery. Non-fatal: a broken dashboard never fails the model refresh.
   const dashboards: Array<{ base: string; artifact: ArtifactInfo }> = [];
+  // Needed twice: to compile each dashboard below, and to tell whether the repo
+  // has a dashboards/index.malloy when deciding about the About page.
+  let bases: string[] = [];
   try {
     const entries = await listGitHubDir(owner, repo, branch, "dashboards", { useToken: ds.githubUseToken });
-    const bases = entries
+    bases = entries
       .filter((e) => e.type === "file" && e.name.endsWith(".malloy"))
       .map((e) => e.name.slice(0, -".malloy".length))
       .sort();
@@ -129,6 +133,42 @@ export async function refreshGitHubModel(datasetId: string): Promise<RefreshResu
       if (a.givens) manifest.givens = a.givens;
       if (a.autorun === false) manifest.autorun = false;
       rows.push({ modelId: created.id, name: a.name || base, title: a.title, manifest, source });
+    }
+    // The written front door: `dashboards/index.jsx|tsx` with no `index.malloy`.
+    // It runs no query, so it is not in `dashboards` above (that loop walks
+    // .malloy files) — but it is a real artifact, and the one the reader should
+    // land on. Stored with a manifest of just a title: no entryFile, no query,
+    // no tiles, which is what marks it as rendering no data.
+    // Guarded on the RESOLVED artifact names, not on the .malloy filenames: a
+    // `## artifact { name="index" }` tag on any other file resolves to the same
+    // name, and malloy_artifacts has no unique (model_id, name) — two rows would
+    // both insert, and getDashboard's unordered `.limit(1)` would then serve
+    // whichever Postgres happened to return.
+    // Two guards, because there are two ways "index" can already be taken and
+    // each misses the other. By FILE: a `dashboards/index.malloy` tagged
+    // `name="overview"` publishes as `overview` while index.jsx is its
+    // component — no row is called `index`, but the About page must not exist
+    // (the CLI's aboutPage() agrees, and would produce nothing here). By NAME: a
+    // tag on some other file can resolve to `index`, and malloy_artifacts has no
+    // unique (model_id, name).
+    if (!bases.includes(ABOUT_NAME) && !rows.some((r) => r.name === ABOUT_NAME)) {
+      for (const ext of ["jsx", "tsx"]) {
+        try {
+          const source = await fetchGitHubFile(owner, repo, branch, `dashboards/${ABOUT_NAME}.${ext}`, {
+            useToken: ds.githubUseToken,
+          });
+          rows.unshift({
+            modelId: created.id,
+            name: ABOUT_NAME,
+            title: ABOUT_TITLE,
+            manifest: { title: ABOUT_TITLE },
+            source,
+          });
+          break;
+        } catch {
+          // no landing page with this extension — try the next, else there is none
+        }
+      }
     }
     if (rows.length > 0) await db.insert(malloyArtifacts).values(rows);
     dashboardCount = rows.length;

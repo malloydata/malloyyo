@@ -14,12 +14,12 @@ export async function POST(req: Request) {
     throw err;
   }
 
-  let body: { source: string; malloy: string; maxRows?: number; save?: boolean; title?: string; datasetId?: string | null; baseSlug?: string | null; question?: string | null };
+  let body: { source: string; malloy: string; maxRows?: number; save?: boolean; title?: string; dataset?: string | null; baseSlug?: string | null; question?: string | null };
   try { body = await req.json(); } catch {
     return NextResponse.json({ error: "invalid JSON" }, { status: 400 });
   }
 
-  const { source, malloy, maxRows = 1000, save = false, title, datasetId, baseSlug, question } = body;
+  const { source, malloy, maxRows = 1000, save = false, title, dataset, baseSlug, question } = body;
   if (!source || !malloy) {
     return NextResponse.json({ error: "source and malloy are required" }, { status: 400 });
   }
@@ -33,16 +33,16 @@ export async function POST(req: Request) {
 
   // `save` persists the run as a durable saved_query with a fresh slug (used
   // when the user edits a loaded query). Otherwise it's a transient run (still
-  // recorded to history). `datasetId`, when present (an ltool replay), names the
+  // recorded to history). `dataset`, when present (an ltool replay), names the
   // exact model — unambiguous.
   if (save) {
     const cleanTitle = (title?.trim() || malloy.trim().slice(0, 80)).slice(0, 200);
-    const result = await saveWebQuery(user.id, source, malloy, cleanTitle, maxRows, datasetId, opts);
+    const result = await saveWebQuery(user.id, source, malloy, cleanTitle, maxRows, dataset, opts);
     if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
     return NextResponse.json(result);
   }
 
-  const result = await runQueryForWeb(user.id, source, malloy, maxRows, datasetId, opts);
+  const result = await runQueryForWeb(user.id, source, malloy, maxRows, dataset, opts);
   if (!result.ok) {
     return NextResponse.json({ error: result.error }, { status: 400 });
   }

@@ -110,7 +110,19 @@ function JoinSection({ join, prefix }: { join: FieldNode; prefix?: string }) {
   );
 }
 
-export type SourceOption = { source: string; description: string | null };
+export type SourceOption = {
+  source: string;
+  description: string | null;
+  /** The dataset this source belongs to — its NAME, which is what links carry
+      and what a reader recognises.
+   *
+   * Optional only because a caller may not know it. Both pickers over this list
+   * get EVERY dataset's sources (ltool hands the same array to its filter and to
+   * the schema panel), so two entries can share a source name — two datasets may
+   * each define an "orders" — and the dataset is what tells them apart. Both
+   * key their rows on dataset+source for that reason. */
+  dataset?: string;
+};
 
 // A compact dropdown for switching which source's schema is shown. Each row is
 // more than a name — the source's description sits dimmed beneath it.
@@ -160,7 +172,7 @@ function SourcePicker({
             ) : (
               sources.map((s) => (
                 <button
-                  key={s.source}
+                  key={`${s.dataset ?? ""}/${s.source}`}
                   onClick={() => { onChange(s.source); setOpen(false); }}
                   className={`block w-full text-left px-2 py-1.5 hover:bg-gray-100 dark:hover:bg-gray-800/60 ${
                     s.source === value ? "bg-gray-50 dark:bg-gray-900" : ""

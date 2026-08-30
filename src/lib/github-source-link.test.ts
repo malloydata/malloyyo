@@ -111,3 +111,24 @@ test("repoUrl", () => {
   assert.equal(repoUrl({ gitRepo: "https://github.com/a/b.git", datasetRepo: "o/r" }), "https://github.com/a/b");
   assert.equal(repoUrl({}), null);
 });
+
+test("the repo-root index.malloy is never a dashboard's source", () => {
+  // It is the model's MCP/ltool entry point — the one file that collides by
+  // basename with a dashboard while being a different thing. The About page
+  // exists precisely BECAUSE there is no dashboards/index.malloy, so a
+  // basename match would send its "view source" link there every time.
+  const files = [{ path: "index.malloy" }, { path: "dashboards/seasonality.malloy" }];
+  assert.equal(dashboardSourcePath("index", files), null, "no link beats a link to the wrong file");
+  assert.equal(
+    dashboardSourceUrl({ name: "index", datasetRepo: "o/r", files }),
+    null,
+  );
+
+  // A dashboard genuinely named "index" lives under dashboards/ and still wins,
+  // even with the model entry sitting beside it.
+  const withDash = [{ path: "index.malloy" }, { path: "dashboards/index.malloy" }];
+  assert.equal(dashboardSourcePath("index", withDash), "dashboards/index.malloy");
+
+  // Other names are untouched: a v1 layout outside dashboards/ still resolves.
+  assert.equal(dashboardSourcePath("odd", [{ path: "custom/odd.malloy" }]), "custom/odd.malloy");
+});

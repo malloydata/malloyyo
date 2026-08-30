@@ -20,20 +20,23 @@ interface Props {
   stableResult: Record<string, unknown>;
   /** The dataset the query ran against — drill targets are dashboards inside it.
       Without it a drill has nowhere to go, so the affordance stays off. */
-  datasetId?: string | null;
+  /** The dataset to drill into, as its NAME. `/datasets/<ref>` resolves an id
+      too, but an id in the address bar is not something to show anyone — the
+      caller resolves the name before handing it over. */
+  datasetRef?: string | null;
 }
 
 type MenuItem = { label: string; run: () => void };
 type Menu = { x: number; y: number; items: MenuItem[] };
 
-export function MalloyResultView({ stableResult, datasetId }: Props) {
+export function MalloyResultView({ stableResult, datasetRef }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
   const [menu, setMenu] = useState<Menu | null>(null);
 
   const onCellClick = useCallback(
     (payload: CellClickPayload) => {
-      if (!datasetId) return;
+      if (!datasetRef) return;
       const drill = resolveDrill(payload);
       if (!drill) return;
       // `self` means "filter the dashboard you're already on". Ltool has no givens
@@ -41,7 +44,7 @@ export function MalloyResultView({ stableResult, datasetId }: Props) {
       const dests = drill.dests.filter((d) => d !== "self");
       if (!dests.length) return;
       const go = (dest: string) => {
-        const u = new URL(`/datasets/${datasetId}/dashboard/${encodeURIComponent(dest)}`, window.location.origin);
+        const u = new URL(`/datasets/${encodeURIComponent(datasetRef)}/dashboard/${encodeURIComponent(dest)}`, window.location.origin);
         // Givens are `$`-prefixed in dashboard URLs (see the dashboard page).
         u.searchParams.set(`$${drill.given}`, drill.filterExpr);
         router.push(u.pathname + u.search);
@@ -54,7 +57,7 @@ export function MalloyResultView({ stableResult, datasetId }: Props) {
         items: dests.map((d) => ({ label: humanizeSlug(d), run: () => go(d) })),
       });
     },
-    [datasetId, router],
+    [datasetRef, router],
   );
 
   useEffect(() => {
@@ -78,7 +81,7 @@ export function MalloyResultView({ stableResult, datasetId }: Props) {
       viz.render(container);
       // Flag drillable cells so they read as links (see .dash-drill in globals.css).
       // Only when a drill could actually navigate — a dead link is worse than none.
-      const names = datasetId ? drillFieldNames(viz) : new Set<string>();
+      const names = datasetRef ? drillFieldNames(viz) : new Set<string>();
       markDrillableCells(container, names);
       // A `# dashboard` result renders its cards progressively, so a one-shot mark
       // right after render() misses tables that appear a frame later.
@@ -98,7 +101,7 @@ export function MalloyResultView({ stableResult, datasetId }: Props) {
       observer?.disconnect();
       vizCleanup?.();
     };
-  }, [stableResult, datasetId, onCellClick]);
+  }, [stableResult, datasetRef, onCellClick]);
 
   return (
     <>

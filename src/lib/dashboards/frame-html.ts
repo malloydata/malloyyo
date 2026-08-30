@@ -154,11 +154,15 @@ const esc = (s: string) =>
 export function frameHtml(opts: {
   title: string;
   info: unknown;
+  /** The sibling dashboards, nav order, this one excluded — `window.__DASHBOARDS__`.
+      Model-derived (names and titles from the repo's own artifacts), so it is
+      safe to inline through safeJson like the rest. */
+  siblings?: unknown;
   givenSpecs: unknown;
   bundleUrl: string;
   nonce: string;
 }): string {
-  const { title, info, givenSpecs, bundleUrl, nonce } = opts;
+  const { title, info, siblings, givenSpecs, bundleUrl, nonce } = opts;
   // Note what is NOT a parameter here: the givens and useUrlState values from
   // the query string. Those are the request-derived half, and they are read from
   // location.search by FRAME_BOOTSTRAP instead of being inlined — see the header.
@@ -167,6 +171,7 @@ export function frameHtml(opts: {
     `<meta name="viewport" content="width=device-width,initial-scale=1"></head>` +
     `<body style="margin:0"><div id="root"></div>` +
     `<script nonce="${nonce}">window.__DASHBOARD__=${safeJson(info)};` +
+    `window.__DASHBOARDS__=${safeJson(siblings ?? [])};` +
     `window.__GIVENS__=${safeJson(givenSpecs)}</script>` +
     `<script nonce="${nonce}">${FRAME_BOOTSTRAP}</script>` +
     `<script nonce="${nonce}" src="/dashboard-vendor.js"></script>` +

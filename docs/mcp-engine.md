@@ -118,6 +118,7 @@ export interface FieldInfo {
   description: string | null;    // promoted from the `#"` annotation route
   annotations?: Annotation[];
   location?: Loc;                // develop projection only
+  access?: AccessModifier;       // develop only — see "access modifiers" below
 }
 
 export interface ViewInfo {
@@ -125,6 +126,7 @@ export interface ViewInfo {
   description: string | null;
   annotations?: Annotation[];
   location?: Loc;                // develop only
+  access?: AccessModifier;       // develop only
   body?: string;                 // develop only; only when readSource available
 }
 
@@ -141,6 +143,7 @@ export interface JoinInfo {
   description: string | null;
   annotations?: Annotation[];
   location?: Loc;                // develop only
+  access?: AccessModifier;       // develop only
 }
 
 export interface FieldGroups {
@@ -250,8 +253,38 @@ export interface RunResult {
 export type Surface = 'develop' | 'explore';
 // explore projection strips: location, body, entry, runs.
 // keeps: expression, description, annotations, queries, givens.
+// DROPS, whole: any member carrying `access` — see below.
 export function projectModel(m: ModelInfo, surface: Surface): ModelInfo;
 export function projectDescription(d: SourceDescription, surface: Surface): SourceDescription;
+
+// ── access modifiers ───────────────────────────────────────────────
+// A field/view/join the model marked `private` or `internal`. Absent = public.
+// The modifier lives on the RAW structDef def, never on the compiled API's
+// Field, so `allFields` hands back non-public members indistinguishable from
+// public ones — the walker reads it off the def and labels them.
+export type AccessModifier = 'private' | 'internal';
+
+// The surfaces split on one fact: a QUERY compiles against a source at access
+// level 'public', and 'internal' only opens up to a source that EXTENDS or
+// JOINS the one declaring it — so NEITHER modifier can be referenced from query
+// text. Explore's contract is "here is what you can query", so it omits those
+// members entirely rather than listing a name that earns 'field-not-accessible'
+// (and worse: describe_source synthesizes its examples from the first view, so
+// an unfiltered private view became a worked example that does not compile).
+// Develop keeps them, marker and all — an author editing the model needs to see
+// what is hidden and why. This is the source-level `exportedOnly` rule (imports
+// and unexported intermediates stay private) applied one level down, to fields.
+export function publicGroups(g: FieldGroups): FieldGroups;   // recursive: joins too
+export function publicSource(s: SourceInfo): SourceInfo;     // incl. anon_srcs
+export function publicOnlyModel(m: ModelInfo): ModelInfo;    // applied at each
+// explore entry point (projectModel/projectDescription 'explore',
+// buildSourceDescribe), so join targets resolved through `sources`, the deduped
+// join_source_map, and the synthesized examples are all filtered at once.
+//
+// NOT filtered: describe_source's `malloy_text` — the source's verbatim sliced
+// declaration. Removing a `private view: x is { … }` from source text needs a
+// parser, and the text labels itself (`private`/`internal` are right there in
+// the Malloy). The structured surface is the authority on what is queryable.
 
 // ── catalog entry (advisory list) ──────────────────────────────────
 

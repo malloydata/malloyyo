@@ -30,6 +30,7 @@ import { errorProblem, mapProblems } from './problems';
 import { prettify } from './prettify';
 import { needsQuote } from './quoting';
 import type {
+  AccessModifier,
   Annotation,
   CompileResult,
   FieldGroups,
@@ -170,7 +171,24 @@ function stripScalarArrayValue(parent: ExploreField, groups: FieldGroups): Field
   return { ...groups, dimensions: groups.dimensions.filter((f) => f.name !== 'value') };
 }
 
-type StructDefField = { name: string; expressionType?: string; code?: string };
+type StructDefField = {
+  name: string;
+  /** A rename (`include { rename: … }`) — the name the field goes by here. */
+  as?: string;
+  expressionType?: string;
+  code?: string;
+  accessModifier?: AccessModifier;
+};
+
+/** The raw def behind a compiled field. Matched on the name the field goes by
+    in the namespace (`as ?? name` — core's `activeName`, which is how the
+    compiled API keys its field map), so a renamed field still finds its def. */
+function rawDef(
+  structDefFields: StructDefField[],
+  name: string,
+): StructDefField | undefined {
+  return structDefFields.find((x) => (x.as ?? x.name) === name);
+}
 
 function fieldKind(
   af: AtomicField,
@@ -306,6 +324,11 @@ function walkFields(
     const mLoc = f.location as MalloyLocation | undefined;
     const local = isLocal(mLoc, ctx.rootUri);
     const loc = local ? toLoc(mLoc) : undefined;
+    // The access modifier lives on the RAW def — the compiled API's Field
+    // doesn't carry it, so `allFields` hands back private/internal members
+    // indistinguishable from public ones. Emitted for develop; the explore
+    // projection drops the member outright (project.ts `publicGroups`).
+    const access = rawDef(structDefFields, f.name)?.accessModifier;
 
     if (f.isExploreField()) {
       const ef = f as ExploreField;
@@ -322,6 +345,7 @@ function walkFields(
       if (needsQuote(f.name)) join.must_quote = true;
       if (annotations.length > 0) join.annotations = annotations;
       if (loc) join.location = loc;
+      if (access) join.access = access;
       // Slice the join's declaration (`name is target on/with …` — carries the
       // keys). Synthetic nested-record/array joins have no own declaration;
       // their location points at the parent source, so skip them.
@@ -360,6 +384,7 @@ function walkFields(
       if (needsQuote(f.name)) view.must_quote = true;
       if (annotations.length > 0) view.annotations = annotations;
       if (loc) view.location = loc;
+      if (access) view.access = access;
       // Body follows the definition's OWN location — across imports too (the
       // reader cache holds every file the compile read). `location` (the coord)
       // stays develop-only/local; the source text rides on explore.
@@ -382,6 +407,7 @@ function walkFields(
     if (expr && expr !== f.name) info.expression = expr;
     if (annotations.length > 0) info.annotations = annotations;
     if (loc) info.location = loc;
+    if (access) info.access = access;
     if (fieldKind(af, structDefFields) === 'measure') groups.measures.push(info);
     else groups.dimensions.push(info);
   }

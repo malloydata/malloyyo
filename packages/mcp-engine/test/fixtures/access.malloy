@@ -1,0 +1,48 @@
+##! experimental.access_modifiers
+
+#" Fields carrying Malloy access modifiers, in every shape that can take one.
+#" Nothing here is queryable from a query against these sources: a query
+#" compiles at access level 'public', and 'internal' only opens up to a source
+#" that extends or joins the one declaring it.
+
+source: acc_parts is duckdb.sql("""
+  SELECT 1 as n, 'p' as part
+""") extend {
+  private dimension: part_secret is 'hidden join field'
+  dimension: part_label is part
+}
+
+source: acc_base is duckdb.sql("""
+  SELECT 1 as n, 'a' as label UNION ALL SELECT 2, 'b'
+""") extend {
+  dimension: note is 'plain'
+  measure: total is n.sum()
+}
+
+#" Every member kind, public and non-public side by side.
+source: acc_fields is acc_base extend {
+  join_one: acc_parts on n = acc_parts.n
+
+  private dimension: hidden_dim is 'nope'
+  internal dimension: staff_dim is 'staff only'
+  private measure: hidden_measure is count()
+  internal measure: staff_measure is count()
+  private view: hidden_view is { group_by: label }
+
+  dimension: shown_dim is label
+  measure: shown_measure is count()
+  view: shown_view is { group_by: label }
+}
+
+#" A join can carry a modifier too.
+source: acc_joins is acc_base extend {
+  private join_one: hidden_join is acc_parts on n = hidden_join.n
+  join_one: shown_join is acc_parts on n = shown_join.n
+}
+
+#" An include block can demote a field the base source declared public.
+source: acc_included is acc_base include {
+  public: n, label
+  private: note
+  internal: total
+}

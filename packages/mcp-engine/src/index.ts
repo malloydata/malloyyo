@@ -12,6 +12,7 @@
 
 // Layer 1 — types
 export type {
+  AccessModifier,
   Annotation,
   ArrayStub,
   CompactField,
@@ -62,7 +63,10 @@ export { HOST_ONLY } from './types';
 // Layer 2 — helpers
 export { compile, listRuns, type CompileOptions, type RunListing } from './walker';
 export { selectSource, describeSource } from './select';
-export { projectModel, projectDescription, buildSourceDescribe } from './project';
+export {
+  projectModel, projectDescription, buildSourceDescribe,
+  publicGroups, publicSource, publicOnlyModel,
+} from './project';
 export { modelCatalogEntry } from './catalog';
 export { run, executeMaterialized, DEFAULT_ROW_LIMIT, type RunOptions } from './run';
 export { jsonRows } from './rows';

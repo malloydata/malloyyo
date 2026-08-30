@@ -215,6 +215,14 @@ Everything is recursive and obeys the same column/join split at every level:
    limit); array-column stubs in its entries are relative.
 8. **Views only on `described_source`. `malloy_text` only the described source.**
 9. **No `depth` parameter.**
+10. **Non-public members are absent, not flagged.** A field, view or join the
+    model marked `private` or `internal` never appears — not in `dimensions` /
+    `measures` / `views`, not as a `joins` entry, not inside a
+    `join_source_map` schema. A query compiles at access level `'public'`
+    (`internal` only opens up to a source that extends or joins the declaring
+    one), so listing one — even flagged — would be a name the reader cannot
+    write. Develop keeps them, labelled with `access`. Only `malloy_text`, the
+    verbatim declaration, still shows them: it labels itself in Malloy syntax.
 
 ## Acceptance criteria
 
@@ -233,6 +241,8 @@ Everything is recursive and obeys the same column/join split at every level:
   subtree); an un-nameable target's fields are inline in its `source_def`.
 - Views only under `described_source`; `malloy_text` is the described source only.
 - A cyclic path returns; the cycle entry is marked and not descended.
+- No `private`/`internal` member appears anywhere in the structured response —
+  every name in it compiles in a query against the described source.
 
 ## Non-goals
 

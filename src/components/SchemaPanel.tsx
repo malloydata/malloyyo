@@ -114,10 +114,13 @@ export type SourceOption = {
   source: string;
   description: string | null;
   /** The dataset this source belongs to — its NAME, which is what links carry
-      and what a reader recognises. Optional: the schema panel's own picker shows
-      one dataset's sources and has no use for it, but ltool's filter lists EVERY
-      dataset's sources and has to group them (and two datasets may each define
-      an "orders"). */
+      and what a reader recognises.
+   *
+   * Optional only because a caller may not know it. Both pickers over this list
+   * get EVERY dataset's sources (ltool hands the same array to its filter and to
+   * the schema panel), so two entries can share a source name — two datasets may
+   * each define an "orders" — and the dataset is what tells them apart. Both
+   * key their rows on dataset+source for that reason. */
   dataset?: string;
 };
 

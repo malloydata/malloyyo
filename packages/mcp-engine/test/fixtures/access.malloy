@@ -46,3 +46,10 @@ source: acc_included is acc_base include {
   private: note
   internal: total
 }
+
+#" A source can demote its own primary key.
+source: acc_pk is duckdb.sql("""
+  SELECT 1 as id, 'x' as tag
+""") extend { primary_key: id }
+
+source: acc_pk_hidden is acc_pk include { public: tag; private: id }

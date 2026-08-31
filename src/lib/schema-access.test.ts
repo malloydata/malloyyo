@@ -58,6 +58,11 @@ source: joins is base extend {
   join_one: shown_join is parts on n = shown_join.n
 }
 
+source: pk_src is duckdb.sql("SELECT 1 as id, 'x' as tag") extend { primary_key: id }
+
+// A source can demote its own primary key.
+source: pk_hidden is pk_src include { public: tag; private: id }
+
 // An include block can demote a field the base source declared public.
 source: included is base include {
   public: n, label
@@ -119,6 +124,17 @@ test("an include block's demotions are respected", async () => {
   assert.equal(names.includes("secret_note"), false, "'secret_note' must not be listed");
   assert.equal(names.includes("secret_total"), false, "'secret_total' must not be listed");
   assert.ok(names.includes("n"), "'n' should be listed");
+});
+
+test("a primary key that was demoted is not advertised", async () => {
+  // Naming a key the panel just dropped hands the reader an identifier they
+  // cannot write.
+  const hidden = await describeSourceFields(files(), "index.malloy", "pk_hidden", {});
+  assert.ok(hidden);
+  assert.deepEqual(hidden.fields.map((f) => f.name), ["tag"]);
+  assert.equal(hidden.primary_key, null);
+  const kept = await describeSourceFields(files(), "index.malloy", "pk_src", {});
+  assert.equal(kept?.primary_key, "id", "a public primary key still shows");
 });
 
 // The point of the filter: everything it hides really is unreachable from a

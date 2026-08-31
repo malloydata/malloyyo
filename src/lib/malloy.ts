@@ -632,7 +632,12 @@ export async function describeSourceFields(
       if (persist && opts.cacheKey) await persistModelDef(opts.cacheKey, () => Promise.resolve(compiled));
       const explore = compiled.explores.find((e) => e.name === sourceName);
       if (!explore) return null;
-      return { primary_key: explore.primaryKey ?? null, fields: serializeFields(explore) };
+      const fields = serializeFields(explore);
+      // A source can demote its own primary key (`include { private: id }`);
+      // don't name a key the panel just dropped and the reader can't write.
+      const pk = explore.primaryKey ?? null;
+      const listed = pk !== null && fields.some((f) => f.name === pk);
+      return { primary_key: listed ? pk : null, fields };
     } catch {
       return null;
     }

@@ -116,9 +116,17 @@ export function publicGroups(g: FieldGroups): FieldGroups {
   };
 }
 
-/** `publicGroups` for a whole source, its anon join targets included. */
+/** `publicGroups` for a whole source, its anon join targets included.
+
+    `primary_key` is cleared when it names a field the filter just removed —
+    otherwise the surface advertises a key the reader cannot write (a source
+    can demote its own primary key: `include { private: id }`). */
 export function publicSource(s: SourceInfo): SourceInfo {
-  const out: SourceInfo = { ...s, ...publicGroups(s) };
+  const groups = publicGroups(s);
+  const out: SourceInfo = { ...s, ...groups };
+  if (out.primary_key && !groups.dimensions.some((d) => d.name === out.primary_key)) {
+    out.primary_key = null;
+  }
   if (s.anon_srcs) out.anon_srcs = s.anon_srcs.map(publicSource);
   return out;
 }

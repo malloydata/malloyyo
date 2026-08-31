@@ -74,6 +74,16 @@ test('explore: the projection drops them too', async () => {
   assert.deepEqual(Object.keys(m.sources['acc_joins']!.joins), ['shown_join']);
 });
 
+test('explore: a primary key that was demoted is not advertised', async () => {
+  // The key names a field the filter removed — naming it anyway hands the
+  // reader an identifier they cannot write.
+  const d = await describe('acc_pk_hidden');
+  assert.deepEqual(Object.keys(d.described_source.dimensions), ['tag']);
+  assert.equal(d.described_source.primary_key, undefined);
+  const kept = await describe('acc_pk');
+  assert.equal(kept.described_source.primary_key, 'id', 'a public primary key still shows');
+});
+
 // ── develop: the author sees everything, with the marker ───────────
 
 test('develop: keeps every member and labels its modifier', async () => {

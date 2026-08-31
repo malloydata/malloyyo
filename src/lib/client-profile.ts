@@ -30,7 +30,9 @@ export type ClientProfile = {
   sendStructuredContent: boolean;
 };
 
-const DEFAULT_PROFILE: ClientProfile = { id: "default", renderRowsInline: false, sendStructuredContent: true };
+/** Exported so an in-app caller can take it deliberately rather than by
+    happening not to match a UA rule — see mcp-host's `inApp` branch. */
+export const DEFAULT_CLIENT_PROFILE: ClientProfile = { id: "default", renderRowsInline: false, sendStructuredContent: true };
 
 /** Map a request User-Agent to its presentation profile. Unknown/absent → the
     default (unchanged JSON behavior). */
@@ -38,7 +40,7 @@ export function clientProfile(userAgent: string | null | undefined): ClientProfi
   if (userAgent && /^openai-mcp\b/i.test(userAgent)) {
     return { id: "chatgpt", renderRowsInline: true, sendStructuredContent: false };
   }
-  return DEFAULT_PROFILE;
+  return DEFAULT_CLIENT_PROFILE;
 }
 
 // How many rows to put in the inline table before we stop and point at the link.

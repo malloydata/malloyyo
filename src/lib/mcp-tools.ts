@@ -342,7 +342,17 @@ export type WebRunResult =
 
 // Context for a web run: the client (User-Agent), the resolved author_model
 // ('human' or an inherited model), and the loaded query's question, if any.
-export type WebRunOpts = { userAgent?: string | null; authorModel?: string | null; question?: string | null };
+// `entrypoint` labels a runQueryForWeb run in `history` and defaults to
+// 'ltool' — the Run button. Ask passes 'ask' so a query a model wrote for
+// someone is countable apart from one they wrote themselves, which is the only
+// way to tell whether a cheaper model is good enough at Malloy. saveWebQuery
+// ignores it: saving is the Run & save button, full stop.
+export type WebRunOpts = {
+  userAgent?: string | null;
+  authorModel?: string | null;
+  question?: string | null;
+  entrypoint?: QueryEntrypoint;
+};
 
 // Run a Malloy query for the web UI, recording it to history (a browser run —
 // user_agent is the browser, author_model resolved by the caller). Every run is
@@ -375,7 +385,7 @@ export async function runQueryForWeb(
     const durationMs = Date.now() - t0;
     const capped = res.rows.slice(0, maxRows);
     const { slug } = await recordHistory({
-      userId, entrypoint: "ltool", datasetId: ds.id, toolName: "query", question: opts.question ?? null,
+      userId, entrypoint: opts.entrypoint ?? "ltool", datasetId: ds.id, toolName: "query", question: opts.question ?? null,
       source, malloyInput: malloyQuery, compiledSql: res.sql, rowCount: res.rowCount, durationMs,
       executed: true, userAgent: opts.userAgent, authorModel: opts.authorModel, mintSlug: true,
     });
@@ -393,7 +403,7 @@ export async function runQueryForWeb(
     const durationMs = Date.now() - t0;
     const msg = err instanceof Error ? err.message : String(err);
     await recordHistory({
-      userId, entrypoint: "ltool", datasetId: ds.id, toolName: "query", question: opts.question ?? null,
+      userId, entrypoint: opts.entrypoint ?? "ltool", datasetId: ds.id, toolName: "query", question: opts.question ?? null,
       source, malloyInput: malloyQuery, durationMs, executed: true, error: msg,
       userAgent: opts.userAgent, authorModel: opts.authorModel,
     });
@@ -431,6 +441,10 @@ export async function saveWebQuery(
     const res = await runRestrictedMalloyFiles(files, "index.malloy", malloyQuery, { rowLimit: maxRows, cacheKey: model.id });
     const durationMs = Date.now() - t0;
     const capped = res.rows.slice(0, maxRows);
+    // Saving is the Run & save button and nothing else, so the entrypoint here
+    // is literal — deliberately NOT opts.entrypoint. The 'query saved'
+    // telemetry event is typed to 'ltool' for the same reason. Give Ask a save
+    // path one day and both widen together.
     const { slug } = await recordHistory({
       userId, entrypoint: "ltool", datasetId: ds.id, toolName: "query", question: title,
       source, malloyInput: malloyQuery, compiledSql: res.sql, rowCount: res.rowCount, durationMs,

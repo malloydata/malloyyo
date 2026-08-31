@@ -151,10 +151,9 @@ function SourceFilterPicker({
     (!currentDatasetRef || !s.dataset || s.dataset === currentDatasetRef);
 
   // Open centred on where you already are, not at the top of the list. With one
-  // group per dataset the list is long, and landing on "All sources" every time
-  // means scrolling to find your own dataset before you can pick a sibling
-  // source in it — which is the common move. Scrolls the list box only, never
-  // the page.
+  // group per dataset the list is long, and landing at the top every time means
+  // scrolling to find your own dataset before you can pick a sibling source in
+  // it — which is the common move. Scrolls the list box only, never the page.
   useEffect(() => {
     if (!open) return;
     const el = selectedRef.current;
@@ -179,9 +178,9 @@ function SourceFilterPicker({
         title="Filter by source"
       >
         {/* Show the selected source name directly — the `sources` list loads
-            async, so a lookup would briefly fall back to "All sources". */}
+            async, so a lookup would briefly show the placeholder instead. */}
         <span className={`truncate ${value ? "text-gray-800 dark:text-gray-200 font-semibold" : "text-gray-500 dark:text-gray-400"}`}>
-          {value || "All sources"}
+          {value || "Pick a source"}
         </span>
         <span className="text-[9px] text-gray-400 dark:text-gray-600 flex-shrink-0">▾</span>
       </button>
@@ -193,12 +192,6 @@ function SourceFilterPicker({
             className="fixed z-50 max-h-80 overflow-y-auto rounded-md border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950 shadow-lg py-1"
             style={{ top: pos.top, left: pos.left, width: Math.max(pos.width, 224) }}
           >
-            <button
-              onClick={() => { onChange(""); setOpen(false); }}
-              className={`block w-full text-left px-2 py-1.5 hover:bg-gray-100 dark:hover:bg-gray-800/60 ${value === "" ? "bg-gray-50 dark:bg-gray-900" : ""}`}
-            >
-              <span className="block text-[11px] text-gray-600 dark:text-gray-400">All sources</span>
-            </button>
             {/* Grouped by dataset, sources indented beneath it. Flat, the list
                 read as arbitrary — it was in API order, which is dataset order,
                 but with nothing marking where one dataset ended and the next
@@ -256,11 +249,15 @@ function StarButton({
 }) {
   if (!item.slug) return null;
   const others = Math.max(0, item.favoriteCount - (item.isFavorited ? 1 : 0));
+  // The unfavorited state was gray-300/gray-700 — near-invisible against the
+  // row, so it read as decoration rather than a control you could press. It is
+  // now a legible gray that still recedes behind the amber of a real favorite,
+  // which is what has to stand out in a scanned list.
   const cls = item.isFavorited
     ? "text-amber-400 hover:text-amber-500"
     : others > 0
       ? "text-blue-400 dark:text-blue-500 hover:text-amber-400"
-      : "text-gray-300 dark:text-gray-700 hover:text-amber-400 dark:hover:text-amber-500";
+      : "text-gray-400 dark:text-gray-500 hover:text-amber-400 dark:hover:text-amber-500";
   const title = item.isFavorited
     ? others > 0
       ? `Your favorite (+${others} other${others > 1 ? "s" : ""}) — click to remove yours`
@@ -271,12 +268,249 @@ function StarButton({
   return (
     <button
       onClick={(e) => onToggle(e, item)}
-      className={`text-sm leading-none flex-shrink-0 transition-colors ${cls}`}
+      className={`text-[32px] leading-none flex-shrink-0 transition-colors rounded px-1 py-0.5 hover:bg-gray-100 dark:hover:bg-gray-800 ${cls}`}
       title={title}
     >
       {item.isFavorited || others > 0 ? "★" : "☆"}
-      {others > 0 && <span className="text-[9px] align-top ml-0.5">{others}</span>}
+      {others > 0 && <span className="text-xs align-top ml-0.5 font-semibold">{others}</span>}
     </button>
+  );
+}
+
+type AskUsage = { input: number; cacheRead: number; cacheWrite: number; output: number };
+type AskCost = {
+  model: string;
+  effort: string | null;
+  steps: number;
+  usage: AskUsage;
+  costUsd: number | null;
+};
+/** The menu, from /api/me: the defaults plus what may be chosen. `effort` on a
+    model says whether that model takes one at all. */
+type AskConfig = {
+  model: string;
+  effort: string;
+  models: Array<{ id: string; effort: boolean }>;
+  efforts: string[];
+};
+
+function tokens(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
+}
+
+/** Asks land between a tenth of a cent and a few cents, where dollars are all
+    leading zeros — so show cents until a question actually costs a dollar. */
+function money(usd: number): string {
+  if (usd >= 1) return `$${usd.toFixed(2)}`;
+  const cents = usd * 100;
+  return cents < 0.1 ? "<0.1¢" : `${cents.toFixed(1)}¢`;
+}
+
+/** One line under the Ask box, in a fixed position: always who is answering and
+    how hard they're thinking, then either how to submit or what the last
+    question cost.
+
+    The model is named up front rather than only after a run, because it decides
+    both the quality of the answer and the size of the bill, and one key serves
+    everyone on the instance. Cached input is called out separately — it is most
+    of an agentic loop's input and bills at about a tenth of the rate, so one
+    merged total would read as several times more expensive than it was. */
+function AskStatusLine({ cost }: { cost: AskCost | null }) {
+  if (!cost) {
+    return (
+      <p className="text-[10px] text-gray-400 dark:text-gray-600">
+        Enter to ask · Shift+Enter for a new line
+      </p>
+    );
+  }
+  const { usage, steps, costUsd } = cost;
+  const cached = usage.cacheRead > 0 ? ` (${tokens(usage.cacheRead)} cached)` : "";
+  const parts = [
+    `${steps} turn${steps === 1 ? "" : "s"}`,
+    `${tokens(usage.input + usage.cacheRead + usage.cacheWrite)} in${cached}`,
+    `${tokens(usage.output)} out`,
+  ];
+  // An estimate, and labelled as one: the rates are compiled in and the invoice
+  // is the invoice. Absent entirely for a model with no price on file, rather
+  // than shown as zero.
+  if (costUsd != null) parts.push(`~${money(costUsd)}`);
+  return <p className="text-[10px] text-gray-400 dark:text-gray-600">{parts.join(" · ")}</p>;
+}
+
+/** Model and effort, chosen per question. The effort control is absent — not
+    disabled — for a model that takes none, because the API rejects an effort
+    there; offering a dead control would only invite a 400. */
+function AskControls({
+  config,
+  model,
+  effort,
+  onModel,
+  onEffort,
+  disabled,
+}: {
+  config: AskConfig;
+  model: string;
+  effort: string;
+  onModel: (v: string) => void;
+  onEffort: (v: string) => void;
+  disabled: boolean;
+}) {
+  const cls =
+    "text-[10px] rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950 px-1.5 py-0.5 text-gray-600 dark:text-gray-400 disabled:opacity-50";
+  const takesEffort = config.models.find((m) => m.id === model)?.effort ?? false;
+  return (
+    <div className="flex items-center gap-2">
+      <select value={model} onChange={(e) => onModel(e.target.value)} disabled={disabled} className={cls}>
+        {config.models.map((m) => (
+          <option key={m.id} value={m.id}>{m.id}</option>
+        ))}
+      </select>
+      {takesEffort && (
+        <select value={effort} onChange={(e) => onEffort(e.target.value)} disabled={disabled} className={cls}>
+          {config.efforts.map((e) => (
+            <option key={e} value={e}>{e} effort</option>
+          ))}
+        </select>
+      )}
+    </div>
+  );
+}
+
+/** What you can query, when nothing is chosen yet. The same catalogue the
+    source dropdown holds, laid out instead of folded away: a source name on its
+    own ("order_items", "goals") rarely says what is in it, and the model
+    already carries a description for most of them. */
+function SourcePicker({
+  sources,
+  onPick,
+}: {
+  sources: SourceOption[];
+  onPick: (s: SourceOption) => void;
+}) {
+  if (sources.length === 0) {
+    return (
+      <div className="flex items-center justify-center h-full">
+        <p className="text-xs text-gray-400 dark:text-gray-600">No sources available yet.</p>
+      </div>
+    );
+  }
+  return (
+    <div className="px-8 py-6 max-w-2xl space-y-5">
+      <div className="space-y-1">
+        <h2 className="text-sm font-semibold">Pick a source</h2>
+        <p className="text-xs text-gray-500 dark:text-gray-400">
+          What would you like to look at? Or select a query from the sidebar.
+        </p>
+      </div>
+      {groupSourcesByDataset(sources).map((group) => (
+        <div key={group.key} className="space-y-1.5">
+          <p className="text-[10px] uppercase tracking-wide font-semibold text-gray-400 dark:text-gray-500">
+            {group.dataset}
+          </p>
+          <div className="space-y-1">
+            {group.sources.map((s) => (
+              <button
+                key={`${s.dataset ?? ""}/${s.source}`}
+                onClick={() => onPick(s)}
+                className="block w-full text-left px-3 py-2 rounded border border-gray-200 dark:border-gray-800 hover:border-gray-400 dark:hover:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-900/50"
+              >
+                <span className="block font-mono text-xs text-gray-800 dark:text-gray-200">{s.source}</span>
+                {s.description && (
+                  <span className="block text-[11px] text-gray-500 dark:text-gray-400 leading-snug mt-0.5">
+                    {s.description}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Ask: a question in, a run query out. The Malloy the model writes lands in
+    the editor and its result in the panel below, exactly as if it had been
+    typed and Run — so what comes back is reviewable and editable, not a black
+    box. Rendered only where a source is already chosen: the model needs to
+    know what it is querying, and picking that is the human's job. */
+function AskBox({
+  value,
+  onChange,
+  onSubmit,
+  busy,
+  disabled,
+  error,
+  placeholder,
+  cost,
+  config,
+  model,
+  effort,
+  onModel,
+  onEffort,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  onSubmit: () => void;
+  busy: boolean;
+  disabled: boolean;
+  error: string | null;
+  placeholder: string;
+  cost: AskCost | null;
+  config: AskConfig | null;
+  model: string;
+  effort: string;
+  onModel: (v: string) => void;
+  onEffort: (v: string) => void;
+}) {
+  return (
+    <div className="space-y-2">
+      {/* A textarea, not an input: a question worth asking a model is often a
+          couple of sentences of context, and a single line hides all but the
+          tail of it while you type. Enter still submits (the common case);
+          Shift+Enter breaks the line. */}
+      <div className="flex items-start gap-2">
+        <textarea
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); onSubmit(); }
+          }}
+          disabled={busy}
+          placeholder={placeholder}
+          rows={3}
+          className="flex-1 min-w-0 text-xs px-2.5 py-2 rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950 placeholder:text-gray-400 dark:placeholder:text-gray-600 disabled:opacity-60 focus:outline-none focus:ring-1 focus:ring-blue-500 resize-y leading-relaxed"
+        />
+        <button
+          onClick={onSubmit}
+          disabled={busy || disabled || !value.trim()}
+          className="text-xs px-3 py-1.5 rounded bg-black text-white dark:bg-white dark:text-black disabled:opacity-40 hover:opacity-80 flex-shrink-0"
+          title={disabled ? "Choose a source first" : "Write and run a query for this question"}
+        >
+          {busy ? "asking…" : "Ask"}
+        </button>
+      </div>
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        {config ? (
+          <AskControls
+            config={config}
+            model={model}
+            effort={effort}
+            onModel={onModel}
+            onEffort={onEffort}
+            disabled={busy}
+          />
+        ) : (
+          <span />
+        )}
+        <AskStatusLine cost={cost} />
+      </div>
+      {error && (
+        <p className="text-xs text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 rounded px-2.5 py-2 whitespace-pre-wrap">
+          {error}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -297,8 +531,42 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
   const [running, setRunning] = useState(false);
   const [result, setResult] = useState<RunResult | null>(null);
   const [runError, setRunError] = useState<string | null>(null);
+  // Ask — off entirely unless the deployment has an Anthropic key (/api/me).
+  const [askAvailable, setAskAvailable] = useState(false);
+  const [askQuestion, setAskQuestion] = useState("");
+  // The dataset behind the source chosen for a from-scratch ask. Carried from
+  // the picker's own option rather than looked up by name, because two datasets
+  // may each publish an "orders" and the name alone cannot say which.
+  const [askDataset, setAskDataset] = useState<string | null>(null);
+  const [asking, setAsking] = useState(false);
+  const [askError, setAskError] = useState<string | null>(null);
+  // What the last ask cost. Survives the answer landing, so it is still there
+  // while you read the result you paid for.
+  const [askCost, setAskCost] = useState<AskCost | null>(null);
+  const [askConfig, setAskConfig] = useState<AskConfig | null>(null);
+  // The choice for the next question. Empty until /api/me reports the defaults,
+  // then whatever was last picked — kept across asks, so a session that wants
+  // Opus does not have to re-choose it every time.
+  const [askModel, setAskModel] = useState("");
+  const [askEffort, setAskEffort] = useState("");
+  // The schema panel, where Ask is available. Knowing what fields exist is most
+  // of knowing what you can ask, so it starts OPEN and the Malloy starts shut —
+  // and from then on nothing but a click changes either.
+  const [schemaOpen, setSchemaOpen] = useState(true);
   // The Malloy editor and schema panel are collapsed by default and expand
   // together — most users read results; writing Malloy is the advanced path.
+  // Whether the Malloy editor is open.
+  //
+  // Where Ask is available this belongs to the USER and nothing else touches
+  // it: opening a query, running one, or asking a question all leave it exactly
+  // as they found it. It is also INDEPENDENT of the schema panel there — the
+  // fields are a reference you keep open while writing questions, the Malloy is
+  // an implementation detail you unfold when you want it, and pairing them
+  // forces one of the two into the wrong state.
+  //
+  // Without Ask the two stay coupled and automatic — the box auto-opens on a
+  // scratch query and closes when you pick another — because there the editor
+  // IS the interface and there is no question box to work from.
   const [expanded, setExpanded] = useState(false);
   // Which source the schema panel is *browsing*. Defaults to the loaded query's
   // source but can be changed independently to explore other sources, without
@@ -345,6 +613,12 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
     fetch("/api/me").then((r) => r.json()).then((d) => {
       if (d?.instanceName) setInstanceName(d.instanceName);
       if (typeof d?.claudeConnected === "boolean") setClaudeConnected(d.claudeConnected);
+      if (d?.askEnabled === true) setAskAvailable(true);
+      if (d?.askConfig) {
+        setAskConfig(d.askConfig);
+        setAskModel(d.askConfig.model);
+        setAskEffort(d.askConfig.effort);
+      }
       if (d?.user?.isAdmin) setIsAdmin(true);
     }).catch(() => {});
   }, []);
@@ -368,6 +642,13 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
       })
       .catch(() => {});
   }, []);
+
+  // Programmatic expand/collapse. A no-op once Ask is available — see the
+  // `expanded` declaration. User-driven toggles call setExpanded directly.
+  const autoExpand = useCallback(
+    (open: boolean) => { if (!askAvailable) setExpanded(open); },
+    [askAvailable],
+  );
 
   const runQuery = useCallback(async (src: string, malloy: string, dataset?: string | null, baseSlug?: string | null, question?: string | null) => {
     if (!src || !malloy.trim()) return;
@@ -419,7 +700,7 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
         setSource(body.source ?? "");
         setSchemaSource(body.source ?? "");
         if (body.source) setSourceFilter(body.source);
-        setExpanded(false);
+        autoExpand(false);
         setEditedTitle(null);
         // Open on a tab+scope that actually contains this query.
         // Favorites > History, Me > All (the query is always in the list shown).
@@ -434,7 +715,7 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
       })
       .catch((e) => { if (!cancelled) setRunError(e instanceof Error ? e.message : String(e)); });
     return () => { cancelled = true; };
-  }, [initialSlug, runQuery]);
+  }, [initialSlug, runQuery, autoExpand]);
 
   // Open an editable scratch query. Nothing is minted here: it carries
   // `id: null, slug: null`, and /api/run mints the slug when it is actually run
@@ -455,11 +736,11 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
     setSource(src ?? "");
     setSchemaSource(src ?? "");
     // Expand to show the schema only when there IS a source to show one for.
-    setExpanded(Boolean(src));
+    autoExpand(Boolean(src));
     setEditedTitle(null);
     setResult(null);
     setRunError(null);
-  }, []);
+  }, [autoExpand]);
 
   // Deep-link to a DATASET and/or a SOURCE (the front page's "Query" chip, the
   // dashboard nav's "Query" item, and the empty-dataset tier of the
@@ -485,11 +766,16 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
     setSchemaSource(item.source ?? "");
     // Navigating to a query narrows the list to its source by default.
     if (item.source) setSourceFilter(item.source);
-    setExpanded(false);
+    autoExpand(false);
     setEditedTitle(null);
     setTitleEditing(false);
     setResult(null);
     setRunError(null);
+    // A failed ask belongs to the question that produced it. Carrying its error
+    // (or its text) onto a different query reads as a complaint about THIS one.
+    setAskError(null);
+    setAskQuestion("");
+    setAskCost(null);
     mainRef.current?.scrollTo({ top: 0 });
     if (item.malloyQuery && item.source) {
       runQuery(item.source, item.malloyQuery, item.dataset, item.slug, item.question);
@@ -562,6 +848,12 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
   });
 
   // The loaded query has been edited away from what its slug points at.
+  // The source the schema panel describes: whatever is in view, whether that is
+  // a selected query's source or the one picked on the ask screen.
+  const schemaFor = schemaSource || source || sourceFilter || null;
+  // Where Ask is available the panel is its own thing, shown whenever it is
+  // open and has something to describe. Elsewhere it still rides `expanded`.
+  const schemaVisible = askAvailable ? schemaOpen && !!schemaFor : expanded;
   const isModified = !!selected && query.trim() !== (selected.malloyQuery ?? "").trim();
   const modifiedDefaultTitle = `(Modified) ${selected?.question ?? ""}`;
   // You can rename a saved query's title only if it's yours — or you're an admin.
@@ -579,6 +871,99 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
         `Using the ${instanceName} Malloy tools, Call ${instanceName}:open_share_link with slug "${activeSlug}", then ask me what I'd like to know.`
       )}`
     : null;
+
+  // Ask the model for a query and show what it ran. The server does both — see
+  // src/app/api/ask/route.ts: it runs what the model wrote so the run is
+  // recorded as model-authored, which the client is in no position to assert.
+  //
+  // A failed ask still fills the editor when the response carried Malloy: a
+  // query that compiled but wouldn't run is far more useful in front of the
+  // user than an error alone.
+  async function handleAsk(askSource: string, dataset: string | null) {
+    const q = askQuestion.trim();
+    if (!q || !askSource || asking) return;
+    setAsking(true);
+    setAskError(null);
+    setAskCost(null);
+    setRunError(null);
+    setResult(null);
+    try {
+      const res = await fetch("/api/ask", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          source: askSource,
+          question: q,
+          dataset,
+          // Only a refinement when the editor is actually showing this source's
+          // query; otherwise it's a fresh question and stale Malloy would only
+          // mislead.
+          currentMalloy: selected && askSource === source ? query : null,
+          model: askModel || undefined,
+          effort: askEffort || undefined,
+        }),
+      });
+      const json = await res.json();
+      // Whether or not it worked — a failed ask still spent tokens.
+      if (json.usage) {
+        setAskCost({
+          model: json.model,
+          effort: json.effort ?? null,
+          steps: json.steps ?? 0,
+          usage: json.usage,
+          costUsd: json.costUsd ?? null,
+        });
+      }
+      const malloy = typeof json.malloy === "string" && json.malloy.trim() ? json.malloy : null;
+      const item: HistoryItem = {
+        id: null,
+        slug: json.slug ?? null,
+        // The model's synopsis of the query it settled on, when it gave one —
+        // it names what the query answers, which is what this row is for. The
+        // typed question is the fallback.
+        question: typeof json.question === "string" && json.question.trim() ? json.question : q,
+        createdAt: new Date().toISOString(),
+        source: askSource,
+        dataset,
+        malloyQuery: malloy,
+        rowCount: json.rowCount ?? null,
+        durationMs: json.durationMs ?? null,
+        authorName: null,
+        mine: true,
+        isFavorited: false,
+        favoriteCount: 0,
+      };
+
+      // Whatever came back, if there is a query, open the panel on it — the
+      // editor is the whole point, and on the 'compiled but would not run'
+      // failure the query is the only thing that explains the error. Without
+      // this the panel would still be showing the previous selection, or
+      // nothing at all when the ask started from the empty state.
+      if (malloy) {
+        setQuery(malloy);
+        setSource(askSource);
+        setSchemaSource(askSource);
+        setEditedTitle(null);
+        setSelected(item);
+      }
+
+      if (!res.ok) { setAskError(json.error ?? "ask failed"); return; }
+
+      setResult(json);
+      setAskQuestion("");
+      // Same move as Run & save: surface the new row at the top of History (mine).
+      // Only on success — a run that failed minted no slug and is not a row
+      // anyone can come back to.
+      autoFallback.current = false;
+      setItems((prev) => [item, ...prev]);
+      setView("history");
+      setScope("me");
+    } catch (e) {
+      setAskError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setAsking(false);
+    }
+  }
 
   // Run the current editor contents. If the query was edited, persist it as a
   // new history entry (fresh slug) under the edited title; otherwise just run.
@@ -734,7 +1119,7 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
                         <span title={new Date(item.createdAt).toLocaleString()}>{formatWhen(item.createdAt)}</span>
                       </div>
                     </button>
-                    <div className="pr-3 pt-3 flex-shrink-0">
+                    <div className="pr-2 pt-2 flex-shrink-0">
                       <StarButton item={item} onToggle={toggleFavorite} />
                     </div>
                   </div>
@@ -748,9 +1133,51 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
       {/* Main content */}
       <main ref={mainRef} className="flex-1 overflow-y-auto">
         {!selected ? (
-          <div className="flex items-center justify-center h-full">
-            <p className="text-xs text-gray-400 dark:text-gray-600">Select a query from the sidebar</p>
-          </div>
+          // No source yet: there is nothing to ask ABOUT, so offer the choice
+          // itself rather than a question box that cannot be used. The list is
+          // the same catalogue the picker holds, opened out — a name alone
+          // rarely says what a source is for, and the descriptions are already
+          // there in the model.
+          !sourceFilter ? (
+            <SourcePicker
+              sources={sources}
+              onPick={(s) => {
+                setSourceFilter(s.source);
+                setAskDataset(s.dataset ?? null);
+                setSchemaSource(s.source);
+              }}
+            />
+          ) : askAvailable ? (
+            <div className="px-8 py-6 max-w-2xl space-y-4">
+              <div className="space-y-1">
+                <h2 className="text-sm font-semibold">Ask a question</h2>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  Describe what you want to know about{" "}
+                  <span className="font-mono text-gray-700 dark:text-gray-300">{sourceFilter}</span>
+                  {" "}— or select a query from the sidebar.
+                </p>
+              </div>
+              <AskBox
+                value={askQuestion}
+                onChange={setAskQuestion}
+                onSubmit={() => handleAsk(sourceFilter, askDataset)}
+                busy={asking}
+                disabled={!sourceFilter}
+                error={askError}
+                cost={askCost}
+                config={askConfig}
+                model={askModel}
+                effort={askEffort}
+                onModel={setAskModel}
+                onEffort={setAskEffort}
+                placeholder={`Ask about ${sourceFilter}…`}
+              />
+            </div>
+          ) : (
+            <div className="flex items-center justify-center h-full">
+              <p className="text-xs text-gray-400 dark:text-gray-600">Select a query from the sidebar</p>
+            </div>
+          )
         ) : (
           <div className="px-8 py-6 space-y-5 max-w-4xl">
             {/* Question + meta */}
@@ -785,9 +1212,17 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
                   </p>
                 )}
                 <button
-                  onClick={() => setExpanded((o) => !o)}
+                  // The chip is named after the SOURCE, so where the two are
+                  // separable it toggles that source's fields, not the editor.
+                  onClick={() =>
+                    askAvailable ? setSchemaOpen((o) => !o) : setExpanded((o) => !o)
+                  }
                   className="flex-shrink-0 text-xs px-2 py-0.5 rounded bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300 hover:bg-purple-200 dark:hover:bg-purple-900/60"
-                  title={expanded ? "Hide Malloy & schema" : "Show Malloy & schema"}
+                  title={
+                    askAvailable
+                      ? schemaOpen ? "Hide fields" : "Show fields"
+                      : expanded ? "Hide Malloy & schema" : "Show Malloy & schema"
+                  }
                 >
                   {source || "schema"}
                 </button>
@@ -800,8 +1235,29 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
               )}
             </div>
 
-            {/* Malloy — collapsed to a one-line preview by default; expanding
-                also opens the schema panel (they travel together). */}
+            {/* Ask — a follow-up question about the source already in view.
+                Above the Malloy so the flow reads question → query → result. */}
+            {askAvailable && source && (
+              <AskBox
+                value={askQuestion}
+                onChange={setAskQuestion}
+                onSubmit={() => handleAsk(source, selected.dataset ?? null)}
+                busy={asking}
+                disabled={false}
+                error={askError}
+                cost={askCost}
+                config={askConfig}
+                model={askModel}
+                effort={askEffort}
+                onModel={setAskModel}
+                onEffort={setAskEffort}
+                placeholder={`Ask about ${source}…`}
+              />
+            )}
+
+            {/* Malloy — a one-line preview until unfolded. Where Ask is
+                available this is the editor alone; the fields have their own
+                control (the source chip above). */}
             <div className="space-y-2">
               {expanded ? (
                 <>
@@ -810,7 +1266,7 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
                     <button
                       onClick={() => setExpanded(false)}
                       className="text-[11px] text-gray-400 dark:text-gray-600 hover:text-gray-700 dark:hover:text-gray-300"
-                      title="Collapse Malloy & schema"
+                      title={askAvailable ? "Collapse Malloy" : "Collapse Malloy & schema"}
                     >
                       ▾ collapse
                     </button>
@@ -821,7 +1277,7 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
                 <button
                   onClick={() => setExpanded(true)}
                   className="w-full flex items-baseline gap-2 text-left px-2.5 py-2 rounded border border-gray-200 dark:border-gray-800 hover:bg-gray-50 dark:hover:bg-gray-900/50 group"
-                  title="Show Malloy & schema"
+                  title={askAvailable ? "Show Malloy" : "Show Malloy & schema"}
                 >
                   <span className="text-[10px] text-gray-400 dark:text-gray-600 flex-shrink-0">▸</span>
                   <span className="text-[10px] uppercase tracking-wide font-semibold text-gray-400 dark:text-gray-600 flex-shrink-0">Malloy</span>
@@ -873,6 +1329,20 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
               )}
             </div>
 
+            {/* An ask that returns nothing looks like a success and reads like a
+                failure. The overwhelmingly common cause is a filter written
+                against a guessed representation of a value — the model is told
+                the column exists and its type, never what is in it — so name
+                that rather than leave an empty table to be puzzled over. */}
+            {askCost && result && result.rowCount === 0 && !runError && (
+              <p className="text-xs text-amber-800 dark:text-amber-200 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-900 rounded px-2.5 py-2">
+                The query ran and matched nothing. Usually that means a filter
+                doesn&apos;t match how the values are actually stored — asking for{" "}
+                <code>&apos;NY&apos;</code> when the column holds{" "}
+                <code>&apos;New York&apos;</code>, say. Check the filter in the Malloy above.
+              </p>
+            )}
+
             {runError && (
               <pre className="text-xs text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 rounded p-3 whitespace-pre-wrap">
                 {runError}
@@ -902,12 +1372,14 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
         )}
       </main>
 
-      {expanded && (
+      {schemaVisible && (
         <SchemaPanel
-          source={schemaSource || source || null}
+          source={schemaFor}
           sources={sources}
           onSourceChange={setSchemaSource}
-          onClose={() => setExpanded(false)}
+          // Closing the fields closes the fields. It only touches the Malloy
+          // editor where the two are still coupled (no Ask).
+          onClose={() => { setSchemaOpen(false); if (!askAvailable) setExpanded(false); }}
         />
       )}
 

@@ -377,3 +377,10 @@ test("a run whose surface reports ok is the answer, a failed one is not", async 
 
   assert.equal(result.ok, false, "without the ok signal nothing can be treated as an answer");
 });
+
+test("cost is an estimate the caller may withhold, never a required field", () => {
+  // /api/ask omits costUsd for non-admins, so every consumer has to tolerate
+  // its absence. askCostUsd already returns null for an unpriced model — this
+  // pins that the two absences look the same to a reader.
+  assert.equal(askCostUsd("claude-not-in-the-table", { input: 1, cacheRead: 0, cacheWrite: 0, output: 1 }), null);
+});

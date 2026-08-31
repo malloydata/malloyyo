@@ -331,8 +331,9 @@ function AskStatusLine({ cost }: { cost: AskCost | null }) {
     `${tokens(usage.output)} out`,
   ];
   // An estimate, and labelled as one: the rates are compiled in and the invoice
-  // is the invoice. Absent entirely for a model with no price on file, rather
-  // than shown as zero.
+  // is the invoice. Absent for a model with no price on file — and absent for
+  // everyone but an admin, who the server withholds it from entirely, so this
+  // is a null check rather than a second permission decision.
   if (costUsd != null) parts.push(`~${money(costUsd)}`);
   return <p className="text-[10px] text-gray-400 dark:text-gray-600">{parts.join(" · ")}</p>;
 }
@@ -474,6 +475,10 @@ function AskBox({
           value={value}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={(e) => {
+            // `isComposing` guards the IME: confirming a Japanese/Chinese/Korean
+            // candidate is also an Enter, and without this it submits whatever
+            // half-converted text is in the box — and bills for the answer.
+            if (e.nativeEvent.isComposing) return;
             if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); onSubmit(); }
           }}
           disabled={busy}
@@ -1138,7 +1143,12 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
           // the same catalogue the picker holds, opened out — a name alone
           // rarely says what a source is for, and the descriptions are already
           // there in the model.
-          !sourceFilter ? (
+          //
+          // Gated on Ask being available, because picking a source has to LEAD
+          // somewhere. Without Ask the next screen is "select a query from the
+          // sidebar", so the picker would be an invitation followed by a
+          // refusal — worse than saying so up front.
+          askAvailable && !sourceFilter ? (
             <SourcePicker
               sources={sources}
               onPick={(s) => {
@@ -1162,7 +1172,7 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
                 onChange={setAskQuestion}
                 onSubmit={() => handleAsk(sourceFilter, askDataset)}
                 busy={asking}
-                disabled={!sourceFilter}
+                disabled={false}
                 error={askError}
                 cost={askCost}
                 config={askConfig}

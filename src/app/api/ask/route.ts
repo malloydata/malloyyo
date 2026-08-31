@@ -18,6 +18,7 @@
 
 import { NextResponse } from "next/server";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
+import { isAdmin } from "@/lib/admin";
 import { askEnabled, askForMalloy } from "@/lib/ask";
 import { runQueryForWeb } from "@/lib/mcp-tools";
 import { originFromRequest } from "@/lib/oauth/base-url";
@@ -90,14 +91,20 @@ export async function POST(req: Request) {
   // What ran and what it cost — on the response as a nested object the client
   // reads, and on the log flattened, so a log search can filter on the fields
   // directly instead of digging into a serialized object.
+  //
+  // The DOLLAR figure goes only to admins, and is withheld here rather than
+  // merely hidden in the UI: it is the operator's spend on the operator's key,
+  // and a number that must not be shown should not be in the payload at all.
+  // Turns and tokens still go to everyone — they describe the work done on your
+  // question, which is yours to see. The log always carries the cost.
   const report = {
     model: asked.model,
     effort: asked.effort,
     steps: asked.steps,
     usage: asked.usage,
-    costUsd: asked.costUsd,
+    ...(isAdmin(user) ? { costUsd: asked.costUsd } : {}),
   };
-  const logged = { ...report, usage: undefined, ...asked.usage };
+  const logged = { ...report, usage: undefined, costUsd: asked.costUsd, ...asked.usage };
 
   if (!asked.ok) {
     logger.info("ask failed", {

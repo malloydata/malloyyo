@@ -34,6 +34,18 @@ export interface Problem {
 
 // ── the describe-shape ─────────────────────────────────────────────
 
+/**
+ * A field's Malloy access modifier, when it has one. Absent means public.
+ *
+ * DEVELOP ONLY. A query compiles against a source at access level 'public', so
+ * neither modifier can be referenced from query text — 'internal' only opens up
+ * to a source that EXTENDS or JOINS the one declaring it. The explore
+ * projection therefore drops the member entirely rather than shipping this
+ * marker (project.ts `publicGroups`); an author editing the model, on the other
+ * hand, wants to see which fields are hidden and why.
+ */
+export type AccessModifier = 'private' | 'internal';
+
 export interface FieldInfo {
   name: string;
   /** Present (true) only when `name` must be backtick-quoted to write in
@@ -47,6 +59,7 @@ export interface FieldInfo {
   instructions?: string;
   annotations?: Annotation[];
   location?: Loc; // develop only
+  access?: AccessModifier; // develop only
 }
 
 export interface ViewInfo {
@@ -57,6 +70,7 @@ export interface ViewInfo {
   instructions?: string;
   annotations?: Annotation[];
   location?: Loc; // develop only
+  access?: AccessModifier; // develop only
   /** The view's defining source text (`name is { … }`), sliced from its
       `location`. Present (on develop and explore) only when readSource was
       available; absent when the source could not be re-read. */
@@ -96,6 +110,7 @@ export interface JoinInfo {
   instructions?: string;
   annotations?: Annotation[];
   location?: Loc; // develop only
+  access?: AccessModifier; // develop only
   /** The join's defining source text (`name is target on …`/`with …`), sliced
       from its `location` — carries the join keys. Real joins only (synthetic
       nested-record/array joins have no own declaration). Absent when the source

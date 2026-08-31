@@ -229,8 +229,31 @@ export type FieldNode = {
   fields?: FieldNode[];
 };
 
+// A field's access modifier ('private' | 'internal') lives on the raw structDef
+// field def, not on the compiled API's Field object — so `explore.allFields`
+// hands back every field, modifier or not. A QUERY compiles against a source at
+// access level 'public' (core's query-arrow builds a StaticSourceSpace with
+// 'public'), which means BOTH modifiers are unreferenceable from query text:
+// 'internal' only opens up to a source that extends or joins this one. So a
+// field list for a query editor — ltool's schema panel, via /api/schema — must
+// offer only the unmodified (public) fields; anything else is a name the user
+// can click, paste, and then get 'field-not-accessible' from.
+type AccessTaggedFieldDef = {
+  name: string;
+  as?: string;
+  accessModifier?: "private" | "internal";
+};
+
+/** Names (as they appear in the field namespace — `as` wins, matching core's
+    `activeName`) that carry an access modifier and so are not public. */
+function nonPublicFieldNames(explore: malloy.Explore): Set<string> {
+  const defs = (explore.structDef.fields ?? []) as AccessTaggedFieldDef[];
+  return new Set(defs.filter((d) => d.accessModifier).map((d) => d.as ?? d.name));
+}
+
 function serializeFields(explore: malloy.Explore): FieldNode[] {
-  return explore.allFields.map((f) => {
+  const nonPublic = nonPublicFieldNames(explore);
+  return explore.allFields.filter((f) => !nonPublic.has(f.name)).map((f) => {
     const description = f.annotations.forRoute('"')[0]?.content.trim() ?? null;
     if (f.isQueryField()) return { name: f.name, kind: "view" as const, description };
     if (f.isExploreField()) return {
@@ -609,7 +632,12 @@ export async function describeSourceFields(
       if (persist && opts.cacheKey) await persistModelDef(opts.cacheKey, () => Promise.resolve(compiled));
       const explore = compiled.explores.find((e) => e.name === sourceName);
       if (!explore) return null;
-      return { primary_key: explore.primaryKey ?? null, fields: serializeFields(explore) };
+      const fields = serializeFields(explore);
+      // A source can demote its own primary key (`include { private: id }`);
+      // don't name a key the panel just dropped and the reader can't write.
+      const pk = explore.primaryKey ?? null;
+      const listed = pk !== null && fields.some((f) => f.name === pk);
+      return { primary_key: listed ? pk : null, fields };
     } catch {
       return null;
     }

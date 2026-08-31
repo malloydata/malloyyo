@@ -7,6 +7,7 @@
 // expression, description, annotations, queries, givens.
 
 import type {
+  AccessModifier,
   Annotation,
   ArrayStub,
   CompactField,
@@ -91,12 +92,61 @@ function byName<T extends { name: string }>(items: T[]): Record<string, Omit<T, 
   return out;
 }
 
-function projectGroups(g: FieldGroups): ExploreFieldGroups {
+// ── access modifiers: dropped, not projected ───────────────────────
+// A member carrying `access` ('private' | 'internal') cannot be referenced from
+// query text — a query compiles against a source at access level 'public', and
+// 'internal' only opens up to a source that EXTENDS or JOINS the one declaring
+// it. So the explore surface, whose whole contract is "here is what you can
+// query", omits those members entirely rather than listing names that earn a
+// 'field-not-accessible'. Develop keeps them (with the marker): an author
+// editing the model needs to see what is hidden.
+
+const isPublic = (m: { access?: AccessModifier }): boolean => m.access === undefined;
+
+/** A group tree with every non-public member removed, recursively (a private
+    field inside a joined source goes too, and a private join goes whole). */
+export function publicGroups(g: FieldGroups): FieldGroups {
   return {
-    dimensions: byName(g.dimensions.map(projectField)),
-    measures: byName(g.measures.map(projectField)),
-    views: byName(g.views.map(projectView)),
-    joins: byName(g.joins.map(projectJoin)),
+    dimensions: g.dimensions.filter(isPublic),
+    measures: g.measures.filter(isPublic),
+    views: g.views.filter(isPublic),
+    joins: g.joins.filter(isPublic).map((j) =>
+      j.fields ? { ...j, fields: publicGroups(j.fields) } : j,
+    ),
+  };
+}
+
+/** `publicGroups` for a whole source, its anon join targets included.
+
+    `primary_key` is cleared when it names a field the filter just removed —
+    otherwise the surface advertises a key the reader cannot write (a source
+    can demote its own primary key: `include { private: id }`). */
+export function publicSource(s: SourceInfo): SourceInfo {
+  const groups = publicGroups(s);
+  const out: SourceInfo = { ...s, ...groups };
+  if (out.primary_key && !groups.dimensions.some((d) => d.name === out.primary_key)) {
+    out.primary_key = null;
+  }
+  if (s.anon_srcs) out.anon_srcs = s.anon_srcs.map(publicSource);
+  return out;
+}
+
+/** `publicSource` across a model. Applied at each explore entry point, so
+    everything downstream — join targets resolved through `sources`, the
+    deduped join_source_map, the synthesized examples — is already filtered. */
+export function publicOnlyModel(m: ModelInfo): ModelInfo {
+  const sources: Record<string, SourceInfo> = {};
+  for (const [name, s] of Object.entries(m.sources)) sources[name] = publicSource(s);
+  return { ...m, sources };
+}
+
+function projectGroups(g: FieldGroups): ExploreFieldGroups {
+  const pub = publicGroups(g);
+  return {
+    dimensions: byName(pub.dimensions.map(projectField)),
+    measures: byName(pub.measures.map(projectField)),
+    views: byName(pub.views.map(projectView)),
+    joins: byName(pub.joins.map(projectJoin)),
   };
 }
 
@@ -409,9 +459,15 @@ function emitSourceJoin(
  * (The Malloy-text appendix is assembled separately by the caller.)
  */
 export function buildSourceDescribe(
-  model: ModelInfo,
+  compiled: ModelInfo,
   name: string,
 ): ExploreSourceDescribe | undefined {
+  // describe_source is an EXPLORE surface, so it is assembled from the
+  // public-only view of the compiled model. Filtering here — once, at the
+  // entry — covers the root source, every join target resolved through
+  // `sources`, the deduped `join_source_map`, and the examples the caller
+  // synthesizes from the result.
+  const model = publicOnlyModel(compiled);
   const root = model.sources[name];
   if (!root) return undefined;
   const ctx: EmitCtx = { model, joins: Object.create(null), map: Object.create(null) };

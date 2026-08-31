@@ -45,7 +45,8 @@ import {
   type RecordHistoryFields,
 } from "./mcp-tools";
 import { env } from "./env";
-import { clientProfile, renderRowsMarkdown } from "./client-profile";
+import { DEFAULT_CLIENT_PROFILE, clientProfile, renderRowsMarkdown } from "./client-profile";
+import type { QueryEntrypoint } from "./telemetry";
 
 export type ToolResult = {
   content: Array<{ type: "text"; text: string }>;
@@ -266,35 +267,90 @@ export interface HostedSurface {
 // client user_agent and the request's author_model), and a successful run is
 // decorated with its freshly-minted share link. route.ts wires this into
 // initialize / tools/list / tools/call.
+export type HostedSurfaceCtx = {
+  userAgent?: string | null;
+  authorModel?: string | null;
+  /** Who is on the other end. 'mcp' (the default) is a foreign client reached
+      over /mcp — it gets the instance tag, the multi-instance routing policy,
+      and the self-reported `model` param. 'inapp' is our own agent loop running
+      in this process: one instance, model already known, so all three are noise
+      that would only spend context and mislead (HOST_POLICY tells the reader to
+      go use the CLI, which is wrong advice for a caller that is the app). */
+  style?: "mcp" | "inapp";
+  /** Restrict the surface to these tool names. Omitted = everything. A caller
+      that has already chosen the dataset doesn't need list_sources, and every
+      descriptor it doesn't need is prompt it doesn't pay for. */
+  tools?: string[];
+  /** How runs are labelled in `history`. Defaults to 'mcp'. */
+  entrypoint?: QueryEntrypoint;
+  /** Mint a share slug for each successful run. Default true — over /mcp every
+      run IS a result, and the slug is how it gets shared.
+
+      An agent loop is the exception: its runs are the model looking around, and
+      a slug would put each one in the user's History beside their real queries
+      (the list is `executed AND slug IS NOT NULL`). Pass false there; the
+      caller mints one for the answer it actually keeps. The history row is
+      still written either way — exploration stays auditable, it just isn't
+      presented as a result. */
+  mintSlugs?: boolean;
+};
+
 export function buildHostedExploreSurface(
   user: User,
   baseUrl: string,
-  ctx: { userAgent?: string | null; authorModel?: string | null } = {},
+  ctx: HostedSurfaceCtx = {},
 ): HostedSurface {
   const surface = exploreSurface(makeExploreHost(user.id));
-  const byName = new Map(surface.tools.map((t) => [t.name, t]));
+  const inApp = ctx.style === "inapp";
+  const entrypoint = ctx.entrypoint ?? "mcp";
+  const mintSlugs = ctx.mintSlugs ?? true;
+  const wanted = ctx.tools ? new Set(ctx.tools) : null;
+  const keep = (name: string) => !wanted || wanted.has(name);
+  const byName = new Map(surface.tools.filter((t) => keep(t.name)).map((t) => [t.name, t]));
   const userAgent = ctx.userAgent ?? null;
   // Presentation policy for THIS client (default = unchanged JSON). Only the
   // human-facing `content` text is shaped by it; structuredContent is invariant.
-  const profile = clientProfile(userAgent);
+  //
+  // In-app callers opt out entirely. The policy exists to shape results for
+  // foreign MCP clients, keyed off their User-Agent — and an in-app caller's
+  // User-Agent is the end user's BROWSER, which the policy was never about. It
+  // matters beyond tidiness: our own agent loop reads `structuredContent.ok` to
+  // know whether a query worked, so a profile that withheld structuredContent
+  // (as the ChatGPT one does) would make every answer read as a failure. That
+  // coupling should not be one UA-match away.
+  const profile = inApp ? DEFAULT_CLIENT_PROFILE : clientProfile(userAgent);
   // Trusted model attribution from the x-author-model header (a harness sets it);
   // falls back per-call to the self-reported `model` arg, then 'assistant'.
   const headerModel = ctx.authorModel ?? null;
 
+  // In-app, `model` is known from ctx and the tag names an instance the caller
+  // can't be confused about, so both are dropped rather than spent on context.
+  const tag = (d: string) => (inApp ? d : `${TAG} ${d}`);
+  const schema = (name: string, input: Record<string, unknown>) => {
+    const required = withRequiredQuestion(name, input);
+    return inApp ? required : withModelParam(required);
+  };
+
   const descriptors = [
-    ...surface.tools.map((t) => ({
-      name: t.name,
-      title: t.title,
-      // Instance tag prepended as HOST policy — the engine keeps descriptions
-      // instance-agnostic; multi-instance routing is the host's concern.
-      description: `${TAG} ${t.description}`,
-      inputSchema: withModelParam(withRequiredQuestion(t.name, t.inputSchema)),
-    })),
-    {
-      ...OPEN_SHARE_LINK,
-      description: `${TAG} ${OPEN_SHARE_LINK.description}`,
-      inputSchema: withModelParam(OPEN_SHARE_LINK.inputSchema as Record<string, unknown>),
-    },
+    ...surface.tools
+      .filter((t) => keep(t.name))
+      .map((t) => ({
+        name: t.name,
+        title: t.title,
+        // Instance tag prepended as HOST policy — the engine keeps descriptions
+        // instance-agnostic; multi-instance routing is the host's concern.
+        description: tag(t.description),
+        inputSchema: schema(t.name, t.inputSchema),
+      })),
+    ...(keep(OPEN_SHARE_LINK.name)
+      ? [
+          {
+            ...OPEN_SHARE_LINK,
+            description: tag(OPEN_SHARE_LINK.description),
+            inputSchema: schema(OPEN_SHARE_LINK.name, OPEN_SHARE_LINK.inputSchema as Record<string, unknown>),
+          },
+        ]
+      : []),
   ];
 
   const strArg = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
@@ -315,7 +371,7 @@ export function buildHostedExploreSurface(
     const record = (extra: Partial<RecordHistoryFields>) =>
       recordHistory({
         userId: user.id,
-        entrypoint: "mcp",
+        entrypoint,
         toolName: name,
         source: strArg(args.source),
         durationMs: Date.now() - start,
@@ -325,7 +381,7 @@ export function buildHostedExploreSurface(
       });
 
     try {
-      if (name === "open_share_link") {
+      if (name === "open_share_link" && keep(name)) {
         const result = await openShareLink(toolArgs, baseUrl);
         await record({ error: resultError(result as unknown as Record<string, unknown>) });
         return withTiming(result, start);
@@ -370,7 +426,7 @@ export function buildHostedExploreSurface(
         durationMs: runOk ? qr.total_time_ms : Date.now() - start,
         executed: isQuery ? executing : null,
         error: succeeded ? undefined : resultError(result),
-        mintSlug: runOk,
+        mintSlug: runOk && mintSlugs,
       });
 
       // Decorate a successful executed query with the share link as the
@@ -411,8 +467,9 @@ export function buildHostedExploreSurface(
   // Render the instance name into the engine's instructions ({{INSTANCE_NAME}}
   // → env.INSTANCE_NAME) — the same instance stamp the descriptors get via TAG —
   // then append the host-only policy block (multi-instance tag routing).
+  const instructions = renderInstructions(surface.instructions, env.INSTANCE_NAME);
   return {
-    instructions: `${renderInstructions(surface.instructions, env.INSTANCE_NAME)}\n\n${HOST_POLICY}`,
+    instructions: inApp ? instructions : `${instructions}\n\n${HOST_POLICY}`,
     descriptors,
     call,
   };

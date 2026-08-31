@@ -27,6 +27,7 @@
     "smoke:telemetry": "tsx scripts/telemetry-smoke.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.122.0",
     "@auth/drizzle-adapter": "^1.11.2",
     "@codemirror/lang-sql": "^6.10.0",
     "@codemirror/theme-one-dark": "^6.1.3",

@@ -9,6 +9,7 @@ import { getSettings } from "@/lib/settings";
 import { env } from "@/lib/env";
 import { configuredAuthProviders, partialAuthProviders } from "@/lib/auth-providers";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
+import { askConfig, askEnabled } from "@/lib/ask";
 import { hostedSignIn } from "@/lib/hosted-auth-integration";
 import { signInPath, signOutPath } from "@/lib/auth-paths";
 
@@ -84,6 +85,14 @@ export async function GET() {
     tagline,
     signinNotice,
     claudeConnected,
+    // Whether this deployment has an Anthropic key. Signed-in only: the shape
+    // of an instance's paid integrations isn't something to publish to
+    // unauthenticated callers, and only a signed-in page can use Ask anyway.
+    askEnabled: askEnabled(),
+    // Which model answers and at what effort — shown in the Ask box so nobody
+    // has to read the deployment's env to know what is about to spend money on
+    // their behalf.
+    askConfig: askEnabled() ? askConfig() : null,
     signInPath: signInPath("/"),
     signOutPath: signOutPath("/"),
     user: { id: u.id, name: u.name, email: u.email, image: u.image, isAdmin: isAdmin(u) },

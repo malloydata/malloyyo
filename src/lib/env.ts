@@ -67,6 +67,35 @@ export const env = {
   get GITHUB_TOKEN() {
     return process.env.GITHUB_TOKEN || process.env.GITHUB_TOKEN_FALLBACK || "";
   },
+  // Optional — the key that turns on Ask (natural-language → Malloy in ltool).
+  // Absent is the normal state and the whole feature is simply off: no key, no
+  // Ask box, and /api/ask answers 503. There is one key per deployment, so every
+  // signed-in user's questions are billed to the operator who set it — see
+  // src/lib/ask.ts for the loop's own cost bounds (a hard step cap, a row cap on
+  // what it may read, one dataset's schema in context).
+  get ANTHROPIC_API_KEY() {
+    return process.env.ANTHROPIC_API_KEY ?? "";
+  },
+  // Required when ANTHROPIC_API_KEY is an identity-linked key: such keys act
+  // inside a workspace and the API rejects a request that doesn't name one
+  // ("anthropic-workspace-id is required when authenticating with an
+  // identity-linked API key"). An ordinary key needs no workspace and ignores
+  // this, so it stays unset by default.
+  get ANTHROPIC_WORKSPACE_ID() {
+    return process.env.ANTHROPIC_WORKSPACE_ID ?? "";
+  },
+  // Which model writes the Malloy. Sonnet is the default: it shares Opus's
+  // request shape (adaptive thinking, the full effort ladder), so moving between
+  // them is this one string, and it is markedly better at Malloy than Haiku —
+  // which matters more than the sticker price, because every query that fails to
+  // compile costs another round trip carrying the whole conversation.
+  //
+  // Older-generation models (claude-haiku-4-5) take a different thinking
+  // parameter and reject `effort`; modelShape in src/lib/ask.ts shapes the
+  // request per model, so setting one here works without further changes.
+  get ANTHROPIC_MODEL() {
+    return process.env.ANTHROPIC_MODEL || "claude-sonnet-5";
+  },
   // Optional GA4 Measurement ID (G-XXXXXXXXXX). Unset means this deployment
   // ships no third-party script and sets no cookies — the same default the
   // static `dashboard bundle` sites use, where the ID lives in

@@ -72,3 +72,22 @@ test("anything that isn't a commit hash is ignored, not displayed", () => {
 test("the version itself comes from the manifest", () => {
   assert.match(VERSION, /^\d+\.\d+\.\d+/);
 });
+
+test("/api/version reports the commit when the build has one, and omits it when not", async () => {
+  // The endpoint is how a deploy check asks "what code are you?" without a
+  // browser. `sha` is absent rather than null on a build with no commit, so a
+  // caller can test presence instead of distinguishing null from a placeholder.
+  const route = await import("../app/api/version/route.js");
+
+  const sha = "064c6b5abcdef";
+  process.env.GIT_COMMIT_SHA = sha;
+  const withSha = await (route.GET() as Response).json();
+  assert.equal(withSha.sha, sha.slice(0, 7));
+  assert.equal(withSha.version, VERSION);
+
+  delete process.env.GIT_COMMIT_SHA;
+  delete process.env.VERCEL_GIT_COMMIT_SHA;
+  const without = await (route.GET() as Response).json();
+  assert.equal("sha" in without, false, "omitted, not null");
+  assert.equal(without.version, VERSION);
+});

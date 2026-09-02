@@ -1,10 +1,25 @@
-name: Publish malloyyo CLI
+name: Release
 
-# A merge to main is the signal to release. scripts/release.ts reconciles the
-# version in packages/cli/package.json against the npm registry: it patch-bumps
-# (and commits back) an already-published version, or publishes as-is when the
-# PR carried its own semver bump. The bump commit carries [skip ci] so it does
-# not re-trigger this workflow.
+# EVERY merge to main is a release: it bumps one shared version across the CLI
+# and the server, publishes the CLI to npm, and rebuilds the server image.
+#
+# That last part is the point. The server's version is compiled into its build
+# (src/lib/version.ts imports the root manifest), so bumping the manifest and
+# rebuilding is what makes a running server able to say what code it is. Before
+# this, the root version moved only by hand: it sat at 0.2.31 through six CLI
+# releases while deployments had no way to identify themselves.
+#
+# The rebuild is DISPATCHED, not left to the push. A push made with GITHUB_TOKEN
+# starts no workflow run — that is GitHub's rule for avoiding recursive CI, and
+# it applies to the bump commit this job pushes. So relying on docker-publish's
+# push trigger would bump the version and quietly build nothing. workflow_dispatch
+# is the documented exception to that rule, which is why the last step uses it and
+# why no PAT is needed.
+#
+# The release commit still carries no [skip ci]: a human running `npm run release`
+# pushes with their own credentials, where the push DOES trigger workflows, and
+# [skip ci] would suppress those. The `if:` on the job below is what stops the
+# release re-triggering itself — see the note there.
 #
 # Auth is npm Trusted Publishing (OIDC) — no NPM_TOKEN. Register
 # `@malloydata/malloyyo` on npmjs.com with a trusted publisher pointing at this
@@ -21,14 +36,10 @@ name: Publish malloyyo CLI
 
 on:
   push:
+    # No path filter, deliberately. A filter on the CLI's own directories is what
+    # left the server version frozen: a server-only PR matched nothing, so no
+    # release ran and the number never moved. Any change that lands is a release.
     branches: [main]
-    paths:
-      # Anything that changes the published CLI bytes is a release signal. The
-      # CLI bundles the engine into dist/index.js, so engine changes ship as a
-      # CLI patch — even though the engine is private and never published alone.
-      - "packages/cli/**"
-      - "packages/mcp-engine/**"
-      - ".github/workflows/cli-publish.yml"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -42,13 +53,29 @@ concurrency:
 
 jobs:
   release:
+    # Two conditions.
+    #
     # The publishing repository, and only it. A fork inherits this workflow and the
     # package name with it; see the note at the top.
-    if: github.repository == 'malloydata/malloyyo'
+    #
+    # And not the release commit itself. Without a path filter this workflow sees
+    # its own bump, which would release again, forever.
+    #
+    # The pattern matches the exact subject scripts/release.ts writes —
+    # `release: v1.2.3` — rather than a bare `release:` prefix, so an ordinary PR
+    # squash-merged as "release: update the notes" still gets released. A skipped
+    # job is not a failed one, so that near-miss would have been silent.
+    #
+    # If you change the message the script writes, change this: they are a string
+    # apart, and disagreeing means the release re-triggers itself.
+    if: >-
+      github.repository == 'malloydata/malloyyo'
+      && !startsWith(github.event.head_commit.message, 'release: v')
     runs-on: ubuntu-latest
     permissions:
       contents: write # commit the version bump + push the tag
       id-token: write # npm trusted publishing (OIDC)
+      actions: write # dispatch the image rebuild below
     steps:
       - uses: actions/checkout@v6
         with:
@@ -74,3 +101,15 @@ jobs:
       - name: Release
         working-directory: packages/cli
         run: npm run release ${{ inputs.dry_run && '-- --dry-run' || '' }}
+
+      # The bump is pushed with GITHUB_TOKEN, and GitHub starts no workflow run
+      # from such a push — so the image has to be asked for. workflow_dispatch is
+      # the documented exception to that rule, so github.token is enough and no
+      # PAT is involved.
+      #
+      # `--ref main` builds main's tip, which is the release commit just pushed.
+      - name: Rebuild the server image at the release commit
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run docker-publish.yml --ref main

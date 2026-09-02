@@ -38,10 +38,10 @@
  * Run `npm run release -- --help` for the full guided walkthrough.
  */
 import {execFileSync} from 'node:child_process';
-import {readFileSync, writeFileSync} from 'node:fs';
+import {readFileSync, realpathSync, writeFileSync} from 'node:fs';
 import {createInterface} from 'node:readline/promises';
 import {fileURLToPath} from 'node:url';
-import {dirname, join, relative, resolve, sep} from 'node:path';
+import {dirname, join, relative, sep} from 'node:path';
 
 const pkgDir = join(dirname(fileURLToPath(import.meta.url)), '..');
 const pkgJsonPath = join(pkgDir, 'package.json');
@@ -484,7 +484,13 @@ async function main(): Promise<void> {
 
 // Run only when invoked as a script, so a test can import the version-writing
 // functions above without releasing anything.
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+//
+// realpathSync on argv[1] because import.meta.url is ALREADY symlink-resolved:
+// comparing a resolved path against an unresolved one makes this false whenever
+// the checkout sits under a symlink (/tmp on macOS, plenty of managed home
+// directories), and the failure mode is `npm run release` exiting 0 having done
+// nothing at all.
+if (process.argv[1] && realpathSync(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch(e => {
     console.error(e);
     process.exit(1);

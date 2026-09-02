@@ -1,25 +1,32 @@
 #!/usr/bin/env tsx
 /**
- * Release the `malloyyo` CLI to npm.
+ * Release the repo: the `malloyyo` CLI to npm, and the version the server
+ * reports.
  *
- * A merge to main is the signal to release. The version in package.json is the
- * source of truth, reconciled against the registry:
+ * EVERY merge to main is the signal to release. The version in
+ * packages/cli/package.json is the source of truth, reconciled against the
+ * registry:
  *
  *   - version already on npm   -> ordinary merge, the PR carried no bump:
- *       patch-bump, publish, commit the bump back ([skip ci]) + tag.
+ *       patch-bump, publish, commit the bump back + tag.
  *   - version NOT on npm        -> the PR carried its own semver bump:
  *       publish it as-is + tag. No commit (the version is already in the repo).
  *
- * This releases the CLI and ONLY the CLI. It deliberately does not touch the
- * repo-root @malloyyo/server version, which it used to mirror.
+ * ONE NUMBER covers both packages. It is written to packages/cli/package.json,
+ * the repo-root @malloyyo/server package.json, and all three version fields in
+ * package-lock.json.
  *
- * The mirror made sense while one number meant "these match" — the server and
- * the CLI moved together. They don't anymore: a server is deployed on its own
- * schedule, a globally installed CLI is upgraded on the operator's, and the
- * server version is the unit of release state. A CLI patch that bumped it would
- * report every deployment as out of date. Compatibility across that gap comes
- * from the server staying backward compatible (see src/http.ts), not from
- * matching numbers.
+ * This reverses an earlier decision to keep them apart. That decision read the
+ * number as a compatibility claim — "a CLI patch that bumped it would report
+ * every deployment as out of date" — and it left the server's number frozen at
+ * 0.2.31 through six CLI releases, so a running server could not say what code
+ * it was. The number is an IDENTITY, not a claim: if two deployments differ,
+ * their numbers should differ, and a deployment six releases behind saying so is
+ * the point rather than a bug. Compatibility still comes from the server staying
+ * backward compatible (see src/http.ts), which was always the real mechanism.
+ *
+ * The commit deliberately carries NO [skip ci] — see the commit step for why,
+ * and for the guard that replaced it.
  *
  * The mcp-engine is internal and unpublished — it is NOT versioned here (it
  * stays pinned at 0.0.1).
@@ -34,13 +41,16 @@ import {execFileSync} from 'node:child_process';
 import {readFileSync, writeFileSync} from 'node:fs';
 import {createInterface} from 'node:readline/promises';
 import {fileURLToPath} from 'node:url';
-import {dirname, join, relative, sep} from 'node:path';
+import {dirname, join, relative, resolve, sep} from 'node:path';
 
 const pkgDir = join(dirname(fileURLToPath(import.meta.url)), '..');
 const pkgJsonPath = join(pkgDir, 'package.json');
-// The lock lives at the repo root even though only the CLI workspace is released.
 const repoRoot = join(pkgDir, '..', '..');
 const lockPath = join(repoRoot, 'package-lock.json');
+// The server's manifest. Its version is compiled into the build
+// (src/lib/version.ts imports it), so moving it here is what lets a running
+// server say which code it is.
+const rootPkgJsonPath = join(repoRoot, 'package.json');
 
 /**
  * Point package-lock.json at the release version too.
@@ -52,10 +62,10 @@ const lockPath = join(repoRoot, 'package-lock.json');
  * notice and discard. (`npm ci` tolerates it — it only checks that the lock
  * satisfies the dependencies — so this was noise, not a broken build.)
  *
- * ONLY the CLI workspace entry is touched. The lock's root entries mirror the
- * repo-root @malloyyo/server version, which this script deliberately no longer
- * moves (see the header): writing the CLI's version there would not fix drift,
- * it would manufacture a fresh one against the root package.json.
+ * BOTH the CLI workspace entry and the root entries are written, because one
+ * version now covers both packages (see the header). The root version appears
+ * twice — top-level `version` and `packages[""].version` — and writing only one
+ * leaves the other to show up as a spurious diff on the next `npm install`.
  *
  * Edited surgically rather than with `npm install --package-lock-only`, which
  * re-resolves the whole tree and would let unrelated dependency bumps ride into
@@ -63,19 +73,50 @@ const lockPath = join(repoRoot, 'package-lock.json');
  * parse/serialise round-trip is byte-identical and the diff stays on the
  * version field.
  */
-function syncLockVersion(version: string): boolean {
-  const text = readFileSync(lockPath, 'utf8');
+export function syncLockVersion(version: string, path: string = lockPath): boolean {
+  const text = readFileSync(path, 'utf8');
   const lock = JSON.parse(text);
   // The workspace is keyed by its repo-relative path, always POSIX-separated.
   const cliKey = relative(repoRoot, pkgDir).split(sep).join('/');
-  const entry = lock.packages?.[cliKey] as {version?: unknown} | undefined;
-  if (!entry || typeof entry.version !== 'string') {
-    throw new Error(`package-lock.json: no version field at packages["${cliKey}"]`);
-  }
-  entry.version = version;
+  // Every place the lock records a version we release. A missing field throws
+  // rather than being skipped: a lock whose shape has changed should abort the
+  // release, not quietly ship a server whose version did not move.
+  const setVersion = (holder: unknown, where: string): void => {
+    const entry = holder as {version?: unknown} | undefined;
+    if (!entry || typeof entry.version !== 'string') {
+      throw new Error(`package-lock.json: no version field at ${where}`);
+    }
+    entry.version = version;
+  };
+  setVersion(lock.packages?.[cliKey], `packages["${cliKey}"]`);
+  setVersion(lock.packages?.[''], 'packages[""]');
+  setVersion(lock, 'the top level');
   const next = JSON.stringify(lock, null, 2) + '\n';
   if (next === text) return false;
-  writeFileSync(lockPath, next);
+  writeFileSync(path, next);
+  return true;
+}
+
+/**
+ * Point the server's manifest at the release version.
+ *
+ * Same surgical edit as the lock, and for the same reason: npm writes
+ * package.json as `JSON.stringify(…, null, 2)`, so a round-trip is
+ * byte-identical and the diff stays on the version field. `npm version` is not
+ * used because it would need a second child process and a cwd change to reach
+ * the root workspace, and it writes a lock as a side effect we have already
+ * handled.
+ */
+export function syncRootVersion(version: string, path: string = rootPkgJsonPath): boolean {
+  const text = readFileSync(path, 'utf8');
+  const pkg = JSON.parse(text) as {version?: unknown};
+  if (typeof pkg.version !== 'string') {
+    throw new Error('package.json (repo root): no version field');
+  }
+  pkg.version = version;
+  const next = JSON.stringify(pkg, null, 2) + '\n';
+  if (next === text) return false;
+  writeFileSync(path, next);
   return true;
 }
 
@@ -165,7 +206,7 @@ ${bold('WHAT IT DOES')}
 
     ${bold('• version is already on npm')}  -> the PR didn't bump it, so this is a
         routine release: bump a ${bold('patch')}, publish, then commit the bumped
-        version back to main (with ${cyan('[skip ci]')}) and push a tag.
+        version back to main and push a tag.
 
     ${bold('• version is NOT on npm')}      -> the PR already bumped it (you chose the
         major/minor/patch in the PR): publish that exact version and tag it.
@@ -294,8 +335,9 @@ async function main(): Promise<void> {
   }
 
   // Captured before `npm version` runs — it rewrites the lock as a side effect,
-  // so this is the only faithful copy to roll back to if the release aborts.
+  // so these are the only faithful copies to roll back to if the release aborts.
   const lockBefore = readFileSync(lockPath, 'utf8');
+  const rootPkgBefore = readFileSync(rootPkgJsonPath, 'utf8');
 
   let version = inRepo;
   let bumped = false;
@@ -318,12 +360,15 @@ async function main(): Promise<void> {
 
   const lockSynced = syncLockVersion(version);
   if (lockSynced) ok(`Synced package-lock.json → ${green(version)}.`);
+  const rootSynced = syncRootVersion(version);
+  if (rootSynced) ok(`Synced the server's package.json → ${green(version)}.`);
 
   const tag = `malloyyo-v${version}`;
   const restoreVersion = (): void => {
     if (bumped) run('npm', ['version', '--no-git-tag-version', inRepo], {quiet: true});
     // Unconditional: `npm version` may have touched the lock even when we didn't.
     writeFileSync(lockPath, lockBefore);
+    writeFileSync(rootPkgJsonPath, rootPkgBefore);
   };
 
   // --- the plan ------------------------------------------------------------
@@ -334,9 +379,12 @@ async function main(): Promise<void> {
     `  lock sync    ${lockSynced ? `yes — package-lock.json → ${green(version)}` : dim('no (already in sync)')}`
   );
   console.log(
+    `  server sync  ${rootSynced ? `yes — package.json → ${green(version)}` : dim('no (already in sync)')}`
+  );
+  console.log(
     `  commit back  ${
-      bumped || lockSynced
-        ? `yes — "${`release: ${name} v${version} [skip ci]`}"`
+      bumped || lockSynced || rootSynced
+        ? `yes — "${`release: v${version}`}"`
         : dim('no (version already in repo)')
     }`
   );
@@ -344,7 +392,7 @@ async function main(): Promise<void> {
     `  push         ${
       noPush
         ? yellow('no (--no-push)')
-        : bumped || lockSynced
+        : bumped || lockSynced || rootSynced
           ? 'commit + tag → origin/main'
           : 'tag → origin'
     }`
@@ -386,14 +434,22 @@ async function main(): Promise<void> {
     }
 
     step('Git');
-    // lockSynced can be the ONLY reason to commit: a release that publishes the
-    // in-repo version as-is still has to carry a lock that drifted earlier.
-    const committed = bumped || lockSynced;
+    // lockSynced or rootSynced can be the ONLY reason to commit: a release that
+    // publishes the in-repo version as-is still has to carry a lock or a server
+    // manifest that drifted earlier.
+    const committed = bumped || lockSynced || rootSynced;
     if (committed) {
       const files: string[] = [];
       if (bumped) files.push(pkgJsonPath);
       if (lockSynced) files.push(lockPath);
-      run('git', ['commit', '-m', `release: ${name} v${version} [skip ci]`, ...files]);
+      if (rootSynced) files.push(rootPkgJsonPath);
+      // NO [skip ci]. This commit has to trigger docker-publish.yml so the
+      // server image is rebuilt from the bumped manifest — that rebuild is what
+      // makes the new version real. The `release:` prefix is what stops the
+      // release re-triggering ITSELF: cli-publish.yml skips a head commit whose
+      // message starts with it. Change this string and you must change that
+      // workflow's `if:` in the same commit.
+      run('git', ['commit', '-m', `release: v${version}`, ...files]);
     }
     if (!succeeds('git', ['rev-parse', '-q', '--verify', `refs/tags/${tag}`])) {
       run('git', ['tag', tag]);
@@ -426,7 +482,11 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch(e => {
-  console.error(e);
-  process.exit(1);
-});
+// Run only when invoked as a script, so a test can import the version-writing
+// functions above without releasing anything.
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch(e => {
+    console.error(e);
+    process.exit(1);
+  });
+}

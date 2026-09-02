@@ -1,10 +1,18 @@
-name: Publish malloyyo CLI
+name: Release
 
-# A merge to main is the signal to release. scripts/release.ts reconciles the
-# version in packages/cli/package.json against the npm registry: it patch-bumps
-# (and commits back) an already-published version, or publishes as-is when the
-# PR carried its own semver bump. The bump commit carries [skip ci] so it does
-# not re-trigger this workflow.
+# EVERY merge to main is a release: it bumps one shared version across the CLI
+# and the server, publishes the CLI to npm, and — because the bump commit is an
+# ordinary push — lets docker-publish.yml rebuild the server image from it.
+#
+# That last part is the point. The server's version is compiled into its build
+# (src/lib/version.ts imports the root manifest), so bumping the manifest and
+# rebuilding is what makes a running server able to say what code it is. Before
+# this, the root version moved only by hand: it sat at 0.2.31 through six CLI
+# releases while deployments had no way to identify themselves.
+#
+# The release commit must NOT carry [skip ci]. That would silence the rebuild
+# this depends on. The `if:` on the job below is what stops the loop instead —
+# see the note there.
 #
 # Auth is npm Trusted Publishing (OIDC) — no NPM_TOKEN. Register
 # `@malloydata/malloyyo` on npmjs.com with a trusted publisher pointing at this
@@ -21,14 +29,10 @@ name: Publish malloyyo CLI
 
 on:
   push:
+    # No path filter, deliberately. A filter on the CLI's own directories is what
+    # left the server version frozen: a server-only PR matched nothing, so no
+    # release ran and the number never moved. Any change that lands is a release.
     branches: [main]
-    paths:
-      # Anything that changes the published CLI bytes is a release signal. The
-      # CLI bundles the engine into dist/index.js, so engine changes ship as a
-      # CLI patch — even though the engine is private and never published alone.
-      - "packages/cli/**"
-      - "packages/mcp-engine/**"
-      - ".github/workflows/cli-publish.yml"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -42,9 +46,20 @@ concurrency:
 
 jobs:
   release:
+    # Two conditions.
+    #
     # The publishing repository, and only it. A fork inherits this workflow and the
     # package name with it; see the note at the top.
-    if: github.repository == 'malloydata/malloyyo'
+    #
+    # And not the release commit itself. Without a path filter this workflow sees
+    # its own bump, which would release again, forever. `[skip ci]` used to prevent
+    # that, but it silences EVERY workflow — including the docker rebuild the bump
+    # exists to trigger. So the guard is here, narrowly, and it is a string match
+    # against the message scripts/release.ts writes: if you change one, change the
+    # other, or the release re-triggers itself.
+    if: >-
+      github.repository == 'malloydata/malloyyo'
+      && !startsWith(github.event.head_commit.message, 'release:')
     runs-on: ubuntu-latest
     permissions:
       contents: write # commit the version bump + push the tag

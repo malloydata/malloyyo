@@ -5,19 +5,20 @@
 // handshake (serverInfo.version) and at /api/version. Single source of truth is
 // this repo's root package.json (@malloyyo/server).
 //
-// This is the SERVER's version and only the server's. The published CLI
-// (@malloydata/malloyyo) carries its own: packages/cli/scripts/release.ts
-// deliberately does not mirror one into the other, because a server is deployed
-// on its own schedule and a globally installed CLI is upgraded on the
-// operator's — a CLI patch that moved this number would report every deployment
-// as out of date. Compatibility across that gap comes from the server staying
-// backward compatible, not from matching numbers.
+// ONE NUMBER covers the server and the published CLI (@malloydata/malloyyo):
+// packages/cli/scripts/release.ts writes both on every merge to main. It used to
+// keep them apart, reading the number as a compatibility claim; that left this
+// one frozen at 0.2.31 through six CLI releases, so a running server could not
+// say what code it was. It is an identity — if two deployments differ, their
+// numbers differ — and compatibility comes from the server staying backward
+// compatible, not from matching numbers.
 //
 // (The mcp-engine is an internal, unpublished library pinned at 0.0.1 and is
 // deliberately NOT the version anyone means.)
 //
-// Importing the manifest keeps this honest: bump the root package.json and
-// everything the server reports follows — no hand-edited literal to drift.
+// Importing the manifest is what makes the number real: it is compiled into the
+// build, so a bumped manifest only reaches a deployment via a rebuild — which is
+// exactly why the release commit must not carry [skip ci].
 import { version } from "../../package.json";
 import { env } from "./env";
 
@@ -26,12 +27,10 @@ export const VERSION: string = version;
 /**
  * The commit the running build came from, abbreviated, or undefined.
  *
- * VERSION alone does not answer "is my deploy live?". The release workflow
- * deliberately does not move the repo-root @malloyyo/server version — see the
- * note above, and packages/cli/scripts/release.ts — so it changes only when
- * someone bumps it by hand, and many deploys share one number. The commit is
- * what actually distinguishes two deployments of the same version, which is the
- * question an operator looking at an admin page is asking.
+ * VERSION now moves on every merge, so it usually answers "is my deploy live?"
+ * on its own. The commit still distinguishes two builds of the SAME version — a
+ * rebuild of an unchanged tree, or an image composed elsewhere — which is the
+ * remaining question an operator looking at an admin page might be asking.
  *
  * Seven characters: git's own abbreviation, unambiguous in a repo this size and
  * readable at a glance.

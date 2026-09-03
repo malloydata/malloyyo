@@ -67,6 +67,15 @@ body {
   width: 100%;
 }
 
+/* A chart's root must also have a HEIGHT before it will draw anything at all
+   (see drawsAChart in MalloyResultView). The container supplies a definite one
+   and this makes the root fill it; min-height: 0 keeps a flex item from
+   refusing to shrink below its content. */
+.malloy-result-fill .malloy-render {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 /* Drillable dimension cells inside a rendered Malloy result — marked .dash-drill
    by the shared drill helper (packages/cli/src/frame-runtime/drill.ts). Normal
    text until hovered, then they read as links. The Malloy renderer always draws

@@ -3,6 +3,7 @@
 
 "use client";
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { MalloyViz } from "@malloydata/render";
 import { useRouter } from "next/navigation";
 // The dashboard frame runtime and this view are the two places that render Malloy
 // results and honor `# drill`, so they share one reading of the tag. Imported from
@@ -44,6 +45,29 @@ type Menu = { x: number; y: number; items: MenuItem[] };
 
 const TIERS = { small: 230, medium: 380, large: 520 } as const;
 
+// A chart tag on the result itself. `#(malloy)` internals never match.
+const CHART_TAG = /^\s*#\s*(bar_chart|line_chart|scatter_chart|shape_map|segment_map|viz\b)/;
+
+/** Does this result draw a chart rather than a table?
+ *
+ *  It decides the box, not the styling. The renderer's two sizing strategies
+ *  behave completely differently here: a table is `fixed` and renders whatever
+ *  its container is, while a chart is `fill` and refuses to render at all until
+ *  a ResizeObserver on its own root reports a non-zero width AND height
+ *  (malloy-render, component/render.tsx — `showRendering`). A root whose height
+ *  comes from its children can never satisfy that: no height, so no children, so
+ *  no height. It stays empty forever, `onReady` never fires, and nothing is
+ *  logged — which is exactly what an unrendered chart looked like from here.
+ *
+ *  So a chart is given a definite box to fill. A table keeps sizing itself. */
+function drawsAChart(result: unknown): boolean {
+  const annotations = (result as { annotations?: Array<{ value?: unknown }> } | null)?.annotations;
+  return (
+    Array.isArray(annotations) &&
+    annotations.some((a) => typeof a?.value === "string" && CHART_TAG.test(a.value))
+  );
+}
+
 export function MalloyResultView({
   stableResult,
   datasetRef,
@@ -51,6 +75,7 @@ export function MalloyResultView({
   size = "medium",
 }: Props) {
   const inTranscript = variant === "transcript";
+  const isChart = drawsAChart(stableResult);
   const containerRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
   const [menu, setMenu] = useState<Menu | null>(null);
@@ -81,17 +106,36 @@ export function MalloyResultView({
     [datasetRef, router],
   );
 
+  // ONE viz for the life of the component, updated in place.
+  //
+  // Building a new one per result looks harmless and is not. The import is
+  // async, so an effect that re-runs before its predecessor's `.then` resolves
+  // leaves that viz alive with nothing holding it, and two vizzes rendering into
+  // the same element stomp each other. (The dashboard frame runtime holds its
+  // viz in a ref for the same reason.)
+  const vizRef = useRef<MalloyViz | null>(null);
+
+  // Disposed on unmount only, and CLEARED as well as removed: a removed viz is
+  // disposed, rendering into it again yields an empty root and no error, and
+  // React preserves refs across StrictMode's remount — so a stale one here is
+  // exactly what you would get.
+  useEffect(
+    () => () => {
+      vizRef.current?.remove();
+      vizRef.current = null;
+    },
+    [],
+  );
+
   useEffect(() => {
     if (!containerRef.current || !stableResult) return;
     const container = containerRef.current;
     let cancelled = false;
-    let vizCleanup: (() => void) | null = null;
     let observer: MutationObserver | null = null;
 
     import("@malloydata/render").then(({ MalloyRenderer }) => {
       if (cancelled || !container) return;
-      const renderer = new MalloyRenderer({});
-      const viz = renderer.createViz({
+      const viz = (vizRef.current ??= new MalloyRenderer({}).createViz({
         // In a transcript the PAGE is the scroller, so the renderer must not
         // also virtualize against its own container — two virtualizers over one
         // scroll position fight, and the symptom is the view jumping as you
@@ -105,14 +149,13 @@ export function MalloyResultView({
         // Clicking a `# drill`-tagged dimension opens the dashboard it points at
         // (no-op for every other cell).
         onClick: onCellClick,
-      });
+      }));
       try {
         viz.setResult(stableResult as Parameters<typeof viz.setResult>[0]);
         viz.render(container);
       } catch (e) {
         // One unrenderable result must not blank the conversation around it.
         container.textContent = `Could not render this result: ${e instanceof Error ? e.message : String(e)}`;
-        vizCleanup = () => viz.remove();
         return;
       }
       // Flag drillable cells so they read as links (see .dash-drill in globals.css).
@@ -129,13 +172,11 @@ export function MalloyResultView({
         });
         observer.observe(container, { childList: true, subtree: true });
       }
-      vizCleanup = () => viz.remove();
     });
 
     return () => {
       cancelled = true;
       observer?.disconnect();
-      vizCleanup?.();
     };
   }, [stableResult, datasetRef, onCellClick, inTranscript]);
 
@@ -143,7 +184,7 @@ export function MalloyResultView({
     <>
       <div
         ref={containerRef}
-        className="malloy-result"
+        className={isChart ? "malloy-result malloy-result-fill" : "malloy-result"}
         style={{
           // Flex column rather than grid, and the same shape the docs site uses
           // for an embedded result: the renderer root then has a width to fill
@@ -154,8 +195,13 @@ export function MalloyResultView({
           width: "100%",
           overflow: "auto",
           // A page-owned result reserves room; one in a transcript takes only
-          // what it needs, up to its tier.
-          ...(inTranscript ? { maxHeight: TIERS[size] } : { minHeight: "350px" }),
+          // what it needs, up to its tier. A CHART instead gets a definite
+          // height either way — see drawsAChart: it draws nothing without one.
+          ...(inTranscript
+            ? isChart
+              ? { height: TIERS[size] }
+              : { maxHeight: TIERS[size] }
+            : { minHeight: "350px" }),
           // The renderer's sticky header is z-index 200 and escapes into the
           // root stacking context without its own, painting over the composer.
           isolation: "isolate",

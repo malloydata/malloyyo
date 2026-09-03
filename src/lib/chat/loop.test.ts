@@ -100,6 +100,38 @@ function fakeRunner(rows: number, annotations?: Array<{ value: string }>) {
   return { run, calls };
 }
 
+/** A runner returning exactly these rows — for shapes fakeRunner cannot make. */
+function rowRunner(rows: Record<string, unknown>[]) {
+  const run = (async () => ({
+    ok: true as const,
+    slug: "main_abc123",
+    rows,
+    sql: "SELECT 1",
+    rowCount: rows.length,
+    truncated: false,
+    durationMs: 5,
+    stableResult: { schema: {}, data: {} },
+  })) as unknown as ChatDependencies["runQuery"];
+  return { run };
+}
+
+/** One decade row of the shape that cost a real chat ~250k tokens: a nest of
+    `actors`, each with a nest of genres. ~8kB per row. */
+function nestedRow(decade: number) {
+  return {
+    decade,
+    top_actors: Array.from({ length: 100 }, (_, i) => ({
+      name: `Actor Number ${i}`,
+      nconst: `nm${String(i).padStart(7, "0")}`,
+      total_ratings: 57.732 + i,
+      genre_breakdown: [
+        { genre: "Drama", title_count: 3 },
+        { genre: "War", title_count: 1 },
+      ],
+    })),
+  };
+}
+
 async function collect(deps: ChatDependencies, input: ChatTurnInput = INPUT) {
   const events: ChatEvent[] = [];
   const outcome = await runChatTurn(input, (e) => events.push(e), deps);
@@ -356,4 +388,66 @@ test("an untagged query is never told about charts", async () => {
   const result = events.find((e) => e.type === "tool_result");
   assert.ok(result && result.type === "tool_result");
   assert.equal(/NO CHART/.test(result.text), false);
+});
+
+test("a nested result is bounded by BYTES, not by a row count", async () => {
+  // The row cap is 50 and this is 12 rows, so a row cap sees nothing wrong.
+  // Serialized it is ~100kB, and it used to go to the model whole and then get
+  // replayed on every later turn.
+  const { surface } = fakeSurface();
+  const { run } = rowRunner(Array.from({ length: 12 }, (_, i) => nestedRow(1910 + i * 10)));
+
+  const { events } = await collect({
+    surface,
+    runQuery: run,
+    stream: scripted([toolTurn("query", { malloy: "run: x -> { }" }), textTurn()]),
+  });
+
+  const result = events.find((e) => e.type === "tool_result");
+  assert.ok(result && result.type === "tool_result");
+  assert.ok(
+    result.text.length < 40_000,
+    `the model was handed ${result.text.length} characters`,
+  );
+  const parsed = JSON.parse(result.text.split("\n\n(")[0]);
+  assert.equal(parsed.row_count, 12, "and is still told the true count");
+  assert.ok(parsed.rows.length > 0 && parsed.rows.length < 12, "some rows, not all");
+  assert.match(result.text, /of 12 rows shown to you/);
+});
+
+test("a single row over the budget yields none, and says why", async () => {
+  const { surface } = fakeSurface();
+  // One row of 400 nested actors — bigger on its own than the whole budget.
+  const huge = { decade: 1990, top_actors: nestedRow(1990).top_actors.flatMap(() => nestedRow(1990).top_actors.slice(0, 4)) };
+  const { run } = rowRunner([huge]);
+
+  const { events } = await collect({
+    surface,
+    runQuery: run,
+    stream: scripted([toolTurn("query", { malloy: "run: x -> { }" }), textTurn()]),
+  });
+
+  const result = events.find((e) => e.type === "tool_result");
+  assert.ok(result && result.type === "tool_result");
+  const parsed = JSON.parse(result.text.split("\n\n(")[0]);
+  assert.equal(parsed.rows.length, 0);
+  // Zero rows without a reason invites the model to run it again unchanged.
+  assert.match(result.text, /NO ROWS SHOWN TO YOU/);
+  assert.match(result.text, /limit:/);
+});
+
+test("a small result is untouched, and not pretty-printed", async () => {
+  const { surface } = fakeSurface();
+  const { run } = fakeRunner(3);
+
+  const { events } = await collect({
+    surface,
+    runQuery: run,
+    stream: scripted([toolTurn("query", { malloy: "run: x -> { }" }), textTurn()]),
+  });
+
+  const result = events.find((e) => e.type === "tool_result");
+  assert.ok(result && result.type === "tool_result");
+  assert.equal(JSON.parse(result.text).rows.length, 3, "all three rows");
+  assert.equal(result.text.includes("\n  "), false, "no indentation to pay for");
 });

@@ -26,6 +26,7 @@
 //    for the screen.
 
 import Anthropic from "@anthropic-ai/sdk";
+import { DEFAULT_RESULT_BYTES } from "@malloyyo/mcp-engine";
 import type { User } from "@/db";
 import type { HostedSurface } from "../mcp-host";
 import {
@@ -406,6 +407,42 @@ function droppedChartTag(malloy: string, stableResult: unknown): string | null {
   return landed ? null : wanted;
 }
 
+/** What one tool result may cost the model, in characters.
+ *
+ *  A ROW CAP does not bound this and never did. A nested query puts a whole
+ *  table inside each row: twelve rows of `nest: top_actors { limit: 100, nest:
+ *  genre_breakdown }` came to 1,009,418 characters — about 250k tokens — which
+ *  then sat in the message array and was replayed on all eight later turns.
+ *
+ *  The engine's own explore surface has always bounded this (applyResultBudget,
+ *  same constant). The chat executes through runQueryForWeb instead — that is
+ *  what buys a renderable result and the ltool link — and so skipped it.
+ *  Bounding it here restores the invariant the shared surface already had. */
+const MODEL_RESULT_BYTES = DEFAULT_RESULT_BYTES;
+
+/** The rows the model may read, and the JSON it reads them as.
+ *
+ *  Whole rows are dropped from the END, so the query's own ordering decides what
+ *  survives — a top-N stays a top-N. Not pretty-printed: indentation is perhaps
+ *  a third of the characters and buys the model nothing. */
+function budgeted(rows: unknown[]): { shown: number; text: string } {
+  const capped = rows.slice(0, LOOP_ROWS);
+  let used = 0;
+  let keep = 0;
+  for (const row of capped) {
+    // Row by row rather than serializing the whole thing and measuring: the
+    // giant string is the exact thing worth not building.
+    const size = JSON.stringify(row)?.length ?? 4;
+    if (used + size > MODEL_RESULT_BYTES) break;
+    used += size + 1;
+    keep++;
+  }
+  return {
+    shown: keep,
+    text: JSON.stringify({ row_count: rows.length, rows: capped.slice(0, keep) }),
+  };
+}
+
 /** An executed query: one run at RENDER_ROWS, of which the model reads a slice. */
 async function runExecutedQuery(
   use: Anthropic.ToolUseBlock,
@@ -439,10 +476,23 @@ async function runExecutedQuery(
     return { type: "tool_result", id: use.id, ok: false, text: res.error };
   }
   // The model reads a slice; the screen gets everything.
-  const seen = res.rows.slice(0, LOOP_ROWS);
+  const { shown, text: rowsText } = budgeted(res.rows);
   const notes: string[] = [];
-  if (res.rowCount > seen.length) {
-    notes.push(`${seen.length} of ${res.rowCount} rows shown to you; the person sees all ${res.rowCount}.`);
+  if (shown === 0) {
+    // One row on its own blew the budget. Saying "0 rows" without saying why
+    // invites the model to run it again unchanged.
+    notes.push(
+      `NO ROWS SHOWN TO YOU. The result has ${res.rowCount} row(s), and the FIRST one alone ` +
+        `exceeds the ${MODEL_RESULT_BYTES}-character budget for a tool result — a nested query ` +
+        `can put a whole table inside one row. The person can see the result; you cannot. ` +
+        `Re-query with less in it: put a \`limit:\` on the nest, drop a nesting level, or ` +
+        `aggregate instead of listing.`,
+    );
+  } else if (res.rowCount > shown) {
+    notes.push(
+      `${shown} of ${res.rowCount} rows shown to you; the person sees all ${res.rowCount}. ` +
+        `Aggregate, filter, or do top-N in Malloy rather than reading rows to post-process.`,
+    );
   }
   const dropped = droppedChartTag(malloy, res.stableResult);
   if (dropped) {
@@ -458,7 +508,7 @@ async function runExecutedQuery(
     type: "tool_result",
     id: use.id,
     ok: true,
-    text: `${JSON.stringify({ row_count: res.rowCount, rows: seen }, null, 2)}${note}`,
+    text: `${rowsText}${note}`,
     malloy,
     sql: res.sql,
     rowCount: res.rowCount,

@@ -359,6 +359,33 @@ export async function runChatTurn(
   return done;
 }
 
+/** The render tags that turn a result into a picture. */
+const CHART_TAGS = ["bar_chart", "line_chart", "scatter_chart", "shape_map", "segment_map"];
+
+/**
+ * Did a chart tag in the query text fail to attach to the QUERY?
+ *
+ * Malloy attaches a tag to the thing on the next line, so `# line_chart` written
+ * inside the query block lands on whatever field follows it and is silently
+ * dropped from the result's annotations — the renderer then draws a table. It
+ * compiles, it runs, it returns rows, and nothing anywhere says the chart was
+ * lost. A model has no way to notice, and asking it to be careful in the prompt
+ * does not survive contact with a long query.
+ *
+ * So compare intent against outcome: the tag is in the text, and is not in the
+ * annotations. Returns the tag that went missing, or null.
+ */
+function droppedChartTag(malloy: string, stableResult: unknown): string | null {
+  const wanted = CHART_TAGS.find((t) => new RegExp(`^\\s*#\\s*${t}\\b`, "m").test(malloy));
+  if (!wanted) return null;
+  const annotations =
+    (stableResult as { annotations?: Array<{ value?: unknown }> } | undefined)?.annotations ?? [];
+  const landed = annotations.some(
+    (a) => typeof a.value === "string" && a.value.trimStart().startsWith(`# ${wanted}`),
+  );
+  return landed ? null : wanted;
+}
+
 /** An executed query: one run at RENDER_ROWS, of which the model reads a slice. */
 async function runExecutedQuery(
   use: Anthropic.ToolUseBlock,
@@ -390,10 +417,20 @@ async function runExecutedQuery(
   }
   // The model reads a slice; the screen gets everything.
   const seen = res.rows.slice(0, LOOP_ROWS);
-  const note =
-    res.rowCount > seen.length
-      ? `\n\n(${seen.length} of ${res.rowCount} rows shown to you; the person sees all ${res.rowCount}.)`
-      : "";
+  const notes: string[] = [];
+  if (res.rowCount > seen.length) {
+    notes.push(`${seen.length} of ${res.rowCount} rows shown to you; the person sees all ${res.rowCount}.`);
+  }
+  const dropped = droppedChartTag(malloy, res.stableResult);
+  if (dropped) {
+    notes.push(
+      `NO CHART WAS DRAWN. Your \`# ${dropped}\` tag did not attach to the query, so this ` +
+        `rendered as a table. A tag attaches to the thing on the NEXT line, so it must sit on ` +
+        `its own line directly above \`run:\` — not inside the query block. Re-run it with the ` +
+        `tag moved.`,
+    );
+  }
+  const note = notes.length ? `\n\n(${notes.join(" ")})` : "";
   return {
     type: "tool_result",
     id: use.id,

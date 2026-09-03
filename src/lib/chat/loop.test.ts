@@ -74,8 +74,9 @@ function fakeSurface() {
   return { surface, calls };
 }
 
-/** Stands in for runQueryForWeb. `rows` is how many the run returns. */
-function fakeRunner(rows: number) {
+/** Stands in for runQueryForWeb. `rows` is how many the run returns;
+    `annotations` is what the compiled result carries back. */
+function fakeRunner(rows: number, annotations?: Array<{ value: string }>) {
   const calls: Array<{ malloy: string; maxRows: number; dataset: string | null | undefined }> = [];
   const run = (async (
     _userId: string,
@@ -93,7 +94,7 @@ function fakeRunner(rows: number) {
       rowCount: rows,
       truncated: false,
       durationMs: 5,
-      stableResult: { schema: {}, data: { kind: "big-render-payload" } },
+      stableResult: { schema: {}, data: { kind: "big-render-payload" }, ...(annotations ? { annotations } : {}) },
     };
   }) as unknown as ChatDependencies["runQuery"];
   return { run, calls };
@@ -277,4 +278,64 @@ test("exactly one cache breakpoint per request, always last", async () => {
     const lastIdx = typeof last.content === "string" ? -1 : last.content.length - 1;
     assert.equal(marked[0], `${params.messages.length - 1}.${lastIdx}`);
   }
+});
+
+test("a chart tag that failed to attach is reported back to the model", async () => {
+  // Malloy attaches a tag to the next line, so one written inside the query block
+  // lands on a field and vanishes from the result. It compiles, it runs, and
+  // nothing says the chart was lost — so the loop has to say it.
+  const { surface } = fakeSurface();
+  const { run } = fakeRunner(20, [{ value: "#(malloy) source.name = baby_names\n" }]);
+  const malloy = [
+    "run: baby_names -> {",
+    "  # line_chart { x=birth_year y=total_babies }",
+    "  group_by: birth_year",
+    "}",
+  ].join("\n");
+
+  const { events } = await collect({
+    surface,
+    runQuery: run,
+    stream: scripted([toolTurn("query", { malloy }), textTurn()]),
+  });
+
+  const result = events.find((e) => e.type === "tool_result");
+  assert.ok(result && result.type === "tool_result");
+  assert.match(result.text, /NO CHART WAS DRAWN/);
+  assert.match(result.text, /line_chart/);
+  assert.match(result.text, /directly above/);
+});
+
+test("a chart tag that DID attach is not complained about", async () => {
+  const { surface } = fakeSurface();
+  const { run } = fakeRunner(20, [
+    { value: "# line_chart { x=birth_year y=total_babies }\n" },
+    { value: "#(malloy) source.name = baby_names\n" },
+  ]);
+  const malloy = "# line_chart { x=birth_year y=total_babies }\nrun: baby_names -> { group_by: birth_year }";
+
+  const { events } = await collect({
+    surface,
+    runQuery: run,
+    stream: scripted([toolTurn("query", { malloy }), textTurn()]),
+  });
+
+  const result = events.find((e) => e.type === "tool_result");
+  assert.ok(result && result.type === "tool_result");
+  assert.equal(/NO CHART/.test(result.text), false);
+});
+
+test("an untagged query is never told about charts", async () => {
+  const { surface } = fakeSurface();
+  const { run } = fakeRunner(5);
+
+  const { events } = await collect({
+    surface,
+    runQuery: run,
+    stream: scripted([toolTurn("query", { malloy: "run: x -> { group_by: y }" }), textTurn()]),
+  });
+
+  const result = events.find((e) => e.type === "tool_result");
+  assert.ok(result && result.type === "tool_result");
+  assert.equal(/NO CHART/.test(result.text), false);
 });

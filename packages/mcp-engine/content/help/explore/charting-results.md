@@ -18,8 +18,35 @@ run: order_items -> {
 }
 ```
 
-**A tag on its own line attaches to the thing on the next line.** That is the
-whole placement rule.
+**A tag on its own line attaches to the thing on the NEXT line.** That is the
+whole placement rule, and it is also the trap:
+
+```malloy
+// WRONG — the tag attaches to `birth_year`, not to the query.
+// Malloy compiles this, runs it, returns rows, and silently draws a TABLE.
+run: baby_names -> {
+  where: name = 'James' | 'Michael'
+  # line_chart { x=birth_year y=total_babies series=name }
+  group_by: birth_year
+  group_by: name
+  aggregate: total_babies
+}
+```
+
+```malloy
+// RIGHT — above `run:`, so it attaches to the query.
+# line_chart { x=birth_year y=total_babies series=name }
+run: baby_names -> {
+  where: name = 'James' | 'Michael'
+  group_by: birth_year
+  group_by: name
+  aggregate: total_babies
+}
+```
+
+Nothing warns you. The tag simply does not appear in the result's annotations,
+and the renderer has no chart to draw. If you tagged a query and got a table,
+this is why, before anything else.
 
 Related: `yo_help dashboards/charts` goes deeper on the dimension-counting rule
 and on sorting a named axis; this topic is about answering a question with a

@@ -42,6 +42,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import type { User } from "@/db";
 import type { HostedSurface } from "./mcp-host";
 import { env } from "./env";
+import { formatMalloy } from "./format-malloy";
 import { logger, serializeErr } from "./logger";
 
 /** Model turns per question. A typical run is three: describe the source,
@@ -436,7 +437,11 @@ export async function askForMalloy(
     messages.push({ role: "user", content: results });
   }
 
-  if (compiled) return { ok: true, malloy: compiled, question: compiledQuestion, ...report() };
+  // Formatted on the way out: `compiled` is whatever the model typed, and ltool
+  // both runs it and puts it in an editor for someone to read and change.
+  if (compiled) {
+    return { ok: true, malloy: formatMalloy(compiled), question: compiledQuestion, ...report() };
+  }
   return {
     ok: false,
     error: lastProblem

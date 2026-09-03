@@ -118,7 +118,8 @@ test("an executed query goes to runQueryForWeb, not the tool surface", async () 
   });
 
   assert.equal(runs.length, 1, "the query ran through runQueryForWeb");
-  assert.equal(runs[0].malloy, malloy);
+  // Formatted BEFORE it runs, so what executed is what the transcript shows.
+  assert.equal(runs[0].malloy, "run: order_items -> {\n  group_by: brand\n}");
   assert.equal(calls.length, 0, "and never reached the surface");
 });
 

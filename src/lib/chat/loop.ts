@@ -43,6 +43,7 @@ import {
 // unit-tested without a database.
 import type { runQueryForWeb } from "../mcp-tools";
 import { env } from "../env";
+import { formatMalloy } from "../format-malloy";
 import { logger, serializeErr } from "../logger";
 
 /** Model turns in one exchange. Higher than Ask's, because a conversation can
@@ -394,11 +395,14 @@ async function runExecutedQuery(
   runQuery: typeof runQueryForWeb,
   model: string,
 ): Promise<ChatEvent> {
-  const malloy = typeof args.malloy === "string" ? args.malloy : "";
+  const written = typeof args.malloy === "string" ? args.malloy : "";
   const question = typeof args.question === "string" ? args.question.trim() : "";
-  if (!malloy) {
+  if (!written) {
     return { type: "tool_result", id: use.id, ok: false, text: "'malloy' is required." };
   }
+  // Formatted BEFORE it runs, so the text stored in history and shown in the
+  // transcript is the text that executed — not a prettied stand-in for it.
+  const malloy = formatMalloy(written);
   const res = await runQuery(
     input.user.id,
     input.source,

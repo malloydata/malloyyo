@@ -50,7 +50,10 @@ import { logger, serializeErr } from "./logger";
     cannot converge costs a bounded amount rather than an open-ended one. */
 const MAX_STEPS = 6;
 
-/** Row cap for the loop's own runs. The number matches the dashboard
+/** Row cap for a loop's own runs. Exported: chat applies the same ceiling to
+    what its model reads, so the two agree on how much data a turn may carry.
+
+    Row cap for the loop's own runs. The number matches the dashboard
     typeahead's own limit (frame-runtime TYPEAHEAD_LIMIT), which is the same job
     — how many values of a column someone needs to see to recognise the one they
     meant. Too tight and value discovery silently fails on a high-cardinality
@@ -58,7 +61,7 @@ const MAX_STEPS = 6;
     omits the one it wanted, and concludes it isn't there. Still far short of
     dragging a result set through the context window, and the answer is re-run
     uncapped afterwards. */
-const LOOP_ROWS = 50;
+export const LOOP_ROWS = 50;
 
 /** Per-turn output cap. Malloy queries are small; this is sized for a model
     that also thinks out loud, not for long prose. */
@@ -89,11 +92,11 @@ export function askModels(): string[] {
 /** Choices arriving from a browser are untrusted: anything not on the offered
     list falls back to the deployment default rather than being forwarded to the
     API. Keeps a hand-rolled request from naming a model nobody configured. */
-function pickModel(requested: string | undefined): string {
+export function pickModel(requested: string | undefined): string {
   return requested && askModels().includes(requested) ? requested : env.ANTHROPIC_MODEL;
 }
 
-function pickEffort(requested: string | undefined): AskEffort {
+export function pickEffort(requested: string | undefined): AskEffort {
   return requested && (ASK_EFFORTS as readonly string[]).includes(requested)
     ? (requested as AskEffort)
     : ASK_EFFORT;

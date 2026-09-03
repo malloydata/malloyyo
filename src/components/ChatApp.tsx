@@ -74,7 +74,16 @@ function useElapsed(since: number | null): number {
   return since == null ? 0 : Math.max(0, (now - since) / 1000);
 }
 
-export function ChatApp({ initialChatId }: { initialChatId?: string }) {
+export function ChatApp({
+  initialChatId,
+  initialDataset,
+  initialSource,
+}: {
+  initialChatId?: string;
+  /** `?dataset=&source=` — start a chat on this source and open it. */
+  initialDataset?: string;
+  initialSource?: string;
+}) {
   const router = useRouter();
   const [chats, setChats] = useState<ChatSummary[]>([]);
   const [activeId, setActiveId] = useState<string | null>(initialChatId ?? null);
@@ -179,17 +188,29 @@ export function ChatApp({ initialChatId }: { initialChatId?: string }) {
     bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [messages, liveText, liveTools]);
 
-  async function newChat(s: SourceOption) {
-    const res = await fetch("/api/chats", {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ dataset: s.dataset, source: s.source }),
-    });
-    const created = await res.json();
-    if (!res.ok) return setError(created.error ?? "could not start a chat");
-    loadChats();
-    selectChat(created.id);
-  }
+  const newChat = useCallback(
+    async (s: SourceOption) => {
+      const res = await fetch("/api/chats", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ dataset: s.dataset, source: s.source }),
+      });
+      const created = await res.json();
+      if (!res.ok) return setError(created.error ?? "could not start a chat");
+      loadChats();
+      selectChat(created.id);
+    },
+    [loadChats, selectChat],
+  );
+
+  // A `?dataset=&source=` deep link: create the chat, once. The ref is what
+  // makes it once — this creates a row, and StrictMode runs an effect twice.
+  const seeded = useRef(false);
+  useEffect(() => {
+    if (seeded.current || initialChatId || !initialDataset || !initialSource) return;
+    seeded.current = true;
+    void newChat({ dataset: initialDataset, source: initialSource, description: null });
+  }, [initialChatId, initialDataset, initialSource, newChat]);
 
   async function send() {
     const q = question.trim();

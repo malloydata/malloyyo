@@ -27,6 +27,10 @@ interface Props {
    *                 caps its maximum so a long result cannot own the page, and
    *                 lets the transcript be the scroller. */
   variant?: "page" | "transcript";
+  /** How much vertical room a transcript result may take, in the docs site's
+      own three tiers (malloydata.github.io sizes every embedded result this
+      way, guessing per query). Ignored for "page". */
+  size?: "small" | "medium" | "large";
   /** The dataset the query ran against — drill targets are dashboards inside it.
       Without it a drill has nowhere to go, so the affordance stays off. */
   /** The dataset to drill into, as its NAME. `/datasets/<ref>` resolves an id
@@ -38,7 +42,14 @@ interface Props {
 type MenuItem = { label: string; run: () => void };
 type Menu = { x: number; y: number; items: MenuItem[] };
 
-export function MalloyResultView({ stableResult, datasetRef, variant = "page" }: Props) {
+const TIERS = { small: 230, medium: 380, large: 520 } as const;
+
+export function MalloyResultView({
+  stableResult,
+  datasetRef,
+  variant = "page",
+  size = "medium",
+}: Props) {
   const inTranscript = variant === "transcript";
   const containerRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
@@ -132,20 +143,35 @@ export function MalloyResultView({ stableResult, datasetRef, variant = "page" }:
     <>
       <div
         ref={containerRef}
+        className="malloy-result"
         style={{
-          display: "grid",
+          // Flex column rather than grid, and the same shape the docs site uses
+          // for an embedded result: the renderer root then has a width to fill
+          // (see .malloy-result in globals.css), which a chart needs and a table
+          // does not.
+          display: "flex",
+          flexDirection: "column",
           width: "100%",
           overflow: "auto",
           // A page-owned result reserves room; one in a transcript takes only
-          // what it needs, up to a ceiling.
-          ...(inTranscript ? { maxHeight: "60vh" } : { minHeight: "350px" }),
+          // what it needs, up to its tier.
+          ...(inTranscript ? { maxHeight: TIERS[size] } : { minHeight: "350px" }),
           // The renderer's sticky header is z-index 200 and escapes into the
           // root stacking context without its own, painting over the composer.
           isolation: "isolate",
           // It ships no dark theme, so a bare bubble in dark mode is unreadable.
           background: "#fff",
           color: "#171717",
-          borderRadius: inTranscript ? 6 : undefined,
+          // Framed, the way the docs site frames an embedded result: a hairline
+          // and a small radius, so a white result on a white page still reads as
+          // an object rather than as loose content. The border also gives the
+          // scroll a visible edge when the content exceeds its tier.
+          ...(inTranscript
+            ? {
+                border: "1px solid rgb(234, 234, 234)",
+                borderRadius: 5,
+              }
+            : {}),
         }}
       />
       {menu && <DrillMenu menu={menu} onClose={() => setMenu(null)} />}

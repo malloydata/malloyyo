@@ -118,6 +118,10 @@ function QueryCard({
             stableResult={result.stableResult as Record<string, unknown>}
             datasetRef={dataset}
             variant="transcript"
+            // The docs site guesses this per query by hand; here the row count is
+            // the only signal available, and it is a decent one — a five-row
+            // answer wants a small box, a hundred-row one wants room to scroll.
+            size={rows == null || rows <= 12 ? "small" : rows <= 60 ? "medium" : "large"}
           />
           {result.slug && (
             <a

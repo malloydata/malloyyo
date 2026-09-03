@@ -56,6 +56,17 @@ body {
   font-family: var(--font-geist-sans), system-ui, sans-serif;
 }
 
+/* The Malloy renderer's root inside one of our result containers.
+   Without an explicit width it has none to inherit in a flex/grid parent, and a
+   TABLE survives that (its columns give it intrinsic width) while a CHART does
+   not — it measures its container, gets zero, and draws nothing. The docs site
+   (malloydata.github.io, css/document.css) carries the same override for the
+   same reason. */
+.malloy-result .malloy-render,
+.malloy-result .table-container {
+  width: 100%;
+}
+
 /* Drillable dimension cells inside a rendered Malloy result — marked .dash-drill
    by the shared drill helper (packages/cli/src/frame-runtime/drill.ts). Normal
    text until hovered, then they read as links. The Malloy renderer always draws

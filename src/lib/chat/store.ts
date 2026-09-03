@@ -1,9 +1,15 @@
 // Copyright (c) The Malloy Foundation
 // SPDX-License-Identifier: MIT
 
-// Reading and writing chats. Every function here is user-scoped: a chat belongs
-// to one person, and `ownedChat` is the single place that decides so — nothing
-// else in this file re-derives it.
+// Reading and writing chats. A chat belongs to ONE person; `ownedChat` is the
+// single place that decides so, and nothing else in this file re-derives it.
+//
+// A chat may also be made public, which grants READING and nothing else —
+// `readableChat` is that rule, and it is deliberately a separate function from
+// `ownedChat` rather than a flag on it. Everything that writes (asking a
+// question, renaming, deleting, publishing) goes on calling `ownedChat`, so a
+// public chat cannot be added to: it stays one person's conversation instead of
+// turning into a room nobody owns.
 
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import type Anthropic from "@anthropic-ai/sdk";
@@ -20,6 +26,35 @@ export async function ownedChat(id: string, userId: string): Promise<Chat | null
   return row ?? null;
 }
 
+/** The chat if this user may READ it: theirs, or one someone published.
+ *
+ *  Returns who is asking along with it, because every caller needs to know —
+ *  a reader gets no composer and no controls. */
+export async function readableChat(
+  id: string,
+  userId: string,
+): Promise<{ chat: Chat; mine: boolean } | null> {
+  const [row] = await db.select().from(chats).where(eq(chats.id, id)).limit(1);
+  if (!row) return null;
+  if (row.userId === userId) return { chat: row, mine: true };
+  return row.isPublic ? { chat: row, mine: false } : null;
+}
+
+/** Publish or unpublish. Owner only — a reader of a public chat cannot pass it
+    on, and cannot take it back either. */
+export async function setChatPublic(
+  id: string,
+  userId: string,
+  isPublic: boolean,
+): Promise<Chat | null> {
+  const [row] = await db
+    .update(chats)
+    .set({ isPublic })
+    .where(and(eq(chats.id, id), eq(chats.userId, userId)))
+    .returning();
+  return row ?? null;
+}
+
 export async function listChats(userId: string, limit = 100) {
   return db
     .select({
@@ -27,6 +62,7 @@ export async function listChats(userId: string, limit = 100) {
       dataset: chats.dataset,
       source: chats.source,
       title: chats.title,
+      isPublic: chats.isPublic,
       updatedAt: chats.updatedAt,
     })
     .from(chats)

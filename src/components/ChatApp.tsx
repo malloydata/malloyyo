@@ -22,6 +22,8 @@ type ChatSummary = {
   dataset: string;
   source: string;
   title: string | null;
+  /** Published: readable by anyone signed in to this instance, never writable. */
+  isPublic?: boolean;
   updatedAt: string;
 };
 
@@ -88,6 +90,11 @@ export function ChatApp({
   const [chats, setChats] = useState<ChatSummary[]>([]);
   const [activeId, setActiveId] = useState<string | null>(initialChatId ?? null);
   const [chat, setChat] = useState<ChatSummary | null>(null);
+  // Whether the OPEN chat is mine. A chat someone published is readable by
+  // anyone signed in, and a reader gets no composer and no publish control —
+  // asking would append to their transcript, which the server refuses anyway.
+  const [mine, setMine] = useState(true);
+  const [publishing, setPublishing] = useState(false);
   const [messages, setMessages] = useState<StoredMessage[]>([]);
   const [results, setResults] = useState<StoredResult[]>([]);
 
@@ -155,6 +162,7 @@ export function ChatApp({
       .then((d) => {
         if (d?.chat) {
           setChat(d.chat);
+          setMine(d.mine !== false);
           setMessages(d.messages ?? []);
           setResults(d.results ?? []);
         }
@@ -202,6 +210,26 @@ export function ChatApp({
     },
     [loadChats, selectChat],
   );
+
+  async function togglePublic() {
+    if (!chat || !activeId || publishing) return;
+    const next = !chat.isPublic;
+    setPublishing(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/chats/${activeId}`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ isPublic: next }),
+      });
+      const body = await res.json();
+      if (!res.ok) return setError(body.error ?? "could not change sharing");
+      setChat((c) => (c ? { ...c, isPublic: next } : c));
+      setChats((list) => list.map((c) => (c.id === activeId ? { ...c, isPublic: next } : c)));
+    } finally {
+      setPublishing(false);
+    }
+  }
 
   // A `?dataset=&source=` deep link: create the chat, once. The ref is what
   // makes it once — this creates a row, and StrictMode runs an effect twice.
@@ -377,8 +405,15 @@ export function ChatApp({
                     <p className="text-xs text-gray-800 dark:text-gray-200 line-clamp-2 leading-snug">
                       {c.title ?? "New chat"}
                     </p>
-                    <span className="mt-1.5 inline-block text-[10px] px-1 py-0.5 rounded bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300">
-                      {c.source}
+                    <span className="mt-1.5 inline-flex items-center gap-1">
+                      <span className="text-[10px] px-1 py-0.5 rounded bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300">
+                        {c.source}
+                      </span>
+                      {c.isPublic && (
+                        <span className="text-[10px] px-1 py-0.5 rounded bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300">
+                          public
+                        </span>
+                      )}
                     </span>
                   </button>
                 </li>
@@ -404,12 +439,39 @@ export function ChatApp({
                   {chat.dataset} · {chat.source}
                 </p>
               </div>
-              <button
-                onClick={() => setShowSchema((s) => !s)}
-                className="flex-shrink-0 text-xs px-2 py-0.5 rounded bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300 hover:bg-purple-200 dark:hover:bg-purple-900/60"
-              >
-                {showSchema ? "hide fields" : "fields"}
-              </button>
+              <div className="flex-shrink-0 flex items-center gap-2">
+                {mine ? (
+                  <button
+                    onClick={togglePublic}
+                    disabled={publishing}
+                    title={
+                      chat.isPublic
+                        ? "Anyone signed in can read this chat. Click to make it private again."
+                        : "Let anyone signed in read this chat. They cannot add to it."
+                    }
+                    className={`text-xs px-2 py-0.5 rounded border disabled:opacity-50 ${
+                      chat.isPublic
+                        ? "border-green-300 dark:border-green-800 bg-green-50 dark:bg-green-950/40 text-green-800 dark:text-green-300 hover:bg-green-100 dark:hover:bg-green-900/50"
+                        : "border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800"
+                    }`}
+                  >
+                    {chat.isPublic ? "✓ public" : "make public"}
+                  </button>
+                ) : (
+                  <span
+                    title="Someone else's chat, shared with you. You can read it; asking would add to their conversation."
+                    className="text-xs px-2 py-0.5 rounded border border-gray-300 dark:border-gray-600 text-gray-600 dark:text-gray-400"
+                  >
+                    read-only
+                  </span>
+                )}
+                <button
+                  onClick={() => setShowSchema((s) => !s)}
+                  className="text-xs px-2 py-0.5 rounded bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300 hover:bg-purple-200 dark:hover:bg-purple-900/60"
+                >
+                  {showSchema ? "hide fields" : "fields"}
+                </button>
+              </div>
             </header>
 
             <div className="flex-1 overflow-y-auto px-6 py-5">
@@ -428,6 +490,25 @@ export function ChatApp({
               </div>
             </div>
 
+            {/* No composer on someone else's chat. The server refuses the post
+                anyway (the messages route is owner-scoped), but a text box that
+                fails on submit is a worse way to learn that than not having
+                one. */}
+            {!mine ? (
+              <div className="border-t border-gray-200 dark:border-gray-800 px-6 py-3">
+                <p className="max-w-3xl text-[11px] text-gray-600 dark:text-gray-400">
+                  Shared with you to read. To ask your own questions about{" "}
+                  <span className="font-medium">{chat.source}</span>,{" "}
+                  <Link
+                    href={`/chat?dataset=${encodeURIComponent(chat.dataset)}&source=${encodeURIComponent(chat.source)}`}
+                    className="text-blue-600 dark:text-blue-400 hover:underline"
+                  >
+                    start your own chat
+                  </Link>
+                  .
+                </p>
+              </div>
+            ) : (
             <div className="border-t border-gray-200 dark:border-gray-800 px-6 py-3 space-y-2">
               <div className="max-w-3xl space-y-2">
                 <div className="flex items-start gap-2">
@@ -497,6 +578,7 @@ export function ChatApp({
                 </div>
               </div>
             </div>
+            )}
           </>
         )}
       </main>

@@ -511,6 +511,12 @@ export const chats = pgTable(
     // Written from the first question, so the list reads as questions asked
     // rather than "New chat (3)".
     title: text("title"),
+    // Shared READ-ONLY with anyone signed in to this instance. Not an ACL and
+    // not an invitation to join: a public chat can be read, never added to, so
+    // it stays one person's conversation rather than becoming a room. Only
+    // grantable on a PUBLIC dataset — a chat carries rows, and publishing one on
+    // a private dataset would route around that dataset's own privacy.
+    isPublic: boolean("is_public").notNull().default(false),
     // What answered. Recorded per chat rather than per message because a
     // conversation the model switched mid-way through is a different artifact,
     // and knowing which one it was is how a cheaper model gets evaluated.

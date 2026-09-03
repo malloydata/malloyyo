@@ -47,6 +47,10 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   }
 
   const { id } = await ctx.params;
+  // ownedChat, not readableChat — deliberately. A published chat is readable by
+  // anyone signed in, and asking is a WRITE: it appends to someone else's
+  // transcript and spends the operator's tokens doing it. So a reader gets a
+  // 404 here even though GET just handed them the whole conversation.
   const chat = await ownedChat(id, user.id);
   if (!chat) return Response.json({ error: "not found" }, { status: 404 });
 

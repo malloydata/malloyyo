@@ -3,7 +3,10 @@
 
 import { NextResponse } from "next/server";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
-import { datasetNameById, loadSharedQuery, sharedQueryListContext } from "@/lib/mcp-tools";
+import { isAdmin } from "@/lib/admin";
+import { canReadDataset, datasetNameById, loadSharedQuery, sharedQueryListContext } from "@/lib/mcp-tools";
+import { db, datasets } from "@/db";
+import { eq } from "drizzle-orm";
 
 export const runtime = "nodejs";
 
@@ -27,6 +30,21 @@ export async function GET(
   if (!res.ok) {
     return NextResponse.json({ error: res.error, wrongInstance: res.wrongInstance }, { status: 404 });
   }
+  // A slug names a dataset, and this used to answer for any of them. Running the
+  // query was always gated (/api/run resolves through visibleDatasetWhere), but
+  // the QUESTION and the MALLOY came back regardless — and those name a private
+  // model's fields and filters. Gated now on the same rule as the history list,
+  // or the answer would be hidden in one place and a link away in another.
+  if (res.datasetId) {
+    const [ds] = await db
+      .select({ isPublic: datasets.isPublic, userId: datasets.userId })
+      .from(datasets)
+      .where(eq(datasets.id, res.datasetId));
+    if (ds && !canReadDataset(ds, user.id, isAdmin(user))) {
+      return NextResponse.json({ error: "not found" }, { status: 404 });
+    }
+  }
+
   const ctxFlags = await sharedQueryListContext(slug, user.id);
   return NextResponse.json({
     instance: res.instance,

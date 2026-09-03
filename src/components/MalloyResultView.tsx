@@ -18,6 +18,15 @@ import {
 
 interface Props {
   stableResult: Record<string, unknown>;
+  /** Where this is being rendered.
+   *
+   *  "page"       — the result owns the view (ltool). Reserves height and scrolls
+   *                 itself, which is right when there is nothing else to read.
+   *  "transcript" — one result among many in a scrolling conversation. Claims no
+   *                 minimum height (an 8-row table must not reserve 350px),
+   *                 caps its maximum so a long result cannot own the page, and
+   *                 lets the transcript be the scroller. */
+  variant?: "page" | "transcript";
   /** The dataset the query ran against — drill targets are dashboards inside it.
       Without it a drill has nowhere to go, so the affordance stays off. */
   /** The dataset to drill into, as its NAME. `/datasets/<ref>` resolves an id
@@ -29,7 +38,8 @@ interface Props {
 type MenuItem = { label: string; run: () => void };
 type Menu = { x: number; y: number; items: MenuItem[] };
 
-export function MalloyResultView({ stableResult, datasetRef }: Props) {
+export function MalloyResultView({ stableResult, datasetRef, variant = "page" }: Props) {
+  const inTranscript = variant === "transcript";
   const containerRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
   const [menu, setMenu] = useState<Menu | null>(null);
@@ -71,14 +81,29 @@ export function MalloyResultView({ stableResult, datasetRef }: Props) {
       if (cancelled || !container) return;
       const renderer = new MalloyRenderer({});
       const viz = renderer.createViz({
-        tableConfig: { enableDrill: false },
-        scrollEl: container,
+        // In a transcript the PAGE is the scroller, so the renderer must not
+        // also virtualize against its own container — two virtualizers over one
+        // scroll position fight, and the symptom is the view jumping as you
+        // read (the dashboard frame runtime hit this and documents it).
+        tableConfig: inTranscript
+          ? { enableDrill: false, disableVirtualization: true, rowLimit: 1000 }
+          : { enableDrill: false },
+        ...(inTranscript
+          ? { dashboardConfig: { disableVirtualization: true } }
+          : { scrollEl: container }),
         // Clicking a `# drill`-tagged dimension opens the dashboard it points at
         // (no-op for every other cell).
         onClick: onCellClick,
       });
-      viz.setResult(stableResult as Parameters<typeof viz.setResult>[0]);
-      viz.render(container);
+      try {
+        viz.setResult(stableResult as Parameters<typeof viz.setResult>[0]);
+        viz.render(container);
+      } catch (e) {
+        // One unrenderable result must not blank the conversation around it.
+        container.textContent = `Could not render this result: ${e instanceof Error ? e.message : String(e)}`;
+        vizCleanup = () => viz.remove();
+        return;
+      }
       // Flag drillable cells so they read as links (see .dash-drill in globals.css).
       // Only when a drill could actually navigate — a dead link is worse than none.
       const names = datasetRef ? drillFieldNames(viz) : new Set<string>();
@@ -101,13 +126,27 @@ export function MalloyResultView({ stableResult, datasetRef }: Props) {
       observer?.disconnect();
       vizCleanup?.();
     };
-  }, [stableResult, datasetRef, onCellClick]);
+  }, [stableResult, datasetRef, onCellClick, inTranscript]);
 
   return (
     <>
       <div
         ref={containerRef}
-        style={{ display: "grid", minHeight: "350px", overflow: "auto", width: "100%" }}
+        style={{
+          display: "grid",
+          width: "100%",
+          overflow: "auto",
+          // A page-owned result reserves room; one in a transcript takes only
+          // what it needs, up to a ceiling.
+          ...(inTranscript ? { maxHeight: "60vh" } : { minHeight: "350px" }),
+          // The renderer's sticky header is z-index 200 and escapes into the
+          // root stacking context without its own, painting over the composer.
+          isolation: "isolate",
+          // It ships no dark theme, so a bare bubble in dark mode is unreadable.
+          background: "#fff",
+          color: "#171717",
+          borderRadius: inTranscript ? 6 : undefined,
+        }}
       />
       {menu && <DrillMenu menu={menu} onClose={() => setMenu(null)} />}
     </>

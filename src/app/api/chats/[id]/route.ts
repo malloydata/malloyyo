@@ -10,10 +10,14 @@
 // through owner-scoped calls. A published chat can be read and never added to.
 
 import { NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
-import { db, datasets } from "@/db";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
-import { deleteChat, loadForDisplay, readableChat, setChatPublic } from "@/lib/chat/store";
+import {
+  chatIsPublishable,
+  deleteChat,
+  loadForDisplay,
+  readableChat,
+  setChatPublic,
+} from "@/lib/chat/store";
 
 export const runtime = "nodejs";
 
@@ -45,7 +49,14 @@ export async function GET(_req: Request, ctx: Ctx) {
   // rather than inferred: the client does not know who owns a chat it was
   // handed, and guessing from the URL is how a read-only view grows a text box
   // that fails on submit.
-  return NextResponse.json({ chat: found.chat, mine: found.mine, messages, results });
+  //
+  // A reader gets the chat PROJECTED, not the row — the row carries the owner's
+  // user_id, which is nothing a reader needs and not ours to hand out.
+  const { id: chatId, dataset, source, title, isPublic, createdAt, updatedAt } = found.chat;
+  const chat = found.mine
+    ? found.chat
+    : { id: chatId, dataset, source, title, isPublic, createdAt, updatedAt };
+  return NextResponse.json({ chat, mine: found.mine, messages, results });
 }
 
 export async function PATCH(req: Request, ctx: Ctx) {
@@ -71,11 +82,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
   if (body.isPublic) {
     const owned = await readableChat(id, user.id);
     if (!owned?.mine) return NextResponse.json({ error: "not found" }, { status: 404 });
-    const [ds] = await db
-      .select({ isPublic: datasets.isPublic })
-      .from(datasets)
-      .where(eq(datasets.name, owned.chat.dataset));
-    if (!ds?.isPublic) {
+    if (!(await chatIsPublishable(owned.chat))) {
       return NextResponse.json(
         { error: `'${owned.chat.dataset}' is a private dataset — a chat on it cannot be shared.` },
         { status: 400 },

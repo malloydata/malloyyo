@@ -13,7 +13,25 @@
 
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import type Anthropic from "@anthropic-ai/sdk";
-import { db, chats, chatMessages, chatResults, type Chat } from "@/db";
+import { db, chats, chatMessages, chatResults, datasets, type Chat } from "@/db";
+
+/** Is this dataset NAME one anyone may see?
+ *
+ *  Pinned to `status = 'ready'` because that is the row the chat's queries
+ *  actually ran against — findByDatasetRef resolves through visibleDatasetWhere,
+ *  which pins it too — and because `name` is unique only AMONG ready rows. A
+ *  failed or stale namesake is an expected state (POST /api/datasets only
+ *  rejects a clash against a ready row), so without the pin an unordered
+ *  single-row select could answer with a public leftover for a private dataset,
+ *  or the reverse. */
+async function datasetIsPublic(name: string): Promise<boolean> {
+  const [ds] = await db
+    .select({ isPublic: datasets.isPublic })
+    .from(datasets)
+    .where(and(eq(datasets.name, name), eq(datasets.status, "ready")))
+    .limit(1);
+  return ds?.isPublic === true;
+}
 
 /** The chat if this user owns it, else null. Absent and not-yours look the same
     on purpose — a probe must not be able to tell them apart. */
@@ -37,7 +55,18 @@ export async function readableChat(
   const [row] = await db.select().from(chats).where(eq(chats.id, id)).limit(1);
   if (!row) return null;
   if (row.userId === userId) return { chat: row, mine: true };
-  return row.isPublic ? { chat: row, mine: false } : null;
+  if (!row.isPublic) return null;
+  // Re-checked on every read, not just when it was published. `is_public` is a
+  // claim made at one moment, and the dataset can be made private afterwards —
+  // at which point this chat's stored ROWS would go on being served to everyone
+  // signed in, which is precisely what publishing is gated on preventing.
+  return (await datasetIsPublic(row.dataset)) ? { chat: row, mine: false } : null;
+}
+
+/** Whether this chat may be published: its dataset must be public. Exported so
+    the route asks the same question the reader path answers. */
+export async function chatIsPublishable(chat: Chat): Promise<boolean> {
+  return datasetIsPublic(chat.dataset);
 }
 
 /** Publish or unpublish. Owner only — a reader of a public chat cannot pass it

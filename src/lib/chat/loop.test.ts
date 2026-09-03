@@ -238,6 +238,23 @@ test("an aborted chat stops spending", async () => {
   assert.equal(turns, 1, "no further model calls after the abort");
   assert.equal(runs.length, 0, "and the tool it asked for never ran");
   assert.equal(outcome.steps, 1);
+
+  // What gets PERSISTED has to stay replayable. An assistant message whose
+  // tool_use has no tool_result after it is rejected by the API on every later
+  // turn — and the route persists `appended` whatever happened, so leaving one
+  // behind bricks the chat for good, with no UI to remove a message.
+  const last = outcome.appended.at(-1);
+  assert.equal(last?.role, "user", "the turn ends with the tool results, not the request");
+  const answered = new Set(
+    (last?.content as Array<{ tool_use_id?: string }>).map((b) => b.tool_use_id),
+  );
+  for (const m of outcome.appended) {
+    for (const b of m.content as Array<{ type?: string; id?: string }>) {
+      if (b.type === "tool_use") {
+        assert.ok(answered.has(b.id), `tool_use ${b.id} was left unanswered`);
+      }
+    }
+  }
 });
 
 test("a model that never stops asking for tools hits the step cap", async () => {

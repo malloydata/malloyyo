@@ -317,8 +317,26 @@ export async function runChatTurn(
     if (toolUses.length === 0) break;
 
     const toolResults: Anthropic.ToolResultBlockParam[] = [];
+    // Stopping must not leave the transcript unreplayable. EVERY tool_use has to
+    // be answered by a tool_result in the very next message or the API rejects
+    // the whole conversation — and the assistant message carrying these is
+    // already in `appended`, which the route persists whatever happens. Return
+    // early from inside this loop and the chat is bricked permanently: every
+    // later question replays the orphan and fails, and there is no UI to delete
+    // a message, only the whole chat. So an abort fills in the rest and falls
+    // out of the loop rather than jumping past the push below.
+    let stopped = false;
     for (const use of toolUses) {
-      if (input.signal?.aborted) return outcome();
+      if (input.signal?.aborted) stopped = true;
+      if (stopped) {
+        toolResults.push({
+          type: "tool_result",
+          tool_use_id: use.id,
+          content: [{ type: "text", text: "Stopped by the person asking; this never ran." }],
+          is_error: true,
+        });
+        continue;
+      }
       const args: Record<string, unknown> = { ...(use.input as Record<string, unknown>) };
       onEvent({ type: "tool_start", id: use.id, name: use.name, input: args });
 
@@ -346,6 +364,7 @@ export async function runChatTurn(
     }
     messages.push({ role: "user", content: toolResults });
     appended.push({ role: "user", content: toolResults });
+    if (stopped) return outcome();
   }
 
   const done = outcome();

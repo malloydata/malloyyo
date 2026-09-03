@@ -45,8 +45,11 @@ type Menu = { x: number; y: number; items: MenuItem[] };
 
 const TIERS = { small: 230, medium: 380, large: 520 } as const;
 
-// A chart tag on the result itself. `#(malloy)` internals never match.
-const CHART_TAG = /^\s*#\s*(bar_chart|line_chart|scatter_chart|shape_map|segment_map|viz\b)/;
+// A chart tag on the result itself. The SPACE is required, not incidental:
+// @malloydata/malloy-tag strips `# ` to read an annotation, so `#bar_chart`
+// parses as no tag at all and the renderer draws a table. Matching it here would
+// hand a table a chart's fixed height. `#(malloy)` internals never match.
+const CHART_TAG = /^#[ \t]+(bar_chart|line_chart|scatter_chart|shape_map|segment_map|viz\b)/;
 
 /** Does this result draw a chart rather than a table?
  *
@@ -64,7 +67,7 @@ function drawsAChart(result: unknown): boolean {
   const annotations = (result as { annotations?: Array<{ value?: unknown }> } | null)?.annotations;
   return (
     Array.isArray(annotations) &&
-    annotations.some((a) => typeof a?.value === "string" && CHART_TAG.test(a.value))
+    annotations.some((a) => typeof a?.value === "string" && CHART_TAG.test(a.value.trimStart()))
   );
 }
 
@@ -80,8 +83,19 @@ export function MalloyResultView({
   const router = useRouter();
   const [menu, setMenu] = useState<Menu | null>(null);
 
+  // The viz is built ONCE and bakes this handler in, so closing over props here
+  // would freeze them at first render — and ltool reuses one instance across
+  // datasets, so a drill would navigate to whichever dataset happened to be open
+  // when the component mounted (or be dead, if that first one was null). Read
+  // through a ref instead, and keep the identity stable.
+  const latest = useRef({ datasetRef, router });
+  useEffect(() => {
+    latest.current = { datasetRef, router };
+  });
+
   const onCellClick = useCallback(
     (payload: CellClickPayload) => {
+      const { datasetRef, router } = latest.current;
       if (!datasetRef) return;
       const drill = resolveDrill(payload);
       if (!drill) return;
@@ -103,7 +117,7 @@ export function MalloyResultView({
         items: dests.map((d) => ({ label: humanizeSlug(d), run: () => go(d) })),
       });
     },
-    [datasetRef, router],
+    [],
   );
 
   // ONE viz for the life of the component, updated in place.

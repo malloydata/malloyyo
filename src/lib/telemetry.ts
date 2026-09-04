@@ -16,7 +16,7 @@ export const POSTHOG_HOST = "https://us.i.posthog.com";
 // Keep this analytics project free of sensitive feature-flag or remote-config payloads.
 const POSTHOG_PROJECT_TOKEN = "phc_BAR8UTgMWRi3gbpqgcQDYyngn5joRKGifU9GWJV9KA6R";
 
-export type QueryEntrypoint = "mcp" | "ltool" | "dashboard" | "ask";
+export type QueryEntrypoint = "mcp" | "ltool" | "dashboard" | "ask" | "chat";
 export type TelemetryOutcome = "success" | "error";
 export type ModelPublishMethod = "github_create" | "github_refresh" | "github_webhook" | "cli_push";
 export type McpToolName = "list_sources" | "describe_source" | "open_share_link" | "yo_help" | "other";

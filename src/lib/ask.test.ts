@@ -14,6 +14,7 @@ import type Anthropic from "@anthropic-ai/sdk";
 import type { User } from "@/db";
 import type { HostedSurface, ToolResult } from "./mcp-host";
 import { askCostUsd, askForMalloy, modelShape, supportsEffort, type AskDependencies } from "./ask";
+import { formatMalloy } from "./format-malloy";
 
 const USER = { id: "u1" } as User;
 
@@ -101,7 +102,26 @@ test("returns the Malloy from the query call that compiled", async () => {
   });
 
   assert.equal(result.ok, true);
-  assert.equal(result.ok && result.malloy, "run: flights -> { group_by: carrier }");
+  // Formatted on the way out — ltool shows this text in an editor.
+  assert.equal(result.ok && result.malloy, "run: flights -> {\n  group_by: carrier\n}");
+});
+
+test("a one-line query comes back on newlines, however the model wrote it", async () => {
+  const { surface } = fakeSurface(() => true);
+  const result = await askForMalloy(INPUT, {
+    surface,
+    createMessage: scriptedModel([
+      // What a model actually produces when nothing stops it: one line,
+      // semicolons between the clauses. It compiles; it is not readable.
+      queryTurn("run: flights -> { where: carrier = 'WN'; group_by: carrier; limit: 5 }"),
+      textTurn(),
+    ]),
+  });
+
+  assert.equal(
+    result.ok && result.malloy,
+    "run: flights -> {\n  where: carrier = 'WN'\n  group_by: carrier\n  limit: 5\n}",
+  );
 });
 
 test("an executed query is capped, however many rows the model asks for", async () => {
@@ -149,7 +169,7 @@ test("a query that does not compile gets another turn", async () => {
   });
 
   assert.equal(result.ok, true);
-  assert.equal(result.ok && result.malloy, good);
+  assert.equal(result.ok && result.malloy, formatMalloy(good));
   assert.equal(calls.filter((c) => c.name === "query").length, 2);
 });
 
@@ -209,7 +229,7 @@ test("a thrown tool handler is fed back rather than ending the run", async () =>
   });
 
   assert.equal(result.ok, true);
-  assert.equal(result.ok && result.malloy, good);
+  assert.equal(result.ok && result.malloy, formatMalloy(good));
 });
 
 test("the assistant turn is echoed back whole, so thinking blocks survive", async () => {

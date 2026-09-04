@@ -16,7 +16,7 @@
 // dataset is 1:1 with a model_ref (the dataset name), so once the engine reports
 // the model_ref a query resolved to, recording is a direct dataset lookup.
 
-import { desc } from "drizzle-orm";
+import { desc, eq } from "drizzle-orm";
 import { db, datasets, type User } from "@/db";
 import {
   compile,
@@ -36,7 +36,9 @@ import {
     the model it resolved to, and the host-only SQL channel. */
 type QueryRunResult = WithHostOnly<RunResult & { model_ref?: string }>;
 import { withModelRuntime } from "./malloy";
+import { isAdmin } from "./admin";
 import {
+  canReadDataset,
   latestModel,
   loadSharedQuery,
   modelFileMap,
@@ -195,11 +197,28 @@ function resultError(result: Record<string, unknown>): string | undefined {
   return undefined;
 }
 
-async function openShareLink(args: Record<string, unknown>, baseUrl: string): Promise<ToolResult> {
+async function openShareLink(
+  args: Record<string, unknown>,
+  baseUrl: string,
+  viewer: { id: string; admin: boolean },
+): Promise<ToolResult> {
   const slug = String(args.slug ?? "").trim().replace(/^.*\/ltool\//, "");
   if (!slug) return errText("slug is required");
   const res = await loadSharedQuery(slug);
   if (!res.ok) return errText(res.error);
+  // Same gate as /api/ltool/share/[slug], and for the same reason: a question
+  // and its Malloy name a private model's fields and filters. This is the
+  // product's primary endpoint, so closing the web route and leaving this one
+  // open would have moved the leak rather than fixed it. Fails closed on a slug
+  // with no dataset — deleting a dataset nulls history.dataset_id.
+  if (!viewer.admin) {
+    if (!res.datasetId) return errText("share link not found");
+    const [ds] = await db
+      .select({ isPublic: datasets.isPublic, userId: datasets.userId })
+      .from(datasets)
+      .where(eq(datasets.id, res.datasetId));
+    if (!ds || !canReadDataset(ds, viewer.id, false)) return errText("share link not found");
+  }
   return text({
     instance: res.instance,
     source: res.source,
@@ -382,7 +401,10 @@ export function buildHostedExploreSurface(
 
     try {
       if (name === "open_share_link" && keep(name)) {
-        const result = await openShareLink(toolArgs, baseUrl);
+        const result = await openShareLink(toolArgs, baseUrl, {
+          id: user.id,
+          admin: isAdmin(user),
+        });
         await record({ error: resultError(result as unknown as Record<string, unknown>) });
         return withTiming(result, start);
       }

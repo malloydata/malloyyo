@@ -492,6 +492,93 @@ export const integrationSettings = pgTable(
   (t) => [primaryKey({ columns: [t.instanceCode, t.key] })],
 );
 
+// ── chat ─────────────────────────────────────────────────────────────
+// A conversation with a model about ONE source. Scoped that narrowly on
+// purpose: the model is given that source's schema and nothing else, which is
+// what keeps a turn cheap and the answers grounded.
+export const chats = pgTable(
+  "chats",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    // The dataset by NAME and the source within it. Names are not unique across
+    // datasets — two may each define "orders" — so the pair is the identity,
+    // the same pair the source pickers carry (see SchemaPanel's SourceOption).
+    dataset: text("dataset").notNull(),
+    source: text("source").notNull(),
+    // Written from the first question, so the list reads as questions asked
+    // rather than "New chat (3)".
+    title: text("title"),
+    // Shared READ-ONLY with anyone signed in to this instance. Not an ACL and
+    // not an invitation to join: a public chat can be read, never added to, so
+    // it stays one person's conversation rather than becoming a room. Only
+    // grantable on a PUBLIC dataset — a chat carries rows, and publishing one on
+    // a private dataset would route around that dataset's own privacy.
+    isPublic: boolean("is_public").notNull().default(false),
+    // What answered. Recorded per chat rather than per message because a
+    // conversation the model switched mid-way through is a different artifact,
+    // and knowing which one it was is how a cheaper model gets evaluated.
+    model: text("model"),
+    effort: text("effort"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`now()`),
+  },
+  (t) => [index("chats_user_updated_idx").on(t.userId, t.updatedAt)],
+);
+
+// One row per message, holding the RAW Anthropic content-block array.
+//
+// Not flattened to text, and not normalised: thinking blocks must be echoed
+// back unchanged on the same model, and tool_use/tool_result blocks have to
+// round-trip exactly or the next turn is rejected. The array as the API
+// returned it is the only faithful record, and it is what gets replayed.
+export const chatMessages = pgTable(
+  "chat_messages",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    chatId: uuid("chat_id")
+      .notNull()
+      .references(() => chats.id, { onDelete: "cascade" }),
+    // Order within the conversation. Explicit rather than inferred from
+    // created_at, which ties on a fast turn.
+    seq: integer("seq").notNull(),
+    role: text("role").notNull(),
+    content: jsonb("content").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
+  },
+  (t) => [uniqueIndex("chat_messages_chat_seq_unique").on(t.chatId, t.seq)],
+);
+
+// What a query in a chat produced, for the SCREEN.
+//
+// Deliberately not inside chat_messages.content. The message array is replayed
+// to the model on every turn, and a stable_result is large and useless to it —
+// it already read the rows. The two transcripts differ: the model's is compact
+// text, the human's is a rendered result. `tool_use_id` is what joins them.
+export const chatResults = pgTable(
+  "chat_results",
+  {
+    // The model's own id for the tool call this answers. Unique per chat, and
+    // the join key back into the message that requested it.
+    toolUseId: text("tool_use_id").primaryKey(),
+    chatId: uuid("chat_id")
+      .notNull()
+      .references(() => chats.id, { onDelete: "cascade" }),
+    malloy: text("malloy"),
+    sql: text("sql"),
+    rowCount: integer("row_count"),
+    // The Malloy interfaces-format result, for @malloydata/render on the
+    // client. Row-capped upstream — this is a transcript, not a warehouse.
+    stableResult: jsonb("stable_result"),
+    // The history slug the run minted, which is the ltool deep link.
+    slug: text("slug"),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
+  },
+  (t) => [index("chat_results_chat_idx").on(t.chatId)],
+);
+
 export type Dataset = typeof datasets.$inferSelect;
 export type NewDataset = typeof datasets.$inferInsert;
 export type DatasetStatus = (typeof datasetStatus.enumValues)[number];
@@ -508,3 +595,6 @@ export type OAuthAccessToken = typeof oauthAccessTokens.$inferSelect;
 export type Favorite = typeof favorites.$inferSelect;
 export type InstanceSettings = typeof instanceSettings.$inferSelect;
 export type IntegrationSetting = typeof integrationSettings.$inferSelect;
+export type Chat = typeof chats.$inferSelect;
+export type ChatMessage = typeof chatMessages.$inferSelect;
+export type ChatResult = typeof chatResults.$inferSelect;

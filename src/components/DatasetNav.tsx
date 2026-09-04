@@ -44,6 +44,8 @@ export function DatasetNav({
   const [modelSources, setModelSources] = useState<string[]>([]);
   const [instanceName, setInstanceName] = useState("Malloyyo");
   const [claudeConnected, setClaudeConnected] = useState(false);
+  // Chat needs an ANTHROPIC_API_KEY; without one the pill would go nowhere.
+  const [chatEnabled, setChatEnabled] = useState(false);
   // Switcher: every visible dataset (from /api/sources, grouped). The landing
   // page is decided by /datasets/<name> itself, so no dashboard list is needed.
   const [catalog, setCatalog] = useState<{ dataset: string; status: string }[]>([]);
@@ -77,6 +79,7 @@ export function DatasetNav({
       .then((d) => {
         if (d?.instanceName) setInstanceName(d.instanceName);
         if (typeof d?.claudeConnected === "boolean") setClaudeConnected(d.claudeConnected);
+        if (typeof d?.askEnabled === "boolean") setChatEnabled(d.askEnabled);
       })
       .catch(() => {});
     fetch("/api/sources")
@@ -229,6 +232,24 @@ export function DatasetNav({
           <QueryIcon />
           Query
         </Link>
+        {/* Chat belongs in this group for the same reason Query does: it is a way
+            into the data that nobody built in advance. Same first source, so it
+            opens in a conversation rather than in the source picker. */}
+        {chatEnabled && (
+          <Link
+            href={`/chat?${new URLSearchParams({
+              dataset: datasetName || datasetId,
+              ...(modelSources[0] ? { source: modelSources[0] } : {}),
+            }).toString()}`}
+            title="Chat about this dataset"
+            className={`inline-flex items-center gap-1 ${pill(false)}`}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5Z" />
+            </svg>
+            Chat
+          </Link>
+        )}
       </div>
 
       {/* Right-hand group: where this came from, how it's set up, then the

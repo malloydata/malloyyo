@@ -34,6 +34,26 @@ export function visibleDatasetWhere(userId: string) {
   );
 }
 
+// What a viewer may READ ABOUT a dataset: the questions asked of it, the Malloy
+// those questions produced, a chat scoped to it. Deliberately a different rule
+// from visibleDatasetWhere above, which decides what may be RUN.
+//
+// Running returns ROWS, so it is owner-or-public with no admin exemption — an
+// admin does not get to query a private dataset just for being an admin.
+// Reading returns a question and a query, which is how an operator answers
+// "what is this instance being used for", so an admin does see everything.
+//
+// Between those two sits the thing that made this necessary: a question and its
+// Malloy name the private model's fields, its filters, and what someone wanted
+// to know. That is not nothing, and it was visible to every signed-in user.
+export function canReadDataset(
+  ds: { isPublic: boolean; userId: string | null },
+  viewerId: string,
+  admin: boolean,
+): boolean {
+  return admin || ds.isPublic || ds.userId === viewerId;
+}
+
 // Normalize DB sources column — legacy string[] or new {name, description?}[] format.
 export function normalizeSources(raw: unknown): SourceInfo[] {
   if (!Array.isArray(raw)) return [];

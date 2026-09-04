@@ -9,6 +9,14 @@ import { QueryIcon } from "@/components/QueryIcon";
 
 type AuthProvider = { id: string; name: string };
 
+// The [query][chat][claude] group on a source row. Deliberately darker than the
+// gray-400 it started as: these are the ways INTO a dataset, and at 11px on a
+// white card the lighter grey read as disabled rather than as secondary.
+const PILL =
+  "px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-600 " +
+  "text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 " +
+  "hover:text-gray-900 dark:hover:text-gray-100";
+
 type SourceSummary = { source: string; description: string | null };
 
 // The front page is organized BY DATASET, and /api/sources now returns it that
@@ -79,6 +87,8 @@ export default function HomePage() {
   // explanation, since signing in again would just loop back here.
   const [accessState, setAccessState] = useState<"pending" | "disabled" | null>(null);
   const [claudeConnected, setClaudeConnected] = useState(false);
+  // Chat is an ANTHROPIC_API_KEY feature; without one the button goes nowhere.
+  const [chatEnabled, setChatEnabled] = useState(false);
   const [sources, setSources] = useState<DatasetGroup[] | null>(null);
   const [favQueries, setFavQueries] = useState<FavQuery[]>([]);
   const [dashboards, setDashboards] = useState<Array<{ dataset: string; name: string; title: string }>>([]);
@@ -104,6 +114,7 @@ export default function HomePage() {
     if (typeof meJson.signOutPath === "string") setSignOutHref(meJson.signOutPath);
     setAccessState(meJson.accessState === "pending" || meJson.accessState === "disabled" ? meJson.accessState : null);
     if (typeof meJson.claudeConnected === "boolean") setClaudeConnected(meJson.claudeConnected);
+    if (typeof meJson.askEnabled === "boolean") setChatEnabled(meJson.askEnabled);
     if (meJson.user) {
       const [srcRes, favRes, dashRes] = await Promise.all([
         fetch("/api/sources"),
@@ -258,10 +269,10 @@ export default function HomePage() {
             </section>
           )}
 
-          {/* Datasets → sources → questions. Within each dataset, questions are
-              grouped under their source (most recently used first). Each source
-              name opens a menu to explore it with Claude or ltool. Sources with
-              no questions are listed at the bottom of the dataset. */}
+          {/* Datasets → sources → questions. EVERY source of a dataset gets a
+              row with its ways in — [query][chat][claude] — and the questions
+              asked of it beneath. Sources that have been asked about lead, in
+              recency order; the rest follow with their descriptions. */}
           <section>
             <div className="flex items-baseline justify-between mb-3">
               <h2 className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Datasets</h2>
@@ -277,12 +288,19 @@ export default function HomePage() {
                   const g = datasetByName.get(dsName);
                   const { bySource, order } = groupBySource(favByDataset.get(dsName) ?? []);
                   const withQuestions = new Set(order.filter((k) => k !== ""));
-                  const additional = (g?.sources ?? []).filter((s) => !withQuestions.has(s.source));
-                  // No `overflow-hidden` on this card, deliberately: the source menus below
-                  // are absolutely positioned, and an overflow-hidden ancestor clips them —
-                  // the menu opened inside the card and was cut off at its edge, with
-                  // nothing to expand and nothing to scroll. The rounded corners it was
-                  // there for are kept by rounding the header itself.
+                  // EVERY source gets a row. A source nobody has asked about yet
+                  // is the one most worth advertising — it used to be a chip in a
+                  // "More sources" footnote, which read as an afterthought and hid
+                  // the ways in behind a menu. Ones with questions keep their
+                  // recency order and lead.
+                  const describedBy = new Map((g?.sources ?? []).map((s) => [s.source, s.description]));
+                  const rows = [
+                    ...order,
+                    ...(g?.sources ?? []).map((s) => s.source).filter((n) => n && !withQuestions.has(n)),
+                  ];
+                  // No `overflow-hidden` on this card: the rounded corners come from
+                  // rounding the header itself, so an absolutely-positioned child
+                  // (a menu, a tooltip) is never clipped at the card's edge.
                   return (
                     <div key={dsName} className="border border-gray-200 dark:border-gray-800 rounded">
                       <div className="flex items-center justify-between gap-3 px-3 py-2 rounded-t bg-gray-50 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-800">
@@ -348,40 +366,54 @@ export default function HomePage() {
                       )}
 
                       <div className="divide-y divide-gray-100 dark:divide-gray-900">
-                        {order.map((srcKey) => {
+                        {rows.map((srcKey) => {
                           const qs = bySource.get(srcKey) ?? [];
+                          const description = describedBy.get(srcKey);
                           return (
                             <div key={srcKey || "(unspecified)"} className="px-3 py-2">
                               <div className="flex items-center justify-between gap-2">
                                 <span className="font-semibold text-xs truncate">
-                                  {srcKey || <span className="text-gray-500 dark:text-gray-400">{g?.dataset}</span>}
+                                  {srcKey || <span className="text-gray-600 dark:text-gray-300">{g?.dataset}</span>}
                                 </span>
                                 {srcKey && (
-                                  <div className="flex items-center gap-1.5 flex-shrink-0 text-[10px] text-gray-400 dark:text-gray-500">
-                                    <span>explore with:</span>
+                                  <div className="flex items-center gap-1.5 flex-shrink-0 text-[11px] text-gray-700 dark:text-gray-300">
+                                    <Link
+                                      href={`/ltool?source=${encodeURIComponent(srcKey)}&dataset=${encodeURIComponent(g?.dataset ?? dsName)}`}
+                                      title={`Write a Malloy query against ${srcKey}`}
+                                      className={`inline-flex items-center gap-1 ${PILL}`}
+                                    >
+                                      <QueryIcon size={10} />
+                                      query
+                                    </Link>
+                                    {chatEnabled && (
+                                      <Link
+                                        href={`/chat?dataset=${encodeURIComponent(g?.dataset ?? dsName)}&source=${encodeURIComponent(srcKey)}`}
+                                        title={`Start a chat about ${srcKey}`}
+                                        className={PILL}
+                                      >
+                                        chat
+                                      </Link>
+                                    )}
                                     <button
                                       type="button"
                                       onClick={() => exploreWithClaude(srcKey)}
                                       title={claudeConnected ? `Open a Claude chat on ${instanceName}` : `Connect ${instanceName} to Claude first`}
-                                      className="px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-900"
+                                      className={PILL}
                                     >
                                       claude
                                     </button>
-                                    <Link
-                                      href={`/ltool?source=${encodeURIComponent(srcKey)}&dataset=${encodeURIComponent(g?.dataset ?? dsName)}`}
-                                      title={`Write a Malloy query against ${srcKey}`}
-                                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border border-gray-300 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-900"
-                                    >
-                                      <QueryIcon size={10} />
-                                      Query
-                                    </Link>
                                   </div>
                                 )}
                               </div>
+                              {/* A source with no questions would otherwise be a
+                                  bare name; its description says what it holds. */}
+                              {qs.length === 0 && description && (
+                                <p className="mt-1 text-xs text-gray-600 dark:text-gray-400 line-clamp-2">{description}</p>
+                              )}
                               <ul className="mt-1.5 space-y-1">
                                 {qs.slice(0, 8).map((q) => (
                                   <li key={q.slug ?? q.question} className="flex items-start gap-2">
-                                    <span className="text-gray-300 dark:text-gray-600 select-none leading-relaxed flex-shrink-0" aria-hidden>•</span>
+                                    <span className="text-gray-400 dark:text-gray-500 select-none leading-relaxed flex-shrink-0" aria-hidden>•</span>
                                     <Link href={q.slug ? `/ltool/${q.slug}` : "#"}
                                       className="flex-1 text-xs text-gray-700 dark:text-gray-300 hover:text-blue-600 dark:hover:text-blue-400 leading-relaxed">
                                       {q.question}
@@ -391,7 +423,7 @@ export default function HomePage() {
                                 {qs.length > 8 && (
                                   <li className="flex items-start gap-2">
                                     <span className="flex-shrink-0 w-[1ch]" aria-hidden />
-                                    <Link href={`/datasets/${encodeURIComponent(g?.dataset ?? dsName)}/questions`} className="text-[11px] text-gray-400 dark:text-gray-500 hover:underline">
+                                    <Link href={`/datasets/${encodeURIComponent(g?.dataset ?? dsName)}/questions`} className="text-[11px] text-gray-600 dark:text-gray-400 hover:underline">
                                       +{qs.length - 8} more →
                                     </Link>
                                   </li>
@@ -401,19 +433,6 @@ export default function HomePage() {
                           );
                         })}
 
-                        {additional.length > 0 && (
-                          <div className="px-3 py-2">
-                            {order.some((k) => k !== "") && (
-                              <p className="text-[10px] uppercase tracking-wide text-gray-400 dark:text-gray-500 mb-1">More sources</p>
-                            )}
-                            <div className="flex flex-wrap gap-x-3 gap-y-1">
-                              {additional.map((s, i) => (
-                                <SourceMenu key={`${s.source}-${i}`} source={s.source} datasetRef={g?.dataset ?? dsName} instanceName={instanceName}
-                                  claudeConnected={claudeConnected} onClaude={exploreWithClaude} className="text-xs" />
-                              ))}
-                            </div>
-                          </div>
-                        )}
                       </div>
                     </div>
                   );
@@ -473,62 +492,6 @@ function GitHubLink({ repo }: { repo: string }) {
       </svg>
       <span className="sr-only">GitHub repository</span>
     </a>
-  );
-}
-
-// A source name rendered as a link that opens a small menu to explore the
-// source with Claude or ltool.
-function SourceMenu({
-  source,
-  datasetRef,
-  instanceName,
-  claudeConnected,
-  onClaude,
-  className,
-}: {
-  source: string;
-  /** Dataset NAME where we have one, else its id — /api/run resolves either, and
-      the name is what belongs in a link someone might read or share. */
-  datasetRef: string;
-  instanceName: string;
-  claudeConnected: boolean;
-  onClaude: (source: string) => void;
-  className?: string;
-}) {
-  const [open, setOpen] = useState(false);
-  return (
-    <span className="relative inline-block">
-      <button
-        type="button"
-        onClick={() => setOpen((o) => !o)}
-        className={`text-blue-600 dark:text-blue-400 hover:underline ${className ?? ""}`}
-      >
-        {source}
-      </button>
-      {open && (
-        <>
-          {/* click-away backdrop */}
-          <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute left-0 top-full mt-1 z-20 min-w-[170px] rounded border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950 shadow-lg overflow-hidden">
-            <button
-              type="button"
-              onClick={() => { setOpen(false); onClaude(source); }}
-              title={claudeConnected ? `Open a Claude chat on ${instanceName}` : `Connect ${instanceName} to Claude first`}
-              className="block w-full text-left text-xs px-3 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-900"
-            >
-              Explore with Claude
-            </button>
-            <Link
-              href={`/ltool?source=${encodeURIComponent(source)}&dataset=${encodeURIComponent(datasetRef)}`}
-              className="flex w-full items-center gap-1.5 text-left text-xs px-3 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-900 border-t border-gray-100 dark:border-gray-900"
-            >
-              <QueryIcon size={11} />
-              Write a query
-            </Link>
-          </div>
-        </>
-      )}
-    </span>
   );
 }
 

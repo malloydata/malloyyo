@@ -2,10 +2,27 @@
 // SPDX-License-Identifier: MIT
 
 import { NextResponse } from "next/server";
-import { eq, desc, and, isNull, isNotNull, inArray, sql } from "drizzle-orm";
+import { eq, desc, and, isNull, isNotNull, inArray, or, sql } from "drizzle-orm";
 import { db, datasets, history, savedQueries, users } from "@/db";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
+import { isAdmin } from "@/lib/admin";
+import { canReadDataset } from "@/lib/mcp-tools";
 import { RUN_LABELS } from "@/lib/tool-names";
+
+// A row someone else ran is visible only when its dataset is public. Your own
+// runs are always yours to see — which is also what covers the rows that predate
+// dataset_id being recorded, since an unattributable row cannot be shown to be
+// public and so is shown to nobody else. An admin sees everything.
+//
+// Applies to the JOINED datasets row, so it must be used with that left join.
+function rowReadable(userId: string, admin: boolean) {
+  if (admin) return undefined;
+  return or(eq(history.userId, userId), eq(datasets.isPublic, true));
+}
+function savedReadable(userId: string, admin: boolean) {
+  if (admin) return undefined;
+  return or(eq(savedQueries.userId, userId), eq(datasets.isPublic, true));
+}
 
 // --- favorites view: sourced from the DURABLE saved_queries, so favorites keep
 // showing even after their history rows are trimmed (history is disposable). ---
@@ -42,9 +59,11 @@ export async function GET(req: Request) {
   // dataset-wide view drawn from BOTH the disposable history log AND the durable
   // saved_queries, so questions survive history trimming (the same durable
   // source the front page reads).
+  const admin = isAdmin(user);
+
   const datasetId = url.searchParams.get("dataset");
   if (datasetId) {
-    return NextResponse.json(await datasetQuestions(datasetId));
+    return NextResponse.json(await datasetQuestions(datasetId, user.id, admin));
   }
 
   if (view === "favorites") {
@@ -71,7 +90,7 @@ export async function GET(req: Request) {
       .leftJoin(users, eq(users.id, savedQueries.userId))
       .leftJoin(datasets, eq(datasets.id, savedQueries.datasetId))
       // scope filters WHOSE favorites — mine vs anyone's.
-      .where(scope === "me" ? sqFavByMe(user.id) : sqAnyFav())
+      .where(and(scope === "me" ? sqFavByMe(user.id) : sqAnyFav(), savedReadable(user.id, admin)))
       .orderBy(desc(savedQueries.createdAt))
       .limit(100);
     return NextResponse.json(rows);
@@ -110,6 +129,7 @@ export async function GET(req: Request) {
         isNull(history.error),
         isNotNull(history.slug),
         scope === "me" ? eq(history.userId, user.id) : undefined,
+        rowReadable(user.id, admin),
       )
     )
     .orderBy(desc(history.createdAt))
@@ -134,14 +154,23 @@ type DatasetQuestion = {
   authorModel: string | null;
 };
 
-async function datasetQuestions(idOrName: string): Promise<DatasetQuestion[]> {
+async function datasetQuestions(
+  idOrName: string,
+  viewerId: string,
+  admin: boolean,
+): Promise<DatasetQuestion[]> {
   // The route param may be a dataset UUID or its name (same as /api/datasets/[id])
   // — history/saved_queries key on the UUID, so resolve a name first.
   const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idOrName);
+  const cols = { id: datasets.id, isPublic: datasets.isPublic, userId: datasets.userId };
   const [ds] = isUuid
-    ? await db.select({ id: datasets.id }).from(datasets).where(eq(datasets.id, idOrName))
-    : await db.select({ id: datasets.id }).from(datasets).where(and(eq(datasets.name, idOrName), eq(datasets.status, "ready")));
+    ? await db.select(cols).from(datasets).where(eq(datasets.id, idOrName))
+    : await db.select(cols).from(datasets).where(and(eq(datasets.name, idOrName), eq(datasets.status, "ready")));
   if (!ds) return [];
+  // Dataset names are readable and guessable, and this route took one from the
+  // query string and answered with every question ever asked of it. The page
+  // above it checked visibility; this did not.
+  if (!canReadDataset(ds, viewerId, admin)) return [];
   const datasetId = ds.id;
 
   const fromHistory = db

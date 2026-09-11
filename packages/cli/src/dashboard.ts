@@ -49,7 +49,7 @@ const resolveInPageEntry = (): string => path.join(resolveRuntimeDir(), "..", "f
     rest of the bundle into the document as markup. `<\/script` is the same
     string to JS and invisible to the parser. Today's bundles happen to contain
     none, which is a property of the data, not a guarantee. */
-const inlineScript = (js: string) => js.replace(/<\/(script)/gi, String.raw`<\/$1`);
+export const inlineScript = (js: string) => js.replace(/<\/(script)/gi, String.raw`<\/$1`);
 
 const esc = (s: string) =>
   s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");

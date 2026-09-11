@@ -18,6 +18,7 @@
 import { redirect } from "next/navigation";
 import { getSessionUserOrNull } from "@/lib/user";
 import { signInPath, signOutPath } from "@/lib/auth-paths";
+import { signDeviceApproval } from "@/lib/oauth/device-csrf";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -57,6 +58,10 @@ export default async function DevicePage({ searchParams }: PageProps) {
     );
   }
 
+  // Bound to this session and verified on POST, so a cross-site form submission
+  // cannot approve a code on this user's behalf. See device-csrf.ts.
+  const csrf = signDeviceApproval(user.id);
+
   const switchUrl = signOutPath(
     signInPath(userCode ? `/oauth/device?user_code=${encodeURIComponent(userCode)}` : "/oauth/device"),
   );
@@ -74,11 +79,14 @@ export default async function DevicePage({ searchParams }: PageProps) {
             ? "That code is not valid, has expired, or was already used. Start again from your terminal."
             : error === "rate_limited"
               ? "Too many attempts. Wait a minute and try again."
-              : "Something went wrong. Start again from your terminal."}
+              : error === "expired"
+                ? "This page was open too long, or the form did not come from here. Reload and try again."
+                : "Something went wrong. Start again from your terminal."}
         </p>
       ) : null}
 
       <form action="/api/oauth/device/decide" method="POST" className="space-y-4">
+        <input type="hidden" name="t" value={csrf} />
         <label className="block space-y-1">
           <span className="text-xs text-gray-500 dark:text-gray-400">Code from your terminal</span>
           <input

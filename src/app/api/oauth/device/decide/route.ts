@@ -13,6 +13,7 @@ import { getSessionUserOrNull } from "@/lib/user";
 import { signInPath } from "@/lib/auth-paths";
 import { originFromRequest } from "@/lib/oauth/base-url";
 import { decideByUserCode, normalizeUserCode } from "@/lib/oauth/device-codes";
+import { verifyDeviceApproval } from "@/lib/oauth/device-csrf";
 import { logger } from "@/lib/logger";
 
 export const runtime = "nodejs";
@@ -30,7 +31,13 @@ const failures = new Map<string, { count: number; resetAt: number }>();
 function tooManyFailures(userId: string): boolean {
   const now = Date.now();
   const hit = failures.get(userId);
-  if (!hit || hit.resetAt < now) return false;
+  if (!hit) return false;
+  // Drop it rather than leaving it to accumulate: without this the map keeps one
+  // entry per user who has ever failed, for the life of the process.
+  if (hit.resetAt < now) {
+    failures.delete(userId);
+    return false;
+  }
   return hit.count >= MAX_FAILURES;
 }
 
@@ -62,6 +69,17 @@ export async function POST(request: Request): Promise<Response> {
   const form = await request.formData();
   const rawCode = String(form.get("user_code") ?? "");
   const approve = String(form.get("action") ?? "") === "approve";
+
+  // CSRF. The user_code is NOT a secret here — the attacker started the flow and
+  // knows it — so without this the only thing standing between a cross-site POST
+  // and a token scoped to this user is the cookie's SameSite=Lax default.
+  // Enforcing that the blob was minted for THIS session also stops one lifted
+  // from another session being replayed against a different victim.
+  const approval = verifyDeviceApproval(String(form.get("t") ?? ""));
+  if (!approval || approval.userId !== user.id) {
+    logger.warn("device approval rejected: missing or mismatched CSRF token", { userId: user.id });
+    return back(request, { error: "expired" });
+  }
 
   if (!normalizeUserCode(rawCode)) return back(request, { error: "not_found" });
 

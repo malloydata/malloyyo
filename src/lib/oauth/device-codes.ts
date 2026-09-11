@@ -13,6 +13,9 @@ import { db, oauthDeviceCodes } from "@/db";
     and the client's dynamic registration. One constant so they cannot drift. */
 export const DEVICE_GRANT_TYPE = "urn:ietf:params:oauth:grant-type:device_code";
 
+/** Postgres unique-violation SQLSTATE. */
+const UNIQUE_VIOLATION = "23505";
+
 const DEVICE_CODE_BYTES = 32;
 /** 10 minutes: long enough to read a code off one screen and type it into another. */
 export const DEVICE_CODE_TTL_SEC = 600;
@@ -55,7 +58,10 @@ export async function issueDeviceCode(params: {
   resource: string | null;
 }): Promise<IssuedDeviceCode> {
   const deviceCode = randomBytes(DEVICE_CODE_BYTES).toString("base64url");
-  // Retry on the (vanishingly unlikely) unique collision rather than 500.
+  // Retry ONLY a user_code collision (Postgres 23505). Retrying anything else —
+  // an FK violation from a bad clientId, a dropped connection — would do five
+  // inserts and then surface the same error five times slower, with the cause
+  // buried.
   for (let attempt = 0; attempt < 5; attempt++) {
     const userCode = generateUserCode();
     try {
@@ -74,7 +80,8 @@ export async function issueDeviceCode(params: {
         interval: DEVICE_POLL_INTERVAL_SEC,
       };
     } catch (e) {
-      if (attempt === 4) throw e;
+      const code = (e as { code?: string } | null)?.code;
+      if (code !== UNIQUE_VIOLATION || attempt === 4) throw e;
     }
   }
   throw new Error("unreachable");

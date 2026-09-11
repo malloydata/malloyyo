@@ -13,7 +13,10 @@
 // the leading slash back.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { DEV_PATHS } from "../src/dashboard.js";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { join, dirname, relative } from "node:path";
+import { fileURLToPath } from "node:url";
+import { DEV_PATHS, inlineScript } from "../src/dashboard.js";
 
 /** Every path the shells emit, with a representative argument. */
 const emitted = (): string[] => [
@@ -78,5 +81,74 @@ test("dashboard names are encoded, not interpolated raw", () => {
   assert.equal(
     new URL(DEV_PATHS.inPage("a b&c=d"), "http://x/").searchParams.get("d"),
     "a b&c=d",
+  );
+});
+
+// ---------------------------------------------------------------------------
+// The bundle is now INLINED into the frame document, so the escaping below is
+// load-bearing: an unescaped `</script` in a dashboard's compiled code would
+// terminate the script element early and spill the rest of the bundle into the
+// page as markup. Today's bundles happen to contain none, which is a property of
+// the data and not a guarantee — so pin the escaping rather than our luck.
+test("a bundle containing </script> cannot break out of the script element", () => {
+  const hostile = `var a = "</script><img src=x onerror=alert(1)>";`;
+  const escaped = inlineScript(hostile);
+  assert.ok(!/<\/script/i.test(escaped), "an unescaped </script survived");
+  // The escape must not change what the JS means: `\/` is just `/` to a parser,
+  // so the string literal still evaluates to the original text.
+  const literal = escaped.slice(escaped.indexOf('"'), escaped.lastIndexOf('"') + 1);
+  assert.equal(JSON.parse(literal), '</script><img src=x onerror=alert(1)>');
+});
+
+test("escaping is case-insensitive and handles repeats", () => {
+  const out = inlineScript(`a="</SCRIPT>"; b="</script >"; c="</script";`);
+  assert.ok(!/<\/script/i.test(out), out);
+  assert.equal((out.match(/<\\\/script/gi) ?? []).length, 3);
+});
+
+test("escaping leaves ordinary code untouched", () => {
+  const plain = `const x = 1 < 2 ? "a/b" : "c";`;
+  assert.equal(inlineScript(plain), plain);
+});
+
+// ---------------------------------------------------------------------------
+// DEV_PATHS covers the server-rendered templates, but the BROWSER RUNTIME has its
+// own copies — and that is exactly how a root-absolute `fetch("/api/run")` in
+// frame-inpage-entry.tsx survived the first fix and kept the proxied dashboard
+// broken. A table of paths cannot guard code it does not own, so scan the sources
+// that get compiled into the page.
+test("no runtime source resolves a root-absolute URL", () => {
+  // Relative to THIS FILE, not the cwd — the suite is run from the repo root.
+  const pkg = join(dirname(fileURLToPath(import.meta.url)), "..");
+  const roots = [
+    join(pkg, "src/frame-inpage-entry.tsx"),
+    join(pkg, "src/frame-entry.tsx"),
+    join(pkg, "src/frame-wasm-entry.tsx"),
+  ];
+  const dirs = [join(pkg, "src/frame-runtime"), join(pkg, "src/shared")];
+  const files: string[] = [];
+  for (const r of roots) if (existsSync(r)) files.push(r);
+  for (const d of dirs) {
+    if (!existsSync(d)) continue;
+    for (const f of readdirSync(d)) if (/\.(ts|tsx)$/.test(f)) files.push(join(d, f));
+  }
+  assert.ok(files.length > 0, "found no runtime sources to scan — has the layout moved?");
+
+  // fetch("/x"), new EventSource('/x'), el.src = "/x", href="/x"
+  const offender = /(?:fetch|EventSource|open)\s*\(\s*["'`]\/[a-z]|(?:\.src|href)\s*=\s*["'`]\/[a-z]/i;
+  const bad: string[] = [];
+  for (const f of files) {
+    readFileSync(f, "utf8")
+      .split("\n")
+      .forEach((line, i) => {
+        if (line.trim().startsWith("//")) return;
+        if (offender.test(line)) bad.push(`${relative(pkg, f)}:${i + 1}  ${line.trim().slice(0, 80)}`);
+      });
+  }
+  assert.deepEqual(
+    bad,
+    [],
+    `root-absolute URL(s) in runtime source — these resolve against the ORIGIN, so ` +
+      `they break whenever the page is served under a proxy prefix:\n  ${bad.join("\n  ")}`,
   );
 });

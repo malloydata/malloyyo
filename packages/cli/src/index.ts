@@ -198,10 +198,10 @@ async function status(target: string | undefined, opts: { token?: string }): Pro
   console.log(`  ${s.compileError ? `✗ ${s.compileError}` : `✓ compiled ${s.compiledAt ?? ""}`}`);
 }
 
-async function loginCmd(target: string | undefined, opts: { browser?: boolean }): Promise<void> {
+async function loginCmd(target: string | undefined, opts: { browser?: boolean; device?: boolean }): Promise<void> {
   const inst = resolveInstance(resolve("."), target);
   // commander maps `--no-browser` to browser:false, defaulting to true.
-  await login(inst.url, { noBrowser: opts.browser === false });
+  await login(inst.url, { noBrowser: opts.browser === false, device: opts.device === true });
   console.log(`✓ logged in to ${inst.name} (${inst.url})`);
 }
 
@@ -220,6 +220,10 @@ program
   .command("login")
   .argument("[target]", "target name or instance URL (optional if the config has one target)")
   .option("--no-browser", "print the sign-in URL instead of launching a browser")
+  .option(
+    "--device",
+    "sign in by typing a short code in any browser (default where there is no browser: a container, SSH, CI)",
+  )
   .description("sign in to an instance in your browser (stores a token)")
   .action(loginCmd);
 

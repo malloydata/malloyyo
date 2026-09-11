@@ -18,7 +18,7 @@
 // Bound to the userId, and enforced on decide, so a blob lifted from one session
 // cannot be replayed to approve something as a different user.
 
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { signBlob, verifyBlob } from "./signed-blob";
 
 export interface DeviceApproval {
   /** The session this approval form was rendered for. */
@@ -26,63 +26,15 @@ export interface DeviceApproval {
   exp: number;
 }
 
-/** Long enough to read a code off one screen and type it into another, matching
-    the device code's own lifetime — a form that outlived its code would only
-    produce a confusing "not found". */
-const SIGNING_TTL_SEC = 600;
-
-function getSecret(): Buffer {
-  const secret =
-    process.env.OAUTH_SIGNING_SECRET ??
-    process.env.AUTH_SECRET ??
-    process.env.NEXTAUTH_SECRET;
-  if (!secret) throw new Error("AUTH_SECRET must be set for OAuth flows");
-  return Buffer.from(secret, "utf8");
-}
-
-function b64url(buf: Buffer): string {
-  return buf.toString("base64").replace(/=+$/, "").replace(/\+/g, "-").replace(/\//g, "_");
-}
-
-function fromB64url(s: string): Buffer {
-  const padded = s
-    .replace(/-/g, "+")
-    .replace(/_/g, "/")
-    .padEnd(s.length + ((4 - (s.length % 4)) % 4), "=");
-  return Buffer.from(padded, "base64");
-}
-
+/** The blob's TTL (signed-blob.ts) matches the device code's own lifetime: a
+    form that outlived its code would only produce a confusing "not found". */
 export function signDeviceApproval(userId: string): string {
-  const full: DeviceApproval = {
-    userId,
-    exp: Math.floor(Date.now() / 1000) + SIGNING_TTL_SEC,
-  };
-  const body = b64url(Buffer.from(JSON.stringify(full), "utf8"));
-  const mac = createHmac("sha256", getSecret()).update(body).digest();
-  return `${body}.${b64url(mac)}`;
+  return signBlob({ userId });
 }
 
 export function verifyDeviceApproval(token: string): DeviceApproval | null {
-  const dot = token.indexOf(".");
-  if (dot < 0) return null;
-  const body = token.slice(0, dot);
-  const sig = token.slice(dot + 1);
-  const expected = createHmac("sha256", getSecret()).update(body).digest();
-  let received: Buffer;
-  try {
-    received = fromB64url(sig);
-  } catch {
-    return null;
-  }
-  if (received.length !== expected.length) return null;
-  if (!timingSafeEqual(received, expected)) return null;
-  let parsed: DeviceApproval;
-  try {
-    parsed = JSON.parse(fromB64url(body).toString("utf8")) as DeviceApproval;
-  } catch {
-    return null;
-  }
+  const parsed = verifyBlob<{ userId?: unknown }>(token);
+  if (!parsed) return null;
   if (typeof parsed.userId !== "string" || !parsed.userId) return null;
-  if (typeof parsed.exp !== "number" || parsed.exp < Math.floor(Date.now() / 1000)) return null;
-  return parsed;
+  return { userId: parsed.userId, exp: parsed.exp };
 }

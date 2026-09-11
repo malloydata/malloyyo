@@ -83,15 +83,18 @@ export async function POST(request: Request): Promise<Response> {
 
   if (!normalizeUserCode(rawCode)) return back(request, { error: "not_found" });
 
-  // Denials are not guesses — let someone deny freely without burning their quota.
-  if (approve && tooManyFailures(user.id)) {
+  // Both actions count. A deny that finds no code is exactly as much a guess as
+  // an approve that finds none — it leaks the same yes/no through the redirect,
+  // and a deny that HITS ends someone else's live flow — so neither may run
+  // unmetered. A deny that succeeds legitimately still costs nothing.
+  if (tooManyFailures(user.id)) {
     logger.warn("device code approval rate limited", { userId: user.id });
     return back(request, { error: "rate_limited" });
   }
 
   const result = await decideByUserCode(rawCode, user.id, approve);
   if (!result.ok) {
-    if (approve) noteFailure(user.id);
+    noteFailure(user.id);
     return back(request, { error: result.reason, user_code: rawCode });
   }
 

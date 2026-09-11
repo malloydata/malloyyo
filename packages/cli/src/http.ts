@@ -15,6 +15,16 @@ export const USER_AGENT = `malloyyo/${VERSION}`;
 /** The one status a server uses to say the CLI is below its supported floor. */
 const UPGRADE_REQUIRED = 426;
 
+/** Thrown by apiFetch on that status. A distinct class so a caller that retries
+    transport failures (the device-flow poll) can tell this — final, and fixed
+    only by upgrading — from a hop that may succeed next time. */
+export class UpgradeRequiredError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "UpgradeRequiredError";
+  }
+}
+
 async function upgradeRequiredMessage(res: Response): Promise<string> {
   const body = (await res.json().catch(() => ({}))) as { minimum_version?: string };
   const needs = body.minimum_version ? ` ${body.minimum_version} or newer` : " a newer version";
@@ -36,6 +46,6 @@ export async function apiFetch(url: string, init: RequestInit = {}): Promise<Res
   const headers = new Headers(init.headers);
   headers.set("user-agent", USER_AGENT);
   const res = await fetch(url, { ...init, headers });
-  if (res.status === UPGRADE_REQUIRED) throw new Error(await upgradeRequiredMessage(res));
+  if (res.status === UPGRADE_REQUIRED) throw new UpgradeRequiredError(await upgradeRequiredMessage(res));
   return res;
 }

@@ -3,7 +3,8 @@
 
 import { NextResponse } from "next/server";
 import { consumeAuthorizationCode, verifyPkce } from "@/lib/oauth/codes";
-import { getOAuthClient } from "@/lib/oauth/clients";
+import { clientMayUse, getOAuthClient } from "@/lib/oauth/clients";
+import type { OAuthClient } from "@/db";
 import { issueTokenPair, rotateRefreshToken } from "@/lib/oauth/tokens";
 import { pollDeviceCode, DEVICE_GRANT_TYPE } from "@/lib/oauth/device-codes";
 import { corsPreflight, withCors } from "@/lib/oauth/cors";
@@ -25,6 +26,16 @@ interface TokenRequest {
 
 function err(error: string, description: string, status = 400): Response {
   return withCors(NextResponse.json({ error, error_description: description }, { status, headers: { "Cache-Control": "no-store", Pragma: "no-cache" } }));
+}
+
+/** The client, or the RFC 6749 §5.2 error for it: unknown, or registered for
+    some other grant than the one it is asking for. */
+async function clientFor(clientId: string, grantType: string): Promise<OAuthClient | Response> {
+  const client = await getOAuthClient(clientId);
+  if (!client) return err("invalid_client", "Unknown client_id");
+  if (!clientMayUse(client, grantType))
+    return err("unauthorized_client", `Client is not registered for the ${grantType} grant`);
+  return client;
 }
 
 function tokenResponse(accessToken: string, refreshToken: string, expiresIn: number, scope: string): Response {
@@ -69,8 +80,8 @@ async function handleAuthorizationCode(body: TokenRequest): Promise<Response> {
   if (!code || !redirect_uri || !client_id || !code_verifier)
     return err("invalid_request", "code, redirect_uri, client_id, and code_verifier are required");
 
-  const client = await getOAuthClient(client_id);
-  if (!client) return err("invalid_client", "Unknown client_id");
+  const client = await clientFor(client_id, "authorization_code");
+  if (client instanceof Response) return client;
 
   const consumed = await consumeAuthorizationCode(code);
   if (!consumed.ok) return err("invalid_grant", `Authorization code ${consumed.reason}`);
@@ -93,8 +104,8 @@ async function handleDeviceCode(body: TokenRequest): Promise<Response> {
   if (!device_code || !client_id)
     return err("invalid_request", "device_code and client_id are required");
 
-  const client = await getOAuthClient(client_id);
-  if (!client) return err("invalid_client", "Unknown client_id");
+  const client = await clientFor(client_id, DEVICE_GRANT_TYPE);
+  if (client instanceof Response) return client;
 
   const result = await pollDeviceCode(device_code, client_id);
   switch (result.status) {
@@ -128,8 +139,8 @@ async function handleRefreshToken(body: TokenRequest): Promise<Response> {
   const { refresh_token, client_id } = body;
   if (!refresh_token || !client_id) return err("invalid_request", "refresh_token and client_id are required");
 
-  const client = await getOAuthClient(client_id);
-  if (!client) return err("invalid_client", "Unknown client_id");
+  const client = await clientFor(client_id, "refresh_token");
+  if (client instanceof Response) return client;
 
   const result = await rotateRefreshToken(refresh_token, client_id);
   if (!result.ok) {

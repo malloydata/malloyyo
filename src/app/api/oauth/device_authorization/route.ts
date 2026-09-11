@@ -12,7 +12,7 @@
 // code, and only then does the device_code become exchangeable.
 
 import { NextResponse } from "next/server";
-import { getOAuthClient } from "@/lib/oauth/clients";
+import { clientMayUse, getOAuthClient } from "@/lib/oauth/clients";
 import { originFromRequest } from "@/lib/oauth/base-url";
 import { corsPreflight, withCors } from "@/lib/oauth/cors";
 import { issueDeviceCode, DEVICE_GRANT_TYPE } from "@/lib/oauth/device-codes";
@@ -56,7 +56,7 @@ export async function POST(request: Request): Promise<Response> {
   if (!client) return err("invalid_client", "Unknown client_id");
   // The client must have registered for this grant. Dynamic registration records
   // grant_types, so a client that never asked for it cannot start a device flow.
-  if (!client.grantTypes.includes(DEVICE_GRANT_TYPE)) {
+  if (!clientMayUse(client, DEVICE_GRANT_TYPE)) {
     return err("unauthorized_client", `Client is not registered for ${DEVICE_GRANT_TYPE}`);
   }
 

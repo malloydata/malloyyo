@@ -66,14 +66,18 @@ and paste the code back at the prompt. No port needed: the OAuth redirect
 terminates on Anthropic's servers, not on localhost. `claude setup-token` gets
 you a long-lived token instead.
 
-**Malloyyo** — `malloyyo login`. It prints a URL and a short code; open the URL,
-sign in if you are not already, and type the code. Nothing listens and no port is
-involved, which is why it behaves the same here, in a Codespace, and over SSH.
+**Malloyyo** — `malloyyo login`. Where there is no browser to open (here, a
+Codespace, SSH, CI) it uses the device flow: it prints a URL and a short code;
+open the URL on any machine, sign in if you are not already, and type the code.
+Nothing listens and no port is involved. On a laptop it keeps the one-click
+loopback redirect instead; `malloyyo login --device` asks for the code flow
+anywhere.
 
-(Against an instance too old to advertise the device flow, the CLI falls back to a
+(Against an instance too old to offer the device flow, the CLI falls back to the
 loopback redirect, which does need a reachable port: set `MALLOYYO_OAUTH_PORT`
-and `MALLOYYO_OAUTH_HOST=0.0.0.0` and publish that port. Or use a token —
-`--token`, or the env var named in your `malloyyo` config block.)
+and `MALLOYYO_OAUTH_HOST=0.0.0.0` and publish that port. Setting that port also
+selects the loopback redirect on its own. Or use a token — `--token`, or the env
+var named in your `malloyyo` config block.)
 
 **Google / BigQuery** — `gcloud auth application-default login --no-launch-browser`.
 That writes Application Default Credentials to `~/.config/gcloud`, which is what

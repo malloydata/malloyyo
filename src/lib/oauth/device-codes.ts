@@ -6,7 +6,7 @@
 // there is no redirect (so no PKCE; see below), and a second, human-typed code.
 
 import { createHash, randomBytes, randomInt } from "node:crypto";
-import { and, eq, gt, isNull } from "drizzle-orm";
+import { and, eq, gt, isNull, sql } from "drizzle-orm";
 import { db, oauthDeviceCodes } from "@/db";
 
 /** The grant type identifier, used by /token, /device_authorization, discovery,
@@ -111,6 +111,14 @@ export type DecideResult = { ok: true } | { ok: false; reason: "not_found" };
 
 /** Bind a signed-in user to a waiting flow, or deny it.
 
+    One conditional UPDATE, not a read followed by a write: the WHERE clause is
+    what makes a decision final. With a separate SELECT, two decisions racing on
+    the same code — the person who typed it and someone handed the
+    verification_uri_complete link — would both pass the check and the second
+    writer would re-bind the grant to themselves. Zero rows updated means the
+    code is unknown, expired, or already decided, and those are deliberately not
+    distinguished: the caller cannot tell a guess from a stale form either way.
+
     Note what is NOT here: a per-flow attempt counter. A wrong guess cannot be
     attributed to any flow — we have no idea which one the guesser meant — so the
     only place a short code can be defended is the route, by rate-limiting the
@@ -120,15 +128,21 @@ export async function decideByUserCode(
   userId: string,
   approve: boolean,
 ): Promise<DecideResult> {
-  const row = await findPendingByUserCode(rawUserCode);
-  if (!row) {
-    return { ok: false, reason: "not_found" };
-  }
   const now = new Date();
-  await db
+  const updated = await db
     .update(oauthDeviceCodes)
     .set(approve ? { userId, approvedAt: now } : { deniedAt: now })
-    .where(eq(oauthDeviceCodes.deviceCodeHash, row.deviceCodeHash));
+    .where(
+      and(
+        eq(oauthDeviceCodes.userCodeHash, hashCode(normalizeUserCode(rawUserCode))),
+        gt(oauthDeviceCodes.expiresAt, now),
+        isNull(oauthDeviceCodes.approvedAt),
+        isNull(oauthDeviceCodes.deniedAt),
+        isNull(oauthDeviceCodes.consumedAt),
+      ),
+    )
+    .returning({ deviceCodeHash: oauthDeviceCodes.deviceCodeHash });
+  if (updated.length === 0) return { ok: false, reason: "not_found" };
   return { ok: true };
 }
 
@@ -141,39 +155,61 @@ export type PollResult =
   | { status: "not_found" };
 
 /** What the token endpoint needs: the state of this flow, and — when approved —
-    the row, atomically marked consumed so the exchange is one-time. */
+    the row, atomically marked consumed so the exchange is one-time.
+
+    A single statement. The CLI hits this every few seconds for up to ten
+    minutes, and the database it hits may be one that scales to zero, so the
+    pending path should be one round trip, not two. The same statement is also
+    the lock: `consumed_at` is set only where it is still null, so two
+    simultaneous polls of an approved code cannot both mint tokens, and the
+    interval check reads `last_polled_at` in the same statement that advances it,
+    so two polls cannot both slip under it. */
 export async function pollDeviceCode(rawDeviceCode: string, clientId: string): Promise<PollResult> {
   const hash = hashCode(rawDeviceCode);
-  const [row] = await db
-    .select()
-    .from(oauthDeviceCodes)
-    .where(eq(oauthDeviceCodes.deviceCodeHash, hash))
-    .limit(1);
-  if (!row || row.clientId !== clientId) return { status: "not_found" };
-  if (row.consumedAt) return { status: "not_found" };
-  if (row.deniedAt) return { status: "denied" };
-  if (row.expiresAt <= new Date()) return { status: "expired" };
-
   const now = new Date();
-  // Enforce the advertised interval. A second of slack keeps an honest client
-  // polling exactly on the interval from tripping this.
-  if (row.lastPolledAt && now.getTime() - row.lastPolledAt.getTime() < (DEVICE_POLL_INTERVAL_SEC - 1) * 1000) {
-    return { status: "slow_down" };
-  }
-  await db
+  // A second of slack keeps an honest client polling exactly on the advertised
+  // interval from tripping this.
+  const notBefore = new Date(now.getTime() - (DEVICE_POLL_INTERVAL_SEC - 1) * 1000);
+  // Inside a raw CASE Postgres cannot infer a bare parameter's type, so the two
+  // instants go in as text with an explicit cast.
+  const nowTs = sql`${now.toISOString()}::timestamptz`;
+  const notBeforeTs = sql`${notBefore.toISOString()}::timestamptz`;
+  const [row] = await db
     .update(oauthDeviceCodes)
-    .set({ lastPolledAt: now })
-    .where(eq(oauthDeviceCodes.deviceCodeHash, hash));
-
-  if (!row.approvedAt || !row.userId) return { status: "pending" };
-
-  // One-time: the conditional update is the lock, so two simultaneous polls
-  // cannot both mint tokens.
-  const consumed = await db
-    .update(oauthDeviceCodes)
-    .set({ consumedAt: now })
-    .where(and(eq(oauthDeviceCodes.deviceCodeHash, hash), isNull(oauthDeviceCodes.consumedAt)))
+    .set({
+      // Only a poll that is honoured advances the clock; a rejected one (too
+      // soon, denied, expired) leaves the row alone so the state is readable.
+      lastPolledAt: sql`case
+        when ${oauthDeviceCodes.deniedAt} is null
+         and ${oauthDeviceCodes.expiresAt} > ${nowTs}
+         and (${oauthDeviceCodes.lastPolledAt} is null or ${oauthDeviceCodes.lastPolledAt} <= ${notBeforeTs})
+        then ${nowTs} else ${oauthDeviceCodes.lastPolledAt} end`,
+      consumedAt: sql`case
+        when ${oauthDeviceCodes.deniedAt} is null
+         and ${oauthDeviceCodes.expiresAt} > ${nowTs}
+         and (${oauthDeviceCodes.lastPolledAt} is null or ${oauthDeviceCodes.lastPolledAt} <= ${notBeforeTs})
+         and ${oauthDeviceCodes.approvedAt} is not null
+         and ${oauthDeviceCodes.userId} is not null
+        then ${nowTs} else ${oauthDeviceCodes.consumedAt} end`,
+    })
+    .where(
+      and(
+        eq(oauthDeviceCodes.deviceCodeHash, hash),
+        eq(oauthDeviceCodes.clientId, clientId),
+        isNull(oauthDeviceCodes.consumedAt),
+      ),
+    )
     .returning();
-  if (consumed.length === 0) return { status: "not_found" };
-  return { status: "approved", row };
+
+  // The row comes back as it is AFTER the update, so classify from what the
+  // statement decided rather than re-deriving it.
+  if (!row) return { status: "not_found" };
+  if (row.deniedAt) return { status: "denied" };
+  if (row.expiresAt <= now) return { status: "expired" };
+  if (row.consumedAt) return { status: "approved", row };
+  // Not consumed and still live: either the interval refused it — the clock
+  // was left where the previous poll set it, before `now` — or nobody has
+  // decided yet.
+  if (row.lastPolledAt && row.lastPolledAt.getTime() < now.getTime()) return { status: "slow_down" };
+  return { status: "pending" };
 }

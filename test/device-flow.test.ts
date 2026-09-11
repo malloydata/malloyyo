@@ -15,11 +15,15 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { db, users, oauthClients, oauthDeviceCodes, type User } from "@/db";
+import { GET as authorizeRoute } from "@/app/api/oauth/authorize/route";
+import { POST as tokenRoute } from "@/app/api/oauth/token/route";
+import { POST as deviceAuthorizationRoute } from "@/app/api/oauth/device_authorization/route";
 import {
   DEVICE_GRANT_TYPE,
   DEVICE_POLL_INTERVAL_SEC,
   decideByUserCode,
   findPendingByUserCode,
+  hashCode,
   issueDeviceCode,
   normalizeUserCode,
   pollDeviceCode,
@@ -123,6 +127,29 @@ test("a denial is reported as denial, not as pending", async () => {
   assert.equal((await pollDeviceCode(deviceCode, clientId)).status, "denied");
 });
 
+test("two simultaneous decisions bind exactly one user", async () => {
+  // The person who typed the code, and someone handed the verification_uri_complete
+  // link, both submit within the same few milliseconds. A read-then-write would
+  // let both through and the second writer would re-bind the grant to themselves;
+  // the conditional UPDATE is what makes the first decision final.
+  const [other] = await db
+    .insert(users)
+    .values({ email: `device-other-${randomUUID()}@test.local` })
+    .returning();
+  const { deviceCode, userCode } = await issue();
+  const results = await Promise.all([
+    decideByUserCode(userCode, user.id, true),
+    decideByUserCode(userCode, other.id, true),
+  ]);
+  assert.equal(results.filter((r) => r.ok).length, 1, `expected exactly one ok, got ${JSON.stringify(results)}`);
+  const winner = results[0].ok ? user.id : other.id;
+  const polled = await pollDeviceCode(deviceCode, clientId);
+  assert.equal(polled.status, "approved");
+  if (polled.status === "approved") {
+    assert.equal(polled.row.userId, winner, "the grant is bound to the decision that won, not the last writer");
+  }
+});
+
 test("a decided code cannot be decided again", async () => {
   const { userCode } = await issue();
   await decideByUserCode(userCode, user.id, true);
@@ -167,4 +194,105 @@ test("a device_code is bound to the client that requested it", async () => {
 
 test("an unknown device_code is rejected", async () => {
   assert.equal((await pollDeviceCode("not-a-real-device-code", clientId)).status, "not_found");
+});
+
+// ── registered grants are enforced ─────────────────────────────────────────
+//
+// A device-flow client registers with a placeholder redirect_uri (registration
+// requires one). That placeholder is safe ONLY because the server refuses the
+// authorization-code flow to a client that never registered for it — at
+// /authorize, before anything is sent to the redirect, and at the token
+// endpoint. These pin that, and the mirror image for a loopback client that
+// tries the device grant.
+
+async function loopbackClient(): Promise<string> {
+  const [c] = await db
+    .insert(oauthClients)
+    .values({
+      name: "loopback CLI",
+      redirectUris: ["http://localhost:41121/callback"],
+      tokenEndpointAuthMethod: "none",
+      grantTypes: ["authorization_code", "refresh_token"],
+      responseTypes: ["code"],
+      scope: "mcp",
+    })
+    .returning();
+  return c.id;
+}
+
+function form(fields: Record<string, string>): Request {
+  return new Request("http://test.local/api/oauth/token", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams(fields).toString(),
+  });
+}
+
+test("a device-only client's placeholder redirect cannot start an authorization-code flow", async () => {
+  const url = new URL("http://test.local/api/oauth/authorize");
+  url.search = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: "http://localhost/unused-by-device-flow",
+    response_type: "code",
+    code_challenge: "x".repeat(43),
+    code_challenge_method: "S256",
+  }).toString();
+  const res = await authorizeRoute(new Request(url));
+  assert.equal(res.status, 400);
+  assert.match(await res.text(), /unauthorized_client/);
+});
+
+test("a device-only client cannot redeem an authorization code", async () => {
+  const res = await tokenRoute(
+    form({
+      grant_type: "authorization_code",
+      code: "whatever",
+      redirect_uri: "http://localhost/unused-by-device-flow",
+      client_id: clientId,
+      code_verifier: "v".repeat(43),
+    }),
+  );
+  assert.equal(res.status, 400);
+  assert.equal(((await res.json()) as { error: string }).error, "unauthorized_client");
+});
+
+test("a loopback client cannot start or redeem a device flow", async () => {
+  const loopback = await loopbackClient();
+  const start = await deviceAuthorizationRoute(
+    new Request("http://test.local/api/oauth/device_authorization", {
+      method: "POST",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ client_id: loopback, scope: "mcp" }).toString(),
+    }),
+  );
+  assert.equal(start.status, 400);
+  assert.equal(((await start.json()) as { error: string }).error, "unauthorized_client");
+
+  const redeem = await tokenRoute(form({ grant_type: DEVICE_GRANT_TYPE, device_code: "whatever", client_id: loopback }));
+  assert.equal(redeem.status, 400);
+  assert.equal(((await redeem.json()) as { error: string }).error, "unauthorized_client");
+});
+
+test("the token endpoint speaks the device grant end to end for a registered client", async () => {
+  // The positive case, through the real handler: pending, then a token pair.
+  const { deviceCode, userCode } = await issue();
+  const poll = () => tokenRoute(form({ grant_type: DEVICE_GRANT_TYPE, device_code: deviceCode, client_id: clientId }));
+  const first = await poll();
+  assert.equal(first.status, 400);
+  assert.equal(((await first.json()) as { error: string }).error, "authorization_pending");
+
+  await decideByUserCode(userCode, user.id, true);
+  // Inside the interval: slow_down, and the approval is NOT consumed by it.
+  const early = await poll();
+  assert.equal(((await early.json()) as { error: string }).error, "slow_down");
+  // Wind the interval clock back rather than sleeping five seconds.
+  await db
+    .update(oauthDeviceCodes)
+    .set({ lastPolledAt: null })
+    .where(eq(oauthDeviceCodes.deviceCodeHash, hashCode(deviceCode)));
+  const granted = await poll();
+  assert.equal(granted.status, 200, await granted.clone().text());
+  const body = (await granted.json()) as { access_token?: string; refresh_token?: string; token_type?: string };
+  assert.ok(body.access_token && body.refresh_token, "a token pair");
+  assert.equal(body.token_type, "Bearer");
 });

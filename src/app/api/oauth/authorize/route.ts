@@ -3,7 +3,7 @@
 
 import { getSessionUserOrNull } from "@/lib/user";
 import { signInPath } from "@/lib/auth-paths";
-import { getOAuthClient, isRegisteredRedirect } from "@/lib/oauth/clients";
+import { clientMayUse, getOAuthClient, isRegisteredRedirect } from "@/lib/oauth/clients";
 import { signAuthz } from "@/lib/oauth/authz-blob";
 import { originFromRequest } from "@/lib/oauth/base-url";
 
@@ -38,6 +38,10 @@ export async function GET(request: Request): Promise<Response> {
   if (!clientId) return plainError(400, "invalid_request", "client_id is required");
   const client = await getOAuthClient(clientId);
   if (!client) return plainError(400, "invalid_client", "Unknown client_id");
+  // Before anything is sent to the redirect_uri: a client registered only for
+  // the device grant carries a placeholder redirect that must never be usable.
+  if (!clientMayUse(client, "authorization_code"))
+    return plainError(400, "unauthorized_client", "Client is not registered for the authorization_code grant");
   if (!redirectUri) return plainError(400, "invalid_request", "redirect_uri is required");
   if (!isRegisteredRedirect(client, redirectUri)) return plainError(400, "invalid_request", "redirect_uri is not registered for this client");
 

@@ -3,16 +3,16 @@ import crypto from "node:crypto";
 import { spawn } from "node:child_process";
 import type { AddressInfo } from "node:net";
 import { loadCreds, saveCreds, type Creds } from "./store.js";
-import { apiFetch } from "./http.js";
+import { apiFetch, UpgradeRequiredError } from "./http.js";
 import type { Target } from "./config.js";
 
 interface Endpoints {
   authorization_endpoint: string;
   token_endpoint: string;
   registration_endpoint: string;
-  /** Present only on instances that support the device flow. Its absence is how
-      this CLI decides to fall back to the loopback redirect, so a new CLI keeps
-      working against an older server. */
+  /** Present only on instances that support the device flow. Whether the CLI
+      WANTS that flow is decided client-side (see chooseFlow); this only says
+      whether the server can serve it. */
   device_authorization_endpoint?: string;
   grant_types_supported?: string[];
 }
@@ -50,12 +50,12 @@ function pkce(): { verifier: string; challenge: string } {
 
 /** Register a client for ONE flow, not both.
 
-    Registration records which grants a client may use, and the server enforces
-    that. So a device-flow client asks only for the device grant: the redirect URI
-    it must still supply (registration requires a non-empty list) can then never
-    be used to obtain a code, because `authorization_code` is not among its
-    grants. Registering both would leave a redirect enabled that this client never
-    intends to use. */
+    Registration records which grants a client may use, and the server checks
+    them at /authorize and at every token-endpoint handler. So a device-flow
+    client asks only for the device grant: the redirect URI it must still supply
+    (registration requires a non-empty list) can then never be used to obtain a
+    code, because `authorization_code` is not among its grants. Registering both
+    would leave a redirect enabled that this client never intends to use. */
 async function registerClient(
   registrationEndpoint: string,
   redirectUri: string,
@@ -219,6 +219,140 @@ function awaitRedirect(state: string): Promise<{ port: number; code: Promise<str
 export interface LoginOptions {
   /** Print the URL instead of launching a browser. Implied where there is none. */
   noBrowser?: boolean;
+  /** Use the device flow (`--device`) even where a loopback redirect would work. */
+  device?: boolean;
+}
+
+export type LoginFlow = "device" | "loopback";
+
+/** Which flow to run. Decided here, by the client, because only the client
+    knows whether a redirect to `localhost` can reach it.
+
+    The loopback redirect is the better experience wherever it works — the
+    consent page completes the sign-in on its own, nothing to transcribe — and it
+    works wherever the browser and the CLI share a machine. The device flow is
+    for the cases where they do not (a Codespace, a remote container, SSH), or
+    where there is no browser to open at all. RFC 8628 calls those
+    "input-constrained" clients; a laptop is not one, whatever the server
+    advertises.
+
+    Precedence: `--device` always wins; a pinned MALLOYYO_OAUTH_PORT means the
+    user has arranged for the redirect to reach them, so honour it; otherwise a
+    machine with no browser gets the device flow and everything else the
+    loopback. */
+export function chooseFlow(
+  opts: LoginOptions,
+  env: Record<string, string | undefined> = process.env,
+  platform: NodeJS.Platform = process.platform,
+): LoginFlow {
+  if (opts.device) return "device";
+  if (env.MALLOYYO_OAUTH_PORT) return "loopback";
+  return browserless(platform, env) ? "device" : "loopback";
+}
+
+/** RFC 8628 §3.5 responses that end the poll. Anything else the token endpoint
+    says is either `authorization_pending` / `slow_down` (keep going) or noise. */
+const TERMINAL_DEVICE_ERRORS: Record<string, string> = {
+  access_denied: "sign-in was denied",
+  expired_token: "the code expired before it was approved — run login again",
+  invalid_grant: "the server no longer recognises this sign-in attempt — run login again",
+  invalid_client: "the server no longer recognises this CLI registration — run login again",
+  unauthorized_client: "this CLI registration is not allowed to use the device flow",
+};
+
+/** What the poll loop needs from the outside world, so a test can script it. */
+export interface PollDeps {
+  fetch: (url: string, init: RequestInit) => Promise<Response>;
+  sleep: (ms: number) => Promise<void>;
+  now: () => number;
+  /** Told once, the first time a poll fails for a reason that is not the
+      protocol — so a user watching a silent terminal knows it is retrying. */
+  warn: (message: string) => void;
+}
+
+const defaultPollDeps: PollDeps = {
+  fetch: apiFetch,
+  sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+  now: Date.now,
+  warn: (m) => console.log(m),
+};
+
+/** Poll the token endpoint until the human decides, the code expires, or the
+    server says the attempt is over.
+
+    Two kinds of non-success come back here and they must not be confused. The
+    protocol ones — `authorization_pending`, `slow_down`, and the terminal set
+    above — are the server speaking RFC 8628, and are honoured exactly. Everything
+    else is the road between here and the server: a 502 with an HTML body from a
+    forwarding proxy, a reset connection, a gateway timeout. This loop runs for
+    up to ten minutes in precisely the environments where that road is least
+    reliable (a Codespace, a container behind a port forwarder), after the user
+    has already been told to go type a code; ending the whole sign-in over one
+    bad hop would make them start again. Those are retried on the same interval
+    until `expires_in` runs out. A 4xx carrying an error this loop does not know
+    is treated as the server's final word. */
+export async function pollDeviceToken(
+  tokenEndpoint: string,
+  clientId: string,
+  auth: Pick<DeviceAuthorization, "device_code" | "expires_in" | "interval">,
+  deps: Partial<PollDeps> = {},
+): Promise<TokenGrant> {
+  const d: PollDeps = { ...defaultPollDeps, ...deps };
+  // The server advertises the minimum gap; polling faster earns `slow_down`.
+  let intervalMs = (auth.interval ?? 5) * 1000;
+  const deadline = d.now() + auth.expires_in * 1000;
+  let warned = false;
+  const transient = (what: string): void => {
+    if (warned) return;
+    warned = true;
+    d.warn(`(${what} — still waiting, will keep trying until the code expires)`);
+  };
+
+  for (;;) {
+    if (d.now() >= deadline) throw new Error("timed out waiting for approval");
+    await d.sleep(intervalMs);
+
+    let res: Response;
+    try {
+      res = await d.fetch(tokenEndpoint, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: DEVICE_GRANT_TYPE,
+          device_code: auth.device_code,
+          client_id: clientId,
+        }),
+      });
+    } catch (e) {
+      // "Upgrade the CLI" is not going to change by waiting.
+      if (e instanceof UpgradeRequiredError) throw e;
+      transient(`could not reach the server: ${(e as Error).message}`);
+      continue;
+    }
+    const body = (await res.json().catch(() => null)) as (Partial<TokenGrant> & { error?: string }) | null;
+
+    if (res.ok && body?.access_token && body.refresh_token) {
+      return { access_token: body.access_token, refresh_token: body.refresh_token, expires_in: body.expires_in };
+    }
+
+    // Not the protocol: a non-JSON body, a body with no error code, or a server
+    // error. None of these is the server deciding anything about this sign-in.
+    if (!body?.error || res.status >= 500) {
+      transient(`the server answered ${res.status} ${res.statusText}`.trim());
+      continue;
+    }
+    switch (body.error) {
+      case "authorization_pending":
+        continue;
+      case "slow_down":
+        intervalMs += 5000;
+        continue;
+      default: {
+        const known = TERMINAL_DEVICE_ERRORS[body.error];
+        throw new Error(known ? known : `sign-in failed: ${body.error}`);
+      }
+    }
+  }
 }
 
 /** Device flow (RFC 8628): print a URL and a short code, then poll. Nothing
@@ -228,7 +362,8 @@ export interface LoginOptions {
 async function deviceLogin(baseUrl: string, ep: Endpoints, opts: LoginOptions): Promise<Creds> {
   // Registration demands a redirect URI even though this flow has none. Supply a
   // loopback placeholder; it is inert because this client is not registered for
-  // the authorization_code grant.
+  // the authorization_code grant, and the server refuses /authorize to a client
+  // that is not.
   const clientId = await registerClient(
     ep.registration_endpoint,
     "http://localhost/unused-by-device-flow",
@@ -252,59 +387,35 @@ async function deviceLogin(baseUrl: string, ep: Endpoints, opts: LoginOptions): 
   if (!opts.noBrowser && !browserless()) openBrowser(auth.verification_uri);
   console.log("Waiting for approval…");
 
-  // The server advertises the minimum gap; polling faster earns `slow_down`.
-  let intervalMs = (auth.interval ?? 5) * 1000;
-  const deadline = Date.now() + auth.expires_in * 1000;
-
-  for (;;) {
-    if (Date.now() >= deadline) throw new Error("timed out waiting for approval");
-    await new Promise((r) => setTimeout(r, intervalMs));
-
-    const res = await apiFetch(ep.token_endpoint, {
-      method: "POST",
-      headers: { "content-type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        grant_type: DEVICE_GRANT_TYPE,
-        device_code: auth.device_code,
-        client_id: clientId,
-      }),
-    });
-    const body = (await res.json().catch(() => ({}))) as TokenGrant & { error?: string };
-
-    if (res.ok && body.access_token) {
-      const creds: Creds = {
-        clientId,
-        accessToken: body.access_token,
-        refreshToken: body.refresh_token,
-        expiresAt: Date.now() + (body.expires_in ?? 86400) * 1000,
-      };
-      saveCreds(baseUrl, creds);
-      return creds;
-    }
-    // `authorization_pending` is the normal case while a human decides — it is
-    // the protocol, not a failure. Everything else is terminal.
-    switch (body.error) {
-      case "authorization_pending":
-        continue;
-      case "slow_down":
-        intervalMs += 5000;
-        continue;
-      case "access_denied":
-        throw new Error("sign-in was denied");
-      case "expired_token":
-        throw new Error("the code expired before it was approved — run login again");
-      default:
-        throw new Error(`sign-in failed: ${body.error ?? `${res.status} ${res.statusText}`}`);
-    }
-  }
+  const grant = await pollDeviceToken(ep.token_endpoint, clientId, auth);
+  const creds: Creds = {
+    clientId,
+    accessToken: grant.access_token,
+    refreshToken: grant.refresh_token,
+    expiresAt: Date.now() + (grant.expires_in ?? 86400) * 1000,
+  };
+  saveCreds(baseUrl, creds);
+  return creds;
 }
 
-/** Interactive login. Prefers the device flow when the instance advertises it,
-    and falls back to the loopback redirect so a new CLI still works against an
-    older server. */
+/** Interactive login. The flow is chosen client-side (chooseFlow); the server's
+    discovery document only says whether the device flow is available. Where the
+    device flow is wanted but the instance is too old to offer it, `--device` is
+    an error and the inferred case falls back to the loopback redirect with a
+    note about the port it needs. */
 export async function login(baseUrl: string, opts: LoginOptions = {}): Promise<Creds> {
   const ep = await discover(baseUrl);
-  if (ep.device_authorization_endpoint) return deviceLogin(baseUrl, ep, opts);
+  const wanted = chooseFlow(opts);
+  if (wanted === "device") {
+    if (ep.device_authorization_endpoint) return deviceLogin(baseUrl, ep, opts);
+    if (opts.device) {
+      throw new Error(
+        `${baseUrl} does not support the device flow (it is too old to advertise it).\n` +
+          "Sign in with the loopback redirect instead: drop --device, and in a container set\n" +
+          "MALLOYYO_OAUTH_PORT and MALLOYYO_OAUTH_HOST=0.0.0.0 and publish that port.",
+      );
+    }
+  }
   const { verifier, challenge } = pkce();
   const state = crypto.randomBytes(16).toString("base64url");
 

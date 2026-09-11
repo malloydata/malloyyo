@@ -11,8 +11,9 @@ export const dynamic = "force-dynamic";
 
 // A client registers for the flow it intends to use. The device grant is here so
 // a client that cannot receive a redirect (a container, a Codespace, CI) can
-// register for it ALONE — its redirect_uri is then inert, because the server
-// checks registered grant_types before issuing anything.
+// register for it ALONE — its redirect_uri is then inert, because /authorize and
+// every token-endpoint handler check the registered grant_types (clientMayUse in
+// lib/oauth/clients.ts) before issuing anything.
 const ALLOWED_GRANT_TYPES = new Set([
   "authorization_code",
   "refresh_token",

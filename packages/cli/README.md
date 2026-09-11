@@ -61,8 +61,10 @@ malloyyo logout main
 
 Login is **per-instance** (it authenticates you to a URL, for all datasets on it), so the
 argument is a *target or URL*, not a dataset — and it's optional when the config is
-unambiguous. It uses the instance's OAuth flow (Authorization Code + PKCE, loopback redirect)
-and stores a refreshable token in `~/.config/malloyyo/credentials.json` (mode 0600), keyed by
+unambiguous. It uses the instance's OAuth flow — Authorization Code + PKCE with a loopback
+redirect where the browser and the CLI share a machine, or the device flow (a short code you
+type into any browser; `--device`, and the default where there is no browser: a container,
+SSH, CI) — and stores a refreshable token in `~/.config/malloyyo/credentials.json` (mode 0600), keyed by
 instance URL — so you can be logged in to several instances at once. Tokens auto-refresh.
 
 ## Use

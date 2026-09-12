@@ -121,6 +121,12 @@ The MCP endpoint speaks OAuth 2.1, so claude.ai's remote MCP integration can con
 
 **You don't have to know Malloy — or wire up the database by hand.** Install the [`malloyyo` CLI](packages/cli), register it with Claude, then ask Claude to do the rest: connect to your data, turn your existing SQL / dbt / Looker definitions into a Malloy model, and test it against real data before you publish. One tool for the whole loop.
 
+> **Want none of this on your laptop?** Open your model repo in a **GitHub Codespace**
+> on the prebuilt [Malloyyo dev container](docs/devcontainer.md) — Claude Code, the Malloy
+> and Claude VS Code extensions, the `malloyyo` CLI, Node, Playwright and `gcloud`/`bq` are
+> already in the image, so a model repo's whole setup is a one-line
+> `.devcontainer/devcontainer.json`.
+
 **1. Install and set up your model repo.**
 
 ```bash

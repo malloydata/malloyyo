@@ -30,6 +30,17 @@ npx dotenv-cli -e local/staging -- npx drizzle-kit push
 
 See `local/CLAUDE.md` for instance-specific details (gitignored, private).
 
+**The dev container** (`.devcontainer/`, `docs/devcontainer.md`) is a shared image
+published to `ghcr.io/malloydata/malloyyo-devcontainer` by
+`.github/workflows/devcontainer.yml` — Claude Code, the Malloy/Claude VS Code
+extensions, the `malloyyo` CLI, Node 24, Playwright/Chromium, `gcloud`/`bq`. Model
+repos consume it by reference (`examples/devcontainer/devcontainer.json`), and the
+extensions ride along in the image's `devcontainer.metadata` label, so a consuming
+repo's config is one `image` line. This repo's own `.devcontainer/devcontainer.json`
+uses the published image too — deliberately, so it can't drift from what model repos
+get — and adds only docker-in-docker (for `test:hosted` / `test:migrate`), port 3000
+and `npm ci`.
+
 **Node 24.** CI (`preflight.yml`, `cli-publish.yml`) and Vercel Functions run
 node 24, and `mise.toml` pins the checkout to it. A machine whose global default
 is older will otherwise build and test on a different runtime than ships.

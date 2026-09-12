@@ -25,6 +25,11 @@ const bytea = customType<{ data: Buffer; driverData: Buffer }>({
 });
 import type { AdapterAccountType } from "next-auth/adapters";
 import { instanceSlug } from "../lib/slug";
+// "mcp" is query traffic against /mcp; "publish" is the CLI's model surface
+// (push + status). Defined away from here so a client component can read it.
+import { API_TOKEN_SCOPES, type ApiTokenScope } from "../lib/api-token-scopes";
+export { API_TOKEN_SCOPES };
+export type { ApiTokenScope };
 
 export const datasetStatus = pgEnum("dataset_status", [
   "pending",
@@ -425,6 +430,50 @@ export const oauthRefreshTokens = pgTable(
   ],
 );
 
+// Personal API tokens: the credential a person hands to the `malloyyo` CLI or a
+// CI job. Separate from the OAuth tables above on purpose — those model an
+// interactive client (a client row, a refresh token rotated on every use, a 24h
+// access token), and an unattended build has none of that: no browser to
+// redirect, and a 24h expiry that guarantees a red pipeline the next morning
+// (docs/model-publishing-design.md §8).
+//
+// Anyone admitted to the instance may mint one for themselves. That is safe
+// because a token is never more than its owner: every request re-reads the
+// user row and re-runs authorize() + the dataset check, so a token grants what
+// the person can do AT THAT MOMENT, not what they could do when it was minted.
+// `scopes` only narrows that further.
+//
+// The raw value is never stored — only its sha256 (`tokenHash`) and the
+// human-readable head (`prefix`, e.g. "myo_stg_a1b2c3d4"), which is enough to
+// tell two tokens apart in the UI and nowhere near enough to use one.
+export const apiTokens = pgTable(
+  "api_tokens",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    // What it is for, in the owner's words ("github actions", "laptop").
+    name: text("name").notNull(),
+    tokenHash: text("token_hash").notNull().unique(),
+    prefix: text("prefix").notNull(),
+    // Which surfaces this token may reach: "mcp" (query) and/or "publish"
+    // (model push + status). jsonb rather than an enum array so adding a scope
+    // is data, not a migration — the same reasoning as instanceSettings.accessPolicy.
+    scopes: jsonb("scopes").$type<ApiTokenScope[]>().notNull(),
+    // NULL means never expires — a deliberate choice, not a missing value: a CI
+    // credential that lapses silently breaks the build at 3am. `lastUsedAt` is
+    // what makes a forgotten one visible instead.
+    expiresAt: timestamp("expires_at", { withTimezone: true }),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .default(sql`now()`),
+  },
+  (t) => [index("api_tokens_user_idx").on(t.userId)],
+);
+
 // A standing invitation: an address an admin admitted before the person ever
 // arrived. Consumed on first sign-in (acceptedAt set, the new row lands
 // `active`). A separate table rather than a placeholder `users` row on purpose:
@@ -592,6 +641,7 @@ export type UserRole = (typeof userRole.enumValues)[number];
 export type Invitation = typeof invitations.$inferSelect;
 export type OAuthClient = typeof oauthClients.$inferSelect;
 export type OAuthAccessToken = typeof oauthAccessTokens.$inferSelect;
+export type ApiToken = typeof apiTokens.$inferSelect;
 export type Favorite = typeof favorites.$inferSelect;
 export type InstanceSettings = typeof instanceSettings.$inferSelect;
 export type IntegrationSetting = typeof integrationSettings.$inferSelect;

@@ -258,16 +258,24 @@ export default function HomePage() {
         </section>
       ) : (
         <>
-          {me.isAdmin && (
-            <section className="flex gap-3">
+          {/* Tokens is everyone's — a member holds their own CLI credential; admin
+              is the instance. Both live in the same right-aligned row. */}
+          <section className="flex gap-3">
+            <Link
+              href="/settings/tokens"
+              className="inline-block rounded border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 px-4 py-2 text-xs hover:bg-gray-50 dark:hover:bg-gray-900 ml-auto"
+            >
+              tokens
+            </Link>
+            {me.isAdmin && (
               <Link
                 href="/admin"
-                className="inline-block rounded border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 px-4 py-2 text-xs hover:bg-gray-50 dark:hover:bg-gray-900 ml-auto"
+                className="inline-block rounded border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 px-4 py-2 text-xs hover:bg-gray-50 dark:hover:bg-gray-900"
               >
                 admin
               </Link>
-            </section>
-          )}
+            )}
+          </section>
 
           {/* Datasets → sources → questions. EVERY source of a dataset gets a
               row with its ways in — [query][chat][claude] — and the questions

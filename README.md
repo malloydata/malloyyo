@@ -81,6 +81,18 @@ Both take a target name (`malloyyo publish prod`) when the repo defines more tha
 The dataset must exist first — create it in the UI, or add `--create-dataset` to the first
 publish (it creates a private dataset, and only once the model compiles).
 
+**In CI there is no browser to sign in with**, so mint an API token instead — in the UI at
+`/settings/tokens` (any member can, for themselves) — and hand it over in the environment:
+
+```bash
+export MALLOYYO_TOKEN=myo_…    # instead of `malloyyo login`
+malloyyo publish
+```
+
+A token is shown once, carries the scopes you tick (`publish`, `mcp`), expires when you say
+so or never, and is revocable from the same page — effective on the very next request. See
+[API tokens](docs/authentication.md#programmatic-access-api-tokens).
+
 The CLI records the git commit it published from; Malloyyo compiles and introspects the model and stores a new version. If it doesn't compile, the push is rejected and the live model is left unchanged.
 
 Alternatively, **point Malloyyo at a GitHub repo** and it pulls `index.malloy` (and any

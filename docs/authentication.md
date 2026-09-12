@@ -78,6 +78,56 @@ configured.
 
 ---
 
+## Programmatic access: API tokens
+
+Sign-in above is for people in browsers. Two other credentials authenticate the
+same person without one, and both resolve through `src/lib/bearer-auth.ts`:
+
+- **An OAuth access token** — what `malloyyo login` and a claude.ai connection
+  obtain (Authorization Code + PKCE; `src/lib/oauth/`). Interactive, 24 h,
+  refreshable, and it carries the person's full authority: they just proved who
+  they are.
+- **A personal API token** — minted in the UI at **`/settings/tokens`** and
+  handed to the CLI as `$MALLOYYO_TOKEN` (`src/lib/api-tokens.ts`). This is the
+  credential for CI, where there is no browser and a 24 h expiry would mean a
+  red pipeline every morning.
+
+**Any member may mint one for themselves**, and only for themselves — the
+routes under `/api/tokens` scope every read and write to the session's own user
+id, so an admin cannot see or create someone else's. That is safe because a
+token is never more than its owner: every request re-reads the `users` row and
+re-runs `authorize()`, exactly like a session, so the same instant revocation
+applies. Scopes only narrow it further.
+
+| Scope | What it opens |
+| --- | --- |
+| `publish` | `POST /api/datasets/:ref/model/push` and the matching `…/status` |
+| `mcp` | `POST /mcp` — query traffic |
+
+Publishing additionally requires **owning the dataset**, or being an admin;
+creating a dataset (`--create-dataset`) stays admin-only, matching
+`POST /api/datasets`. An OAuth token satisfies any scope by construction, so
+`malloyyo login` keeps working as it did.
+
+Operational shape:
+
+- **The value is shown once.** Only its sha256 is stored, plus a display prefix
+  (`myo_<instance-code>_<8 chars>`) for the list. A lost token is revoked and
+  replaced, never recovered.
+- **`myo_` is a contract**, not decoration: the CLI uses it to tell "that
+  variable holds something else entirely" from "that token was rejected", and it
+  is what a secret scanner can match. The instance code is the same one that
+  prefixes share slugs, so a token minted on staging and used against
+  production says so.
+- **Expiry is the owner's choice, including never** — a credential that lapses
+  on its own breaks the build at 3am. The list shows each token's last use, which
+  is what makes a forgotten one visible.
+- **Revocation is immediate** (`revoked_at`, checked per request), needs no
+  redeploy, and so is disabling the person: either one stops the token on its
+  very next request.
+
+---
+
 ## Google
 
 Enabled when `AUTH_GOOGLE_ID` is set. Create an OAuth client in the Google Cloud

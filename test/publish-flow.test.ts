@@ -34,8 +34,11 @@ import {
   malloyArtifacts,
   oauthClients,
   oauthAccessTokens,
+  apiTokens,
+  type ApiTokenScope,
   type User,
 } from "@/db";
+import { createApiToken } from "@/lib/api-tokens";
 import { POST as pushRoute } from "@/app/api/datasets/[id]/model/push/route";
 import { GET as statusRoute } from "@/app/api/datasets/[id]/model/status/route";
 
@@ -122,7 +125,15 @@ function runCli(args: string[], cwd: string, env: Record<string, string> = {}): 
     execFile(
       process.execPath,
       [CLI, ...args],
-      { cwd, env: { ...process.env, NO_COLOR: "1", ...env }, maxBuffer: 16 * 1024 * 1024 },
+      {
+        cwd,
+        // MALLOYYO_TOKEN is blanked unless a test sets it: the CLI reads it
+        // from the ambient environment by design, and a developer who has one
+        // exported would otherwise change what these tests exercise. Empty
+        // reads as unset (see tokenSource).
+        env: { ...process.env, NO_COLOR: "1", MALLOYYO_TOKEN: "", ...env },
+        maxBuffer: 16 * 1024 * 1024,
+      },
       (err, stdout, stderr) => {
         const code = err && typeof (err as NodeJS.ErrnoException).code === "number"
           ? ((err as unknown as { code: number }).code)
@@ -218,6 +229,30 @@ async function datasetRows(name: string) {
   return db.select().from(datasets).where(eq(datasets.name, name));
 }
 
+/** An ordinary admitted user — no admin role, which is the point. */
+async function seedMember(email: string): Promise<User> {
+  const [u] = await db.insert(users).values({ email, status: "active", role: "member" }).returning();
+  seededUsers.push(u.id);
+  return u;
+}
+
+/** A live dataset owned by someone. Inserted directly: creating one through the
+    app is an admin act, and these tests are about publishing to an existing one. */
+async function seedDataset(name: string, userId: string) {
+  const [ds] = await db
+    .insert(datasets)
+    .values({ name, userId, isPublic: false, status: "ready", readyAt: new Date() })
+    .returning();
+  return ds;
+}
+
+/** Mint through the real code path, so the format and hashing are exercised. */
+async function mintFor(userId: string, scopes: ApiTokenScope[]): Promise<string> {
+  const created = await createApiToken({ userId, name: `test-${RUN}`, scopes, expiresAt: null });
+  assert.ok(created.ok, "expected the token to be minted");
+  return created.raw;
+}
+
 async function models(datasetId: string) {
   return db
     .select()
@@ -236,7 +271,6 @@ before(async () => {
     .insert(users)
     .values({
       email: `publisher-${RUN}@test.local`,
-      slug: `publisher-${RUN}`,
       status: "active",
       role: "admin",
       isAdmin: true,
@@ -467,17 +501,16 @@ test("status reports the server's auth error, not a bare 401", async () => {
   assert.match(out, /malloyyo login test/);
 });
 
-test("a non-admin token can't create anything", async () => {
-  const [plain] = await db
-    .insert(users)
-    .values({ email: `reader-${RUN}@test.local`, slug: `reader-${RUN}`, status: "active" })
-    .returning();
-  seededUsers.push(plain.id);
+test("a non-admin token can't create a dataset", async () => {
+  // Creating one is admin-only in the UI (POST /api/datasets), so a member's
+  // token must not be a way around that gate — only a way to publish to the
+  // datasets they already own (the test below).
+  const member = await seedMember(`reader-${RUN}@test.local`);
   const raw = randomBytes(32).toString("base64url");
   await db.insert(oauthAccessTokens).values({
     tokenHash: createHash("sha256").update(raw).digest("hex"),
     clientId,
-    userId: plain.id,
+    userId: member.id,
     scope: "mcp",
     resource: null,
     expiresAt: new Date(Date.now() + 60 * 60 * 1000),
@@ -488,11 +521,131 @@ test("a non-admin token can't create anything", async () => {
 
   assert.notEqual(r.code, 0, `expected a non-zero exit\n${r.stdout}\n${r.stderr}`);
   const out = r.stdout + r.stderr;
-  assert.match(out, /admin required/);
+  assert.match(out, /creating one is admin-only/);
   // A 403 is a different problem from a 401 — logging in again won't help.
-  assert.match(out, /isn't an admin/);
+  assert.match(out, /isn't allowed to do this/);
   assert.doesNotMatch(out, /malloyyo login/);
   assert.equal((await datasetRows(`nonadmin_ds_${RUN}`)).length, 0);
+});
+
+// ── minted API tokens (the MALLOYYO_TOKEN path) ──────────────────────────────
+
+test("a minted API token publishes, and $MALLOYYO_TOKEN is enough on its own", async () => {
+  // The whole point of the feature: no --token, no stored login, no browser.
+  const owner = await seedMember(`owner-${RUN}@test.local`);
+  const name = `owned_ds_${RUN}`;
+  await seedDataset(name, owner.id);
+  const minted = await mintFor(owner.id, ["publish"]);
+
+  const dir = makeProject(name);
+  const r = await runCli(["publish", "test", dir], dir, { MALLOYYO_TOKEN: minted });
+
+  assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`);
+  assert.match(r.stdout, /published version 1/);
+
+  const status = await runCli(["status", "test"], dir, { MALLOYYO_TOKEN: minted });
+  assert.equal(status.code, 0, `${status.stdout}\n${status.stderr}`);
+  assert.match(status.stdout, /version 1/);
+
+  // Using it stamps last_used_at, which is how a forgotten token is spotted.
+  const [row] = await db.select().from(apiTokens).where(eq(apiTokens.userId, owner.id));
+  assert.ok(row.lastUsedAt, "expected the token's last_used_at to be recorded");
+});
+
+test("a token without the publish scope is refused, and told which scope it lacks", async () => {
+  const owner = await seedMember(`mcponly-${RUN}@test.local`);
+  const name = `mcponly_ds_${RUN}`;
+  const ds = await seedDataset(name, owner.id);
+  const minted = await mintFor(owner.id, ["mcp"]);
+
+  const dir = makeProject(name);
+  const r = await runCli(["publish", "test", dir], dir, { MALLOYYO_TOKEN: minted });
+
+  assert.notEqual(r.code, 0, `expected a non-zero exit\n${r.stdout}\n${r.stderr}`);
+  const out = r.stdout + r.stderr;
+  assert.match(out, /does not carry the "publish" scope/);
+  // The advice must point at the token page, not at `login` — the credential is
+  // fine, it just wasn't given this permission.
+  assert.match(out, /settings\/tokens/);
+  assert.equal((await models(ds.id)).length, 0);
+});
+
+test("a token can't publish to someone else's dataset", async () => {
+  const [outsider, name] = [await seedMember(`outsider-${RUN}@test.local`), `others_ds_${RUN}`];
+  const stranger = await seedMember(`stranger-${RUN}@test.local`);
+  const ds = await seedDataset(name, stranger.id);
+  const minted = await mintFor(outsider.id, ["publish"]);
+
+  const dir = makeProject(name);
+  const r = await runCli(["publish", "test", dir], dir, { MALLOYYO_TOKEN: minted });
+
+  assert.notEqual(r.code, 0, `expected a non-zero exit\n${r.stdout}\n${r.stderr}`);
+  assert.match(r.stdout + r.stderr, /doesn't own dataset/);
+  assert.equal((await models(ds.id)).length, 0, "nothing is written for a refused publish");
+});
+
+test("an admin's token publishes to a dataset owned by someone else", async () => {
+  // Admins keep the authority they had when publishing was admin-only.
+  const stranger = await seedMember(`admin-target-${RUN}@test.local`);
+  const name = `adminpub_ds_${RUN}`;
+  await seedDataset(name, stranger.id);
+  const minted = await mintFor(admin.id, ["publish"]);
+
+  const dir = makeProject(name);
+  const r = await runCli(["publish", "test", dir], dir, { MALLOYYO_TOKEN: minted });
+
+  assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`);
+  assert.match(r.stdout, /published version 1/);
+});
+
+test("a revoked token stops working immediately", async () => {
+  const owner = await seedMember(`revoked-${RUN}@test.local`);
+  const name = `revoked_ds_${RUN}`;
+  const ds = await seedDataset(name, owner.id);
+  const minted = await mintFor(owner.id, ["publish"]);
+  await db
+    .update(apiTokens)
+    .set({ revokedAt: new Date() })
+    .where(eq(apiTokens.userId, owner.id));
+
+  const dir = makeProject(name);
+  const r = await runCli(["publish", "test", dir], dir, { MALLOYYO_TOKEN: minted });
+
+  assert.notEqual(r.code, 0, `expected a non-zero exit\n${r.stdout}\n${r.stderr}`);
+  const out = r.stdout + r.stderr;
+  assert.match(out, /invalid or revoked token/);
+  // 401 advice names the variable it actually read — otherwise "invalid token"
+  // sends someone to re-run `login`, which wouldn't be used.
+  assert.match(out, /\$MALLOYYO_TOKEN/);
+  assert.equal((await models(ds.id)).length, 0);
+});
+
+test("a token minted on another instance says so instead of just failing", async () => {
+  const owner = await seedMember(`elsewhere-${RUN}@test.local`);
+  const name = `elsewhere_ds_${RUN}`;
+  await seedDataset(name, owner.id);
+
+  const dir = makeProject(name);
+  const r = await runCli(["publish", "test", dir], dir, {
+    MALLOYYO_TOKEN: `myo_somewhereelse_${randomBytes(32).toString("base64url")}`,
+  });
+
+  assert.notEqual(r.code, 0, `expected a non-zero exit\n${r.stdout}\n${r.stderr}`);
+  assert.match(r.stdout + r.stderr, /minted on "somewhereelse"/);
+});
+
+test("a value that isn't a token at all is diagnosed as the wrong secret", async () => {
+  // The MotherDuck-rename hazard: MALLOYYO_TOKEN used to hold a warehouse
+  // secret in some configs, and a bare 401 points nowhere near that.
+  const dir = makeProject(`wrongsecret_ds_${RUN}`);
+  const r = await runCli(["publish", "test", dir], dir, {
+    MALLOYYO_TOKEN: "eyJhbGciOiJIUzI1NiJ9.eyJzZXNzaW9uIjoiYWJjIn0.sig",
+  });
+
+  assert.notEqual(r.code, 0, `expected a non-zero exit\n${r.stdout}\n${r.stderr}`);
+  const out = r.stdout + r.stderr;
+  assert.match(out, /isn't shaped like a Malloyyo token/);
+  assert.match(out, /warehouse password/);
 });
 
 test("--dry-run never reaches the server, even with --create-dataset", async () => {

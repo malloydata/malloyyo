@@ -91,9 +91,39 @@ create it under a slugified variant that later publishes wouldn't find.
 
 `publish` exits non-zero on a server-side compile failure, so it's safe to gate CI on.
 
-**Token precedence:** `--token` flag → the `malloyyo_token` env var from config (for CI) →
-your `malloyyo login` session. So interactively you just `login` once; in CI you set the env
-var and never touch the browser.
+## API tokens (`MALLOYYO_TOKEN`)
+
+For CI, or anywhere there is no browser to sign in with. Mint one in the instance's UI —
+**your name → tokens**, or `<instance-url>/settings/tokens` — and hand it over in the
+environment:
+
+```bash
+export MALLOYYO_TOKEN=myo_main_…
+malloyyo publish            # no login, no browser, no --token
+```
+
+Every member of an instance can mint their own; you do not have to be an admin. A token is
+shown **once**, at creation — it is stored hashed, so a lost one is revoked and replaced
+rather than recovered. It carries the scopes you tick:
+
+| Scope | What it opens |
+| --- | --- |
+| `publish` | `malloyyo publish` and `malloyyo status` |
+| `mcp` | querying the instance's published models over MCP |
+
+A token never carries more than you do. Publishing works on datasets **you own** (admins may
+publish to any), creating a dataset with `--create-dataset` stays admin-only, and every
+request re-checks your account — so revoking the token, or the account, takes effect on the
+next request rather than at expiry. Expiry is your choice at mint time, including **never**:
+a credential that lapses on its own breaks the pipeline at the worst moment, and the token
+list shows when each was last used so a forgotten one is still visible.
+
+**Token precedence:** `--token` flag → the `malloyyo_token` env var named in the config →
+`$MALLOYYO_TOKEN` → your `malloyyo login` session. The config's own variable wins over
+`MALLOYYO_TOKEN` because someone publishing to two instances from one shell needs a
+credential per instance, and one variable can only hold one of them. Both variables sit
+above the stored login, so an export in your shell profile quietly shadows `malloyyo login`
+— `login` warns when that variable is set, and any auth failure names the source it used.
 
 See `docs/model-publishing-design.md` in the repo for the full design.
 
@@ -148,8 +178,9 @@ export MALLOYYO_CLIENT_SECRET=...
 
 That is the whole of it — there is nothing else to configure.
 
-It is separate from `malloyyo login`, which authenticates *you* to one instance. This one
-identifies your account to Malloyyo, and each command trades it for a short-lived access
+It is separate from the two instance credentials — `malloyyo login` and `$MALLOYYO_TOKEN`,
+both of which authenticate *you* to one instance. This one identifies your account to
+Malloyyo itself, and each command trades it for a short-lived access
 token carrying only the permissions that command needs: a `list` cannot create, and only
 `secrets set` can write secrets. The trade happens against Malloyyo's own API, so the CLI
 talks to nothing else. Your secret is held in memory for that request and is never logged,

@@ -3,15 +3,15 @@
 Steps an operator runs when pulling a new version of Malloyyo. Newest first.
 
 > **The schema upgrades itself now — the `psql` steps below are history.** Since
-> 2026-08-07 the `drizzle/` journal is applied at boot (`RUN_MIGRATIONS_ON_BOOT`,
-> on by default), so pulling a new version and restarting is the whole upgrade. A
-> failed migration fails the health check rather than serving a half-migrated
-> schema.
+> 2026-08-07 the `drizzle/` journal is the upgrade path. A long-lived server applies it
+> at boot (`RUN_MIGRATIONS_ON_BOOT`, on by default); Vercel applies it after a successful
+> Production build and before that deployment is published. A failed migration fails the
+> boot or Vercel build rather than serving a half-migrated schema.
 >
 > The `drizzle/manual/*.sql` paths in the older entries below **no longer exist**:
 > those files were folded into the journal, and the directory was removed
 > 2026-08-12. Do not try to run them. A database that predates the journal is
-> detected at boot, baselined, and converged by the later entries — including from
+> detected by the runner, baselined, and converged by the later entries — including from
 > a hand-run July-2026 upgrade, which `0003` and `0004` guard against explicitly.
 > The entries are kept for the context they carry about what each release changed.
 

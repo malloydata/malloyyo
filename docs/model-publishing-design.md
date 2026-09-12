@@ -351,9 +351,13 @@ npm. They don't interfere.
 
 ## 8. Open questions
 
-- **Long-lived API tokens.** `oauthAccessTokens` is 24 h — too short for CI. Add a
-  separate personal/CI token type (hashed, revocable, long TTL), or accept refresh-token
-  rotation in CI? Probably a dedicated `api_tokens` concept.
+- **Long-lived API tokens — resolved:** a dedicated `api_tokens` table
+  (`drizzle/0018_api_tokens.sql`), minted by any member at `/settings/tokens`, read by the
+  CLI from `$MALLOYYO_TOKEN`. Hashed, named, scoped (`publish` / `mcp`), revocable, with
+  an owner-chosen expiry that may be *never*. Separate from the OAuth tables because those
+  model an interactive client — a client row, a refresh token rotated on every use, a 24 h
+  access token — and an unattended build has none of that. See
+  `src/lib/api-tokens.ts` and the API-tokens section of `docs/authentication.md`.
 - **Preview datasets.** Should `publish --preview` mint an ephemeral dataset so a branch
   doesn't clobber the main model version, with a TTL/cleanup? Pairs naturally with branch
   testing.
@@ -370,6 +374,11 @@ npm. They don't interfere.
   (reject, don't persist); the server introspects every declared source so "compiles" implies
   "queryable." Future `--allow-missing-tables` downgrades to a warning for publish-ahead-of-
   ingest.
-- **Opening up authz.** When/if to move from admin-only to owner-based publishing
-  (`dataset.userId === token.userId`), and whether non-admins get a self-serve token flow at
-  that point.
+- **Opening up authz — resolved:** publishing is now the dataset's **owner** or an admin
+  (`dataset.userId === token.userId || isAdmin`), and the self-serve token flow landed with
+  it — a member-only token that could do nothing would have been pointless. Two things
+  stayed put: creating a dataset via `--create-dataset` is still admin-only (it is
+  admin-only in the UI, and a token must not be the way around that), and nobody can mint a
+  token for anyone but themselves. Per-dataset token scoping is the obvious next step if a
+  multi-team instance wants it; today a token carries the whole account's authority,
+  narrowed only by scope.

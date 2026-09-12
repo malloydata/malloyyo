@@ -6,6 +6,7 @@ import { signInPath } from "@/lib/auth-paths";
 import { getOAuthClient, isRegisteredRedirect } from "@/lib/oauth/clients";
 import { signAuthz } from "@/lib/oauth/authz-blob";
 import { originFromRequest } from "@/lib/oauth/base-url";
+import { formatScopes, parseScopeString } from "@/lib/api-token-scopes";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -44,8 +45,14 @@ export async function GET(request: Request): Promise<Response> {
   if (responseType !== "code") return redirectError(redirectUri, "unsupported_response_type", state, 'Only "code" is supported');
   if (!codeChallenge || codeChallengeMethod !== "S256") return redirectError(redirectUri, "invalid_request", state, "PKCE S256 is required");
 
-  const scope = requestedScope || "mcp";
-  if (scope !== "mcp") return redirectError(redirectUri, "invalid_scope", state, `Unsupported scope: ${scope}`);
+  // A client asks for what it needs; anything outside the vocabulary is refused
+  // rather than narrowed, so a client never believes it got a scope it didn't.
+  // Bare "mcp" stays the default, which is what every pre-scopes client sends.
+  const parsedScopes = parseScopeString(requestedScope || "mcp");
+  if (!parsedScopes) {
+    return redirectError(redirectUri, "invalid_scope", state, `Unsupported scope: ${requestedScope}`);
+  }
+  const scope = formatScopes(parsedScopes);
 
   // The local user row, whichever sign-in produced it. `userId` below is bound into the
   // consent blob and compared on approval, so it must be this deployment's own user ID —

@@ -6,7 +6,14 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { delimiter, join } from 'node:path';
-import { browserless, listenTarget, openBrowser } from '../src/oauth.js';
+import {
+  browserless,
+  getAccessToken,
+  listenTarget,
+  looksLikeInstanceToken,
+  openBrowser,
+  tokenSource,
+} from '../src/oauth.js';
 
 test('listens on any free loopback port by default', () => {
   assert.deepEqual(listenTarget({}), { host: '127.0.0.1', port: 0 });
@@ -79,3 +86,59 @@ test(
     assert.ok(true, 'still running after the opener failed');
   },
 );
+
+// ── where a bearer token comes from ─────────────────────────────────────────
+//
+// Precedence is load-bearing: CI sets $MALLOYYO_TOKEN and has no credentials
+// file, while a laptop has a login and (too often) a stale export. Getting the
+// order wrong means one of those two silently uses the wrong credential.
+
+const TARGET = { name: 'prod', url: 'https://yo.example.com', dataset: 'movies' };
+const CONFIGURED = { ...TARGET, tokenEnv: 'YO_PROD_TOKEN' };
+
+test('--token wins over every environment variable', async () => {
+  const env = { YO_PROD_TOKEN: 'from-config-env', MALLOYYO_TOKEN: 'from-global-env' };
+  assert.equal(tokenSource(CONFIGURED, { tokenFlag: 'from-flag' }, env), 'flag');
+  assert.equal(await getAccessToken(CONFIGURED, { tokenFlag: 'from-flag' }, env), 'from-flag');
+});
+
+test("a target's own token env var beats the ambient one", async () => {
+  // Someone publishing to main AND staging from one shell needs a credential
+  // per instance; $MALLOYYO_TOKEN can only hold one of them.
+  const env = { YO_PROD_TOKEN: 'from-config-env', MALLOYYO_TOKEN: 'from-global-env' };
+  assert.equal(tokenSource(CONFIGURED, {}, env), 'env');
+  assert.equal(await getAccessToken(CONFIGURED, {}, env), 'from-config-env');
+});
+
+test('$MALLOYYO_TOKEN is used when the config names no variable', async () => {
+  const env = { MALLOYYO_TOKEN: 'from-global-env' };
+  assert.equal(tokenSource(TARGET, {}, env), 'global-env');
+  assert.equal(await getAccessToken(TARGET, {}, env), 'from-global-env');
+});
+
+test('an empty or unset variable falls through to the stored login', () => {
+  assert.equal(tokenSource(TARGET, {}, {}), 'login');
+  assert.equal(tokenSource(TARGET, {}, { MALLOYYO_TOKEN: '' }), 'login');
+  assert.equal(tokenSource(CONFIGURED, {}, { YO_PROD_TOKEN: '' }), 'login');
+  // A named-but-empty config var still lets the ambient one through.
+  assert.equal(
+    tokenSource(CONFIGURED, {}, { YO_PROD_TOKEN: '', MALLOYYO_TOKEN: 'from-global-env' }),
+    'global-env',
+  );
+});
+
+test('a minted instance token is recognizable, and other secrets are not', () => {
+  // This is advice-only (it never gates a request), but it is the difference
+  // between "invalid or revoked token" and "is that variable still your
+  // warehouse password?".
+  assert.equal(looksLikeInstanceToken(`myo_stg_${'a'.repeat(43)}`), true);
+  assert.equal(looksLikeInstanceToken('myo_main_aa_bb-ccddeeffgghhiijjkkll'), true);
+  for (const other of [
+    '',
+    'myo_stg_short',
+    'Ck1rQmJ3S2xvR2hRc3VwZXJzZWNyZXRhY2Nlc3N0b2s', // an OAuth access token
+    'eyJhbGciOiJIUzI1NiJ9.eyJzZXNzaW9uIjoiYWJjIn0.sig', // a MotherDuck token
+  ]) {
+    assert.equal(looksLikeInstanceToken(other), false, `should not match: ${other}`);
+  }
+});

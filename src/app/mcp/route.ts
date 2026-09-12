@@ -1,11 +1,8 @@
 // Copyright (c) The Malloy Foundation
 // SPDX-License-Identifier: MIT
 
-import { db, users } from "@/db";
-import { eq } from "drizzle-orm";
 import { buildHostedExploreSurface } from "@/lib/mcp-host";
-import { recordAccessTokenUse, validateAccessToken } from "@/lib/oauth/tokens";
-import { authorize } from "@/lib/authorize";
+import { bearerToken, credentialLabel, resolveBearer } from "@/lib/bearer-auth";
 import { corsPreflight, withCors } from "@/lib/oauth/cors";
 import { originFromRequest } from "@/lib/oauth/base-url";
 import { logger } from "@/lib/logger";
@@ -49,13 +46,6 @@ function unauthorized(description: string, request: Request): Response {
 const PROTOCOL_VERSION = "2025-03-26";
 const SERVER_INFO = { name: env.INSTANCE_NAME, version: VERSION };
 
-/** Bearer token from the Authorization header, or "" when absent/not Bearer. */
-function bearerToken(req: Request): string {
-  const header = req.headers.get("authorization");
-  if (!header || !header.toLowerCase().startsWith("bearer ")) return "";
-  return header.slice(7).trim();
-}
-
 export async function POST(req: Request) {
   // Set by the middleware (src/proxy.ts) so these lines correlate with the
   // "request" line that carries the client IP.
@@ -66,34 +56,26 @@ export async function POST(req: Request) {
     logger.info("mcp unauthorized", { requestId, reason: "missing_bearer" });
     return unauthorized("Missing Bearer token. OAuth against this server to obtain one.", req);
   }
-  const validated = await validateAccessToken(raw);
-  if (!validated.ok) {
-    logger.info("mcp unauthorized", { requestId, reason: validated.reason });
-    return unauthorized("Invalid or revoked token", req);
+
+  // Either credential opens this door: an OAuth token from a browser sign-in
+  // (how claude.ai connects) or a personal API token carrying the "mcp" scope
+  // (how a script or an unattended agent does). resolveBearer re-reads the user
+  // row and re-runs authorize() on every call, so a disabled account or a
+  // revoked token loses access immediately rather than at token expiry.
+  const auth = await resolveBearer(raw, { scope: "mcp" });
+  if (!auth.ok) {
+    logger.info("mcp unauthorized", { requestId, status: auth.status, reason: auth.error });
+    return unauthorized(auth.status === 403 ? auth.error : "Invalid or revoked token", req);
   }
+  const user = auth.user;
 
-  // Every log line from here on names the user and the OAuth client, so any
-  // /mcp request can be attributed — not just the tool calls.
-  const log = logger.child({ requestId, userId: validated.userId, clientId: validated.clientId });
-
-  // Identify user from the token — no slug needed.
-  const [user] = await db.select().from(users).where(eq(users.id, validated.userId)).limit(1);
-  if (!user) {
-    log.warn("mcp unauthorized", { reason: "user_not_found" });
-    return unauthorized("Token user not found", req);
-  }
-
-  // Re-authorize on every call, against the row just read. The token alone
-  // proves the user once authenticated; this ensures someone disabled (or still
-  // pending) loses MCP access immediately rather than at token expiry (up to
-  // 90 days).
-  if (!authorize(user).allowed) {
-    log.warn("mcp unauthorized", { reason: "not_allowed" });
-    return unauthorized("Access revoked for this account", req);
-  }
-
-  // Fire-and-forget last_used_at update.
-  void recordAccessTokenUse(validated.tokenHash);
+  // Every log line from here on names the user and the credential, so any /mcp
+  // request can be attributed — not just the tool calls.
+  const log = logger.child({
+    requestId,
+    userId: user.id,
+    credential: credentialLabel(auth.cred),
+  });
 
   let body: JsonRpcReq;
   try { body = (await req.json()) as JsonRpcReq; } catch {
@@ -179,13 +161,14 @@ export async function OPTIONS() { return corsPreflight(); }
 export async function GET(req: Request) {
   // No auth needed to answer, but Streamable HTTP clients send their bearer
   // token when opening the stream — resolve it purely so the log names who is
-  // behind any residual traffic. One indexed lookup, no last_used_at write.
+  // behind any residual traffic. Two indexed lookups (credential, then user),
+  // and deliberately no last_used_at write: opening a stream is not a use.
   const raw = bearerToken(req);
-  const validated = raw ? await validateAccessToken(raw) : null;
+  const resolved = raw ? await resolveBearer(raw, { scope: "mcp", recordUse: false }) : null;
   logger.info("mcp GET", {
     requestId: req.headers.get("x-request-id") ?? undefined,
-    userId: validated?.ok ? validated.userId : undefined,
-    clientId: validated?.ok ? validated.clientId : undefined,
+    userId: resolved?.ok ? resolved.user.id : undefined,
+    credential: resolved?.ok ? credentialLabel(resolved.cred) : undefined,
     userAgent: req.headers.get("user-agent"),
   });
   return withCors(new Response(

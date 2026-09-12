@@ -78,6 +78,46 @@ configured.
 
 ---
 
+## Programmatic access: API tokens
+
+Sign-in above is for people in browsers. Two other credentials authenticate the
+same person without one, and both resolve through `src/lib/bearer-auth.ts`:
+
+- **An OAuth access token** — what `malloyyo login` and a claude.ai connection
+  obtain (Authorization Code + PKCE; `src/lib/oauth/`). Interactive, 24 h,
+  refreshable, and **scoped by what the client asked for** and the person
+  approved: `login` asks for `mcp publish`, a claude.ai connection asks for
+  `mcp` and therefore cannot publish. A credential delegated to a third party
+  for querying must not also be able to overwrite a model.
+- **A personal API token** — minted in the UI at **`/settings/tokens`** and
+  handed to the CLI as `$MALLOYYO_TOKEN` (`src/lib/api-tokens.ts`). This is the
+  credential for CI, where there is no browser and a 24 h expiry would mean a
+  red pipeline every morning.
+
+**Any member may mint one for themselves**, and only for themselves — the
+routes under `/api/tokens` scope every read and write to the session's own user
+id, so an admin can neither see nor create someone else's. That is safe because
+a token is never more than its owner: every request re-reads the `users` row and
+re-runs `authorize()`, exactly like a session, so the same instant revocation
+applies. Its scopes (`publish`, `mcp`) only narrow it further, and publishing
+additionally requires owning the dataset or being an admin.
+
+Both credential kinds carry scopes from the same vocabulary
+(`src/lib/api-token-scopes.ts`), which is why the consent screen and the token
+form describe them in the same words. A stored grant whose scope string this
+build does not recognize — every grant issued before publishing had a scope of
+its own included — is read as `mcp` alone, never as more: `grantedScopes()`
+resolves an unknown vintage to the narrowest reading. Someone whose saved
+`malloyyo login` predates the change signs in once more; the CLI's 403 says so.
+
+To cut off a person, disable the person: `status = disabled` refuses every
+token they hold on its next request, with nothing to revoke one by one.
+
+**→ [API tokens](api-tokens.md)** is the full guide: minting, the CI recipe,
+credential precedence, the token format, rotation, and a troubleshooting table.
+
+---
+
 ## Google
 
 Enabled when `AUTH_GOOGLE_ID` is set. Create an OAuth client in the Google Cloud

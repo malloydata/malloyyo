@@ -20,6 +20,9 @@ interface TokenGrant {
 
 const LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
 
+/** The scopes `malloyyo login` requests. Space-delimited, per RFC 6749 §3.3. */
+const LOGIN_SCOPE = "mcp publish";
+
 async function discover(baseUrl: string): Promise<Endpoints> {
   const res = await apiFetch(`${baseUrl}/api/oauth/discovery/authorization-server`);
   if (!res.ok) throw new Error(`OAuth discovery failed at ${baseUrl}: ${res.status} ${res.statusText}`);
@@ -203,7 +206,11 @@ export async function login(baseUrl: string, opts: LoginOptions = {}): Promise<C
       redirect_uri: redirectUri,
       code_challenge: challenge,
       code_challenge_method: "S256",
-      scope: "mcp",
+      // What this CLI does: publish models, and query them (`malloyyo mcp`
+      // against a hosted instance). A claude.ai connection asks for "mcp"
+      // alone and cannot publish — so a login here is not interchangeable
+      // with one, and must say so.
+      scope: LOGIN_SCOPE,
       state,
     }).toString();
 
@@ -249,6 +256,14 @@ export async function login(baseUrl: string, opts: LoginOptions = {}): Promise<C
       expiresAt: Date.now() + (grant.expires_in ?? 86400) * 1000,
     };
     saveCreds(baseUrl, creds);
+    if (process.env[TOKEN_ENV]) {
+      // Otherwise this reads as a successful login followed by inexplicable
+      // 401s/403s from whatever that variable actually holds.
+      console.log(
+        `\nNote: $${TOKEN_ENV} is set in this shell and takes precedence over the\n` +
+          `  login just stored. Unset it to use this login.`,
+      );
+    }
     return creds;
   } finally {
     close();
@@ -278,26 +293,69 @@ async function refresh(baseUrl: string, creds: Creds): Promise<Creds> {
   return updated;
 }
 
+/**
+ * The env var the CLI reads when the config names none: one token for "the
+ * instance I work with", minted at <url>/settings/tokens.
+ *
+ * A target's own `malloyyo_token: { env: … }` still wins, because someone
+ * pushing to main AND staging from one shell needs a credential per instance
+ * and this single name can only hold one of them.
+ */
+export const TOKEN_ENV = "MALLOYYO_TOKEN";
+
+/**
+ * Is this value shaped like a token minted by a Malloyyo instance
+ * (`myo_<instance>_<secret>`)? Used only to improve an auth failure's advice:
+ * an env var that holds something else entirely — the classic case being a
+ * warehouse secret that used to live under this name — otherwise produces a
+ * bare "invalid token" with nothing pointing at the real cause. A token from
+ * `malloyyo login` is not of this shape, which is why this never gates a
+ * request.
+ */
+export function looksLikeInstanceToken(value: string): boolean {
+  return /^myo_[a-z0-9]+_[A-Za-z0-9_-]{20,}$/.test(value);
+}
+
 /** Where a bearer token came from — decides what advice a 401 gets. */
-export type TokenSource = "flag" | "env" | "login";
+export type TokenSource = "flag" | "env" | "global-env" | "login";
+
+type Env = Record<string, string | undefined>;
 
 /** The source getAccessToken WILL use, without resolving the token itself.
     Same precedence, so an auth failure can name the thing to fix. */
-export function tokenSource(target: Target, opts: { tokenFlag?: string }): TokenSource {
+export function tokenSource(
+  target: Target,
+  opts: { tokenFlag?: string },
+  env: Env = process.env,
+): TokenSource {
   if (opts.tokenFlag) return "flag";
-  if (target.tokenEnv && process.env[target.tokenEnv]) return "env";
+  if (target.tokenEnv && env[target.tokenEnv]) return "env";
+  if (env[TOKEN_ENV]) return "global-env";
   return "login";
 }
 
 /**
  * Resolve a bearer token for a target. Precedence:
  *   1. --token flag
- *   2. the env var named in the config (CI / explicit)
- *   3. stored `malloyyo login` credentials (auto-refreshed when near expiry)
+ *   2. the env var named in the config (per-instance, explicit)
+ *   3. $MALLOYYO_TOKEN (the ambient one — what CI usually sets)
+ *   4. stored `malloyyo login` credentials (auto-refreshed when near expiry)
+ *
+ * Both env vars sit ABOVE the stored login: a container has no credentials
+ * file, and someone who exported a token in this shell meant it. The cost is
+ * that a forgotten `export` in a shell profile shadows a fresh `malloyyo
+ * login` — so `login` says when that variable is set, and every auth failure
+ * names the source it actually used (tokenSource, above).
  */
-export async function getAccessToken(target: Target, opts: { tokenFlag?: string }): Promise<string> {
+export async function getAccessToken(
+  target: Target,
+  opts: { tokenFlag?: string },
+  env: Env = process.env,
+): Promise<string> {
   if (opts.tokenFlag) return opts.tokenFlag;
-  if (target.tokenEnv && process.env[target.tokenEnv]) return process.env[target.tokenEnv] as string;
+  if (target.tokenEnv && env[target.tokenEnv]) return env[target.tokenEnv] as string;
+  const ambient = env[TOKEN_ENV];
+  if (ambient) return ambient;
 
   let creds = loadCreds(target.url);
   if (!creds) {

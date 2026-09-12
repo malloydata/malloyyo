@@ -5,7 +5,14 @@ import { resolveTarget, resolveInstance, resolvePublishTarget, type Target } fro
 import { gatherDirectory, gatherDashboards, gitInfo } from "./gather.js";
 import { lintDashboards, printLintReport } from "./lint.js";
 import { missingEnvRefs, missingEnvHint } from "./shared/env-refs.js";
-import { getAccessToken, login, tokenSource, type TokenSource } from "./oauth.js";
+import {
+  getAccessToken,
+  login,
+  looksLikeInstanceToken,
+  tokenSource,
+  TOKEN_ENV,
+  type TokenSource,
+} from "./oauth.js";
 import { apiFetch } from "./http.js";
 import { serveMcp } from "./mcp.js";
 import { serveDashboard } from "./dashboard.js";
@@ -31,17 +38,43 @@ function shortSha(sha?: string): string {
  * thing that produced it rather than leaving "invalid or revoked token" as the
  * whole message.
  */
-function authHint(status: number, t: Target, source: TokenSource): string {
+function authHint(
+  status: number,
+  t: Target,
+  source: TokenSource,
+  /** The value used didn't look like a minted instance token — likely the wrong secret. */
+  foreignValue = false,
+): string {
   const login = `malloyyo login ${t.name}`;
+  const mint = `${t.url}/settings/tokens`;
   if (status === 403) {
-    return `\n  The token is valid, but that account isn't an admin on ${t.url} —` +
-      `\n  publishing is admin-only. Ask an admin there to grant access.`;
+    // The server's own message says which of these it was; this says where the
+    // fix lives. Both halves matter: a token can be perfectly valid and still
+    // lack the scope, or belong to someone who doesn't own the dataset.
+    const why =
+      `\n  The credential is valid, but it isn't allowed to do this on ${t.url}.` +
+      `\n  The model surface needs the "publish" scope, on an account that owns the` +
+      `\n  dataset (or is an admin there).`;
+    // A saved login from before `login` asked for publishing carries "mcp"
+    // alone, and no token page fixes that — signing in again does.
+    return source === "login"
+      ? why + `\n  A login stored before that scope existed carries only "mcp". Run:  ${login}`
+      : why + `\n  Mint a token carrying it at:  ${mint}`;
   }
+  const wrongSecret = foreignValue
+    ? `\n  (that value isn't shaped like a Malloyyo token — is the variable still` +
+      `\n  set to something else, like a warehouse password?)`
+    : "";
   switch (source) {
     case "flag":
-      return `\n  That token came from --token. Drop the flag and run:  ${login}`;
+      return `\n  That token came from --token. Mint one at ${mint}, or run:  ${login}${wrongSecret}`;
     case "env":
-      return `\n  That token came from $${t.tokenEnv}. Re-issue it, or unset it and run:  ${login}`;
+      return `\n  That token came from $${t.tokenEnv}. Mint a replacement at ${mint},` +
+        `\n  or unset it and run:  ${login}${wrongSecret}`;
+    case "global-env":
+      return `\n  That token came from $${TOKEN_ENV}. It may be revoked, or minted for a` +
+        `\n  different instance. Mint one for ${t.url} at:  ${mint}` +
+        `\n  Or unset the variable and run:  ${login}${wrongSecret}`;
     default:
       return `\n  Your saved login for ${t.url} is expired or revoked.\n  Run:  ${login}`;
   }
@@ -76,10 +109,24 @@ function failureHint(out: ModelStatus, t: Target): string {
 }
 
 /** Message for a failed publish/status response, with advice about what to fix. */
-function requestFailed(what: string, res: Response, out: ModelStatus, t: Target, source: TokenSource): Error {
+function requestFailed(
+  what: string,
+  res: Response,
+  out: ModelStatus,
+  t: Target,
+  source: TokenSource,
+  bearer?: string,
+): Error {
   const detail = out.error ?? `${res.status} ${res.statusText}`;
+  // Only worth saying for a value that came from the environment: a token
+  // typed after --token, or one stored by `login`, is not of that shape either
+  // and saying so would be noise.
+  const foreign =
+    (source === "env" || source === "global-env") && !!bearer && !looksLikeInstanceToken(bearer);
   const hint =
-    res.status === 401 || res.status === 403 ? authHint(res.status, t, source) : failureHint(out, t);
+    res.status === 401 || res.status === 403
+      ? authHint(res.status, t, source, foreign)
+      : failureHint(out, t);
   return new Error(`${what} failed: ${detail}${hint}`);
 }
 
@@ -97,7 +144,8 @@ const PUBLISH_HELP = `Target resolution:
 
   -i takes what \`login\` takes: a URL, or the name of a configured target
   whose url should be borrowed. Authenticate the same way as always:
-  \`malloyyo login <url>\`, or pass --token.`;
+  \`malloyyo login <url>\`, or set \$MALLOYYO_TOKEN (mint one at
+  <url>/settings/tokens — that is what CI wants), or pass --token.`;
 
 async function publish(
   target: string | undefined,
@@ -167,7 +215,7 @@ async function publish(
   const out = (await res.json().catch(() => ({}))) as ModelStatus;
 
   if (!res.ok || !out.ok) {
-    throw requestFailed("publish", res, out, t, source);
+    throw requestFailed("publish", res, out, t, source, bearer);
   }
   if (out.created) {
     console.log(`✓ created dataset ${out.dataset ?? t.dataset} (private) — ${t.url}/datasets/${out.dataset ?? t.dataset}`);
@@ -189,7 +237,7 @@ async function status(target: string | undefined, opts: { token?: string }): Pro
     // Same treatment as publish: read the server's own message, and say what to
     // do about a bad credential instead of just printing "401 Unauthorized".
     const body = (await res.json().catch(() => ({}))) as ModelStatus;
-    throw requestFailed("status", res, body, t, source);
+    throw requestFailed("status", res, body, t, source, bearer);
   }
   const s = (await res.json()) as ModelStatus;
   const git = s.git;

@@ -13,6 +13,10 @@ export async function GET(request: Request) {
   return withCors(NextResponse.json({
     resource: `${origin}/mcp`,
     authorization_servers: [origin],
+    // The MCP endpoint, and only what reaching it requires. Deliberately NOT
+    // the authorization server's full vocabulary: an MCP client reads this to
+    // decide what to ask for, and a connection delegated for querying should
+    // not come back holding "publish" too.
     scopes_supported: ["mcp"],
     bearer_methods_supported: ["header"],
   }));

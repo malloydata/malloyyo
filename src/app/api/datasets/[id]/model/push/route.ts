@@ -4,7 +4,8 @@
 import { NextResponse } from "next/server";
 import { desc, eq } from "drizzle-orm";
 import { db, datasets, malloyModels, malloyModelFiles, malloyArtifacts } from "@/db";
-import { requireAdminBearer } from "@/lib/bearer-auth";
+import { credentialLabel, requireBearer } from "@/lib/bearer-auth";
+import { isAdmin } from "@/lib/admin";
 import { resolveDatasetByRef } from "@/lib/mcp-tools";
 import { introspectModelFiles } from "@/lib/malloy";
 import { nameToSlug } from "@/lib/slug";
@@ -115,7 +116,7 @@ function generatedBy(git: GitInfo): string {
 }
 
 export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
-  const auth = await requireAdminBearer(req);
+  const auth = await requireBearer(req, { scope: "publish" });
   if (!auth.ok) return json(auth.status, { ok: false, error: auth.error });
 
   const { id } = await ctx.params;
@@ -138,8 +139,30 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     });
   }
   if (!ds) {
+    // Creating a dataset is an admin act in the UI (POST /api/datasets), so it is
+    // one here too — otherwise a member's publish token would be a way around
+    // that gate rather than a way to use their own datasets.
+    if (!isAdmin(auth.user)) {
+      return json(403, {
+        ok: false,
+        kind: "request",
+        error: `dataset "${id}" not found, and creating one is admin-only — ask an admin to create it`,
+      });
+    }
     const bad = creationError(id);
     if (bad) return json(400, { ok: false, kind: "request", error: bad });
+  }
+  // Who may publish to an existing dataset: its owner, or an admin. This is the
+  // loosening design §4.5 left open — publishing used to be admin-only, which
+  // made a member's token useless even for the datasets they own.
+  if (ds && ds.userId !== auth.user.id && !isAdmin(auth.user)) {
+    return json(403, {
+      ok: false,
+      kind: "request",
+      error:
+        `that account doesn't own dataset "${ds.name}" and isn't an admin on this ` +
+        `instance — publishing is limited to a dataset's owner`,
+    });
   }
 
   let body: PushBody;
@@ -172,7 +195,14 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   if (!result.ok) {
     const missingEnv = missingEnvRefs(body.config);
     const kind = classifyCompileError(result.error, new Set(fileMap.keys()), missingEnv);
-    logger.info("model push rejected", { datasetId: ds?.id, kind, dryRun, missingEnv, error: result.error });
+    logger.info("model push rejected", {
+      datasetId: ds?.id,
+      credential: credentialLabel(auth.cred),
+      kind,
+      dryRun,
+      missingEnv,
+      error: result.error,
+    });
     // Record the failed attempt on the dataset — but never as a model version (§4.4).
     // Nothing to record when the dataset doesn't exist yet: it isn't created either.
     if (!dryRun && ds) {
@@ -304,6 +334,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       fileCount: fileMap.size,
       dashboardCount: (body.dashboards ?? []).length,
       generatedBy: created.model.generatedBy,
+      credential: credentialLabel(auth.cred),
     });
 
     void captureTelemetry(

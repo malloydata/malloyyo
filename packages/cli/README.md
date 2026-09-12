@@ -125,7 +125,9 @@ credential per instance, and one variable can only hold one of them. Both variab
 above the stored login, so an export in your shell profile quietly shadows `malloyyo login`
 — `login` warns when that variable is set, and any auth failure names the source it used.
 
-See `docs/model-publishing-design.md` in the repo for the full design.
+See [API tokens](https://github.com/malloydata/malloyyo/blob/main/docs/api-tokens.md) for
+the CI recipe, rotation, and a troubleshooting table, and
+`docs/model-publishing-design.md` in the repo for the publish design.
 
 ## Malloyyo-hosted instances (`malloyyo cloud`)
 

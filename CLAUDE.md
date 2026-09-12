@@ -217,6 +217,29 @@ connected to the same Claude client at once. Two env vars disambiguate them:
 Defaults are `Malloyyo`/`main`. Set both in the Vercel env (per environment)
 **and** mirror them into the matching `local/<instance>` file.
 
+## Credentials that reach the API
+
+Three different things authenticate a caller, and conflating them is the easy
+mistake:
+
+- **A session** (browser) — Auth.js database sessions, `getSessionUser()`.
+- **An OAuth access token** — `malloyyo login` and claude.ai connections.
+  24h, refreshable, and it carries the user's FULL authority (they just signed
+  in), so scope checks pass by construction.
+- **A personal API token** — minted by any member at `/settings/tokens`, read by
+  the CLI from `$MALLOYYO_TOKEN`. Long-lived (expiry optional, "never" allowed),
+  hashed, revocable, and scoped: `publish` (model push + status) or `mcp`
+  (query). Format `myo_<INSTANCE_CODE>_<secret>`, which is what lets the CLI
+  diagnose "that variable holds a different secret" and "that token is from
+  another instance" instead of relaying a bare 401.
+
+**Both token kinds resolve through one place — `src/lib/bearer-auth.ts`
+(`requireBearer` / `resolveBearer`).** Don't call `validateAccessToken` from a
+route: that skips the API-token path, the per-request `authorize()` re-read, and
+the scope check. Publishing authority is **the dataset's owner or an admin**;
+creating a dataset stays admin-only, matching `POST /api/datasets`. Full guide:
+`docs/api-tokens.md`.
+
 ## Vercel deployment notes
 
 - `outputFileTracingIncludes` keys must NOT have `/route` suffix

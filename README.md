@@ -90,8 +90,8 @@ malloyyo publish
 ```
 
 A token is shown once, carries the scopes you tick (`publish`, `mcp`), expires when you say
-so or never, and is revocable from the same page — effective on the very next request. See
-[API tokens](docs/authentication.md#programmatic-access-api-tokens).
+so or never, and is revocable from the same page — effective on the very next request.
+See **[API tokens](docs/api-tokens.md)** for the CI recipe and the rest.
 
 The CLI records the git commit it published from; Malloyyo compiles and introspects the model and stores a new version. If it doesn't compile, the push is rejected and the live model is left unchanged.
 

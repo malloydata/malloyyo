@@ -223,9 +223,14 @@ Three different things authenticate a caller, and conflating them is the easy
 mistake:
 
 - **A session** (browser) — Auth.js database sessions, `getSessionUser()`.
-- **An OAuth access token** — `malloyyo login` and claude.ai connections.
-  24h, refreshable, and it carries the user's FULL authority (they just signed
-  in), so scope checks pass by construction.
+- **An OAuth access token** — `malloyyo login` and claude.ai connections. 24h,
+  refreshable, and scoped by what the client asked for on the consent screen:
+  `login` requests `mcp publish`, a claude.ai connection requests `mcp` and so
+  **cannot publish**. A grant whose stored scope is unrecognized — including
+  every grant issued before publishing had a scope of its own — reads as
+  `mcp` alone (`grantedScopes`, src/lib/api-token-scopes.ts): a credential must
+  never gain reach from an older vintage. The upgrade path for someone whose
+  saved login predates this is one `malloyyo login`, which the CLI's 403 says.
 - **A personal API token** — minted by any member at `/settings/tokens`, read by
   the CLI from `$MALLOYYO_TOKEN`. Long-lived (expiry optional, "never" allowed),
   hashed, revocable, and scoped: `publish` (model push + status) or `mcp`
@@ -236,7 +241,9 @@ mistake:
 **Both token kinds resolve through one place — `src/lib/bearer-auth.ts`
 (`requireBearer` / `resolveBearer`).** Don't call `validateAccessToken` from a
 route: that skips the API-token path, the per-request `authorize()` re-read, and
-the scope check. Publishing authority is **the dataset's owner or an admin**;
+the scope check. Scopes are one vocabulary for both
+(`src/lib/api-token-scopes.ts`), so the consent screen and the token form
+render the same sentences. Publishing authority is **the dataset's owner or an admin**;
 creating a dataset stays admin-only, matching `POST /api/datasets`. Full guide:
 `docs/api-tokens.md`.
 

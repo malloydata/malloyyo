@@ -61,7 +61,10 @@ malloyyo logout main
 
 Login is **per-instance** (it authenticates you to a URL, for all datasets on it), so the
 argument is a *target or URL*, not a dataset — and it's optional when the config is
-unambiguous. It uses the instance's OAuth flow (Authorization Code + PKCE, loopback redirect)
+unambiguous. It asks the instance for two permissions, which the consent screen names:
+publishing models, and querying them. (A claude.ai connection to the same instance asks
+only to query, so it cannot publish — and a login stored before publishing had a
+permission of its own needs one more `malloyyo login` to gain it.) It uses the instance's OAuth flow (Authorization Code + PKCE, loopback redirect)
 and stores a refreshable token in `~/.config/malloyyo/credentials.json` (mode 0600), keyed by
 instance URL — so you can be logged in to several instances at once. Tokens auto-refresh.
 

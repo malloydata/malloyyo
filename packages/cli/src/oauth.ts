@@ -20,6 +20,9 @@ interface TokenGrant {
 
 const LOGIN_TIMEOUT_MS = 5 * 60 * 1000;
 
+/** The scopes `malloyyo login` requests. Space-delimited, per RFC 6749 §3.3. */
+const LOGIN_SCOPE = "mcp publish";
+
 async function discover(baseUrl: string): Promise<Endpoints> {
   const res = await apiFetch(`${baseUrl}/api/oauth/discovery/authorization-server`);
   if (!res.ok) throw new Error(`OAuth discovery failed at ${baseUrl}: ${res.status} ${res.statusText}`);
@@ -203,7 +206,11 @@ export async function login(baseUrl: string, opts: LoginOptions = {}): Promise<C
       redirect_uri: redirectUri,
       code_challenge: challenge,
       code_challenge_method: "S256",
-      scope: "mcp",
+      // What this CLI does: publish models, and query them (`malloyyo mcp`
+      // against a hosted instance). A claude.ai connection asks for "mcp"
+      // alone and cannot publish — so a login here is not interchangeable
+      // with one, and must say so.
+      scope: LOGIN_SCOPE,
       state,
     }).toString();
 

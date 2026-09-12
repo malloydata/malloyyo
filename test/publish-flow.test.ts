@@ -246,6 +246,23 @@ async function seedDataset(name: string, userId: string) {
   return ds;
 }
 
+/** An OAuth access token like the one a browser sign-in produces. `scope` is
+    what the client asked for: "mcp publish" is `malloyyo login`, plain "mcp" is
+    a claude.ai connection (and every grant issued before publishing had a scope
+    of its own). */
+async function seedOAuthToken(userId: string, scope: string): Promise<string> {
+  const raw = randomBytes(32).toString("base64url");
+  await db.insert(oauthAccessTokens).values({
+    tokenHash: createHash("sha256").update(raw).digest("hex"),
+    clientId,
+    userId,
+    scope,
+    resource: null,
+    expiresAt: new Date(Date.now() + 60 * 60 * 1000),
+  });
+  return raw;
+}
+
 /** Mint through the real code path, so the format and hashing are exercised. */
 async function mintFor(userId: string, scopes: ApiTokenScope[]): Promise<string> {
   const created = await createApiToken({ userId, name: `test-${RUN}`, scopes, expiresAt: null });
@@ -281,6 +298,7 @@ before(async () => {
 
   // A real bearer token, minted the way the OAuth route mints one: the server
   // validates it against oauth_access_tokens, so auth is exercised for real.
+  // Scope "mcp publish" is what `malloyyo login` requests.
   const [client] = await db
     .insert(oauthClients)
     .values({
@@ -297,7 +315,7 @@ before(async () => {
     tokenHash: createHash("sha256").update(token).digest("hex"),
     clientId: client.id,
     userId: admin.id,
-    scope: "mcp",
+    scope: "mcp publish",
     resource: null,
     expiresAt: new Date(Date.now() + 60 * 60 * 1000),
   });
@@ -506,15 +524,7 @@ test("a non-admin token can't create a dataset", async () => {
   // token must not be a way around that gate — only a way to publish to the
   // datasets they already own (the test below).
   const member = await seedMember(`reader-${RUN}@test.local`);
-  const raw = randomBytes(32).toString("base64url");
-  await db.insert(oauthAccessTokens).values({
-    tokenHash: createHash("sha256").update(raw).digest("hex"),
-    clientId,
-    userId: member.id,
-    scope: "mcp",
-    resource: null,
-    expiresAt: new Date(Date.now() + 60 * 60 * 1000),
-  });
+  const raw = await seedOAuthToken(member.id, "mcp publish");
 
   const dir = makeProject(`nonadmin_ds_${RUN}`);
   const r = await runCli(["publish", "test", dir, "--token", raw, "--create-dataset"], dir);
@@ -526,6 +536,56 @@ test("a non-admin token can't create a dataset", async () => {
   assert.match(out, /isn't allowed to do this/);
   assert.doesNotMatch(out, /malloyyo login/);
   assert.equal((await datasetRows(`nonadmin_ds_${RUN}`)).length, 0);
+});
+
+test("an MCP-only OAuth grant cannot publish, however privileged its owner", async () => {
+  // The claude.ai case: a token delegated to a third party for QUERYING must
+  // not also be able to overwrite a model. The owner here is the admin, so
+  // nothing but the scope is standing in the way.
+  const name = `mcpgrant_ds_${RUN}`;
+  const ds = await seedDataset(name, admin.id);
+  const raw = await seedOAuthToken(admin.id, "mcp");
+
+  const dir = makeProject(name);
+  const r = await runCli(["publish", "test", dir, "--token", raw], dir);
+
+  assert.notEqual(r.code, 0, `expected a non-zero exit\n${r.stdout}\n${r.stderr}`);
+  const out = r.stdout + r.stderr;
+  assert.match(out, /does not carry the "publish" scope/);
+  assert.equal((await models(ds.id)).length, 0);
+});
+
+test("a login stored before publish scopes existed is told to sign in again", async () => {
+  // The upgrade path, and the one case where the fix really is `login`: the
+  // credentials file holds a grant from an older vintage.
+  const name = `oldlogin_ds_${RUN}`;
+  await seedDataset(name, admin.id);
+  const raw = await seedOAuthToken(admin.id, "mcp");
+
+  const configHome = mkdtempSync(join(tmpdir(), "malloyyo-creds-"));
+  projects.push(configHome);
+  mkdirSync(join(configHome, "malloyyo"));
+  writeFileSync(
+    join(configHome, "malloyyo", "credentials.json"),
+    JSON.stringify({
+      [serverUrl]: {
+        clientId,
+        accessToken: raw,
+        refreshToken: "not-used-here",
+        expiresAt: Date.now() + 60 * 60 * 1000,
+      },
+    }),
+  );
+
+  const dir = makeProject(name);
+  // No --token and no env var: this is the stored-login branch of the precedence.
+  const r = await runCli(["publish", "test", dir], dir, { XDG_CONFIG_HOME: configHome });
+
+  assert.notEqual(r.code, 0, `expected a non-zero exit\n${r.stdout}\n${r.stderr}`);
+  const out = r.stdout + r.stderr;
+  assert.match(out, /does not carry the "publish" scope/);
+  assert.match(out, /carries only "mcp"/);
+  assert.match(out, /malloyyo login test/);
 });
 
 // ── minted API tokens (the MALLOYYO_TOKEN path) ──────────────────────────────

@@ -10,7 +10,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { and, desc, eq, isNull } from "drizzle-orm";
 import { db, apiTokens, type ApiToken } from "@/db";
-import { API_TOKEN_SCOPES, type ApiTokenScope } from "@/lib/api-token-scopes";
+import { API_TOKEN_SCOPES, normalizeScopes, type ApiTokenScope } from "@/lib/api-token-scopes";
 import { env } from "@/lib/env";
 import { logger, serializeErr } from "@/lib/logger";
 
@@ -110,11 +110,11 @@ export function parseApiToken(
   return { code, secret, matchesInstance: code === tokenInstanceCode() };
 }
 
-/** The scopes a request may ask for. `all` is an interactive login's authority. */
+/** The scope a surface requires of whatever credential reached it. */
 export type RequiredScope = ApiTokenScope;
 
-export function scopeSatisfied(granted: ApiTokenScope[] | "all", want: RequiredScope): boolean {
-  return granted === "all" || granted.includes(want);
+export function scopeSatisfied(granted: ApiTokenScope[], want: RequiredScope): boolean {
+  return granted.includes(want);
 }
 
 export type Validated<T> = { ok: true; value: T } | { ok: false; error: string };
@@ -141,7 +141,7 @@ export function validateScopes(input: unknown): Validated<ApiTokenScope[]> {
     if (!out.includes(s as ApiTokenScope)) out.push(s as ApiTokenScope);
   }
   // Stable order, so the stored array reads the same however the form sent it.
-  return { ok: true, value: API_TOKEN_SCOPES.filter((s) => out.includes(s)) };
+  return { ok: true, value: normalizeScopes(out) };
 }
 
 /**
@@ -204,12 +204,15 @@ export type CreateResult =
   | { ok: false; error: string };
 
 export async function createApiToken(params: CreateParams): Promise<CreateResult> {
-  const live = await listApiTokens(params.userId);
+  // Expired rows still show in the list (so nobody wonders where one went) but
+  // they are not live, and counting them would refuse a new token to someone
+  // whose twenty are all dead.
+  const live = (await listApiTokens(params.userId)).filter((t) => !isExpired(t));
   if (live.length >= MAX_TOKENS_PER_USER) {
     return {
       ok: false,
       error:
-        `you already have ${MAX_TOKENS_PER_USER} active tokens — ` +
+        `you already have ${MAX_TOKENS_PER_USER} live tokens — ` +
         `revoke one before creating another`,
     };
   }

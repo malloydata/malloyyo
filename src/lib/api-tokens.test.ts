@@ -92,9 +92,9 @@ test("displayPrefix keeps a value that isn't parseable short anyway", () => {
   assert.equal(lib.displayPrefix("not-a-token-but-quite-long"), "not-a-to");
 });
 
-test("scopes: an interactive login satisfies everything, a token only what it holds", () => {
-  assert.equal(lib.scopeSatisfied("all", "publish"), true);
-  assert.equal(lib.scopeSatisfied("all", "mcp"), true);
+test("scopes: a credential satisfies only what it actually holds", () => {
+  assert.equal(lib.scopeSatisfied(["publish", "mcp"], "publish"), true);
+  assert.equal(lib.scopeSatisfied(["publish", "mcp"], "mcp"), true);
   assert.equal(lib.scopeSatisfied(["publish"], "publish"), true);
   assert.equal(lib.scopeSatisfied(["publish"], "mcp"), false);
   assert.equal(lib.scopeSatisfied([], "mcp"), false);

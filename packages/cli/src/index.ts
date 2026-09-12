@@ -51,9 +51,15 @@ function authHint(
     // The server's own message says which of these it was; this says where the
     // fix lives. Both halves matter: a token can be perfectly valid and still
     // lack the scope, or belong to someone who doesn't own the dataset.
-    return `\n  The credential is valid, but it isn't allowed to do this on ${t.url}.` +
-      `\n  The model surface needs a token with the "publish" scope, on an account that` +
-      `\n  owns the dataset (or is an admin there). Mint one at:  ${mint}`;
+    const why =
+      `\n  The credential is valid, but it isn't allowed to do this on ${t.url}.` +
+      `\n  The model surface needs the "publish" scope, on an account that owns the` +
+      `\n  dataset (or is an admin there).`;
+    // A saved login from before `login` asked for publishing carries "mcp"
+    // alone, and no token page fixes that — signing in again does.
+    return source === "login"
+      ? why + `\n  A login stored before that scope existed carries only "mcp". Run:  ${login}`
+      : why + `\n  Mint a token carrying it at:  ${mint}`;
   }
   const wrongSecret = foreignValue
     ? `\n  (that value isn't shaped like a Malloyyo token — is the variable still` +

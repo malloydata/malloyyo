@@ -9,7 +9,11 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
-import { API_TOKEN_SCOPES, type ApiTokenScope } from "@/lib/api-token-scopes";
+import {
+  API_TOKEN_SCOPES,
+  SCOPE_DESCRIPTIONS,
+  type ApiTokenScope,
+} from "@/lib/api-token-scopes";
 
 const BUTTON =
   "rounded border border-gray-300 dark:border-gray-700 px-2 py-1 text-xs hover:bg-gray-50 dark:hover:bg-gray-900 disabled:opacity-40";
@@ -17,12 +21,6 @@ const PRIMARY_BUTTON =
   "rounded bg-black text-white dark:bg-white dark:text-black px-3 py-1.5 text-xs hover:opacity-90 disabled:opacity-40";
 const FIELD =
   "rounded border border-gray-300 dark:border-gray-700 bg-transparent px-2 py-1 text-xs";
-
-/** What each scope actually permits, in the words of the thing it unlocks. */
-const SCOPE_HELP: Record<ApiTokenScope, string> = {
-  publish: "malloyyo publish and malloyyo status — push a model to a dataset you own",
-  mcp: "query this instance's published models over MCP",
-};
 
 /** Expiry choices. `null` is never — see src/lib/api-tokens.ts. */
 const EXPIRY_CHOICES: Array<{ label: string; days: number | null }> = [
@@ -51,26 +49,33 @@ export function CreateTokenForm() {
     e.preventDefault();
     setBusy(true);
     setError(null);
-    const res = await fetch("/api/tokens", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name,
-        scopes,
-        expiresInDays: expiry === "never" ? null : Number(expiry),
-      }),
-    });
-    const json = (await res.json().catch(() => null)) as
-      | { value?: string; error?: string }
-      | null;
-    setBusy(false);
-    if (!res.ok || !json?.value) {
-      setError(json?.error ?? `failed (${res.status})`);
-      return;
+    // try/finally, not a bare await: a dropped connection would otherwise
+    // leave the button disabled on "Creating…" with nothing said.
+    try {
+      const res = await fetch("/api/tokens", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name,
+          scopes,
+          expiresInDays: expiry === "never" ? null : Number(expiry),
+        }),
+      });
+      const json = (await res.json().catch(() => null)) as
+        | { value?: string; error?: string }
+        | null;
+      if (!res.ok || !json?.value) {
+        setError(json?.error ?? `failed (${res.status})`);
+        return;
+      }
+      setMinted(json.value);
+      setName("");
+      router.refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "could not reach the server");
+    } finally {
+      setBusy(false);
     }
-    setMinted(json.value);
-    setName("");
-    router.refresh();
   }
 
   if (minted) {
@@ -119,7 +124,7 @@ export function CreateTokenForm() {
             />
             <span>
               <code>{scope}</code>{" "}
-              <span className="text-gray-500 dark:text-gray-400">— {SCOPE_HELP[scope]}</span>
+              <span className="text-gray-500 dark:text-gray-400">— {SCOPE_DESCRIPTIONS[scope]}</span>
             </span>
           </label>
         ))}
@@ -195,25 +200,54 @@ function MintedToken({ value, onDone }: { value: string; onDone: () => void }) {
 export function RevokeTokenButton({ id, name }: { id: string; name: string }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
-  return (
-    <ConfirmDialog
-      trigger={
-        <button className={BUTTON} disabled={busy}>
-          Revoke
-        </button>
+  const [error, setError] = useState<string | null>(null);
+
+  // The dialog stays open when onConfirm resolves false, so a failure has to
+  // say something there — and it must RESOLVE rather than throw, or the dialog
+  // is left busy with Cancel and Esc disabled.
+  async function revoke(): Promise<boolean> {
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/tokens/${encodeURIComponent(id)}`, { method: "DELETE" });
+      if (!res.ok) {
+        const json = (await res.json().catch(() => null)) as { error?: string } | null;
+        setError(json?.error ?? `could not revoke (${res.status})`);
+        return false;
       }
-      title={`Revoke "${name}"?`}
-      description="Anything using this token stops working on its very next request — a CI job included. This cannot be undone; create a new token instead."
-      confirmLabel="Revoke"
-      destructive
-      onConfirm={async () => {
-        setBusy(true);
-        const res = await fetch(`/api/tokens/${encodeURIComponent(id)}`, { method: "DELETE" });
-        setBusy(false);
-        if (!res.ok) return false;
-        router.refresh();
-        return true;
-      }}
-    />
+      router.refresh();
+      return true;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "could not reach the server");
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <span className="inline-flex flex-col items-end gap-1">
+      <ConfirmDialog
+        trigger={
+          <button className={BUTTON} disabled={busy}>
+            Revoke
+          </button>
+        }
+        title={`Revoke "${name}"?`}
+        description={
+          <>
+            Anything using this token stops working on its very next request — a CI job
+            included. This cannot be undone; create a new token instead.
+            {error && (
+              <span className="block mt-2 text-red-600 dark:text-red-400">{error}</span>
+            )}
+          </>
+        }
+        confirmLabel="Revoke"
+        destructive
+        onConfirm={revoke}
+      />
+      {error && <span className="text-[11px] text-red-600 dark:text-red-400">{error}</span>}
+    </span>
   );
 }

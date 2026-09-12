@@ -7,9 +7,11 @@
 // Two kinds of credential arrive here, and the difference is deliberate:
 //
 //   • An OAuth access token from `malloyyo login` (or a claude.ai connection).
-//     Interactive, 24h, and it carries the person's FULL authority — they just
-//     proved who they are in a browser, so there is nothing for a scope to
-//     narrow. Scope checks pass by construction.
+//     Interactive, 24h, refreshable — and scoped by what the client asked for
+//     on the consent screen. `malloyyo login` asks for "mcp publish"; a
+//     claude.ai connection asks for "mcp" and so cannot publish, which is the
+//     point: a credential delegated to a third party for querying must not
+//     also be able to overwrite a model.
 //   • A personal API token minted in the UI (src/lib/api-tokens.ts). Long-lived
 //     and unattended, so it carries only the scopes its owner ticked.
 //
@@ -28,9 +30,10 @@ import {
   type RequiredScope,
 } from "@/lib/api-tokens";
 import { recordAccessTokenUse, validateAccessToken } from "@/lib/oauth/tokens";
+import { grantedScopes } from "@/lib/api-token-scopes";
 
 export type Credential =
-  | { kind: "oauth"; clientId: string; scopes: "all" }
+  | { kind: "oauth"; clientId: string; scopes: ApiTokenScope[] }
   | { kind: "api-token"; token: ApiToken; scopes: ApiTokenScope[] };
 
 export type BearerAuthResult =
@@ -81,7 +84,9 @@ export async function resolveBearer(raw: string, opts: BearerOptions): Promise<B
   } else {
     const validated = await validateAccessToken(raw);
     if (!validated.ok) return { ok: false, status: 401, error: "invalid or revoked token" };
-    cred = { kind: "oauth", clientId: validated.clientId, scopes: "all" };
+    // grantedScopes reads the stored string conservatively: a grant from
+    // before publishing had a scope of its own says "mcp", and stays MCP-only.
+    cred = { kind: "oauth", clientId: validated.clientId, scopes: grantedScopes(validated.scope) };
     userId = validated.userId;
     onUse = () => void recordAccessTokenUse(validated.tokenHash);
   }
@@ -100,8 +105,8 @@ export async function resolveBearer(raw: string, opts: BearerOptions): Promise<B
       ok: false,
       status: 403,
       error:
-        `this token does not carry the "${opts.scope}" scope ` +
-        `(it has: ${cred.kind === "api-token" ? cred.token.scopes.join(", ") : "all"})`,
+        `this credential does not carry the "${opts.scope}" scope ` +
+        `(it has: ${cred.scopes.join(", ") || "none"})`,
     };
   }
 

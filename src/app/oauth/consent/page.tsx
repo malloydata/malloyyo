@@ -6,6 +6,7 @@ import { getSessionUserOrNull } from "@/lib/user";
 import { signInPath, signOutPath } from "@/lib/auth-paths";
 import { verifyAuthz } from "@/lib/oauth/authz-blob";
 import { getOAuthClient } from "@/lib/oauth/clients";
+import { grantedScopes, SCOPE_DESCRIPTIONS } from "@/lib/api-token-scopes";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -36,11 +37,21 @@ export default async function ConsentPage({ searchParams }: PageProps) {
     <main className="mx-auto max-w-md px-6 py-16 font-mono text-sm space-y-6">
       <h1 className="text-xl font-bold">Authorize {client.name}</h1>
       <p className="text-gray-700 dark:text-gray-300 leading-relaxed">
-        <span className="font-semibold">{client.name}</span> wants to access
-        your malloyyo datasets through the MCP server.
+        <span className="font-semibold">{client.name}</span> wants access to your
+        malloyyo datasets on this instance. It is asking for the permissions
+        below — and nothing else.
       </p>
       <section className="rounded border border-gray-200 dark:border-gray-800 p-4 space-y-2 text-xs">
-        <div><span className="text-gray-500 dark:text-gray-400">Scope:</span> <code>{authz.scope}</code></div>
+        <div className="space-y-1">
+          <span className="text-gray-500 dark:text-gray-400">Can:</span>
+          <ul className="list-disc list-inside space-y-0.5">
+            {grantedScopes(authz.scope).map((scope) => (
+              <li key={scope}>
+                {SCOPE_DESCRIPTIONS[scope]} <code className="text-gray-500 dark:text-gray-400">({scope})</code>
+              </li>
+            ))}
+          </ul>
+        </div>
         <div><span className="text-gray-500 dark:text-gray-400">Redirects back to:</span> <code className="break-all">{redirectHost}</code></div>
         <div className="flex items-center gap-2">
           <span className="text-gray-500 dark:text-gray-400">Signed in as:</span>

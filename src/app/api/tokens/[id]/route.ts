@@ -13,6 +13,8 @@ import { logger } from "@/lib/logger";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export async function DELETE(_req: Request, ctx: { params: Promise<{ id: string }> }) {
   let user;
   try {
@@ -25,6 +27,11 @@ export async function DELETE(_req: Request, ctx: { params: Promise<{ id: string 
   }
 
   const { id } = await ctx.params;
+  // The column is a uuid, so a junk path segment would make Postgres raise
+  // 22P02 and turn the 404 this should be into a 500. Same guard the dataset
+  // routes use (src/lib/mcp-tools.ts).
+  if (!UUID_RE.test(id)) return NextResponse.json({ error: "token not found" }, { status: 404 });
+
   const revoked = await revokeApiToken(user.id, id);
   if (!revoked) return NextResponse.json({ error: "token not found" }, { status: 404 });
 

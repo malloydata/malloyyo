@@ -112,6 +112,13 @@ re-runs the same authorization the web session does, so a token grants what you
 can do *at that moment* — not what you could do when it was minted. Scopes only
 narrow it further.
 
+The same scopes apply to the credential `malloyyo login` stores: it asks for
+`mcp publish`, so a login can publish. A **claude.ai connection asks for `mcp`
+alone and cannot publish** — a credential you delegated for querying should not
+also be able to overwrite a model. If your saved login predates publish scopes,
+publishing answers `this credential does not carry the "publish" scope` and the
+CLI tells you to sign in once more.
+
 Concretely, with a `publish` token:
 
 - **Publish to a dataset you own**, or to any dataset if you are an admin.
@@ -169,7 +176,7 @@ it holds only the *name* of an environment variable, never a value.
 | `invalid or revoked token` | The value is not a live token here — revoked, expired, or never existed. The message names which variable it came from. |
 | `…that value isn't shaped like a Malloyyo token…` | The variable holds something that is not a token at all. Check whether the name is still in use for another secret. |
 | `that token was minted on "x"; this instance is "y"` | Right token, wrong instance. Mint one at the instance you are publishing to. |
-| `this token does not carry the "publish" scope` | The credential is fine; it was not given this permission. Mint a new one with the scope ticked — scopes are fixed at creation. |
+| `this credential does not carry the "publish" scope` | The credential is fine; it was not given this permission. For a token: mint a new one with the scope ticked — scopes are fixed at creation. For a saved login from before publish scopes existed: run `malloyyo login` again. |
 | `that account doesn't own dataset "…"` | Ownership, not authentication. The dataset's owner or an admin can publish to it. |
 | `dataset "…" not found, and creating one is admin-only` | Ask an admin to create the dataset, then publish to it. |
 | Publishing works by hand but not in CI | Almost always precedence: something in the shell profile is shadowing what you think you set. `malloyyo publish` names the source it used in any auth failure. |

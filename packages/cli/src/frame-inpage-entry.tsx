@@ -35,10 +35,16 @@ const givensToUrl = (dashboard, givens) => {
 
 mountInPage({
   root: document.getElementById("root"),
-  // Governed query — the shell's trusted /api/run (the same endpoint the iframe
+  // Governed query — the shell's trusted api/run (the same endpoint the iframe
   // broker forwards to). Returns the raw result the runtime normalizes.
+  //
+  // RELATIVE. A leading slash resolves against the ORIGIN, so behind anything
+  // serving this page under a prefix — code-server's `/proxy/<port>/`, a
+  // Codespaces forwarded port — the POST went to the proxy's own root and came
+  // back `405 Method Not Allowed` from the proxy rather than reaching the dev
+  // server at all. Resolved against the document, it is correct at any depth.
   run: (req, givens) =>
-    fetch("/api/run", {
+    fetch("api/run", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ d: name, query: req.query, malloy: req.malloy, givens }),

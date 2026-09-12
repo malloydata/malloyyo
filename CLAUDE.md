@@ -156,7 +156,10 @@ entries and plan a window; for future drops, remove the column in a release
 - **`GET /api/health` — deep.** "Is this instance correctly connected to its
   dependencies?" The same readiness gate, then `SELECT 1`. Its callers are
   deliberate ones: the deploy script's post-deploy check, the hosted roll's
-  verification gate, an operator diagnosing an alert.
+  verification gate, an operator diagnosing an alert. On Fly, every response
+  also includes `runtime.flyMachineId` from Fly's injected `FLY_MACHINE_ID`, so
+  a rollout controller can prove the routed response came from the exact
+  Machine it is promoting. Non-Fly response bodies are unchanged.
 
 **Nothing on an interval may call the deep route.** It executes a query, and a
 hosted instance's Postgres scales to zero — a check every few seconds would

@@ -1,19 +1,22 @@
 # The Malloyyo dev container
 
-One prebuilt container that any Malloy model repo can open a **GitHub Codespace**
-(or a local **Dev Container**) on, with everything needed to build a model and
-its dashboards already installed — including Claude, so the "ask Claude to build
-the model" loop works from the first minute rather than after an afternoon of
-setup.
+One prebuilt container that a **Malloy model repo** — `malloydata/malloyyo-ecommerce`,
+`lloydtabb/malloyyo-babynames`, anything with an `index.malloy` at its root — can
+open a **GitHub Codespace** (or a local **Dev Container**) on, with everything
+needed to build a model and its dashboards already installed. Including Claude,
+so the "ask Claude to build the model" loop works from the first minute rather
+than after an afternoon of setup.
 
 ```
 ghcr.io/malloydata/malloyyo-devcontainer:latest
 ```
 
-It is built and published by this repository
-([`.devcontainer/Dockerfile`](../.devcontainer/Dockerfile),
-[`.github/workflows/devcontainer.yml`](../.github/workflows/devcontainer.yml)),
-so starting a codespace on it is a **pull, not a build**.
+This repository builds and publishes it ([`devcontainer/Dockerfile`](../devcontainer/Dockerfile),
+[`.github/workflows/devcontainer.yml`](../.github/workflows/devcontainer.yml))
+but does not use it: Malloyyo itself is a Next.js server with its own toolchain,
+which is why the image source lives in `devcontainer/` and not in the
+`.devcontainer/` that would make this repo open inside it. Publishing is what
+makes a model repo's codespace a **pull, not a build**.
 
 > **One step before any of this works.** The publishing workflow is committed as
 > [`.github/devcontainer-workflow.yml`](../.github/devcontainer-workflow.yml) and
@@ -27,9 +30,9 @@ so starting a codespace on it is a **pull, not a build**.
 
 ## Use it in a model repo
 
-Copy [`examples/devcontainer/devcontainer.json`](../examples/devcontainer/devcontainer.json)
-to `.devcontainer/devcontainer.json` in your model repo and commit it. That is
-the entire setup:
+Copy [`devcontainer/devcontainer.json`](../devcontainer/devcontainer.json) from
+this repo to **`.devcontainer/devcontainer.json`** in the model repo and commit
+it. That is the entire setup:
 
 ```jsonc
 {
@@ -46,15 +49,15 @@ Code's *Dev Containers: Reopen in Container* with Docker running).
 You do not list the extensions, the remote user or the dashboard ports: the
 image carries them itself in a `devcontainer.metadata` label, which the Dev
 Containers tooling merges into your configuration. Anything you *do* write in
-your `devcontainer.json` wins, so adding a `forwardPorts`, another extension or
+that `devcontainer.json` wins, so adding a `forwardPorts`, another extension or
 a feature works normally.
 
 `malloyyo init` in `postCreateCommand` is what makes `claude` open in **author
 mode** in that repo — it writes `.mcp.json` (the `malloyyo mcp --develop`
 server), pre-approves that server's tools in `.claude/settings.json`, and
 scaffolds an `index.malloy` if the repo has none. It merges rather than
-overwrites, so it is safe on every rebuild; once you have committed what it
-writes you can drop the line.
+overwrites, so it is safe on every rebuild; once the repo has committed what it
+writes, you can drop the line.
 
 ## What's in it
 
@@ -63,7 +66,7 @@ writes you can drop the line.
 | **Claude Code** | `claude` on the CLI, plus the **Claude Code** VS Code extension (`anthropic.claude-code`) driving the same binary |
 | **Malloy** | the **Malloy** VS Code extension (`malloydata.malloy-vscode`) — schema browsing, query execution, result rendering |
 | **`malloyyo` CLI** | `@malloydata/malloyyo`: `init`, `lint`, `dashboard dev`, `mcp`, `login`, `publish`, `test` |
-| **Node 24** | the same major CI and the Vercel Functions runtime use, plus `npm`, `typescript`, `tsx` — the React/TypeScript side of dashboards |
+| **Node 24** | the major Malloyyo itself runs on, plus `npm`, `typescript`, `tsx` — the React/TypeScript side of dashboards |
 | **Playwright + Chromium** | at `/opt/pw-browsers`, so Claude can open a dashboard it just wrote and look at it |
 | **Google Cloud CLI** | `gcloud` and `bq`, for BigQuery-backed models |
 | **DuckDB CLI** | `duckdb` — the engine Malloy uses by default; handy for poking at a Parquet or CSV file before modelling it |
@@ -111,26 +114,26 @@ For a service account instead, put the JSON in a **Codespaces secret** and point
 
 ### Secrets and tokens
 
-Repo → **Settings → Secrets and variables → Codespaces**. They arrive as
+Model repo → **Settings → Secrets and variables → Codespaces**. They arrive as
 environment variables. The two that come up:
 
 - **`MALLOYYO_TOKEN`** — a personal API token (`/settings/tokens` on your
   instance) with the `publish` scope, so `malloyyo publish` needs no browser
   sign-in. See [API tokens](api-tokens.md).
-- Any `{ "env": "…" }` value your `malloy-config.json` references for the
+- Any `{ "env": "…" }` value that repo's `malloy-config.json` references for the
   analytical database.
 
 ## Pinning, and staying current
 
 `:latest` deliberately tracks the latest `malloyyo`, Claude Code, DuckDB and
 Chromium — the workflow rebuilds it weekly as well as on every change to
-`.devcontainer/`. Two consequences:
+`devcontainer/`. Two consequences:
 
 - **Mid-session, take a newer CLI without rebuilding:** `npm i -g
   @malloydata/malloyyo@latest` (the npm global prefix is owned by `vscode`, so
   no `sudo`).
-- **If you need a fixed environment**, pin a digest or a `sha-…` tag instead of
-  `:latest`:
+- **If a repo needs a fixed environment**, pin a digest or a `sha-…` tag instead
+  of `:latest`:
 
   ```jsonc
   { "image": "ghcr.io/malloydata/malloyyo-devcontainer:sha-<commit>" }
@@ -142,36 +145,28 @@ Chromium — the workflow rebuilds it weekly as well as on every change to
 ## Making it launch even faster: prebuilds
 
 The published image removes the build; **Codespaces prebuilds** remove the rest
-— the extension installs and your `postCreateCommand`. Worth turning on for a
-repo whose codespaces get created often: repo → **Settings → Codespaces → Set up
-prebuild**, pointing at the branch(es) you work on. GitHub then keeps a prepared
-container ready and creation drops to seconds.
+— the extension installs and the `postCreateCommand`. Worth turning on for a
+model repo whose codespaces get created often: that repo → **Settings →
+Codespaces → Set up prebuild**, pointing at the branch(es) you work on. GitHub
+then keeps a prepared container ready and creation drops to seconds.
 
 ## Changing the image
 
-Edit [`.devcontainer/Dockerfile`](../.devcontainer/Dockerfile) and open a PR.
-The workflow builds it and asserts every promised tool actually runs — in a
-login shell, which is what a VS Code terminal is — before anything is published.
-On merge to `main` it publishes `:latest` and `:sha-<commit>`.
+Edit [`devcontainer/Dockerfile`](../devcontainer/Dockerfile) in this repo and
+open a PR. The workflow builds it and asserts every promised tool actually runs
+— in a login shell, which is what a VS Code terminal is — before anything is
+published. On merge to `main` it publishes `:latest` and `:sha-<commit>`, and
+model repos tracking `:latest` pick it up on their next rebuild.
 
 Adding a VS Code extension for everyone means adding it to the
-`devcontainer.metadata` label at the bottom of the Dockerfile, not to a
-consuming repo.
+`devcontainer.metadata` label at the bottom of that Dockerfile, not to each
+model repo.
 
 Locally, to build and try it without CI:
 
 ```bash
-docker build -t malloyyo-devcontainer .devcontainer   # native on Apple Silicon
+docker build -t malloyyo-devcontainer devcontainer   # native on Apple Silicon
 ```
 
 The published image is `linux/amd64`, which is what Codespaces runs; on Apple
 Silicon Docker will emulate it, so build locally if you want native speed.
-
-## This repository's own container
-
-[`.devcontainer/devcontainer.json`](../.devcontainer/devcontainer.json) opens
-*malloyyo itself* in the same image, plus what only the server repo needs: the
-docker-in-docker feature (`npm run test:hosted` and `npm run test:migrate` stand
-up an ephemeral Postgres), port 3000, and `npm ci` on create. It references the
-published image rather than building the Dockerfile beside it, so this repo is
-on the same path — and gets the same image — as everyone else.

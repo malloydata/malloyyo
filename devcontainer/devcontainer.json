@@ -1,0 +1,46 @@
+// THE TEMPLATE. Copy this file to `.devcontainer/devcontainer.json` in a Malloy
+// MODEL repo — malloydata/malloyyo-ecommerce, lloydtabb/malloyyo-babynames, any
+// repo with an index.malloy at its root — and commit it. That is the whole
+// setup for that repo.
+//
+// It is not `.devcontainer/devcontainer.json` here, deliberately: this file
+// belongs to the repos that consume the image, not to malloyyo, which is a
+// Next.js server and is not developed inside it.
+//
+// The image is prebuilt and published by the malloyyo repository, so creating
+// the codespace is a pull rather than a build, and the tools — Claude Code, the
+// Malloy and Claude VS Code extensions, the `malloyyo` CLI, Node 24,
+// Playwright/Chromium, the Google Cloud CLI — come with it. The extensions and
+// the dashboard ports arrive from the image's own `devcontainer.metadata`,
+// which is why they are not listed here.
+//
+// See https://github.com/malloydata/malloyyo/blob/main/docs/devcontainer.md
+{
+  "name": "Malloy model",
+  "image": "ghcr.io/malloydata/malloyyo-devcontainer:latest",
+
+  // Makes `cd <repo> && claude` open in AUTHOR mode: writes .mcp.json (the
+  // `malloyyo mcp --develop` server), pre-approves its tools in
+  // .claude/settings.json, and scaffolds index.malloy if the repo has none. It
+  // merges rather than clobbers, so re-running it on every rebuild is safe —
+  // and once you have committed what it writes, you can drop this line.
+  "postCreateCommand": "malloyyo init",
+
+  // One screen of "what do I type now", printed into each new terminal.
+  "postAttachCommand": "malloyyo-devcontainer-info",
+
+  // Codespaces secrets (repo Settings → Secrets and variables → Codespaces)
+  // arrive as environment variables on their own — nothing to declare here.
+  // This block is for a LOCAL Dev Container, where the values have to be
+  // forwarded from your own shell. Never commit the values themselves.
+  //
+  // "remoteEnv": {
+  //   "MALLOYYO_TOKEN": "${localEnv:MALLOYYO_TOKEN}",
+  //   "ANTHROPIC_API_KEY": "${localEnv:ANTHROPIC_API_KEY}"
+  // },
+
+  "hostRequirements": {
+    "cpus": 2,
+    "memory": "4gb"
+  }
+}

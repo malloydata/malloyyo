@@ -6,12 +6,20 @@
 # Node toolchain for the React side of dashboards, and enough gcloud to
 # authenticate against BigQuery.
 #
+# THE CONSUMERS ARE MODEL REPOS — malloydata/malloyyo-ecommerce,
+# lloydtabb/malloyyo-babynames and their like — not this one. Malloyyo itself is
+# a Next.js server with its own toolchain and is not developed in here, which is
+# why this directory is `devcontainer/` and NOT `.devcontainer/`: the dotted name
+# is what the Dev Containers tooling opens a repo *in*, and nothing should open
+# this repo in this image. This repo only builds and publishes it.
+#
 # WHY IT LIVES HERE, AND NOT IN EVERY MODEL REPO. Building this from scratch on
 # codespace creation costs minutes (three apt repositories, a Chromium download,
-# four global npm installs). `.github/workflows/devcontainer.yml` builds it once
-# per change to this directory and publishes it to
-# ghcr.io/malloydata/malloyyo-devcontainer, so a model repo's devcontainer.json
-# is one line — an `image` reference — and creating its codespace is a pull.
+# four global npm installs), in every model repo, on every create.
+# `.github/workflows/devcontainer.yml` builds it once per change to this
+# directory and publishes it to ghcr.io/malloydata/malloyyo-devcontainer, so a
+# model repo's `.devcontainer/devcontainer.json` is one line — an `image`
+# reference — and creating its codespace is a pull.
 #
 # THE `devcontainer.metadata` LABEL AT THE BOTTOM IS THE OTHER HALF OF THAT.
 # Dev Containers merges image-carried metadata into the effective configuration,
@@ -26,9 +34,9 @@
 
 FROM mcr.microsoft.com/devcontainers/base:2-bookworm
 
-# Node's line. Kept in step with mise.toml / CI / the Vercel Functions runtime —
-# a container that develops against a different major than the one that ships is
-# the whole problem this repo's mise.toml pin exists to avoid.
+# Node's line. The same major Malloyyo itself runs on (mise.toml, CI, the Vercel
+# Functions runtime), so a dashboard's React/TypeScript build behaves here the
+# way it will on the instance that serves it.
 ARG NODE_MAJOR=24
 
 # npm's global prefix, moved off /usr/local/lib and handed to `vscode`, so

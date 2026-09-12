@@ -13,12 +13,16 @@ name: devcontainer
 # Build — and, on main, publish — the shared Malloyyo development container.
 #
 # The point of publishing it is launch time. A Codespace created from a
-# published image is a pull; one that builds .devcontainer/Dockerfile itself
+# published image is a pull; one that builds devcontainer/Dockerfile itself
 # pays for three apt repositories, a Chromium download and four global npm
 # installs on every create, in every repo. So this repo builds the image once
 # and every Malloy model repo consumes it by reference — their whole
-# .devcontainer/devcontainer.json is an `image` line (see
-# examples/devcontainer/devcontainer.json).
+# .devcontainer/devcontainer.json is an `image` line (the template they copy is
+# devcontainer/devcontainer.json here).
+#
+# Malloyyo itself is NOT developed in this image — it is a Next.js server — which
+# is why the source lives in `devcontainer/` rather than `.devcontainer/`. This
+# repo builds the image; model repos live in it.
 #
 # PRs build and smoke-test WITHOUT publishing, so a broken Dockerfile is caught
 # where it is written rather than by the next person's codespace.
@@ -38,12 +42,12 @@ name: devcontainer
 on:
   pull_request:
     paths:
-      - ".devcontainer/**"
+      - "devcontainer/**"
       - ".github/workflows/devcontainer.yml"
   push:
     branches: [main]
     paths:
-      - ".devcontainer/**"
+      - "devcontainer/**"
       - ".github/workflows/devcontainer.yml"
   schedule:
     - cron: "17 9 * * 1" # Mondays, 09:17 UTC — refresh the pinned-to-latest tools
@@ -81,12 +85,12 @@ jobs:
       # linux/amd64 only, which is what Codespaces runs. An arm64 leg would need
       # either QEMU (far too slow for a Chromium + apt image) or a second native
       # runner plus a manifest merge; developers on Apple Silicon who want a
-      # native local container build .devcontainer/Dockerfile themselves — one
+      # native local container build devcontainer/Dockerfile themselves — one
       # line, documented in docs/devcontainer.md.
       - name: Build
         uses: docker/build-push-action@v6
         with:
-          context: .devcontainer
+          context: devcontainer
           load: true # into the local daemon, so the smoke test can run it
           tags: malloyyo-devcontainer:ci
           platforms: linux/amd64
@@ -165,7 +169,7 @@ jobs:
         if: github.event_name != 'pull_request' && github.repository == 'malloydata/malloyyo'
         uses: docker/build-push-action@v6
         with:
-          context: .devcontainer
+          context: devcontainer
           push: true
           platforms: linux/amd64
           tags: |

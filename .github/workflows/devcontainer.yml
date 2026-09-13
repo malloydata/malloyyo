@@ -1,0 +1,182 @@
+name: devcontainer
+
+# Build — and, on main, publish — the shared Malloyyo development container.
+#
+# The point of publishing it is launch time. A Codespace created from a
+# published image is a pull; one that builds devcontainer/Dockerfile itself
+# pays for three apt repositories, a Chromium download and four global npm
+# installs on every create, in every repo. So this repo builds the image once
+# and every Malloy model repo consumes it by reference — their whole
+# .devcontainer/devcontainer.json is an `image` line (the template they copy is
+# devcontainer/devcontainer.json here).
+#
+# Malloyyo itself is NOT developed in this image — it is a Next.js server — which
+# is why the source lives in `devcontainer/` rather than `.devcontainer/`. This
+# repo builds the image; model repos live in it.
+#
+# PRs build and smoke-test WITHOUT publishing, so a broken Dockerfile is caught
+# where it is written rather than by the next person's codespace.
+#
+# The weekly run is not decoration: the image installs the latest `malloyyo`,
+# Claude Code, DuckDB and Chromium, so a rebuild is how `:latest` stays current
+# between changes to the Dockerfile. Anyone who needs a fixed environment pins
+# the `:sha-…` tag instead.
+#
+# No secrets: the push uses the built-in GITHUB_TOKEN.
+#
+# One-time after the first publish: set the GHCR package
+# `malloyyo-devcontainer` to Public (org → Packages → Package settings → Change
+# visibility). A private package would make every consuming repo's codespace
+# authenticate to the registry before it could start.
+
+on:
+  pull_request:
+    paths:
+      - "devcontainer/**"
+      - ".github/workflows/devcontainer.yml"
+  push:
+    branches: [main]
+    paths:
+      - "devcontainer/**"
+      - ".github/workflows/devcontainer.yml"
+  schedule:
+    - cron: "17 9 * * 1" # Mondays, 09:17 UTC — refresh the pinned-to-latest tools
+  workflow_dispatch: {}
+
+concurrency:
+  group: devcontainer-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write # push to GHCR with the built-in GITHUB_TOKEN
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/malloyyo-devcontainer
+
+jobs:
+  devcontainer:
+    # Forks inherit this workflow, including its weekly schedule; the publish
+    # steps below already refuse to run anywhere but the publishing repository,
+    # and this keeps a fork from burning a build every Monday for an image it
+    # never pushes. A fork's own PRs still build — that is the signal the
+    # workflow exists to give.
+    if: github.repository == 'malloydata/malloyyo' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    # Chromium's download and the Google Cloud CLI are the slow parts; a cold
+    # build (no layer cache) runs well under this, a warm one in a couple of
+    # minutes.
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: docker/setup-buildx-action@v3
+
+      # linux/amd64 only, which is what Codespaces runs. An arm64 leg would need
+      # either QEMU (far too slow for a Chromium + apt image) or a second native
+      # runner plus a manifest merge; developers on Apple Silicon who want a
+      # native local container build devcontainer/Dockerfile themselves — one
+      # line, documented in docs/devcontainer.md.
+      - name: Build
+        uses: docker/build-push-action@v6
+        with:
+          context: devcontainer
+          load: true # into the local daemon, so the smoke test can run it
+          tags: malloyyo-devcontainer:ci
+          platforms: linux/amd64
+          cache-from: type=gha,scope=devcontainer
+          cache-to: type=gha,mode=max,scope=devcontainer
+
+      # Every tool this container promises, asserted to actually run. A missing
+      # one is otherwise discovered by a person who has just waited for a
+      # codespace to start.
+      - name: The tools are all there
+        run: |
+          set -euo pipefail
+          # `bash -lc`, not `bash -c`: a VS Code terminal is a LOGIN shell, and
+          # Debian's /etc/profile rewrites PATH from scratch. Checking the tools
+          # the way a person reaches them is the only check that would catch a
+          # regression there.
+          run() { docker run --rm malloyyo-devcontainer:ci bash -lc "$1"; }
+
+          run 'echo "$PATH" | grep -q /usr/local/share/npm-global/bin'
+          test "$(run 'node --version' | cut -d. -f1)" = "v24"
+          run 'npm --version'
+          run 'malloyyo --version'
+          run 'claude --version'
+          run 'tsc --version'
+          run 'git lfs version'
+          run 'gh --version'
+          run 'gcloud --version | head -1'
+          run 'command -v bq'          # BigQuery CLI, from google-cloud-cli
+          run 'duckdb -c "select 1"'
+          run 'playwright --version'
+          # Chromium itself, not just the driver that would download it.
+          run 'test -n "$(find "$PLAYWRIGHT_BROWSERS_PATH" -name "headless_shell" -o -name "chrome" | head -1)"'
+          run 'malloyyo-devcontainer-info'
+
+      # `npm i -g` as the non-root user has to keep working: picking up a newer
+      # CLI mid-session is the normal way out of "the image is a few days old",
+      # and a root-owned prefix turns that into a permission error.
+      - name: vscode owns the npm global prefix
+        run: |
+          docker run --rm --user vscode malloyyo-devcontainer:ci \
+            bash -lc 'test -w "$NPM_CONFIG_PREFIX/lib/node_modules" && test -w "$PLAYWRIGHT_BROWSERS_PATH"'
+
+      # The image carries the editor configuration in a `devcontainer.metadata`
+      # label — that is what lets a consuming repo's devcontainer.json be one
+      # `image` line and still get the extensions. A typo in that JSON fails
+      # silently at container-create time (the metadata is skipped, the
+      # extensions never install), so assert it here instead.
+      - name: The image carries its devcontainer metadata
+        run: |
+          docker inspect --format '{{ index .Config.Labels "devcontainer.metadata" }}' \
+            malloyyo-devcontainer:ci > metadata.json
+          python3 - <<'PY'
+          import json
+          meta = json.load(open("metadata.json"))
+          merged = {k: v for entry in meta for k, v in entry.items()}
+          exts = merged["customizations"]["vscode"]["extensions"]
+          for required in ("anthropic.claude-code", "malloydata.malloy-vscode"):
+              assert required in exts, f"{required} missing from the image metadata"
+          assert merged["remoteUser"] == "vscode"
+          assert 4173 in merged["forwardPorts"], "the dashboard preview port is not forwarded"
+          print("devcontainer.metadata OK:", ", ".join(exts))
+          PY
+
+      - name: Log in to GHCR
+        if: github.event_name != 'pull_request' && github.repository == 'malloydata/malloyyo'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # A second pass over the same context and cache: every layer is already
+      # built, so this only uploads.
+      - name: Publish
+        id: publish
+        if: github.event_name != 'pull_request' && github.repository == 'malloydata/malloyyo'
+        uses: docker/build-push-action@v6
+        with:
+          context: devcontainer
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:sha-${{ github.sha }}
+          cache-from: type=gha,scope=devcontainer
+          cache-to: type=gha,mode=max,scope=devcontainer
+
+      - name: Report the digest
+        if: steps.publish.outcome == 'success'
+        run: |
+          {
+            echo "### Dev container published"
+            echo ""
+            echo "Model repos track \`${IMAGE}:latest\`. Pin this immutable reference for a fixed environment:"
+            echo ""
+            echo '```'
+            echo "${IMAGE}@${{ steps.publish.outputs.digest }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

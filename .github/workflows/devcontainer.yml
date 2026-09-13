@@ -1,26 +1,35 @@
 name: devcontainer
 
-# Build — and, on main, publish — the shared Malloyyo development container.
+# Build — and, on demand, publish — the shared Malloyyo development container.
 #
 # The point of publishing it is launch time. A Codespace created from a
 # published image is a pull; one that builds devcontainer/Dockerfile itself
 # pays for three apt repositories, a Chromium download and four global npm
 # installs on every create, in every repo. So this repo builds the image once
 # and every Malloy model repo consumes it by reference — their whole
-# .devcontainer/devcontainer.json is an `image` line (the template they copy is
-# devcontainer/devcontainer.json here).
+# .devcontainer/devcontainer.json is an `image` line, written for them by
+# `malloyyo init`.
 #
 # Malloyyo itself is NOT developed in this image — it is a Next.js server — which
 # is why the source lives in `devcontainer/` rather than `.devcontainer/`. This
 # repo builds the image; model repos live in it.
 #
-# PRs build and smoke-test WITHOUT publishing, so a broken Dockerfile is caught
-# where it is written rather than by the next person's codespace.
+# PUBLISHING IS MANUAL — `workflow_dispatch`, and nothing else. A 5.5GB image
+# that every consuming codespace pulls is not something to reissue on a
+# calendar, and most of what lands in this repo cannot change it: the CLI it
+# installs is `@malloydata/malloyyo` from npm, so a CLI change reaches users
+# through a normal release, not through a new container.
 #
-# The weekly run is not decoration: the image installs the latest `malloyyo`,
-# Claude Code, DuckDB and Chromium, so a rebuild is how `:latest` stays current
-# between changes to the Dockerfile. Anyone who needs a fixed environment pins
-# the `:sha-…` tag instead.
+# What that costs, stated plainly: the versions baked in (the CLI, Claude Code,
+# DuckDB, Chromium, the apt packages) are frozen at the last dispatch. A CLI
+# release does NOT flow into an already-built image. Inside a container, the npm
+# prefix is owned by `vscode` precisely so `npm i -g @malloydata/malloyyo@latest`
+# works without sudo; that is the cheap fix. Dispatch a rebuild when the floor
+# itself should move — a Dockerfile change, a security update worth pushing to
+# everyone, or a CLI release that people should get without asking.
+#
+# PRs still build and smoke-test WITHOUT publishing, so a broken Dockerfile is
+# caught where it is written rather than at the next dispatch.
 #
 # No secrets: the push uses the built-in GITHUB_TOKEN.
 #
@@ -30,17 +39,13 @@ name: devcontainer
 # authenticate to the registry before it could start.
 
 on:
+  # Validation only — proves the Dockerfile still builds and every tool in it
+  # still runs. Never publishes.
   pull_request:
     paths:
       - "devcontainer/**"
       - ".github/workflows/devcontainer.yml"
-  push:
-    branches: [main]
-    paths:
-      - "devcontainer/**"
-      - ".github/workflows/devcontainer.yml"
-  schedule:
-    - cron: "17 9 * * 1" # Mondays, 09:17 UTC — refresh the pinned-to-latest tools
+  # The only thing that publishes. Actions tab → devcontainer → Run workflow.
   workflow_dispatch: {}
 
 concurrency:
@@ -56,11 +61,9 @@ env:
 
 jobs:
   devcontainer:
-    # Forks inherit this workflow, including its weekly schedule; the publish
-    # steps below already refuse to run anywhere but the publishing repository,
-    # and this keeps a fork from burning a build every Monday for an image it
-    # never pushes. A fork's own PRs still build — that is the signal the
-    # workflow exists to give.
+    # A fork's own PRs still build — that is the signal this workflow exists to
+    # give, and it costs the fork nothing it didn't ask for. Publishing is
+    # guarded separately, on the steps themselves.
     if: github.repository == 'malloydata/malloyyo' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     # Chromium's download and the Google Cloud CLI are the slow parts; a cold
@@ -145,7 +148,7 @@ jobs:
           PY
 
       - name: Log in to GHCR
-        if: github.event_name != 'pull_request' && github.repository == 'malloydata/malloyyo'
+        if: github.event_name == 'workflow_dispatch' && github.repository == 'malloydata/malloyyo'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -156,7 +159,7 @@ jobs:
       # built, so this only uploads.
       - name: Publish
         id: publish
-        if: github.event_name != 'pull_request' && github.repository == 'malloydata/malloyyo'
+        if: github.event_name == 'workflow_dispatch' && github.repository == 'malloydata/malloyyo'
         uses: docker/build-push-action@v6
         with:
           context: devcontainer
@@ -167,6 +170,22 @@ jobs:
             ${{ env.IMAGE }}:sha-${{ github.sha }}
           cache-from: type=gha,scope=devcontainer
           cache-to: type=gha,mode=max,scope=devcontainer
+
+      # The trap that comes with manual publishing: you change the Dockerfile,
+      # CI goes green, the PR merges, and the image everyone pulls is still the
+      # old one. The green check is what makes that feel finished, so the
+      # reminder belongs on the green check.
+      - name: Publishing is a separate, manual step
+        if: github.event_name == 'pull_request'
+        run: |
+          {
+            echo "### Built and verified — but NOT published"
+            echo ""
+            echo "This image publishes only from a manual run:"
+            echo "**Actions → devcontainer → Run workflow** (branch \`main\`)."
+            echo ""
+            echo "Merging this PR does not change \`${IMAGE}:latest\`."
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Report the digest
         if: steps.publish.outcome == 'success'

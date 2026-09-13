@@ -122,22 +122,37 @@ environment variables. The two that come up:
 
 ## Pinning, and staying current
 
-`:latest` deliberately tracks the latest `malloyyo`, Claude Code, DuckDB and
-Chromium — the workflow rebuilds it weekly as well as on every change to
-`devcontainer/`. Two consequences:
+**The image is a floor, not a promise of currency.** It is published only when
+someone dispatches the workflow, so the versions in it — the CLI, Claude Code,
+DuckDB, Chromium, the apt packages — are whatever was current at that moment.
+Nothing about it updates on a schedule, and a `malloyyo` release does **not**
+flow into an image that already exists.
 
-- **Mid-session, take a newer CLI without rebuilding:** `npm i -g
-  @malloydata/malloyyo@latest` (the npm global prefix is owned by `vscode`, so
-  no `sudo`).
-- **If a repo needs a fixed environment**, pin a digest or a `sha-…` tag instead
-  of `:latest`:
+That is deliberate. It is a 5.5GB image that every consuming codespace pulls,
+and the thing people actually need current — the CLI — is a normal npm package:
 
-  ```jsonc
-  { "image": "ghcr.io/malloydata/malloyyo-devcontainer:sha-<commit>" }
-  ```
+```bash
+npm i -g @malloydata/malloyyo@latest   # inside the container; no sudo needed
+```
 
-  Every publish prints its immutable `@sha256:…` reference in the workflow run's
-  summary.
+The npm prefix is owned by `vscode` precisely so that works mid-session.
+
+**Rebuild and publish** when the floor itself should move — a Dockerfile change,
+a security update worth pushing to everyone, or a CLI release people should get
+without asking for it:
+
+> **Actions → devcontainer → Run workflow**, on `main`.
+
+It builds, re-runs every smoke test, then pushes `:latest` and `:sha-<commit>`,
+and prints the immutable `@sha256:…` in the run summary. A PR that touches
+`devcontainer/` builds and verifies but never publishes — the run says so in its
+summary, so a merged Dockerfile change can't quietly leave `:latest` stale.
+
+**For a fixed environment**, pin a digest or a `sha-…` tag instead of `:latest`:
+
+```jsonc
+{ "image": "ghcr.io/malloydata/malloyyo-devcontainer:sha-<commit>" }
+```
 
 ## Making it launch even faster: prebuilds
 
@@ -152,8 +167,13 @@ then keeps a prepared container ready and creation drops to seconds.
 Edit [`devcontainer/Dockerfile`](../devcontainer/Dockerfile) in this repo and
 open a PR. The workflow builds it and asserts every promised tool actually runs
 — in a login shell, which is what a VS Code terminal is — before anything is
-published. On merge to `main` it publishes `:latest` and `:sha-<commit>`, and
-model repos tracking `:latest` pick it up on their next rebuild.
+published.
+
+**Merging is not publishing.** After the PR lands, dispatch the workflow
+(**Actions → devcontainer → Run workflow**, on `main`) to push `:latest` and
+`:sha-<commit>`; model repos tracking `:latest` pick it up on their next
+container rebuild. The PR run puts that reminder in its own summary, so the
+green check doesn't read as "shipped."
 
 Adding a VS Code extension for everyone means adding it to the
 `devcontainer.metadata` label at the bottom of that Dockerfile, not to each

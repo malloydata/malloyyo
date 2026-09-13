@@ -7,7 +7,7 @@
 # authenticate against BigQuery.
 #
 # THE CONSUMERS ARE MODEL REPOS — malloydata/malloyyo-ecommerce,
-# lloydtabb/malloyyo-babynames and their like — not this one. Malloyyo itself is
+# malloydata/malloyyo-babynames and their like — not this one. Malloyyo itself is
 # a Next.js server with its own toolchain and is not developed in here, which is
 # why this directory is `devcontainer/` and NOT `.devcontainer/`: the dotted name
 # is what the Dev Containers tooling opens a repo *in*, and nothing should open
@@ -19,7 +19,8 @@
 # `.github/workflows/devcontainer.yml` builds it once per change to this
 # directory and publishes it to ghcr.io/malloydata/malloyyo-devcontainer, so a
 # model repo's `.devcontainer/devcontainer.json` is one line — an `image`
-# reference — and creating its codespace is a pull.
+# reference, written for it by `malloyyo init` — and creating its codespace is
+# a pull.
 #
 # THE `devcontainer.metadata` LABEL AT THE BOTTOM IS THE OTHER HALF OF THAT.
 # Dev Containers merges image-carried metadata into the effective configuration,

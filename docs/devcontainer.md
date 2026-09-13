@@ -1,7 +1,7 @@
 # The Malloyyo dev container
 
 One prebuilt container that a **Malloy model repo** — `malloydata/malloyyo-ecommerce`,
-`lloydtabb/malloyyo-babynames`, anything with an `index.malloy` at its root — can
+`malloydata/malloyyo-babynames`, anything with an `index.malloy` at its root — can
 open a **GitHub Codespace** (or a local **Dev Container**) on, with everything
 needed to build a model and its dashboards already installed. Including Claude,
 so the "ask Claude to build the model" loop works from the first minute rather
@@ -20,9 +20,19 @@ makes a model repo's codespace a **pull, not a build**.
 
 ## Use it in a model repo
 
-Copy [`devcontainer/devcontainer.json`](../devcontainer/devcontainer.json) from
-this repo to **`.devcontainer/devcontainer.json`** in the model repo and commit
-it. That is the entire setup:
+Run `malloyyo init` in the repo and commit what it writes:
+
+```bash
+malloyyo init          # writes .devcontainer/devcontainer.json (and .mcp.json, index.malloy, skills)
+git add .devcontainer && git commit -m "Add the Malloyyo dev container"
+```
+
+Then **Code → Codespaces → Create codespace** on that repo (or, locally, VS
+Code's *Dev Containers: Reopen in Container* with Docker running).
+
+The whole file is four lines of substance — the
+[template `init` copies](../packages/cli/src/templates/devcontainer/devcontainer.json)
+carries the rest as comments:
 
 ```jsonc
 {
@@ -33,21 +43,18 @@ it. That is the entire setup:
 }
 ```
 
-Then **Code → Codespaces → Create codespace** on that repo (or, locally, VS
-Code's *Dev Containers: Reopen in Container* with Docker running).
-
 You do not list the extensions, the remote user or the dashboard ports: the
 image carries them itself in a `devcontainer.metadata` label, which the Dev
 Containers tooling merges into your configuration. Anything you *do* write in
 that `devcontainer.json` wins, so adding a `forwardPorts`, another extension or
-a feature works normally.
+a feature works normally — and `init` never overwrites a file that is already
+there, so those edits survive every re-run.
 
-`malloyyo init` in `postCreateCommand` is what makes `claude` open in **author
-mode** in that repo — it writes `.mcp.json` (the `malloyyo mcp --develop`
-server), pre-approves that server's tools in `.claude/settings.json`, and
-scaffolds an `index.malloy` if the repo has none. It merges rather than
-overwrites, so it is safe on every rebuild; once the repo has committed what it
-writes, you can drop the line.
+`malloyyo init` as the container's own `postCreateCommand` is what makes
+`claude` open in **author mode** inside the codespace: it writes `.mcp.json`
+(the `malloyyo mcp --develop` server), pre-approves that server's tools in
+`.claude/settings.json`, and scaffolds an `index.malloy` if the repo has none.
+It merges rather than overwrites, so running on every rebuild is safe.
 
 ## What's in it
 

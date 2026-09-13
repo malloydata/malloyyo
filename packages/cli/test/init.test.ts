@@ -90,3 +90,60 @@ test("refuses to touch a file whose shape it doesn't recognize", () => {
   assert.ok("error" in withAuthorPermissions({ permissions: "nope" }));
   assert.ok("error" in withAuthorPermissions({ permissions: { allow: "nope" } }));
 });
+
+// The devcontainer file `init` writes is what makes a model repo openable as a
+// Codespace. Two things matter and are easy to break: it must be valid JSONC
+// that the Dev Containers tooling will actually parse, and it must never
+// overwrite a repo's own container config — `init` is the dev container's own
+// postCreateCommand, so on every rebuild it runs against a repo that already
+// has one.
+
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { installDevcontainer } from "../src/init.js";
+
+/** Strip `//` line comments the way a JSONC parser would, for assertions. */
+const parseJsonc = (text: string) => JSON.parse(text.replace(/^\s*\/\/.*$/gm, ""));
+
+const tmpRepo = () => fs.mkdtempSync(path.join(os.tmpdir(), "malloyyo-init-"));
+
+test("writes a devcontainer that references the published image", () => {
+  const root = tmpRepo();
+  const res = installDevcontainer(root);
+  assert.equal(res.wrote, true);
+
+  const file = path.join(root, ".devcontainer", "devcontainer.json");
+  const raw = fs.readFileSync(file, "utf8");
+  const parsed = parseJsonc(raw);
+
+  assert.equal(parsed.image, "ghcr.io/malloydata/malloyyo-devcontainer:latest");
+  // The comments are the point of shipping JSONC rather than generating JSON —
+  // whoever opens this file needs to know what it is and what it may omit.
+  assert.match(raw, /^\/\//m);
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("never overwrites a repo's own devcontainer", () => {
+  const root = tmpRepo();
+  const file = path.join(root, ".devcontainer", "devcontainer.json");
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, '{ "image": "ghcr.io/example/mine:pinned" }\n');
+
+  const res = installDevcontainer(root);
+  assert.equal(res.wrote, false);
+  assert.equal(fs.readFileSync(file, "utf8"), '{ "image": "ghcr.io/example/mine:pinned" }\n');
+  fs.rmSync(root, { recursive: true, force: true });
+});
+
+test("is idempotent — a second init leaves the first file alone", () => {
+  const root = tmpRepo();
+  assert.equal(installDevcontainer(root).wrote, true);
+  const first = fs.readFileSync(path.join(root, ".devcontainer", "devcontainer.json"), "utf8");
+  assert.equal(installDevcontainer(root).wrote, false);
+  assert.equal(
+    fs.readFileSync(path.join(root, ".devcontainer", "devcontainer.json"), "utf8"),
+    first,
+  );
+  fs.rmSync(root, { recursive: true, force: true });
+});

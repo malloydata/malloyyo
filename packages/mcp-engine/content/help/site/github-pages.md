@@ -46,7 +46,7 @@ git add docs && git commit -m "update" && git push
 Because the dashboards fetch the parquet client-side, **committing fresh parquet
 is enough to update the live data** — you only need to re-`bundle` when you
 change dashboard code. To automate the data refresh weekly, see the
-`malloyyo-auto-update` skill.
+`yo_help("site/auto-update")`.
 
 ## Gotchas
 
@@ -54,7 +54,7 @@ change dashboard code. To automate the data refresh weekly, see the
   relative to the site root; `bundle` also reads the parquet to get schemas.
 - **Big parquet grows git history.** Each committed refresh adds the full file.
   Fine for occasional updates; for frequent auto-refresh, see the flatten note
-  in `malloyyo-auto-update`.
+  in `yo_help("site/auto-update")`.
 - **Git LFS does not work with Pages "deploy from a branch"** — Pages serves the
   LFS pointer text, not the file. Commit parquet as normal git objects.
 - **Private repos**: Pages on private repos needs a paid plan. Use a public repo

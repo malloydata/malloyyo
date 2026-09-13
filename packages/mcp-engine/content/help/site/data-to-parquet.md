@@ -92,7 +92,7 @@ The persist `name=` is the table name inside `build.duckdb`; the `COPY` names th
 served file (they can differ — e.g. `thing` → `docs/mysite_thing.parquet`).
 
 Wrap steps 1–3 in a single `scripts/build_data.sh` so it is one command, by hand
-and in CI. That's exactly what `malloyyo-auto-update` automates weekly.
+and in CI. That's exactly what `yo_help("site/auto-update")` automates weekly.
 
 ## Either way, verify
 

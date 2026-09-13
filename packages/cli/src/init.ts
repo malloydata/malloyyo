@@ -184,7 +184,16 @@ function templatePath(...parts: string[]): string | undefined {
 
 /** Copy the bundled Claude skill templates into the project's .claude/skills/.
     Existing skill directories are left untouched so a re-init never clobbers
-    local edits. */
+    local edits.
+
+    Those two facts used to be in tension: a skill was a few hundred lines of
+    procedure, copied per repo and then frozen — never updated by a later CLI,
+    with nothing to tell a reader which vintage they were looking at. The
+    skills are now STUBS. Each one carries a description (the trigger, which is
+    what a copied file is actually for) and a pointer to the `yo_help` topic
+    holding the procedure — `site/data-site`, `site/auto-update`. The content
+    ships in the engine and updates with the installed CLI, so the copy has
+    nothing in it that can go stale, and never clobbering it stays safe. */
 function installSkills(root: string): { wrote: string[]; skipped: string[]; note?: string } {
   const srcSkills = templatePath("skills");
   if (!srcSkills) return { wrote: [], skipped: [], note: "no skill templates found — skipped" };

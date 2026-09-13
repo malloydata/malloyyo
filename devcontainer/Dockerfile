@@ -7,7 +7,7 @@
 # authenticate against BigQuery.
 #
 # THE CONSUMERS ARE MODEL REPOS — malloydata/malloyyo-ecommerce,
-# lloydtabb/malloyyo-babynames and their like — not this one. Malloyyo itself is
+# malloydata/malloyyo-babynames and their like — not this one. Malloyyo itself is
 # a Next.js server with its own toolchain and is not developed in here, which is
 # why this directory is `devcontainer/` and NOT `.devcontainer/`: the dotted name
 # is what the Dev Containers tooling opens a repo *in*, and nothing should open
@@ -19,7 +19,8 @@
 # `.github/workflows/devcontainer.yml` builds it once per change to this
 # directory and publishes it to ghcr.io/malloydata/malloyyo-devcontainer, so a
 # model repo's `.devcontainer/devcontainer.json` is one line — an `image`
-# reference — and creating its codespace is a pull.
+# reference, written for it by `malloyyo init` — and creating its codespace is
+# a pull.
 #
 # THE `devcontainer.metadata` LABEL AT THE BOTTOM IS THE OTHER HALF OF THAT.
 # Dev Containers merges image-carried metadata into the effective configuration,
@@ -27,10 +28,13 @@
 # along with the image itself. A consuming repo gets the whole environment from
 # the `image` line alone and only writes down what is genuinely its own.
 #
-# Everything installed here is the LATEST of its line on purpose (the CLI, Claude
-# Code, DuckDB, Chromium): the image is rebuilt weekly, and a model repo pulling
-# `:latest` should get current tools. Pin to a `:sha-…` tag if you need a fixed
-# environment — see docs/devcontainer.md.
+# Everything installed here is the LATEST of its line at BUILD TIME (the CLI,
+# Claude Code, DuckDB, Chromium) — so a rebuild is what moves them, and rebuilds
+# are deliberate: the workflow publishes only on `workflow_dispatch`. What that
+# means in practice is that this image is a FLOOR, not a promise of currency.
+# The one that moves fastest, the `malloyyo` CLI, is a normal npm package: the
+# npm prefix is owned by `vscode` so `npm i -g @malloydata/malloyyo@latest`
+# inside a running container needs no sudo and no new image.
 
 FROM mcr.microsoft.com/devcontainers/base:2-bookworm
 
@@ -124,9 +128,9 @@ RUN apt-get update \
 # poking at a Parquet or CSV file before modelling it.
 #
 # `releases/latest/download` rather than a pinned version: this is a developer
-# convenience, the weekly rebuild keeps it current, and a pin here would rot
-# silently. The asset name changed across DuckDB's arm64 releases, hence the
-# fallback.
+# convenience, and a pinned version here would rot silently between rebuilds
+# with nobody noticing. The asset name changed across DuckDB's arm64 releases,
+# hence the fallback.
 ARG TARGETARCH
 RUN set -eux; \
     arch="${TARGETARCH:-amd64}"; \

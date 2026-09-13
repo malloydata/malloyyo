@@ -9,6 +9,9 @@
 //   3. Pre-approve the author server's tools in .claude/settings.json, so the
 //      first compile/query doesn't stop for a permission prompt. Merged, never
 //      clobbered — the file is hand-edited.
+//   4. Write .devcontainer/devcontainer.json, so the repo can be opened as a
+//      GitHub Codespace on the prebuilt image that already has all of the
+//      above installed — the CLI, Claude, the Malloy extension, gcloud.
 //
 // The .mcp.json is the guaranteed fix; the index.malloy is a best-effort
 // scaffold to review (validate it with `malloyyo mcp --develop` / `dashboard
@@ -165,20 +168,34 @@ function scaffoldIndex(root: string): { wrote: boolean; note: string } {
   };
 }
 
-/** Copy the bundled Claude skill templates into the project's .claude/skills/.
+/** Resolve something inside the bundled templates/ directory.
+
     The templates ride in dist/templates/ (copied there at build time by
     copy-frame-src.mjs), next to this file's bundle (dist/index.js) — resolve
-    them relative to import.meta.url, same as the frame runtime. Existing skill
-    directories are left untouched so a re-init never clobbers local edits. */
-function installSkills(root: string): { wrote: string[]; skipped: string[]; note?: string } {
+    them relative to import.meta.url, same as the frame runtime. Dev
+    (tsx src/index.ts) resolves to src/, where they live directly. */
+function templatePath(...parts: string[]): string | undefined {
   const distDir = path.dirname(fileURLToPath(import.meta.url));
-  // Dev (tsx src/index.ts) resolves to src/, where templates live directly;
-  // a published install resolves to dist/, where the build copied them.
-  const candidates = [
-    path.join(distDir, "templates", "skills"),
-    path.join(distDir, "..", "src", "templates", "skills"),
-  ];
-  const srcSkills = candidates.find((p) => fs.existsSync(p));
+  return [
+    path.join(distDir, "templates", ...parts),
+    path.join(distDir, "..", "src", "templates", ...parts),
+  ].find((p) => fs.existsSync(p));
+}
+
+/** Copy the bundled Claude skill templates into the project's .claude/skills/.
+    Existing skill directories are left untouched so a re-init never clobbers
+    local edits.
+
+    Those two facts used to be in tension: a skill was a few hundred lines of
+    procedure, copied per repo and then frozen — never updated by a later CLI,
+    with nothing to tell a reader which vintage they were looking at. The
+    skills are now STUBS. Each one carries a description (the trigger, which is
+    what a copied file is actually for) and a pointer to the `yo_help` topic
+    holding the procedure — `site/data-site`, `site/auto-update`. The content
+    ships in the engine and updates with the installed CLI, so the copy has
+    nothing in it that can go stale, and never clobbering it stays safe. */
+function installSkills(root: string): { wrote: string[]; skipped: string[]; note?: string } {
+  const srcSkills = templatePath("skills");
   if (!srcSkills) return { wrote: [], skipped: [], note: "no skill templates found — skipped" };
 
   const destSkills = path.join(root, ".claude", "skills");
@@ -197,6 +214,36 @@ function installSkills(root: string): { wrote: string[]; skipped: string[]; note
     wrote.push(name);
   }
   return { wrote, skipped };
+}
+
+/** Write .devcontainer/devcontainer.json — what makes this repo openable as a
+    GitHub Codespace on the prebuilt Malloyyo image.
+    ghcr.io/malloydata/malloyyo-devcontainer carries the CLI, Claude Code, the
+    Malloy and Claude VS Code extensions, Node, Playwright/Chromium and gcloud,
+    so a codespace on it is a pull rather than a multi-minute build, and the
+    repo needs no per-machine setup at all.
+
+    Copied verbatim from the bundled template (comments and all — the file is
+    JSONC and meant to be read and edited), and NEVER over an existing one:
+    a repo that has tuned its container, added a feature or pinned a digest
+    keeps what it has. That also makes this safe as the container's own
+    postCreateCommand, which is where it usually runs from the second time on.
+
+    Exported for the tests. */
+export function installDevcontainer(root: string): { wrote: boolean; note: string } {
+  const dest = path.join(root, ".devcontainer", "devcontainer.json");
+  if (fs.existsSync(dest)) {
+    return { wrote: false, note: ".devcontainer/devcontainer.json exists — left as-is" };
+  }
+  const src = templatePath("devcontainer", "devcontainer.json");
+  if (!src) return { wrote: false, note: "no devcontainer template found — skipped" };
+
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  fs.copyFileSync(src, dest);
+  return {
+    wrote: true,
+    note: "wrote .devcontainer/devcontainer.json — commit it, then Code → Codespaces on GitHub",
+  };
 }
 
 export async function initCmd(dir: string): Promise<void> {
@@ -230,6 +277,9 @@ export async function initCmd(dir: string): Promise<void> {
       console.log(`• skill(s) already present — left as-is: ${sk.skipped.join(", ")}`);
     }
   }
+
+  const dev = installDevcontainer(root);
+  console.log(`${dev.wrote ? "✓" : "•"} ${dev.note}`);
 
   const perms = allowAuthorTools(root);
   if (perms.note) {

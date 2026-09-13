@@ -1,18 +1,14 @@
-// THE TEMPLATE. Copy this file to `.devcontainer/devcontainer.json` in a Malloy
-// MODEL repo — malloydata/malloyyo-ecommerce, lloydtabb/malloyyo-babynames, any
-// repo with an index.malloy at its root — and commit it. That is the whole
-// setup for that repo.
+// Written by `malloyyo init` into a Malloy MODEL repo — this is what makes the
+// repo openable as a GitHub Codespace (or a local Dev Container) with the whole
+// toolchain already installed: Claude Code, the Malloy and Claude VS Code
+// extensions, the `malloyyo` CLI, Node 24, Playwright/Chromium, the Google
+// Cloud CLI. `init` never overwrites an existing one, so local edits survive.
 //
-// It is not `.devcontainer/devcontainer.json` here, deliberately: this file
-// belongs to the repos that consume the image, not to malloyyo, which is a
-// Next.js server and is not developed inside it.
-//
-// The image is prebuilt and published by the malloyyo repository, so creating
-// the codespace is a pull rather than a build, and the tools — Claude Code, the
-// Malloy and Claude VS Code extensions, the `malloyyo` CLI, Node 24,
-// Playwright/Chromium, the Google Cloud CLI — come with it. The extensions and
-// the dashboard ports arrive from the image's own `devcontainer.metadata`,
-// which is why they are not listed here.
+// The image is prebuilt and published by the malloyyo repository
+// (devcontainer/Dockerfile there), so creating the codespace is a pull rather
+// than a build. The extensions and the dashboard ports are not listed here
+// because the image carries them itself, in a `devcontainer.metadata` label
+// that the Dev Containers tooling merges into this file.
 //
 // See https://github.com/malloydata/malloyyo/blob/main/docs/devcontainer.md
 {

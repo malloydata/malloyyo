@@ -32,14 +32,16 @@ See `local/CLAUDE.md` for instance-specific details (gitignored, private).
 
 **The dev container** (`devcontainer/`, `docs/devcontainer.md`) is **for model
 repos, not for this one** — `malloydata/malloyyo-ecommerce`,
-`lloydtabb/malloyyo-babynames` and their like. This repo only builds and
+`malloydata/malloyyo-babynames` and their like. This repo only builds and
 publishes the image (`ghcr.io/malloydata/malloyyo-devcontainer`, via
 `.github/workflows/devcontainer.yml`): Claude Code, the Malloy/Claude VS Code
 extensions, the `malloyyo` CLI, Node 24, Playwright/Chromium, `gcloud`/`bq`. The
 source sits in `devcontainer/` rather than `.devcontainer/` precisely so nothing
-opens *this* repo in it. A model repo copies `devcontainer/devcontainer.json` to
-its own `.devcontainer/devcontainer.json`; the extensions and ports ride along in
-the image's `devcontainer.metadata` label, so that file stays one `image` line.
+opens *this* repo in it. A model repo gets its own `.devcontainer/devcontainer.json`
+from **`malloyyo init`** (template:
+`packages/cli/src/templates/devcontainer/devcontainer.json`, written only when the
+repo has none); the extensions and ports ride along in the image's
+`devcontainer.metadata` label, so that file stays one `image` line.
 
 **Node 24.** CI (`preflight.yml`, `cli-publish.yml`) and Vercel Functions run
 node 24, and `mise.toml` pins the checkout to it. A machine whose global default

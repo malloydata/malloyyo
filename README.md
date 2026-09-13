@@ -124,8 +124,9 @@ The MCP endpoint speaks OAuth 2.1, so claude.ai's remote MCP integration can con
 > **Want none of this on your laptop?** Open your model repo in a **GitHub Codespace**
 > on the prebuilt [Malloyyo dev container](docs/devcontainer.md) — Claude Code, the Malloy
 > and Claude VS Code extensions, the `malloyyo` CLI, Node, Playwright and `gcloud`/`bq` are
-> already in the image, so the model repo's whole setup is a one-line
-> `.devcontainer/devcontainer.json` and its codespace starts in seconds.
+> already in the image. `malloyyo init` writes the one-line
+> `.devcontainer/devcontainer.json` that opts a repo in, and its codespace starts
+> in seconds.
 
 **1. Install and set up your model repo.**
 

@@ -18,16 +18,6 @@ which is why the image source lives in `devcontainer/` and not in the
 `.devcontainer/` that would make this repo open inside it. Publishing is what
 makes a model repo's codespace a **pull, not a build**.
 
-> **One step before any of this works.** The publishing workflow is committed as
-> [`.github/devcontainer-workflow.yml`](../.github/devcontainer-workflow.yml) and
-> is not active there — GitHub rejects writes under `.github/workflows/` from a
-> credential without the `workflow` scope. Move it once, from a checkout with a
-> normal credential, and the first merge to `main` publishes the image:
->
-> ```bash
-> git mv .github/devcontainer-workflow.yml .github/workflows/devcontainer.yml
-> ```
-
 ## Use it in a model repo
 
 Copy [`devcontainer/devcontainer.json`](../devcontainer/devcontainer.json) from

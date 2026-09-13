@@ -1,13 +1,3 @@
-# ---------------------------------------------------------------------------
-# NOT ACTIVE YET — move this file to `.github/workflows/devcontainer.yml`:
-#
-#     git mv .github/devcontainer-workflow.yml .github/workflows/devcontainer.yml
-#
-# GitHub refuses writes under `.github/workflows/` from a credential without the
-# `workflow` scope, which is what the session that wrote this had. The content
-# below is final; only its path is provisional. Nothing runs until it moves.
-# ---------------------------------------------------------------------------
-
 name: devcontainer
 
 # Build — and, on main, publish — the shared Malloyyo development container.

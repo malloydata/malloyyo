@@ -35,6 +35,38 @@ function clean(slug: string): string | null {
 }
 
 /**
+ * The dev container `malloyyo init` writes, and the only one GitHub finds on its
+ * own — a `devcontainer_path=` URL parameter can name another, but only one that
+ * is already committed to the repo, so it buys nothing here.
+ *
+ * Both publish paths ingest this file as an ordinary model file (the CLI's
+ * gatherDirectory reaches past its own hidden-dir skip for it; the GitHub
+ * refresh fetches it alongside malloy-config.json) even though Malloy never
+ * reads it. That is the point: its PRESENCE in the stored file list is the
+ * record that this repo opens as a codespace, so the question is answered from
+ * the model we already have instead of by asking GitHub per page-view — which
+ * with GITHUB_TOKEN unset would spend a 60/hour unauthenticated budget on every
+ * visit to the home page.
+ *
+ * The CLI keeps its own copy of this constant (packages/cli/src/gather.ts):
+ * separate package, no shared protocol module yet.
+ */
+export const DEVCONTAINER_PATH = ".devcontainer/devcontainer.json";
+
+/**
+ * Whether a published model carries a dev container — i.e. whether a codespace
+ * opened on this repo comes up with the Malloyyo tooling installed.
+ *
+ * False for a model published BEFORE this file was ingested, which is
+ * indistinguishable from a repo that genuinely has none. That is deliberate:
+ * both are fixed the same way (run `malloyyo init`, commit, publish), so the UI
+ * can say one thing to both without lying to either.
+ */
+export function hasDevcontainer(files?: { path: string }[] | null): boolean {
+  return (files ?? []).some((f) => f.path === DEVCONTAINER_PATH);
+}
+
+/**
  * "Open this repo in a codespace" — the link that RESUMES the viewer's existing
  * codespace for that branch if they have one, and creates one otherwise.
  *

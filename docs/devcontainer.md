@@ -56,6 +56,24 @@ there, so those edits survive every re-run.
 `.claude/settings.json`, and scaffolds an `index.malloy` if the repo has none.
 It merges rather than overwrites, so running on every rebuild is safe.
 
+### Committing it is what puts the codespace icon on the dataset
+
+A published dataset shows a codespace icon beside its repo link on the Malloyyo
+home page, and it opens a codespace on the model's repo and branch — resuming
+the viewer's existing one rather than building a second.
+
+The icon is live only when the repo's last publish carried
+`.devcontainer/devcontainer.json`. Both publish paths ingest that file as an
+ordinary model file (a CLI `malloyyo publish`, and a GitHub refresh), so its
+presence in the stored model is the record that this repo opens as a *working*
+codespace; without it the icon explains the fix instead of opening a codespace
+that would come up on GitHub's default image with none of this tooling.
+
+So the order matters: `malloyyo init`, **commit**, then publish. A dev container
+sitting uncommitted in a working tree is one a codespace never sees, and a
+dataset published before the container was added keeps the dim icon until the
+next publish or refresh.
+
 ## What's in it
 
 | | |

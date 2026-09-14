@@ -11,6 +11,8 @@ import {
   dashboardSourceUrl,
   repoUrl,
   codespaceUrl,
+  hasDevcontainer,
+  DEVCONTAINER_PATH,
 } from "./github-source-link";
 
 test("parseRepoSlug accepts the shapes a repo is actually stored in", () => {
@@ -185,4 +187,29 @@ test("codespaceUrl is null when there is no GitHub repo to open", () => {
   // Not a GitHub repo, and not two path segments: no link rather than a bogus one.
   assert.equal(codespaceUrl("https://gitlab.com/owner/repo"), null);
   assert.equal(codespaceUrl("owner/repo/extra"), null);
+});
+
+test("hasDevcontainer reads the published file list, not the repo", () => {
+  const model = [
+    { path: "index.malloy" },
+    { path: "malloy-config.json" },
+    { path: "dashboards/trend.malloy" },
+  ];
+  assert.equal(hasDevcontainer(model), false);
+  assert.equal(hasDevcontainer([...model, { path: DEVCONTAINER_PATH }]), true);
+});
+
+test("hasDevcontainer is false for a model with no file list at all", () => {
+  // A dataset whose latest version predates file ingestion, or has no model yet.
+  assert.equal(hasDevcontainer(null), false);
+  assert.equal(hasDevcontainer(undefined), false);
+  assert.equal(hasDevcontainer([]), false);
+});
+
+test("hasDevcontainer only counts the dev container GitHub finds on its own", () => {
+  // A committed config somewhere else is real, but Codespaces will not use it
+  // without a devcontainer_path= parameter — so it is not what this claims.
+  assert.equal(hasDevcontainer([{ path: ".devcontainer/malloyyo/devcontainer.json" }]), false);
+  assert.equal(hasDevcontainer([{ path: "devcontainer.json" }]), false);
+  assert.equal(hasDevcontainer([{ path: ".devcontainer/Dockerfile" }]), false);
 });

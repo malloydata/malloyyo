@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: MIT
 
 import { NextResponse } from "next/server";
-import { eq, desc, and, ne } from "drizzle-orm";
-import { db, datasets, malloyModels, users } from "@/db";
+import { eq, desc, and, ne, inArray } from "drizzle-orm";
+import { db, datasets, malloyModels, malloyModelFiles, users } from "@/db";
+import { DEVCONTAINER_PATH } from "@/lib/github-source-link";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
 
@@ -63,6 +64,8 @@ export async function GET() {
     isPublic: boolean;
     githubRepo: string | null;
     githubBranch: string | null;
+    hasDevcontainer: boolean;
+    githubConnected: boolean;
     ownerName?: string | null;
     sources: Array<{ source: string; description: string | null }>;
   }> = [];
@@ -79,9 +82,15 @@ export async function GET() {
     if (!held || (held.status !== "ready" && ds.status === "ready")) byName.set(ds.name, ds);
   }
 
+  // Model id → the index into `result` of the row it produced, so the dev
+  // container lookup below is ONE query for the whole page rather than a second
+  // per-dataset round trip on top of the one this loop already makes.
+  const rowForModel = new Map<string, number>();
+
   for (const ds of byName.values()) {
     const [latestModel] = await db
       .select({
+        id: malloyModels.id,
         sources: malloyModels.sources,
         gitRepo: malloyModels.gitRepo,
         gitBranch: malloyModels.gitBranch,
@@ -92,6 +101,7 @@ export async function GET() {
       .limit(1);
 
     const declared = normalizeSources(latestModel?.sources);
+    if (latestModel) rowForModel.set(latestModel.id, result.length);
     result.push({
       dataset: ds.name,
       status: ds.status,
@@ -103,6 +113,13 @@ export async function GET() {
       // a non-default branch must not hand out links to the default one. Same
       // precedence as the repo above, so the two always describe one tree.
       githubBranch: ds.githubBranch ?? latestModel?.gitBranch ?? null,
+      // Filled in below — false until the file lookup says otherwise, so a
+      // dataset with no model at all reads as "no codespace", which it is.
+      hasDevcontainer: false,
+      // How this dataset takes a new version, which is the last step of any
+      // advice about changing its repo: a configured github_repo is refreshed
+      // from the dataset's config page, everything else is `malloyyo publish`.
+      githubConnected: ds.githubRepo !== null,
       ...(admin ? { ownerName: ds.ownerName } : {}),
       // A model that declares nothing still gets one row, named for the dataset,
       // so it appears in the catalogue at all rather than silently vanishing.
@@ -112,6 +129,25 @@ export async function GET() {
           ? [{ source: ds.name, description: null }]
           : declared.map((src) => ({ source: src.name, description: src.description })),
     });
+  }
+
+  // Whether each model carries the repo's dev container — see DEVCONTAINER_PATH.
+  // Both publish paths store it as an ordinary model file precisely so this is a
+  // local row lookup instead of a GitHub call per dataset per page view.
+  if (rowForModel.size > 0) {
+    const withContainer = await db
+      .select({ modelId: malloyModelFiles.modelId })
+      .from(malloyModelFiles)
+      .where(
+        and(
+          inArray(malloyModelFiles.modelId, [...rowForModel.keys()]),
+          eq(malloyModelFiles.path, DEVCONTAINER_PATH),
+        ),
+      );
+    for (const row of withContainer) {
+      const i = rowForModel.get(row.modelId);
+      if (i !== undefined) result[i].hasDevcontainer = true;
+    }
   }
 
   return NextResponse.json(result);

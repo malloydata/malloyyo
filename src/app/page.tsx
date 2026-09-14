@@ -7,6 +7,16 @@ import { signIn } from "next-auth/react";
 import Link from "next/link";
 import { QueryIcon } from "@/components/QueryIcon";
 import { repoUrl, codespaceUrl } from "@/lib/github-source-link";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 
 type AuthProvider = { id: string; name: string };
 
@@ -34,6 +44,8 @@ type DatasetGroup = {
   status: string;
   githubRepo: string | null;
   githubBranch: string | null;
+  hasDevcontainer: boolean;
+  githubConnected: boolean;
   ownerName?: string | null;
   sources: SourceSummary[];
 };
@@ -330,7 +342,13 @@ export default function HomePage() {
                             {g?.dataset ?? "dataset"}
                           </Link>
                           {g?.githubRepo && (
-                            <RepoLinks repo={g.githubRepo} branch={g.githubBranch} />
+                            <RepoLinks
+                              repo={g.githubRepo}
+                              branch={g.githubBranch}
+                              hasDevcontainer={g.hasDevcontainer}
+                              githubConnected={g.githubConnected}
+                              dataset={g.dataset}
+                            />
                           )}
                         </span>
                         <div className="flex items-center gap-2 flex-shrink-0">
@@ -496,25 +514,71 @@ export default function HomePage() {
 // worth the pixel next to the octocat because a model repo that has been
 // through `malloyyo init` carries a .devcontainer for the prebuilt Malloyyo
 // image, so this is the whole distance from "I see a dataset" to "I am editing
-// its model with Claude, tools installed". A repo without one still opens, on
-// GitHub's default image.
+// its model with Claude, tools installed".
 //
-// Both are built from the PARSED slug, so a model published from an ssh remote
-// (git@github.com:owner/repo.git — what `git remote get-url` returns for most
-// checkouts) links correctly instead of to github.com/git@github.com:owner….
-function RepoLinks({ repo, branch }: { repo: string; branch: string | null }) {
+// A repo WITHOUT that dev container still opens as a codespace — on GitHub's
+// default image, with none of the tooling — which looks like the feature
+// working and isn't. So the icon is always here (its absence would be a puzzle
+// of its own), but without a dev container it explains the one-time fix instead
+// of opening something disappointing.
+//
+// Both links are built from the PARSED slug, so a model published from an ssh
+// remote (git@github.com:owner/repo.git — what `git remote get-url` returns for
+// most checkouts) links correctly instead of to github.com/git@github.com:owner….
+function RepoLinks({
+  repo,
+  branch,
+  hasDevcontainer,
+  githubConnected,
+  dataset,
+}: {
+  repo: string;
+  branch: string | null;
+  hasDevcontainer: boolean;
+  githubConnected: boolean;
+  dataset: string;
+}) {
   const href = repoUrl({ gitRepo: repo });
   const codespace = codespaceUrl(repo, branch);
   if (!href) return null;
   return (
     <span className="flex items-center gap-1.5 flex-shrink-0">
       <GitHubLink href={href} repo={repo} />
-      {codespace && <CodespaceLink href={codespace} repo={repo} branch={branch} />}
+      {codespace &&
+        (hasDevcontainer ? (
+          <CodespaceLink href={codespace} repo={repo} branch={branch} />
+        ) : (
+          <NoDevcontainer repo={repo} githubConnected={githubConnected} dataset={dataset} />
+        ))}
     </span>
   );
 }
 
 // Terminal-in-a-window: a codespace is a dev machine, not a document.
+function CodespaceIcon() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 16 16"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.4"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <rect x="1.2" y="2.2" width="13.6" height="9.6" rx="1.6" />
+      <path d="M4.4 5.8 6.2 7.4 4.4 9" />
+      <path d="M7.8 9.2h3.6" />
+      <path d="M5 14.2h6" />
+    </svg>
+  );
+}
+
+const ICON_CLASS =
+  "flex-shrink-0 text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200";
+
 function CodespaceLink({
   href,
   repo,
@@ -530,26 +594,93 @@ function CodespaceLink({
       target="_blank"
       rel="noopener noreferrer"
       title={`Open a codespace on ${repo}${branch ? ` (${branch})` : ""} — resumes yours if you have one`}
-      className="flex-shrink-0 text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200"
+      className={ICON_CLASS}
     >
-      <svg
-        width="14"
-        height="14"
-        viewBox="0 0 16 16"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="1.4"
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        aria-hidden
-      >
-        <rect x="1.2" y="2.2" width="13.6" height="9.6" rx="1.6" />
-        <path d="M4.4 5.8 6.2 7.4 4.4 9" />
-        <path d="M7.8 9.2h3.6" />
-        <path d="M5 14.2h6" />
-      </svg>
+      <CodespaceIcon />
       <span className="sr-only">Open in a codespace</span>
     </a>
+  );
+}
+
+// The same icon, dimmed, for a repo whose last publish carried no dev container.
+// Rather than open a codespace that would come up on GitHub's default image with
+// none of the tooling, it hands over the fix — as the commands, in order, so the
+// answer to "what do I type?" is on screen instead of described.
+//
+// The commands end in `malloyyo publish`, because a committed dev container the
+// instance has not ingested yet still leaves this icon dim — the fix isn't done
+// until a new model version carries the file. A GitHub-connected dataset can
+// reach the same place from its config page, which is the shorter route for
+// someone who never publishes from the CLI, so it is offered as the alternative
+// rather than left out.
+//
+// The same words fit a repo that genuinely has no dev container and one whose
+// model was simply published before this file was ingested, because the fix is
+// identical: init, commit, publish.
+function NoDevcontainer({
+  repo,
+  githubConnected,
+  dataset,
+}: {
+  repo: string;
+  githubConnected: boolean;
+  dataset: string;
+}) {
+  return (
+    <Dialog>
+      <DialogTrigger asChild>
+        <button
+          type="button"
+          title="Codespaces aren't set up for this repo — click to see how"
+          className={`${ICON_CLASS} opacity-50`}
+        >
+          <CodespaceIcon />
+          <span className="sr-only">Set up codespaces for this repo</span>
+        </button>
+      </DialogTrigger>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Codespaces aren&apos;t set up for {repo}</DialogTitle>
+          <DialogDescription>
+            A codespace here would start on GitHub&apos;s default image — no Malloy, no CLI, no
+            Claude. Set it up once, in a checkout of the repo:
+          </DialogDescription>
+        </DialogHeader>
+        <pre className="overflow-x-auto whitespace-pre rounded bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-800 p-3 text-[11px] leading-relaxed font-mono select-all">
+          {"malloyyo init\n" +
+            "git add .devcontainer\n" +
+            'git commit -m "Add the dev container"\n' +
+            "git push\n" +
+            "malloyyo publish"}
+        </pre>
+        <p className="text-xs text-gray-600 dark:text-gray-400">
+          {githubConnected ? (
+            <>
+              {dataset} tracks its repo, so the last step can instead be{" "}
+              <Link
+                href={`/datasets/${encodeURIComponent(dataset)}/config`}
+                className="underline underline-offset-2 hover:text-gray-900 dark:hover:text-gray-100"
+              >
+                refresh from GitHub
+              </Link>
+              . Either way, this icon then opens a codespace with the tooling installed.
+            </>
+          ) : (
+            <>This icon then opens a codespace with the tooling installed.</>
+          )}
+        </p>
+        <DialogFooter>
+          <DialogClose asChild>
+            <button
+              type="button"
+              className="rounded border border-gray-300 dark:border-gray-700 px-3 py-1.5 text-xs hover:bg-gray-50 dark:hover:bg-gray-900"
+            >
+              Close
+            </button>
+          </DialogClose>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 

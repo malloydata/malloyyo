@@ -7,10 +7,22 @@ import type { ModelFile, GitInfo, DashboardPayload } from "./protocol.js";
 
 const SKIP_DIRS = new Set(["node_modules", ".git"]);
 
+/** What `malloyyo init` writes, and the only dev container GitHub finds without
+    being told where to look (a `devcontainer_path=` URL parameter can name
+    another, but only one that is already committed). Published as a model file
+    so "does this repo open as a codespace?" is answerable from the model alone. */
+export const DEVCONTAINER_PATH = ".devcontainer/devcontainer.json";
+
 /**
  * Collect every *.malloy file under `dir` (recursively, skipping hidden dirs and
  * node_modules) plus malloy-config.json at the root. Paths are relative to `dir`,
  * POSIX-separated, so imports resolve the same way on the server.
+ *
+ * `.devcontainer/devcontainer.json` rides along too, despite the hidden-dir skip
+ * and despite Malloy never reading it: its PRESENCE in the published file list is
+ * how the server knows this repo can be opened as a codespace. Nothing else in
+ * the stored model says so, and asking GitHub per page-view would spend the
+ * unauthenticated rate limit on a question the publish already answered.
  */
 export function gatherDirectory(dir: string): { files: ModelFile[]; config?: string } {
   const files: ModelFile[] = [];
@@ -30,6 +42,12 @@ export function gatherDirectory(dir: string): { files: ModelFile[]; config?: str
     }
   };
   walk(dir);
+
+  // Explicit, because walk() skips every dotted entry — see DEVCONTAINER_PATH.
+  const devcontainer = join(dir, ...DEVCONTAINER_PATH.split("/"));
+  if (existsSync(devcontainer)) {
+    files.push({ path: DEVCONTAINER_PATH, content: readFileSync(devcontainer, "utf8") });
+  }
 
   const configPath = join(dir, "malloy-config.json");
   const config = existsSync(configPath) ? readFileSync(configPath, "utf8") : undefined;

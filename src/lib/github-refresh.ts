@@ -5,6 +5,7 @@ import { desc, eq } from "drizzle-orm";
 import { modelArtifact, type ArtifactInfo } from "@malloyyo/mcp-engine";
 import { db, datasets, malloyModels, malloyModelFiles, malloyArtifacts } from "@/db";
 import { GitHubURLReader, fetchGitHubFile, listGitHubDir, parseGitHubRepo } from "./github";
+import { DEVCONTAINER_PATH } from "./github-source-link";
 import { introspectModelWithReader, withReaderRuntime, fileUrl, type SourceInfo } from "./malloy";
 import { ABOUT_NAME, ABOUT_TITLE } from "@/lib/dashboards/about";
 import { logger } from "./logger";
@@ -32,6 +33,19 @@ export async function refreshGitHubModel(datasetId: string): Promise<RefreshResu
     });
   } catch {
     // Not present — fine.
+  }
+
+  // The repo's dev container, fetched for its EXISTENCE rather than its content:
+  // stored as a model file so the app can tell whether this repo opens as a
+  // working codespace without asking GitHub again on every page view. Malloy
+  // never reads it, so a missing one is as ordinary as a missing config.
+  let devcontainer: string | undefined;
+  try {
+    devcontainer = await fetchGitHubFile(owner, repo, branch, DEVCONTAINER_PATH, {
+      useToken: ds.githubUseToken,
+    });
+  } catch {
+    // No dev container in this repo — the UI says so when someone asks for one.
   }
 
   const result = await introspectModelWithReader(reader, "index.malloy", malloyConfig);
@@ -95,6 +109,7 @@ export async function refreshGitHubModel(datasetId: string): Promise<RefreshResu
 
   const allFiles = new Map(reader.fetched);
   if (malloyConfig) allFiles.set("malloy-config.json", malloyConfig);
+  if (devcontainer) allFiles.set(DEVCONTAINER_PATH, devcontainer);
 
   if (allFiles.size > 0) {
     await db.insert(malloyModelFiles).values(

@@ -190,6 +190,8 @@ function makeProject(
     model?: string;
     dashboard?: boolean;
     tokenEnv?: string;
+    /** Write a .devcontainer/devcontainer.json, as `malloyyo init` does. */
+    devcontainer?: boolean;
     /** Extra `connections` entries, e.g. one whose password is an unset env ref. */
     connections?: Record<string, unknown>;
   } = {},
@@ -218,6 +220,13 @@ function makeProject(
     ),
   );
   writeFileSync(join(dir, "index.malloy"), opts.model ?? MODEL);
+  if (opts.devcontainer) {
+    mkdirSync(join(dir, ".devcontainer"));
+    writeFileSync(
+      join(dir, ".devcontainer", "devcontainer.json"),
+      JSON.stringify({ image: "ghcr.io/malloydata/malloyyo-devcontainer" }),
+    );
+  }
   if (opts.dashboard) {
     mkdirSync(join(dir, "dashboards"));
     writeFileSync(join(dir, "dashboards", "totals.malloy"), DASHBOARD);
@@ -723,4 +732,45 @@ test("the dataset the flag created is addressable by name and unique among ready
     .from(datasets)
     .where(and(eq(datasets.name, DS_MAIN), eq(datasets.status, "ready")));
   assert.equal(rows.length, 1);
+});
+
+// The repo's dev container travels with the model, so the app can tell whether
+// this dataset opens as a working codespace without asking GitHub per page view.
+// Worth an end-to-end test rather than a unit one: gatherDirectory skips every
+// dotted entry, so this file reaches the server only by a deliberate exception
+// — and nothing downstream would fail loudly if that exception regressed. The
+// icon would just quietly stop working.
+test("a repo's dev container is published with the model", async () => {
+  const ds = `${DS_MAIN}_devcontainer`;
+  const dir = makeProject(ds, { devcontainer: true });
+  const r = await runCli(["publish", "test", dir, "--token", token, "--create-dataset"], dir);
+  assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`);
+
+  const [row] = await datasetRows(ds);
+  const [model] = await models(row.id);
+  const files = await db
+    .select({ path: malloyModelFiles.path, content: malloyModelFiles.content })
+    .from(malloyModelFiles)
+    .where(eq(malloyModelFiles.modelId, model.id));
+
+  const found = files.find((f) => f.path === ".devcontainer/devcontainer.json");
+  assert.ok(found, `devcontainer.json published — got ${files.map((f) => f.path).join(", ")}`);
+  assert.match(found.content, /malloyyo-devcontainer/);
+});
+
+test("a repo without a dev container publishes without one", async () => {
+  const ds = `${DS_MAIN}_nodevcontainer`;
+  const dir = makeProject(ds);
+  const r = await runCli(["publish", "test", dir, "--token", token, "--create-dataset"], dir);
+  assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`);
+
+  const [row] = await datasetRows(ds);
+  const [model] = await models(row.id);
+  const files = await db
+    .select({ path: malloyModelFiles.path })
+    .from(malloyModelFiles)
+    .where(eq(malloyModelFiles.modelId, model.id));
+  assert.equal(files.some((f) => f.path === ".devcontainer/devcontainer.json"), false);
+  // And the model itself still published, so this is not a vacuous pass.
+  assert.ok(files.some((f) => f.path === "index.malloy"));
 });

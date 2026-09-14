@@ -34,6 +34,39 @@ function clean(slug: string): string | null {
   return `${parts[0]}/${parts[1]}`;
 }
 
+/**
+ * "Open this repo in a codespace" — the link that RESUMES the viewer's existing
+ * codespace for that branch if they have one, and creates one otherwise.
+ *
+ * That behaviour is entirely `?quickstart=1`: without it, codespaces.new always
+ * lands on the create form, so a second visit builds a second container instead
+ * of returning to the work in progress. With it, GitHub shows "Resume this
+ * codespace" when one exists for the branch and the ordinary create page when
+ * one doesn't. Nothing here can know which — the codespace belongs to whoever
+ * clicks, not to this server — which is why it must be GitHub's page that
+ * decides rather than us picking a URL per case.
+ *
+ * The branch matters: a dataset pinned to a non-default branch would otherwise
+ * open a codespace on the default one, which is the wrong code with no hint
+ * that it is wrong. Omitted when unknown, which is what GitHub reads as "the
+ * default branch".
+ *
+ * Returns null when the recorded repo isn't a GitHub "owner/repo" — the same
+ * condition that makes every other link in this file null.
+ */
+export function codespaceUrl(
+  repo: string | null | undefined,
+  branch?: string | null,
+): string | null {
+  const slug = parseRepoSlug(repo);
+  if (!slug) return null;
+  const ref = branch?.trim();
+  // Branch names legitimately contain "/" (feature/x), and the path segments
+  // around it are separators, not part of the name — so encode per segment.
+  const path = ref ? `${slug}/tree/${ref.split("/").map(encodeURIComponent).join("/")}` : slug;
+  return `https://codespaces.new/${path}?quickstart=1`;
+}
+
 export type SourceLinkInput = {
   /** Dashboard slug — the basename of its .malloy file. */
   name: string;

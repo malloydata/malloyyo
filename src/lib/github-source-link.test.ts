@@ -5,7 +5,13 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseRepoSlug, dashboardSourcePath, dashboardSourceUrl, repoUrl } from "./github-source-link";
+import {
+  parseRepoSlug,
+  dashboardSourcePath,
+  dashboardSourceUrl,
+  repoUrl,
+  codespaceUrl,
+} from "./github-source-link";
 
 test("parseRepoSlug accepts the shapes a repo is actually stored in", () => {
   assert.equal(parseRepoSlug("malloydata/malloyyo-ecommerce"), "malloydata/malloyyo-ecommerce");
@@ -131,4 +137,52 @@ test("the repo-root index.malloy is never a dashboard's source", () => {
 
   // Other names are untouched: a v1 layout outside dashboards/ still resolves.
   assert.equal(dashboardSourcePath("odd", [{ path: "custom/odd.malloy" }]), "custom/odd.malloy");
+});
+
+// codespaceUrl — the "open a codespace on this model repo" link beside the
+// GitHub one on the home page.
+
+test("codespaceUrl resumes-or-creates on the default branch", () => {
+  assert.equal(
+    codespaceUrl("malloydata/malloyyo-ecommerce"),
+    "https://codespaces.new/malloydata/malloyyo-ecommerce?quickstart=1",
+  );
+});
+
+test("codespaceUrl pins the branch when the dataset has one", () => {
+  assert.equal(
+    codespaceUrl("malloydata/malloyyo-ecommerce", "staging"),
+    "https://codespaces.new/malloydata/malloyyo-ecommerce/tree/staging?quickstart=1",
+  );
+  // A dataset pinned to a branch that opens a codespace on the DEFAULT branch
+  // is the failure this argument exists to prevent, so it must survive the
+  // shapes branch names really take.
+  assert.equal(
+    codespaceUrl("malloydata/malloyyo-ecommerce", "feature/new model"),
+    "https://codespaces.new/malloydata/malloyyo-ecommerce/tree/feature/new%20model?quickstart=1",
+  );
+});
+
+test("codespaceUrl accepts the remote spellings a CLI publish records", () => {
+  for (const repo of [
+    "git@github.com:malloydata/malloyyo-imdb.git",
+    "https://github.com/malloydata/malloyyo-imdb",
+    "https://github.com/malloydata/malloyyo-imdb.git",
+  ]) {
+    assert.equal(
+      codespaceUrl(repo),
+      "https://codespaces.new/malloydata/malloyyo-imdb?quickstart=1",
+      repo,
+    );
+  }
+});
+
+test("codespaceUrl is null when there is no GitHub repo to open", () => {
+  assert.equal(codespaceUrl(null), null);
+  assert.equal(codespaceUrl(undefined), null);
+  assert.equal(codespaceUrl(""), null);
+  assert.equal(codespaceUrl("   "), null);
+  // Not a GitHub repo, and not two path segments: no link rather than a bogus one.
+  assert.equal(codespaceUrl("https://gitlab.com/owner/repo"), null);
+  assert.equal(codespaceUrl("owner/repo/extra"), null);
 });

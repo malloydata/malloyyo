@@ -29,6 +29,7 @@ export async function GET() {
       status: datasets.status,
       isPublic: datasets.isPublic,
       githubRepo: datasets.githubRepo,
+      githubBranch: datasets.githubBranch,
       ownerName: users.name,
     })
     .from(datasets)
@@ -61,6 +62,7 @@ export async function GET() {
     status: string;
     isPublic: boolean;
     githubRepo: string | null;
+    githubBranch: string | null;
     ownerName?: string | null;
     sources: Array<{ source: string; description: string | null }>;
   }> = [];
@@ -79,7 +81,11 @@ export async function GET() {
 
   for (const ds of byName.values()) {
     const [latestModel] = await db
-      .select({ sources: malloyModels.sources, gitRepo: malloyModels.gitRepo })
+      .select({
+        sources: malloyModels.sources,
+        gitRepo: malloyModels.gitRepo,
+        gitBranch: malloyModels.gitBranch,
+      })
       .from(malloyModels)
       .where(eq(malloyModels.datasetId, ds.id))
       .orderBy(desc(malloyModels.createdAt))
@@ -93,6 +99,10 @@ export async function GET() {
       // "owner/repo" the model came from: the dataset's configured GitHub repo,
       // or the git remote recorded by a CLI publish.
       githubRepo: ds.githubRepo ?? latestModel?.gitRepo ?? null,
+      // The branch that repo was taken from, paired with it: a dataset pinned to
+      // a non-default branch must not hand out links to the default one. Same
+      // precedence as the repo above, so the two always describe one tree.
+      githubBranch: ds.githubBranch ?? latestModel?.gitBranch ?? null,
       ...(admin ? { ownerName: ds.ownerName } : {}),
       // A model that declares nothing still gets one row, named for the dataset,
       // so it appears in the catalogue at all rather than silently vanishing.

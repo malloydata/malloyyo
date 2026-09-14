@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { signIn } from "next-auth/react";
 import Link from "next/link";
 import { QueryIcon } from "@/components/QueryIcon";
+import { repoUrl, codespaceUrl } from "@/lib/github-source-link";
 
 type AuthProvider = { id: string; name: string };
 
@@ -32,6 +33,7 @@ type DatasetGroup = {
   isPublic: boolean;
   status: string;
   githubRepo: string | null;
+  githubBranch: string | null;
   ownerName?: string | null;
   sources: SourceSummary[];
 };
@@ -327,7 +329,9 @@ export default function HomePage() {
                           >
                             {g?.dataset ?? "dataset"}
                           </Link>
-                          {g?.githubRepo && <GitHubLink repo={g.githubRepo} />}
+                          {g?.githubRepo && (
+                            <RepoLinks repo={g.githubRepo} branch={g.githubBranch} />
+                          )}
                         </span>
                         <div className="flex items-center gap-2 flex-shrink-0">
                           {g && g.status !== "ready" && <StatusBadge status={g.status} />}
@@ -485,11 +489,75 @@ export default function HomePage() {
   );
 }
 
-// Octocat icon linking to the GitHub repo the dataset's model was published from.
-function GitHubLink({ repo }: { repo: string }) {
+// Where the dataset's model lives, and how to go work on it: the repo on
+// GitHub, and a codespace opened on that same repo.
+//
+// The codespace link RESUMES rather than duplicating — see codespaceUrl. It is
+// worth the pixel next to the octocat because a model repo that has been
+// through `malloyyo init` carries a .devcontainer for the prebuilt Malloyyo
+// image, so this is the whole distance from "I see a dataset" to "I am editing
+// its model with Claude, tools installed". A repo without one still opens, on
+// GitHub's default image.
+//
+// Both are built from the PARSED slug, so a model published from an ssh remote
+// (git@github.com:owner/repo.git — what `git remote get-url` returns for most
+// checkouts) links correctly instead of to github.com/git@github.com:owner….
+function RepoLinks({ repo, branch }: { repo: string; branch: string | null }) {
+  const href = repoUrl({ gitRepo: repo });
+  const codespace = codespaceUrl(repo, branch);
+  if (!href) return null;
+  return (
+    <span className="flex items-center gap-1.5 flex-shrink-0">
+      <GitHubLink href={href} repo={repo} />
+      {codespace && <CodespaceLink href={codespace} repo={repo} branch={branch} />}
+    </span>
+  );
+}
+
+// Terminal-in-a-window: a codespace is a dev machine, not a document.
+function CodespaceLink({
+  href,
+  repo,
+  branch,
+}: {
+  href: string;
+  repo: string;
+  branch: string | null;
+}) {
   return (
     <a
-      href={`https://github.com/${repo}`}
+      href={href}
+      target="_blank"
+      rel="noopener noreferrer"
+      title={`Open a codespace on ${repo}${branch ? ` (${branch})` : ""} — resumes yours if you have one`}
+      className="flex-shrink-0 text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-gray-200"
+    >
+      <svg
+        width="14"
+        height="14"
+        viewBox="0 0 16 16"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden
+      >
+        <rect x="1.2" y="2.2" width="13.6" height="9.6" rx="1.6" />
+        <path d="M4.4 5.8 6.2 7.4 4.4 9" />
+        <path d="M7.8 9.2h3.6" />
+        <path d="M5 14.2h6" />
+      </svg>
+      <span className="sr-only">Open in a codespace</span>
+    </a>
+  );
+}
+
+// Octocat icon linking to the GitHub repo the dataset's model was published from.
+function GitHubLink({ href, repo }: { href: string; repo: string }) {
+  return (
+    <a
+      href={href}
       target="_blank"
       rel="noopener noreferrer"
       title={`GitHub: ${repo}`}

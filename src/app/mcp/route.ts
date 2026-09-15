@@ -177,13 +177,13 @@ export async function POST(req: Request) {
     // HTML below is loaded into a sandboxed iframe by the client and driven
     // over postMessage — see src/lib/mcp-app.ts.
     case "resources/list":
-      return ok(body.id, { resources: [helloAppResource()] });
+      return ok(body.id, { resources: [helloAppResource(originFromRequest(req))] });
 
     case "resources/read": {
       const uri = String((body.params ?? {}).uri ?? "");
       if (uri !== HELLO_APP_URI) return err(body.id, -32002, `resource not found: ${uri}`);
       return ok(body.id, {
-        contents: [helloAppResourceContents()],
+        contents: [helloAppResourceContents(originFromRequest(req))],
       });
     }
 

@@ -36,21 +36,28 @@ export const APP_MIME_TYPE = "text/html;profile=mcp-app";
 const MIME = APP_MIME_TYPE;
 
 /**
- * The `_meta.ui` block.
+ * The `_meta.ui` block, built per-request so the CSP can name this instance's
+ * own origin.
  *
- * NO `csp` key. It used to declare every domain list as `[]`, reasoning that an
- * app which says hello needs no network. But `resourceDomains` maps to CSP
- * `script-src` among others, and "empty or omitted → no network resources" —
- * so an explicit empty list may well be what blocked this app's inline
- * <script>. Omitting the key entirely leaves the host on its own default,
- * which is what MotherDuck's dive viewer effectively relies on: it declares
- * only the domains it actually needs and nothing restrictive beyond that.
+ * This has now been all three ways. Explicit empty arrays, then the key omitted
+ * entirely, and neither rendered. MotherDuck's dive viewer — which does render
+ * here — declares a real csp naming its own domain, and that is the last
+ * structural difference between their resource and this one, so mirror it.
  *
- * Also dropped `prefersBorder`, the one other field MotherDuck's resource does
- * not carry — keeping this as close to a known-rendering declaration as
- * possible while the question is still "why does nothing appear".
+ * The app genuinely needs no network: its HTML is inlined and its only channel
+ * is postMessage to the host. Declaring the origin anyway costs nothing and
+ * removes the possibility that an absent or empty policy is what stops the
+ * frame bootstrapping.
  */
-const UI_META = {};
+function uiMeta(origin: string) {
+  return {
+    csp: {
+      connectDomains: [origin],
+      resourceDomains: [origin],
+      frameDomains: [],
+    },
+  };
+}
 
 /**
  * What the client advertised under `capabilities.extensions`. Logged on every
@@ -69,23 +76,23 @@ export function clientUiCapability(params: Record<string, unknown> | undefined) 
   };
 }
 
-export function helloAppResource() {
+export function helloAppResource(origin: string) {
   return {
     uri: HELLO_APP_URI,
     name: "Hello World",
     description: "A minimal MCP App that writes its text from JavaScript.",
     mimeType: MIME,
-    _meta: { ui: UI_META },
+    _meta: { ui: uiMeta(origin) },
   };
 }
 
-export function helloAppResourceContents() {
+export function helloAppResourceContents(origin: string) {
   return {
     uri: HELLO_APP_URI,
     mimeType: MIME,
     text: helloAppHtml(),
     // Takes precedence over the listing-level copy above.
-    _meta: { ui: UI_META },
+    _meta: { ui: uiMeta(origin) },
   };
 }
 

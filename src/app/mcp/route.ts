@@ -2,6 +2,14 @@
 // SPDX-License-Identifier: MIT
 
 import { buildHostedExploreSurface } from "@/lib/mcp-host";
+import {
+  DASHBOARD_APP_URI,
+  callDashboardApp,
+  dashboardAppHtml,
+  dashboardAppResource,
+  dashboardAppTool,
+  isDashboardAppTool,
+} from "@/lib/mcp-app";
 import { bearerToken, credentialLabel, resolveBearer } from "@/lib/bearer-auth";
 import { corsPreflight, withCors } from "@/lib/oauth/cors";
 import { originFromRequest } from "@/lib/oauth/base-url";
@@ -100,7 +108,7 @@ export async function POST(req: Request) {
     case "initialize":
       return ok(body.id, {
         protocolVersion: PROTOCOL_VERSION,
-        capabilities: { tools: { listChanged: false } },
+        capabilities: { tools: { listChanged: false }, resources: { listChanged: false } },
         serverInfo: SERVER_INFO,
         instructions: hosted.instructions,
       });
@@ -109,7 +117,33 @@ export async function POST(req: Request) {
       return withCors(new Response(null, { status: 202 }));
 
     case "tools/list":
-      return ok(body.id, { tools: hosted.descriptors });
+      // PROTOTYPE: the MCP Apps tool rides alongside the explore surface.
+      return ok(body.id, {
+        tools: [...hosted.descriptors, dashboardAppTool(`[${env.INSTANCE_NAME}]`)],
+      });
+
+    // PROTOTYPE: MCP Apps (the extension MotherDuck's view_dive uses). The
+    // HTML below is loaded into a sandboxed iframe by the client and driven
+    // over postMessage — see src/lib/mcp-app.ts.
+    case "resources/list":
+      return ok(body.id, { resources: [dashboardAppResource()] });
+
+    case "resources/read": {
+      const uri = String((body.params ?? {}).uri ?? "");
+      if (uri !== DASHBOARD_APP_URI) return err(body.id, -32002, `resource not found: ${uri}`);
+      return ok(body.id, {
+        contents: [
+          {
+            uri: DASHBOARD_APP_URI,
+            mimeType: "text/html;profile=mcp-app",
+            text: dashboardAppHtml(),
+          },
+        ],
+      });
+    }
+
+    case "resources/templates/list":
+      return ok(body.id, { resourceTemplates: [] });
 
     case "tools/call": {
       const params = body.params ?? {};
@@ -118,7 +152,9 @@ export async function POST(req: Request) {
       const start = Date.now();
       log.info("mcp tool call", { tool: name });
       try {
-        const result = await hosted.call(name, args);
+        const result = isDashboardAppTool(name)
+          ? callDashboardApp(args)
+          : await hosted.call(name, args);
         log.info("mcp tool ok", { tool: name, durationMs: Date.now() - start });
         return ok(body.id, result);
       } catch (e) {

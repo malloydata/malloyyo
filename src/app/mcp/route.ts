@@ -54,6 +54,8 @@ function unauthorized(description: string, request: Request): Response {
   );
 }
 
+const PROTOCOL_VERSION = "2025-03-26";
+
 /**
  * Newest first. 2026-07-28 is the revision that introduced `server/discover`
  * and capability `extensions` — which is the revision claude.ai speaks, and
@@ -127,22 +129,9 @@ export async function POST(req: Request) {
       // single fact that decides if the panel can work, and it is knowable
       // only from what it advertises here. Logged so a silent non-render is
       // attributable instead of guessed at.
-      // Echo back the revision the CLIENT asked for when we support it.
-      // This used to answer a hard-coded "2025-03-26" no matter what — which
-      // advertises 2026-07-28 in server/discover and then negotiates the
-      // session down to a revision predating MCP Apps, so nothing the client
-      // was told about the UI extension could survive the handshake.
-      const requested = String((body.params ?? {}).protocolVersion ?? "");
-      const negotiated = SUPPORTED_VERSIONS.includes(requested)
-        ? requested
-        : SUPPORTED_VERSIONS[0];
-      log.info("mcp initialize", {
-        requestedVersion: requested || null,
-        negotiatedVersion: negotiated,
-        ui: clientUiCapability(body.params),
-      });
+      log.info("mcp initialize", { ui: clientUiCapability(body.params) });
       return ok(body.id, {
-        protocolVersion: negotiated,
+        protocolVersion: PROTOCOL_VERSION,
         capabilities: serverCapabilities(),
         serverInfo: SERVER_INFO,
         instructions: hosted.instructions,

@@ -35,11 +35,22 @@ export const UI_EXTENSION_ID = "io.modelcontextprotocol/ui";
 export const APP_MIME_TYPE = "text/html;profile=mcp-app";
 const MIME = APP_MIME_TYPE;
 
-/** The `_meta.ui` block: no network at all is needed to say hello. */
-const UI_META = {
-  csp: { connectDomains: [], resourceDomains: [], frameDomains: [] },
-  prefersBorder: true,
-};
+/**
+ * The `_meta.ui` block.
+ *
+ * NO `csp` key. It used to declare every domain list as `[]`, reasoning that an
+ * app which says hello needs no network. But `resourceDomains` maps to CSP
+ * `script-src` among others, and "empty or omitted → no network resources" —
+ * so an explicit empty list may well be what blocked this app's inline
+ * <script>. Omitting the key entirely leaves the host on its own default,
+ * which is what MotherDuck's dive viewer effectively relies on: it declares
+ * only the domains it actually needs and nothing restrictive beyond that.
+ *
+ * Also dropped `prefersBorder`, the one other field MotherDuck's resource does
+ * not carry — keeping this as close to a known-rendering declaration as
+ * possible while the question is still "why does nothing appear".
+ */
+const UI_META = {};
 
 /**
  * What the client advertised under `capabilities.extensions`. Logged on every
@@ -146,7 +157,13 @@ export function helloAppHtml(): string {
   code { font-family: ui-monospace, monospace; }
 </style>
 </head>
-<body></body>
+<body>
+  <h1>Hello world</h1>
+  <div id="fallback">
+    This is STATIC HTML. If you are reading this sentence, the panel rendered
+    but its JavaScript did not run.
+  </div>
+</body>
 <script>
 (function () {
   var PROTOCOL_VERSION = "2026-01-26";
@@ -162,9 +179,13 @@ export function helloAppHtml(): string {
       "<dl>" + dl + "</dl>";
   }
 
-  // Paint immediately, so a completed handshake is not a precondition for
-  // seeing anything. If the panel says "handshake: pending" the resource
-  // rendered but the host never answered ui/initialize.
+  // Paint immediately, replacing the static fallback in <body>. Which of the
+  // three texts appears is the whole diagnostic:
+  //   the static sentence  -> panel renders, script blocked (CSP)
+  //   "handshake pending"  -> script runs, host never answers ui/initialize
+  //   "handshake ok"       -> everything works
+  // The previous version shipped an empty <body>, which made the first case
+  // indistinguishable from the panel not rendering at all.
   paint("Hello world", [["handshake", "pending"]]);
 
   window.addEventListener("message", function (event) {

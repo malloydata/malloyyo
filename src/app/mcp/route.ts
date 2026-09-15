@@ -3,6 +3,7 @@
 
 import { buildHostedExploreSurface } from "@/lib/mcp-host";
 import {
+  APP_MIME_TYPE,
   HELLO_APP_URI,
   UI_EXTENSION_ID,
   callHelloApp,
@@ -54,6 +55,22 @@ function unauthorized(description: string, request: Request): Response {
 }
 
 const PROTOCOL_VERSION = "2025-03-26";
+
+/**
+ * Newest first. 2026-07-28 is the revision that introduced `server/discover`
+ * and capability `extensions` — which is the revision claude.ai speaks, and
+ * the only one in which an MCP App can be advertised at all.
+ */
+const SUPPORTED_VERSIONS = ["2026-07-28", "2025-06-18", "2025-03-26"];
+
+/** The capability block, shared by `initialize` and `server/discover`. */
+function serverCapabilities() {
+  return {
+    tools: { listChanged: false },
+    resources: { listChanged: false },
+    extensions: { [UI_EXTENSION_ID]: { mimeTypes: [APP_MIME_TYPE] } },
+  };
+}
 const SERVER_INFO = { name: env.INSTANCE_NAME, version: VERSION };
 
 export async function POST(req: Request) {
@@ -115,15 +132,37 @@ export async function POST(req: Request) {
       log.info("mcp initialize", { ui: clientUiCapability(body.params) });
       return ok(body.id, {
         protocolVersion: PROTOCOL_VERSION,
-        capabilities: {
-          tools: { listChanged: false },
-          resources: { listChanged: false },
-          extensions: { [UI_EXTENSION_ID]: { mimeTypes: ["text/html;profile=mcp-app"] } },
-        },
+        capabilities: serverCapabilities(),
         serverInfo: SERVER_INFO,
         instructions: hosted.instructions,
       });
     }
+
+    /**
+     * PROTOCOL REVISION 2026-07-28. claude.ai does NOT call `initialize` — it
+     * calls this, and the spec says servers MUST implement it. Until it existed
+     * here the method fell through to `default:` and was answered with
+     * -32601, so every connection's discovery failed silently: tools kept
+     * working only because the client still had them cached from when the
+     * connector was added, and nothing ever learned about the UI resource or
+     * the tool `_meta` that binds it. That is why no panel ever rendered.
+     *
+     * Shape differs from initialize: serverInfo moves into `_meta`, and a list
+     * of `supportedVersions` replaces the single negotiated `protocolVersion`.
+     */
+    case "server/discover":
+      return ok(body.id, {
+        _meta: {
+          "io.modelcontextprotocol/serverInfo": {
+            name: SERVER_INFO.name,
+            title: SERVER_INFO.name,
+            version: SERVER_INFO.version,
+          },
+        },
+        supportedVersions: SUPPORTED_VERSIONS,
+        capabilities: serverCapabilities(),
+        instructions: hosted.instructions,
+      });
 
     case "notifications/initialized":
       return withCors(new Response(null, { status: 202 }));

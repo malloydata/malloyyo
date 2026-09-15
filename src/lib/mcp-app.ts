@@ -32,7 +32,8 @@ export const HELLO_APP_URI = "ui://malloyyo/hello.html";
 
 export const UI_EXTENSION_ID = "io.modelcontextprotocol/ui";
 
-const MIME = "text/html;profile=mcp-app";
+export const APP_MIME_TYPE = "text/html;profile=mcp-app";
+const MIME = APP_MIME_TYPE;
 
 /** The `_meta.ui` block: no network at all is needed to say hello. */
 const UI_META = {

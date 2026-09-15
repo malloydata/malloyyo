@@ -3,12 +3,14 @@
 
 import { buildHostedExploreSurface } from "@/lib/mcp-host";
 import {
-  DASHBOARD_APP_URI,
-  callDashboardApp,
-  dashboardAppHtml,
-  dashboardAppResource,
-  dashboardAppTool,
-  isDashboardAppTool,
+  HELLO_APP_URI,
+  UI_EXTENSION_ID,
+  callHelloApp,
+  clientUiCapability,
+  helloAppResource,
+  helloAppResourceContents,
+  helloAppTool,
+  isHelloAppTool,
 } from "@/lib/mcp-app";
 import { bearerToken, credentialLabel, resolveBearer } from "@/lib/bearer-auth";
 import { corsPreflight, withCors } from "@/lib/oauth/cors";
@@ -105,13 +107,23 @@ export async function POST(req: Request) {
   });
 
   switch (body.method) {
-    case "initialize":
+    case "initialize": {
+      // PROTOTYPE: whether this client will render an MCP App at all is the
+      // single fact that decides if the panel can work, and it is knowable
+      // only from what it advertises here. Logged so a silent non-render is
+      // attributable instead of guessed at.
+      log.info("mcp initialize", { ui: clientUiCapability(body.params) });
       return ok(body.id, {
         protocolVersion: PROTOCOL_VERSION,
-        capabilities: { tools: { listChanged: false }, resources: { listChanged: false } },
+        capabilities: {
+          tools: { listChanged: false },
+          resources: { listChanged: false },
+          extensions: { [UI_EXTENSION_ID]: { mimeTypes: ["text/html;profile=mcp-app"] } },
+        },
         serverInfo: SERVER_INFO,
         instructions: hosted.instructions,
       });
+    }
 
     case "notifications/initialized":
       return withCors(new Response(null, { status: 202 }));
@@ -119,26 +131,20 @@ export async function POST(req: Request) {
     case "tools/list":
       // PROTOTYPE: the MCP Apps tool rides alongside the explore surface.
       return ok(body.id, {
-        tools: [...hosted.descriptors, dashboardAppTool(`[${env.INSTANCE_NAME}]`)],
+        tools: [...hosted.descriptors, helloAppTool(`[${env.INSTANCE_NAME}]`)],
       });
 
     // PROTOTYPE: MCP Apps (the extension MotherDuck's view_dive uses). The
     // HTML below is loaded into a sandboxed iframe by the client and driven
     // over postMessage — see src/lib/mcp-app.ts.
     case "resources/list":
-      return ok(body.id, { resources: [dashboardAppResource()] });
+      return ok(body.id, { resources: [helloAppResource()] });
 
     case "resources/read": {
       const uri = String((body.params ?? {}).uri ?? "");
-      if (uri !== DASHBOARD_APP_URI) return err(body.id, -32002, `resource not found: ${uri}`);
+      if (uri !== HELLO_APP_URI) return err(body.id, -32002, `resource not found: ${uri}`);
       return ok(body.id, {
-        contents: [
-          {
-            uri: DASHBOARD_APP_URI,
-            mimeType: "text/html;profile=mcp-app",
-            text: dashboardAppHtml(),
-          },
-        ],
+        contents: [helloAppResourceContents()],
       });
     }
 
@@ -152,8 +158,8 @@ export async function POST(req: Request) {
       const start = Date.now();
       log.info("mcp tool call", { tool: name });
       try {
-        const result = isDashboardAppTool(name)
-          ? callDashboardApp(args)
+        const result = isHelloAppTool(name)
+          ? callHelloApp(args)
           : await hosted.call(name, args);
         log.info("mcp tool ok", { tool: name, durationMs: Date.now() - start });
         return ok(body.id, result);

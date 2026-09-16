@@ -30,8 +30,32 @@ type JsonRpcReq = {
   params?: Record<string, unknown>;
 };
 
+/**
+ * Every result gets `resultType: "complete"`.
+ *
+ * Protocol revision 2026-07-28 made the field REQUIRED on the result envelope:
+ * "servers implementing protocol revision 2026-07-28 MUST include it (the
+ * absent-means-complete bridge applies only to earlier-revision servers)".
+ * Because we advertise 2026-07-28 in server/discover, a client that takes us at
+ * our word rejects EVERY result we return — not just the App tool. That is what
+ * "This connector has no tools available" was, and what made every tools/call
+ * fail on the direct connector while the same server worked fine through an
+ * older-revision bridge.
+ *
+ * Stamped here rather than per-handler because the reference SDK does exactly
+ * that, for all methods (stampResultType in @modelcontextprotocol/client): the
+ * field belongs to the envelope, so anything that returns a result needs it and
+ * nothing should have to remember.
+ *
+ * The other value is "input_required", which only some methods may return; no
+ * handler here does, so unconditional "complete" is correct.
+ */
 function ok(id: string | number | null | undefined, result: unknown) {
-  return withCors(Response.json({ jsonrpc: "2.0", id: id ?? null, result }));
+  const stamped =
+    result && typeof result === "object" && !Array.isArray(result) && !("resultType" in result)
+      ? { ...(result as Record<string, unknown>), resultType: "complete" }
+      : result;
+  return withCors(Response.json({ jsonrpc: "2.0", id: id ?? null, result: stamped }));
 }
 
 function err(id: string | number | null | undefined, code: number, message: string) {

@@ -44,6 +44,18 @@ export type DashboardRunResult =
     a composite dashboard's grid runs each of its tiles); `malloy` runs restricted
     Malloy text (suggestion queries / ad-hoc panels). Falls back to `index.malloy`
     for a v1 manifest with no `entryFile`. */
+/**
+ * A run string beginning with `run:` is Malloy TEXT; anything else names a
+ * run-expression. Unambiguous, because a run-expression is `source -> view` or
+ * a bare view name and cannot begin with `run:`.
+ *
+ * This lets one wire field carry either, which is what a panel needs — it has
+ * a single `run` call, not two.
+ */
+export function isMalloyText(s: string): boolean {
+  return /^\s*run\s*:/.test(s);
+}
+
 export async function runDashboard(
   userId: string,
   datasetId: string,
@@ -65,16 +77,30 @@ export async function runDashboard(
 
   const manifest = a.manifest as Record<string, unknown>;
   const entryFile = typeof manifest.entryFile === "string" ? manifest.entryFile : "index.malloy";
-  const entry = fileUrl(entryFile);
 
-  if (typeof req.malloy === "string") {
+  // One field, two meanings: `query` carrying `run:` IS Malloy text. Callers
+  // that still set `malloy` explicitly keep working.
+  const malloyText =
+    typeof req.malloy === "string"
+      ? req.malloy
+      : typeof req.query === "string" && isMalloyText(req.query)
+        ? req.query
+        : null;
+
+  // Ad-hoc Malloy compiles against index.malloy — the model's PUBLISHED
+  // surface, the same one the MCP `query` tool uses — so a panel gets exactly
+  // the reach a model gets. A tile keeps the dashboard's own entry, because it
+  // must see the dashboard's inline query and imports.
+  const entry = fileUrl(malloyText !== null ? "index.malloy" : entryFile);
+
+  if (malloyText !== null) {
     // Restricted text: core rejects anything outside the model's published
     // surface with 'restricted-construct-forbidden'. The runtime cast bridges
     // the app/engine duplicate @malloydata/malloy installs (same seam as
     // mcp-host.ts) — one runtime object, two identical declaration trees.
     type EngineRuntime = Parameters<typeof runRestricted>[0];
     const out = await withModelRuntime(files, found.model.id, (runtime) =>
-      runRestricted(runtime as unknown as EngineRuntime, entry, req.malloy as string, {
+      runRestricted(runtime as unknown as EngineRuntime, entry, malloyText, {
         givens: givens ?? {},
         stableResult: true,
         rowLimit: maxRows,

@@ -1,0 +1,10 @@
+import { chromium } from "playwright";
+const b = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH });
+const p = await b.newPage();
+p.on("pageerror", (e) => console.log("pageerror:", String(e.message).slice(0, 160)));
+p.on("console", (m) => { if (m.type() === "error") console.log("console:", m.text().slice(0, 160)); });
+await p.goto("http://127.0.0.1:4181/app.html", { waitUntil: "load" });
+await p.waitForTimeout(4000);
+console.log("inject log:", await p.evaluate(() => window.__INJECT_LOG__ || "(none)"));
+console.log("root text :", (await p.locator("#root").innerText().catch(() => "")).slice(0, 200));
+await b.close();

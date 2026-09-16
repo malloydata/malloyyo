@@ -84,7 +84,48 @@ window.addEventListener("error", function (e) {
 ${sdk}
 </script>
 <script>${vendor}</script>
-<script>${dash}</script>
+<script id="dash-src" type="text/plain">${Buffer.from(dash, "utf8").toString("base64")}</script>
+<script type="module">
+// Can a panel execute code delivered as a string? MotherDuck's one-viewer
+// design depends on it; ours can avoid it with one resource per dashboard.
+const src = new TextDecoder().decode(Uint8Array.from(atob(document.getElementById("dash-src").textContent.trim()), (c) => c.charCodeAt(0)));
+const log = [];
+let ok = false;
+
+// 1. blob: module import — the cleanest, no eval.
+try {
+  const url = URL.createObjectURL(new Blob([src], { type: "text/javascript" }));
+  await import(url);
+  log.push("blob import: OK");
+  ok = true;
+} catch (e) { log.push("blob import: " + (e && e.message || e)); }
+
+// 2. data: URL module import.
+if (!ok) try {
+  await import("data:text/javascript," + encodeURIComponent(src));
+  log.push("data import: OK");
+  ok = true;
+} catch (e) { log.push("data import: " + (e && e.message || e)); }
+
+// 3. Function constructor — needs unsafe-eval.
+if (!ok) try {
+  new Function(src)();
+  log.push("new Function: OK");
+  ok = true;
+} catch (e) { log.push("new Function: " + (e && e.message || e)); }
+
+window.__INJECT_LOG__ = log;
+if (!ok) {
+  document.getElementById("root").innerHTML =
+    "<pre style='white-space:pre-wrap;padding:12px;font:12px ui-monospace'>DYNAMIC LOAD FAILED " +
+    log.join(" | ") + "</pre>";
+} else {
+  const n = document.createElement("div");
+  n.style.cssText = "padding:8px 16px;font:11px ui-monospace;opacity:.6";
+  n.textContent = log.join(" | ");
+  document.body.appendChild(n);
+}
+</script>
 <script type="module">
 // Connect to the host AFTER the dashboard has mounted, and report height so
 // the panel is not zero-height. This is the only MCP-App-specific code in the

@@ -2409,43 +2409,47 @@ react/cjs/react-jsx-runtime.production.js:
    *)
 */
 </script>
-<script>(() => {
-  // vreact:react
-  var R = window.__DASH_VENDOR__.React;
-  var useState = R.useState;
-  var useEffect = R.useEffect;
-  var useRef = R.useRef;
-  var useMemo = R.useMemo;
-  var useCallback = R.useCallback;
-  var useReducer = R.useReducer;
-  var Fragment = R.Fragment;
-  var Component = R.Component;
-  var createElement = R.createElement;
-  var memo = R.memo;
+<script id="dash-src" type="text/plain">KCgpID0+IHsKICAvLyB2cmVhY3Q6cmVhY3QKICB2YXIgUiA9IHdpbmRvdy5fX0RBU0hfVkVORE9SX18uUmVhY3Q7CiAgdmFyIHVzZVN0YXRlID0gUi51c2VTdGF0ZTsKICB2YXIgdXNlRWZmZWN0ID0gUi51c2VFZmZlY3Q7CiAgdmFyIHVzZVJlZiA9IFIudXNlUmVmOwogIHZhciB1c2VNZW1vID0gUi51c2VNZW1vOwogIHZhciB1c2VDYWxsYmFjayA9IFIudXNlQ2FsbGJhY2s7CiAgdmFyIHVzZVJlZHVjZXIgPSBSLnVzZVJlZHVjZXI7CiAgdmFyIEZyYWdtZW50ID0gUi5GcmFnbWVudDsKICB2YXIgQ29tcG9uZW50ID0gUi5Db21wb25lbnQ7CiAgdmFyIGNyZWF0ZUVsZW1lbnQgPSBSLmNyZWF0ZUVsZW1lbnQ7CiAgdmFyIG1lbW8gPSBSLm1lbW87CgogIC8vIHZqc3g6anN4cgogIHZhciBKID0gd2luZG93Ll9fREFTSF9WRU5ET1JfXy5qc3hSdW50aW1lOwogIHZhciBqc3ggPSBKLmpzeDsKICB2YXIganN4cyA9IEouanN4czsKICB2YXIgRnJhZ21lbnQyID0gSi5GcmFnbWVudDsKCiAgLy8gdmRhc2g6ZGFzaGJvYXJkCiAgZnVuY3Rpb24gVHJpdmlhbCgpIHsKICAgIGNvbnN0IFtuLCBzZXROXSA9IHVzZVN0YXRlKDApOwogICAgcmV0dXJuIC8qIEBfX1BVUkVfXyAqLyBqc3hzKCJkaXYiLCB7IHN0eWxlOiB7IHBhZGRpbmc6IDE2LCBmb250OiAiMTRweCB1aS1zYW5zLXNlcmlmLCBzeXN0ZW0tdWkiIH0sIGNoaWxkcmVuOiBbCiAgICAgIC8qIEBfX1BVUkVfXyAqLyBqc3goImgxIiwgeyBzdHlsZTogeyBmb250U2l6ZTogMTYsIG1hcmdpbjogIjAgMCA4cHgiIH0sIGNoaWxkcmVuOiAiRnJhbWUgcnVudGltZSBsb2FkZWQiIH0pLAogICAgICAvKiBAX19QVVJFX18gKi8ganN4KCJwIiwgeyBzdHlsZTogeyBtYXJnaW46ICIwIDAgMTJweCIsIG9wYWNpdHk6IDAuNyB9LCBjaGlsZHJlbjogIlJlYWN0IG1vdW50ZWQgdGhyb3VnaCB0aGUgZGFzaGJvYXJkIHJ1bnRpbWUsIGluc2lkZSBhbiBNQ1AgQXBwIHBhbmVsLiBObyBxdWVyeSB3YXMgcnVuLiIgfSksCiAgICAgIC8qIEBfX1BVUkVfXyAqLyBqc3hzKCJidXR0b24iLCB7IG9uQ2xpY2s6ICgpID0+IHNldE4obiArIDEpLCBjaGlsZHJlbjogWwogICAgICAgICJjbGlja2VkICIsCiAgICAgICAgbiwKICAgICAgICAiIHRpbWVzIgogICAgICBdIH0pCiAgICBdIH0pOwogIH0KCiAgLy8gZnJhbWUtZW50cnkudHMKICB3aW5kb3cuX19EQVNIX1JVTlRJTUVfXy5tb3VudERhc2hib2FyZChUcml2aWFsKTsKfSkoKTsK</script>
+<script type="module">
+// Can a panel execute code delivered as a string? MotherDuck's one-viewer
+// design depends on it; ours can avoid it with one resource per dashboard.
+const src = new TextDecoder().decode(Uint8Array.from(atob(document.getElementById("dash-src").textContent.trim()), (c) => c.charCodeAt(0)));
+const log = [];
+let ok = false;
 
-  // vjsx:jsxr
-  var J = window.__DASH_VENDOR__.jsxRuntime;
-  var jsx = J.jsx;
-  var jsxs = J.jsxs;
-  var Fragment2 = J.Fragment;
+// 1. blob: module import — the cleanest, no eval.
+try {
+  const url = URL.createObjectURL(new Blob([src], { type: "text/javascript" }));
+  await import(url);
+  log.push("blob import: OK");
+  ok = true;
+} catch (e) { log.push("blob import: " + (e && e.message || e)); }
 
-  // vdash:dashboard
-  function Trivial() {
-    const [n, setN] = useState(0);
-    return /* @__PURE__ */ jsxs("div", { style: { padding: 16, font: "14px ui-sans-serif, system-ui" }, children: [
-      /* @__PURE__ */ jsx("h1", { style: { fontSize: 16, margin: "0 0 8px" }, children: "Frame runtime loaded" }),
-      /* @__PURE__ */ jsx("p", { style: { margin: "0 0 12px", opacity: 0.7 }, children: "React mounted through the dashboard runtime, inside an MCP App panel. No query was run." }),
-      /* @__PURE__ */ jsxs("button", { onClick: () => setN(n + 1), children: [
-        "clicked ",
-        n,
-        " times"
-      ] })
-    ] });
-  }
+// 2. data: URL module import.
+if (!ok) try {
+  await import("data:text/javascript," + encodeURIComponent(src));
+  log.push("data import: OK");
+  ok = true;
+} catch (e) { log.push("data import: " + (e && e.message || e)); }
 
-  // frame-entry.ts
-  window.__DASH_RUNTIME__.mountDashboard(Trivial);
-})();
+// 3. Function constructor — needs unsafe-eval.
+if (!ok) try {
+  new Function(src)();
+  log.push("new Function: OK");
+  ok = true;
+} catch (e) { log.push("new Function: " + (e && e.message || e)); }
+
+window.__INJECT_LOG__ = log;
+if (!ok) {
+  document.getElementById("root").innerHTML =
+    "<pre style='white-space:pre-wrap;padding:12px;font:12px ui-monospace'>DYNAMIC LOAD FAILED " +
+    log.join(" | ") + "</pre>";
+} else {
+  const n = document.createElement("div");
+  n.style.cssText = "padding:8px 16px;font:11px ui-monospace;opacity:.6";
+  n.textContent = log.join(" | ");
+  document.body.appendChild(n);
+}
 </script>
 <script type="module">
 // Connect to the host AFTER the dashboard has mounted, and report height so

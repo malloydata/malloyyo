@@ -3,26 +3,18 @@
 
 import { buildHostedExploreSurface } from "@/lib/mcp-host";
 import {
-  APP_MIME_TYPE,
-  BACKING_TOOL,
-  DASHBOARD_APP_URI,
-  dashboardQueryArgs,
-  frameTestContents,
-  frameTestResource,
-  frameTestTool,
-  isFrameTestTool,
-  isFrameTestUri,
-  isPanelQueryTool,
-  panelQueryArgs,
-  panelQueryTool,
-  staticDashboardResult,
-  UI_EXTENSION_ID,
-  dashboardAppResources,
-  isAppResourceUri,
-  dashboardAppResourceContents,
-  dashboardAppTool,
-  isDashboardAppTool,
-} from "@/lib/mcp-app";
+  BUNDLE_TOOL,
+  RUN_TOOL,
+  SHOW_TOOL,
+  SURFACE_BUILD,
+  dashboardBundlePayload,
+  isPanelUri,
+  panelHtml,
+  panelUri,
+} from "@/lib/mcp-app-dashboard";
+import { listAllDashboards } from "@/lib/dashboards";
+import { runDashboard } from "@/lib/dashboards/engine";
+import { APP_MIME_TYPE, UI_EXTENSION_ID } from "@/lib/mcp-app";
 import { bearerToken, credentialLabel, resolveBearer } from "@/lib/bearer-auth";
 import { corsPreflight, withCors } from "@/lib/oauth/cors";
 import { originFromRequest } from "@/lib/oauth/base-url";
@@ -105,32 +97,71 @@ function serverCapabilities() {
     extensions: { [UI_EXTENSION_ID]: { mimeTypes: [APP_MIME_TYPE] } },
   };
 }
-/**
- * The app's query is fixed and takes seconds, and the panel may ask for it
- * again itself. Without this, each render stacks another expensive query
- * behind the last — which is exactly how a wedged dev server happened.
- *
- * In-flight calls share one promise, so concurrent renders never duplicate
- * work. Module scope, so it dies with the process; a prototype does not need
- * more than that.
- */
-const DASHBOARD_TTL_MS = 900_000; // 15 min — the query is fixed, and it costs 13-70s cold
-let dashboardCache: { at: number; promise: Promise<unknown> } | null = null;
-
-function cachedDashboardResult(run: () => Promise<unknown>): Promise<unknown> {
-  const now = Date.now();
-  if (!dashboardCache || now - dashboardCache.at > DASHBOARD_TTL_MS) {
-    // Drop a failed result so the next call retries rather than caching an error.
-    const promise = run().catch((e) => {
-      if (dashboardCache?.promise === promise) dashboardCache = null;
-      throw e;
-    });
-    dashboardCache = { at: now, promise };
-  }
-  return dashboardCache.promise;
-}
-
 const SERVER_INFO = { name: env.INSTANCE_NAME, version: VERSION };
+
+/**
+ * The dashboard surface: three tools and one resource, whatever the dashboard
+ * count. `show_dashboard` is the only one the model sees; the other two are
+ * `visibility: ["app"]`, called by the panel itself.
+ */
+function dashboardTools(instance: string) {
+  const uri = panelUri();
+  const ui = { resourceUri: uri };
+  const appOnly = { resourceUri: uri, visibility: ["app"] };
+  return [
+    {
+      name: SHOW_TOOL,
+      title: "Show a dashboard",
+      description:
+        `[${instance}] (build ${SURFACE_BUILD}) Renders one of this instance's dashboards inline, as an ` +
+        `interactive panel. Dashboards are listed per dataset by list_sources. ` +
+        `Once it renders, say it is there rather than restating its contents.`,
+      annotations: { title: "Show a dashboard", readOnlyHint: true },
+      inputSchema: {
+        type: "object",
+        properties: {
+          dataset: { type: "string", description: "Dataset name or id." },
+          dashboard: { type: "string", description: "Dashboard name, as listed by list_sources." },
+        },
+        required: ["dataset", "dashboard"],
+      },
+      outputSchema: { type: "object", properties: {}, additionalProperties: true },
+      _meta: { ui, "ui/resourceUri": uri },
+    },
+    {
+      name: BUNDLE_TOOL,
+      title: "Load a dashboard's code",
+      description: `[${instance}] Returns a dashboard's compiled bundle. Called by the panel.`,
+      annotations: { title: "Load a dashboard's code", readOnlyHint: true },
+      inputSchema: {
+        type: "object",
+        properties: { datasetId: { type: "string" }, name: { type: "string" } },
+        required: ["datasetId", "name"],
+      },
+      outputSchema: { type: "object", properties: {}, additionalProperties: true },
+      _meta: { ui: appOnly, "ui/resourceUri": uri },
+    },
+    {
+      name: RUN_TOOL,
+      title: "Run a dashboard query",
+      description: `[${instance}] Runs one dashboard query. Called by the panel.`,
+      annotations: { title: "Run a dashboard query", readOnlyHint: true },
+      inputSchema: {
+        type: "object",
+        properties: {
+          datasetId: { type: "string" },
+          name: { type: "string" },
+          query: { type: "string", description: "A run-expression, or Malloy text beginning with `run:`." },
+          malloy: { type: "string" },
+          givens: { type: "object", additionalProperties: true },
+        },
+        required: ["datasetId", "name"],
+      },
+      outputSchema: { type: "object", properties: {}, additionalProperties: true },
+      _meta: { ui: appOnly, "ui/resourceUri": uri },
+    },
+  ];
+}
 
 export async function POST(req: Request) {
   // Set by the middleware (src/proxy.ts) so these lines correlate with the
@@ -253,9 +284,7 @@ export async function POST(req: Request) {
       return ok(body.id, {
         tools: [
           ...hosted.descriptors,
-          dashboardAppTool(`[${env.INSTANCE_NAME}]`),
-          panelQueryTool(`[${env.INSTANCE_NAME}]`),
-          frameTestTool(`[${env.INSTANCE_NAME}]`),
+          ...dashboardTools(env.INSTANCE_NAME),
         ],
       });
 
@@ -263,34 +292,22 @@ export async function POST(req: Request) {
     // HTML below is loaded into a sandboxed iframe by the client and driven
     // over postMessage — see src/lib/mcp-app.ts.
     case "resources/list":
-      return ok(body.id, { resources: [...dashboardAppResources(), frameTestResource()] });
+      return ok(body.id, { resources: [{ uri: panelUri(), name: panelUri(), mimeType: APP_MIME_TYPE }] });
 
     case "resources/read": {
       const uri = String((body.params ?? {}).uri ?? "");
-      // Answer for any URI this app has been advertised under — clients cache
-      // resources/list and keep asking for the one they first saw.
-      if (isFrameTestUri(uri)) {
-        return ok(body.id, { contents: [frameTestContents(uri)], ttlMs: 1_000, cacheScope: "public" });
+      if (isPanelUri(uri)) {
+        // One shell for every dashboard and every user — so it is public, and
+        // long-lived because the URI already changes whenever the shell does.
+        // A dashboard edit does NOT change it: the bundle arrives separately,
+        // which is what spares clients a reconnect per dashboard change.
+        return ok(body.id, {
+          contents: [{ uri, mimeType: APP_MIME_TYPE, text: panelHtml() }],
+          ttlMs: 3_600_000,
+          cacheScope: "public",
+        });
       }
-      if (!isAppResourceUri(uri)) return err(body.id, -32002, `resource not found: ${uri}`);
-      return ok(body.id, {
-        contents: [dashboardAppResourceContents(uri)],
-        // REQUIRED on cacheable results in protocol revision 2026-07-28. The
-        // reference codec "fills the required ttlMs/cacheScope fields on
-        // cacheable results", and resources/read is one — a client on that
-        // revision rejects the read outright without them, which reads as
-        // "there was a problem displaying content".
-        //
-        // public: this HTML is identical for every user; it embeds no session,
-        // no query result, and nothing user-specific.
-        // Near-zero TTL. An hour of caching meant a client kept serving the
-        // app it had already fetched, so redeploys were invisible — the very
-        // problem the URI aliasing was added to solve, reintroduced through
-        // cache metadata. This is a prototype whose HTML changes constantly;
-        // correctness beats efficiency until it stops moving.
-        ttlMs: 1_000,
-        cacheScope: "public",
-      });
+      return err(body.id, -32002, `resource not found: ${uri}`);
     }
 
     case "resources/templates/list":
@@ -310,23 +327,95 @@ export async function POST(req: Request) {
         // to run the real Malloy query instead, once /mcp's query path is not
         // 20x slower than /api/run for the same text.
         // The panel's own query button: a real Malloy run, on demand.
-        if (isFrameTestTool(name)) {
+        if (name === SHOW_TOOL) {
+          // Names the dashboard for the panel; the panel fetches its bundle.
+          //
+          // Accept the app-only tools' spellings too. Clients cache tool
+          // schemas hard and do not re-read them, so a caller working from a
+          // stale definition guesses — and answering "" for a missing argument
+          // is the least debuggable thing this can do. Aliases cost nothing;
+          // a silent empty result costs a round trip to discover.
+          const dataset = String(args.dataset ?? args.datasetId ?? "");
+          const dash = String(args.dashboard ?? args.name ?? "");
+          if (!dataset || !dash) {
+            log.info("mcp tool error", { tool: name, reason: "missing arguments" });
+            return ok(body.id, {
+              content: [
+                {
+                  type: "text",
+                  text:
+                    "show_dashboard needs `dataset` and `dashboard`. Call list_sources " +
+                    "to see what is available. (If your tool definition shows no " +
+                    "parameters, it is cached — reconnect the server.)",
+                },
+              ],
+              structuredContent: { ok: false, error: "dataset and dashboard are required" },
+              isError: true,
+            });
+          }
           log.info("mcp tool ok", { tool: name, durationMs: Date.now() - start });
           return ok(body.id, {
-            content: [{ type: "text", text: "Frame runtime smoke test rendered above." }],
-            structuredContent: { ok: true },
+            content: [{ type: "text", text: `Opened the '${dash}' dashboard above.` }],
+            structuredContent: { ok: true, datasetId: dataset, name: dash },
           });
         }
-        if (isPanelQueryTool(name)) {
-          const panel = await hosted.call(BACKING_TOOL, panelQueryArgs());
+        if (name === BUNDLE_TOOL) {
+          const payload = await dashboardBundlePayload(user.id, {
+            datasetId: String(args.datasetId ?? ""),
+            name: String(args.name ?? ""),
+          });
           log.info("mcp tool ok", { tool: name, durationMs: Date.now() - start });
-          return ok(body.id, panel);
+          return ok(body.id, {
+            content: [{ type: "text", text: payload.ok ? payload.title : payload.error }],
+            structuredContent: payload as unknown as Record<string, unknown>,
+          });
         }
-        const result = isDashboardAppTool(name)
-          ? process.env.DASHBOARD_LIVE_QUERY === "1"
-            ? await cachedDashboardResult(() => hosted.call(BACKING_TOOL, dashboardQueryArgs()))
-            : staticDashboardResult()
-          : await hosted.call(name, args);
+        if (name === RUN_TOOL) {
+          const out = await runDashboard(
+            user.id,
+            String(args.datasetId ?? ""),
+            String(args.name ?? ""),
+            { query: args.query as string | undefined, malloy: args.malloy as string | undefined },
+            (args.givens ?? {}) as Record<string, unknown>,
+          );
+          log.info("mcp tool ok", { tool: name, durationMs: Date.now() - start });
+          return ok(body.id, {
+            content: [{ type: "text", text: out.ok ? "ok" : `error: ${out.error}` }],
+            structuredContent: out as unknown as Record<string, unknown>,
+          });
+        }
+                        // Dashboards are part of what a dataset IS, so they ride along with
+        // list_sources rather than needing a tool of their own. Discovery then
+        // costs the model nothing extra, and the tool list does not grow with
+        // the dashboard count.
+        if (name === "list_sources") {
+          const base = (await hosted.call(name, args)) as {
+            content?: { type: string; text: string }[];
+            structuredContent?: Record<string, unknown>;
+          };
+          const dashboards = (await listAllDashboards(user.id)).map((d) => ({
+            dataset: d.datasetName ?? d.datasetId,
+            name: d.name,
+            title: d.title,
+          }));
+          const note =
+            dashboards.length === 0
+              ? ""
+              : "\n\nDashboards (render inline with show_dashboard):\n" +
+                dashboards.map((d) => `  ${d.dataset} / ${d.name} — ${d.title}`).join("\n");
+          log.info("mcp tool ok", { tool: name, durationMs: Date.now() - start });
+          return ok(body.id, {
+            ...base,
+            content: [
+              ...(base.content ?? []),
+              ...(note ? [{ type: "text", text: note }] : []),
+            ],
+            ...(base.structuredContent
+              ? { structuredContent: { ...base.structuredContent, dashboards } }
+              : { structuredContent: { dashboards } }),
+          });
+        }
+        const result = await hosted.call(name, args);
         log.info("mcp tool ok", { tool: name, durationMs: Date.now() - start });
         return ok(body.id, result);
       } catch (e) {

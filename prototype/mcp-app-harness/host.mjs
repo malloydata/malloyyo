@@ -44,12 +44,11 @@ const page = `<!doctype html>
 <header><b>Host harness</b> <span id="log">waiting…</span></header>
 <div id="panel"><iframe id="app" sandbox="allow-scripts allow-same-origin allow-popups allow-forms"></iframe></div>
 <script>
-const APP_HTML = ${JSON.stringify(appHtml).replace(/<\//g, "<\\/")};
 const TOOL_RESULT = ${JSON.stringify(toolResult).replace(/<\//g, "<\\/").replace(/\u2028|\u2029/g, "")};
 const events = []; window.__events = events;
 const log = (s) => { events.push(s); document.getElementById("log").textContent = events.join("  ·  "); };
 const app = document.getElementById("app");
-app.srcdoc = APP_HTML;
+app.src = "/app.html";
 window.addEventListener("message", (e) => {
   const m = e.data;
   if (!m || m.jsonrpc !== "2.0") return;
@@ -78,6 +77,10 @@ window.addEventListener("message", (e) => {
 });
 </script></body></html>`;
 
-http.createServer((_q, res) => {
+http.createServer((q, res) => {
+  if ((q.url || "").startsWith("/app.html")) {
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" }).end(appHtml);
+    return;
+  }
   res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" }).end(page);
 }).listen(PORT, "127.0.0.1", () => console.log("host http://127.0.0.1:" + PORT));

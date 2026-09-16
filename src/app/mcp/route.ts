@@ -8,7 +8,8 @@ import {
   DASHBOARD_APP_URI,
   dashboardQueryArgs,
   UI_EXTENSION_ID,
-  dashboardAppResource,
+  dashboardAppResources,
+  isAppResourceUri,
   dashboardAppResourceContents,
   dashboardAppTool,
   isDashboardAppTool,
@@ -223,13 +224,25 @@ export async function POST(req: Request) {
     // HTML below is loaded into a sandboxed iframe by the client and driven
     // over postMessage — see src/lib/mcp-app.ts.
     case "resources/list":
-      return ok(body.id, { resources: [dashboardAppResource()] });
+      return ok(body.id, { resources: dashboardAppResources() });
 
     case "resources/read": {
       const uri = String((body.params ?? {}).uri ?? "");
-      if (uri !== DASHBOARD_APP_URI) return err(body.id, -32002, `resource not found: ${uri}`);
+      // Answer for any URI this app has been advertised under — clients cache
+      // resources/list and keep asking for the one they first saw.
+      if (!isAppResourceUri(uri)) return err(body.id, -32002, `resource not found: ${uri}`);
       return ok(body.id, {
-        contents: [dashboardAppResourceContents()],
+        contents: [dashboardAppResourceContents(uri)],
+        // REQUIRED on cacheable results in protocol revision 2026-07-28. The
+        // reference codec "fills the required ttlMs/cacheScope fields on
+        // cacheable results", and resources/read is one — a client on that
+        // revision rejects the read outright without them, which reads as
+        // "there was a problem displaying content".
+        //
+        // public: this HTML is identical for every user; it embeds no session,
+        // no query result, and nothing user-specific.
+        ttlMs: 3_600_000,
+        cacheScope: "public",
       });
     }
 

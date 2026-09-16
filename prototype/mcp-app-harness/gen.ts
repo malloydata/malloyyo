@@ -1,6 +1,6 @@
 // Writes the app HTML + a sample tool result for host.mjs to serve.
 import { writeFileSync } from "node:fs";
-import { dashboardAppHtml, dashboardAppResource, dashboardAppTool } from "../../src/lib/mcp-app";
+import { dashboardAppHtml, dashboardAppResources, dashboardAppTool } from "../../src/lib/mcp-app";
 
 const out = process.argv[2] ?? ".";
 writeFileSync(out + "/app.html", dashboardAppHtml());
@@ -25,5 +25,5 @@ writeFileSync(
     2,
   ),
 );
-console.log("resource:", JSON.stringify(dashboardAppResource()));
+console.log("resource:", JSON.stringify(dashboardAppResources()));
 console.log("tool _meta:", JSON.stringify(dashboardAppTool("[LocalDev]")._meta));

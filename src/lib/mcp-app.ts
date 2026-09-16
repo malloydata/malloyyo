@@ -16,7 +16,42 @@
  * render the result instead of printing it.
  */
 
+import { REFERENCE_APP_HTML } from "./mcp-app-ref/reference-app";
+
+/**
+ * Serve the reference app verbatim instead of ours. A control switch: it
+ * separates "our server declares the app wrongly" from "our HTML is wrong",
+ * which no amount of reading either one has settled.
+ */
+const SERVE_REFERENCE_APP = process.env.MCP_APP_REFERENCE === "1";
+
 export const DASHBOARD_APP_URI = "ui://show_dashboard/mcp-app.html";
+
+/**
+ * Every URI this app has EVER been advertised under.
+ *
+ * Clients cache resources/list and do not re-read it — not on reconnect, not
+ * on a fresh grant. A client that first saw this server during the hello-world
+ * build still asks for ui://malloyyo/hello.html, gets "resource not found",
+ * and reports "there was a problem displaying content". Renaming the URI to
+ * match the SDK examples' convention is what broke those clients.
+ *
+ * So serve the app under all of them. A stale URI costs one map entry; a
+ * client that can never resolve the resource costs the whole feature.
+ */
+const LEGACY_APP_URIS = [
+  "ui://malloyyo/hello.html",
+  "ui://malloyyo/dashboard.html",
+];
+
+export function isAppResourceUri(uri: string): boolean {
+  return uri === DASHBOARD_APP_URI || LEGACY_APP_URIS.includes(uri);
+}
+
+/** List the current URI first, then the legacy ones, so new clients take the current. */
+export function appResourceUris(): string[] {
+  return [DASHBOARD_APP_URI, ...LEGACY_APP_URIS];
+}
 
 export const UI_EXTENSION_ID = "io.modelcontextprotocol/ui";
 
@@ -25,19 +60,19 @@ export const APP_MIME_TYPE = "text/html;profile=mcp-app";
 /** The tool whose result this app renders. */
 export const BACKING_TOOL = "query";
 
-export function dashboardAppResource() {
-  return {
-    uri: DASHBOARD_APP_URI,
-    name: DASHBOARD_APP_URI,
+export function dashboardAppResources() {
+  return appResourceUris().map((uri) => ({
+    uri,
+    name: uri,
     mimeType: APP_MIME_TYPE,
-  };
+  }));
 }
 
-export function dashboardAppResourceContents() {
+export function dashboardAppResourceContents(uri: string = DASHBOARD_APP_URI) {
   return {
-    uri: DASHBOARD_APP_URI,
+    uri,
     mimeType: APP_MIME_TYPE,
-    text: dashboardAppHtml(),
+    text: SERVE_REFERENCE_APP ? REFERENCE_APP_HTML : dashboardAppHtml(),
   };
 }
 

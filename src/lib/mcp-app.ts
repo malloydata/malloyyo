@@ -106,6 +106,8 @@ export function dashboardAppHtml(): string {
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="light dark">
 <title>Baby names by decade</title>
 <style>
   body { margin: 0; padding: 16px; font: 14px/1.5 ui-sans-serif, system-ui, sans-serif; color: #231f20; }
@@ -124,7 +126,7 @@ export function dashboardAppHtml(): string {
 </head>
 <body>
 <div id="root" class="muted">Loading&hellip;</div>
-<script>
+<script type="module">
 (function () {
   var root = document.getElementById("root");
   var lastH = 0;

@@ -45,7 +45,7 @@ const page = `<!doctype html>
 <div id="panel"><iframe id="app" sandbox="allow-scripts allow-same-origin allow-popups allow-forms"></iframe></div>
 <script>
 const APP_HTML = ${JSON.stringify(appHtml).replace(/<\//g, "<\\/")};
-const TOOL_RESULT = ${JSON.stringify(toolResult)};
+const TOOL_RESULT = ${JSON.stringify(toolResult).replace(/<\//g, "<\\/").replace(/\u2028|\u2029/g, "")};
 const events = []; window.__events = events;
 const log = (s) => { events.push(s); document.getElementById("log").textContent = events.join("  ·  "); };
 const app = document.getElementById("app");

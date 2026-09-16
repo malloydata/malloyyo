@@ -4,9 +4,10 @@
 import { buildHostedExploreSurface } from "@/lib/mcp-host";
 import {
   APP_MIME_TYPE,
+  BACKING_TOOL,
   DASHBOARD_APP_URI,
+  dashboardQueryArgs,
   UI_EXTENSION_ID,
-  callDashboardApp,
   dashboardAppResource,
   dashboardAppResourceContents,
   dashboardAppTool,
@@ -242,8 +243,11 @@ export async function POST(req: Request) {
       const start = Date.now();
       log.info("mcp tool call", { tool: name });
       try {
+        // The app tool is one fixed query, run through the instance's own
+        // query surface — same Malloy path, real data, no arguments to get
+        // wrong. Its `_meta.ui.resourceUri` is what makes a host render it.
         const result = isDashboardAppTool(name)
-          ? callDashboardApp(args)
+          ? await hosted.call(BACKING_TOOL, dashboardQueryArgs())
           : await hosted.call(name, args);
         log.info("mcp tool ok", { tool: name, durationMs: Date.now() - start });
         return ok(body.id, result);

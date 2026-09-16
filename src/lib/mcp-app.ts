@@ -17,6 +17,8 @@
  */
 
 import { REFERENCE_APP_HTML } from "./mcp-app-ref/reference-app";
+import { createHash } from "node:crypto";
+
 import { APP_HTML } from "./mcp-app-src/generated-app-html";
 
 /**
@@ -26,21 +28,27 @@ import { APP_HTML } from "./mcp-app-src/generated-app-html";
  */
 const SERVE_REFERENCE_APP = process.env.MCP_APP_REFERENCE === "1";
 
-export const DASHBOARD_APP_URI = "ui://show_dashboard/mcp-app-v3.html";
+/**
+ * Content-addressed: the URI carries a hash of the app HTML, so it changes
+ * exactly when the app does.
+ *
+ * Clients cache resource bodies by URI and do not re-read resources/list, so a
+ * stable URI means every change is invisible until the TTL lapses — and the
+ * URI is identical across instances, so a body cached from localhost can be
+ * served for staging. Hashing ends both: a changed app is always a cache miss,
+ * an unchanged one is always a hit, and no manual version bump is needed.
+ */
+const APP_HASH = createHash("sha256").update(APP_HTML).digest("hex").slice(0, 12);
+
+export const DASHBOARD_APP_URI = `ui://show_dashboard/mcp-app-${APP_HASH}.html`;
 
 /**
- * Every URI this app has EVER been advertised under.
- *
- * Clients cache resources/list and do not re-read it — not on reconnect, not
- * on a fresh grant. A client that first saw this server during the hello-world
- * build still asks for ui://malloyyo/hello.html, gets "resource not found",
- * and reports "there was a problem displaying content". Renaming the URI to
- * match the SDK examples' convention is what broke those clients.
- *
- * So serve the app under all of them. A stale URI costs one map entry; a
- * client that can never resolve the resource costs the whole feature.
+ * Every URI this app has been advertised under. A client that first saw an
+ * older build still asks for the URI it cached; answering costs one array
+ * entry, and not answering costs the whole panel.
  */
 const LEGACY_APP_URIS = [
+  "ui://show_dashboard/mcp-app-v3.html",
   "ui://show_dashboard/mcp-app-v2.html",
   "ui://show_dashboard/mcp-app.html",
   "ui://malloyyo/hello.html",
@@ -48,7 +56,12 @@ const LEGACY_APP_URIS = [
 ];
 
 export function isAppResourceUri(uri: string): boolean {
-  return uri === DASHBOARD_APP_URI || LEGACY_APP_URIS.includes(uri);
+  return (
+    uri === DASHBOARD_APP_URI ||
+    LEGACY_APP_URIS.includes(uri) ||
+    // Any hash, including one from an older build of this server.
+    /^ui:\/\/show_dashboard\/mcp-app-[0-9a-f]{6,}\.html$/.test(uri)
+  );
 }
 
 /** List the current URI first, then the legacy ones, so new clients take the current. */

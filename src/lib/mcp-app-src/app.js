@@ -112,6 +112,13 @@ function draw() {
       </div>
     </header>
     ${decades}
+    <section class="live">
+      <h2>Live query
+        <span>runs <code>run: baby_names -&gt; { aggregate: total_babies }</code> on the server</span>
+        <button class="ask" id="runq">Run query</button>
+      </h2>
+      <div id="qout" class="muted">not run yet</div>
+    </section>
     <p class="muted" id="status"></p>`;
 
   const q = document.getElementById("q");
@@ -135,6 +142,37 @@ function draw() {
       draw();
     }),
   );
+  // App -> server: ask the host to proxy a tools/call. No CORS, no CSP, and
+  // no credentials in the panel — the host calls the server as the connected
+  // user. This is the sanctioned path for a panel to fetch its own data.
+  document.getElementById("runq").addEventListener("click", async () => {
+    const out = document.getElementById("qout");
+    out.className = "muted";
+    out.textContent = "running…";
+    const t0 = Date.now();
+    try {
+      const res = await app.callServerTool({ name: "dashboard_run_query", arguments: {} });
+      const ms = Date.now() - t0;
+      const rows = findRows(res && res.structuredContent, 0);
+      if (!rows || !rows.length) {
+        out.innerHTML = `<span class="muted">no rows (${ms} ms)</span>`;
+        return;
+      }
+      const cols = Object.keys(rows[0]);
+      out.className = "";
+      out.innerHTML =
+        `<table>${rows
+          .map(
+            (r) =>
+              `<tr>${cols.map((c) => `<td>${esc(c)}</td><td class="ct">${num(r[c])}</td>`).join("")}</tr>`,
+          )
+          .join("")}</table>` + `<p class="muted">${ms} ms round trip</p>`;
+    } catch (e) {
+      out.className = "muted";
+      out.textContent = `failed after ${Date.now() - t0} ms: ${(e && e.message) || e}`;
+    }
+  });
+
   // Outbound bridge: put a question into the conversation from the panel.
   root.querySelectorAll("button.ask").forEach((b) =>
     b.addEventListener("click", async () => {

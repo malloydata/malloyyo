@@ -7,6 +7,9 @@ import {
   BACKING_TOOL,
   DASHBOARD_APP_URI,
   dashboardQueryArgs,
+  isPanelQueryTool,
+  panelQueryArgs,
+  panelQueryTool,
   staticDashboardResult,
   UI_EXTENSION_ID,
   dashboardAppResources,
@@ -243,7 +246,11 @@ export async function POST(req: Request) {
     case "tools/list":
       // PROTOTYPE: the MCP Apps tool rides alongside the explore surface.
       return ok(body.id, {
-        tools: [...hosted.descriptors, dashboardAppTool(`[${env.INSTANCE_NAME}]`)],
+        tools: [
+          ...hosted.descriptors,
+          dashboardAppTool(`[${env.INSTANCE_NAME}]`),
+          panelQueryTool(`[${env.INSTANCE_NAME}]`),
+        ],
       });
 
     // PROTOTYPE: MCP Apps (the extension MotherDuck's view_dive uses). The
@@ -293,6 +300,12 @@ export async function POST(req: Request) {
         // Static for now — see staticDashboardResult(). Set DASHBOARD_LIVE_QUERY=1
         // to run the real Malloy query instead, once /mcp's query path is not
         // 20x slower than /api/run for the same text.
+        // The panel's own query button: a real Malloy run, on demand.
+        if (isPanelQueryTool(name)) {
+          const panel = await hosted.call(BACKING_TOOL, panelQueryArgs());
+          log.info("mcp tool ok", { tool: name, durationMs: Date.now() - start });
+          return ok(body.id, panel);
+        }
         const result = isDashboardAppTool(name)
           ? process.env.DASHBOARD_LIVE_QUERY === "1"
             ? await cachedDashboardResult(() => hosted.call(BACKING_TOOL, dashboardQueryArgs()))

@@ -214,6 +214,43 @@ export function dashboardQueryArgs() {
   };
 }
 
+/** The simple query the panel runs on demand, to exercise the app->server path. */
+export const PANEL_QUERY_TOOL = "dashboard_run_query";
+
+export const PANEL_QUERY_MALLOY = "run: baby_names -> { aggregate: total_babies }";
+
+/**
+ * App-only: `visibility: ["app"]` means the panel may call it and the model
+ * cannot see it. That keeps panel plumbing out of the model's tool list, where
+ * it would otherwise invite speculative calls.
+ */
+export function panelQueryTool(tag: string) {
+  return {
+    name: PANEL_QUERY_TOOL,
+    title: "Run the panel's query",
+    description: `${tag} Runs \`${PANEL_QUERY_MALLOY}\` and returns the rows. Called by the panel, not by the model.`,
+    annotations: { title: "Run the panel's query", readOnlyHint: true },
+    inputSchema: { type: "object", properties: {} },
+    outputSchema: { type: "object", properties: {}, additionalProperties: true },
+    _meta: {
+      ui: { resourceUri: DASHBOARD_APP_URI, visibility: ["app"] },
+      "ui/resourceUri": DASHBOARD_APP_URI,
+    },
+  };
+}
+
+export function panelQueryArgs() {
+  return {
+    source: "baby_names",
+    malloy: PANEL_QUERY_MALLOY,
+    question: "Total births across the whole dataset",
+  };
+}
+
+export function isPanelQueryTool(name: string) {
+  return name === PANEL_QUERY_TOOL;
+}
+
 export function isDashboardAppTool(name: string) {
   return name === "show_dashboard";
 }

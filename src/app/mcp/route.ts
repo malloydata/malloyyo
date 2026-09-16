@@ -7,6 +7,11 @@ import {
   BACKING_TOOL,
   DASHBOARD_APP_URI,
   dashboardQueryArgs,
+  frameTestContents,
+  frameTestResource,
+  frameTestTool,
+  isFrameTestTool,
+  isFrameTestUri,
   isPanelQueryTool,
   panelQueryArgs,
   panelQueryTool,
@@ -250,6 +255,7 @@ export async function POST(req: Request) {
           ...hosted.descriptors,
           dashboardAppTool(`[${env.INSTANCE_NAME}]`),
           panelQueryTool(`[${env.INSTANCE_NAME}]`),
+          frameTestTool(`[${env.INSTANCE_NAME}]`),
         ],
       });
 
@@ -257,12 +263,15 @@ export async function POST(req: Request) {
     // HTML below is loaded into a sandboxed iframe by the client and driven
     // over postMessage — see src/lib/mcp-app.ts.
     case "resources/list":
-      return ok(body.id, { resources: dashboardAppResources() });
+      return ok(body.id, { resources: [...dashboardAppResources(), frameTestResource()] });
 
     case "resources/read": {
       const uri = String((body.params ?? {}).uri ?? "");
       // Answer for any URI this app has been advertised under — clients cache
       // resources/list and keep asking for the one they first saw.
+      if (isFrameTestUri(uri)) {
+        return ok(body.id, { contents: [frameTestContents(uri)], ttlMs: 1_000, cacheScope: "public" });
+      }
       if (!isAppResourceUri(uri)) return err(body.id, -32002, `resource not found: ${uri}`);
       return ok(body.id, {
         contents: [dashboardAppResourceContents(uri)],
@@ -301,6 +310,13 @@ export async function POST(req: Request) {
         // to run the real Malloy query instead, once /mcp's query path is not
         // 20x slower than /api/run for the same text.
         // The panel's own query button: a real Malloy run, on demand.
+        if (isFrameTestTool(name)) {
+          log.info("mcp tool ok", { tool: name, durationMs: Date.now() - start });
+          return ok(body.id, {
+            content: [{ type: "text", text: "Frame runtime smoke test rendered above." }],
+            structuredContent: { ok: true },
+          });
+        }
         if (isPanelQueryTool(name)) {
           const panel = await hosted.call(BACKING_TOOL, panelQueryArgs());
           log.info("mcp tool ok", { tool: name, durationMs: Date.now() - start });

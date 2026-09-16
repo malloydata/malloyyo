@@ -18,6 +18,8 @@
 
 import { REFERENCE_APP_HTML } from "./mcp-app-ref/reference-app";
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 
 import { APP_HTML } from "./mcp-app-src/generated-app-html";
 
@@ -249,6 +251,70 @@ export function panelQueryArgs() {
 
 export function isPanelQueryTool(name: string) {
   return name === PANEL_QUERY_TOOL;
+}
+
+/**
+ * STAGE 0 — the real frame runtime in a panel.
+ *
+ * The panel IS the frame: no nested iframe, just the document
+ * /api/dashboards/.../frame would emit, with every external script inlined
+ * because a panel cannot fetch from our origin. Built by
+ * prototype/stage0/build.ts.
+ *
+ * Read from disk rather than embedded: it is 4.4 MB, and a string constant
+ * that size is miserable to typecheck. Deploying it would need an
+ * outputFileTracingIncludes entry; localhost does not.
+ */
+// Deliberately NOT memoized. Rebuilding panel.html does not touch any .ts, so
+// Next never recompiles and a cached copy goes stale silently — which is
+// exactly what happened, and cost a test cycle. Re-read per call; it is a
+// prototype and correctness beats one file read.
+function loadFrameTestHtml(): string {
+  try {
+    return readFileSync(path.join(process.cwd(), "prototype/stage0/panel.html"), "utf8");
+  } catch {
+    return "<!doctype html><p>prototype/stage0/panel.html not built — run prototype/stage0/build.ts</p>";
+  }
+}
+
+/** Hashed per call, so a rebuilt panel is always a new URI and never cached. */
+export function frameTestUri(): string {
+  return `ui://frame_test/panel-${createHash("sha256")
+    .update(loadFrameTestHtml())
+    .digest("hex")
+    .slice(0, 12)}.html`;
+}
+
+export function frameTestResource() {
+  const uri = frameTestUri();
+  return { uri, name: uri, mimeType: APP_MIME_TYPE };
+}
+
+export function frameTestContents(uri: string = frameTestUri()) {
+  return { uri, mimeType: APP_MIME_TYPE, text: loadFrameTestHtml() };
+}
+
+export function isFrameTestUri(uri: string) {
+  return /^ui:\/\/frame_test\/panel-[0-9a-f]{6,}\.html$/.test(uri);
+}
+
+export function frameTestTool(tag: string) {
+  const uri = frameTestUri();
+  return {
+    name: "show_frame_test",
+    title: "Frame runtime smoke test",
+    description:
+      `${tag} STAGE 0. Renders the real dashboard frame runtime inside a panel, ` +
+      `with a trivial dashboard and no query. Takes no arguments.`,
+    annotations: { title: "Frame runtime smoke test", readOnlyHint: true },
+    inputSchema: { type: "object", properties: {} },
+    outputSchema: { type: "object", properties: {}, additionalProperties: true },
+    _meta: { ui: { resourceUri: uri }, "ui/resourceUri": uri },
+  };
+}
+
+export function isFrameTestTool(name: string) {
+  return name === "show_frame_test";
 }
 
 export function isDashboardAppTool(name: string) {

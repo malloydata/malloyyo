@@ -148,6 +148,19 @@ export function dashboardAppTool(tag: string) {
       },
       required: ["dashboard"],
     },
+    // The shipped examples all declare one, and this tool returns
+    // structuredContent — which a strict client may reject as unschema'd
+    // output when the tool never said it produces any.
+    outputSchema: {
+      type: "object",
+      properties: {
+        url: { type: "string", description: "The dashboard URL, givens encoded." },
+        dashboard: { type: "string", description: "Which dashboard was opened." },
+        title: { type: "string", description: "Its display name." },
+        input: { type: ["string", "null"], description: "The primary input, if one was given." },
+      },
+      required: ["url", "dashboard", "title"],
+    },
     _meta: {
       ui: { resourceUri: DASHBOARD_APP_URI },
       "ui/resourceUri": DASHBOARD_APP_URI,

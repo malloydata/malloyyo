@@ -157,9 +157,27 @@ export async function POST(req: Request) {
           ((body.params?.capabilities ?? {}) as Record<string, unknown>).extensions ?? {},
         ),
       });
+      // Match the reference server's handshake exactly
+      // (@modelcontextprotocol/server-basic-vanillajs, which renders):
+      //
+      //   protocolVersion: echoed back from the request, not hardcoded
+      //   capabilities:    {tools:{listChanged},resources:{listChanged}}
+      //
+      // Both mattered. We answered a fixed "2025-03-26" no matter what the
+      // client asked for, which can drop a newer client into a mode that
+      // predates MCP Apps. And we advertised an `extensions` capability the
+      // reference server does not send at all — the UI extension belongs to
+      // the 2026-07-28 server/discover handshake below, not to initialize.
+      const requested = String((body.params ?? {}).protocolVersion ?? "");
+      const negotiated = SUPPORTED_VERSIONS.includes(requested)
+        ? requested
+        : PROTOCOL_VERSION;
       return ok(body.id, {
-        protocolVersion: PROTOCOL_VERSION,
-        capabilities: serverCapabilities(),
+        protocolVersion: negotiated,
+        capabilities: {
+          tools: { listChanged: true },
+          resources: { listChanged: true },
+        },
         serverInfo: SERVER_INFO,
         instructions: hosted.instructions,
       });

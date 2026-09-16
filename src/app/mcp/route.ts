@@ -4,14 +4,13 @@
 import { buildHostedExploreSurface } from "@/lib/mcp-host";
 import {
   APP_MIME_TYPE,
-  HELLO_APP_URI,
+  DASHBOARD_APP_URI,
   UI_EXTENSION_ID,
-  callHelloApp,
-  clientUiCapability,
-  helloAppResource,
-  helloAppResourceContents,
-  helloAppTool,
-  isHelloAppTool,
+  callDashboardApp,
+  dashboardAppResource,
+  dashboardAppResourceContents,
+  dashboardAppTool,
+  isDashboardAppTool,
 } from "@/lib/mcp-app";
 import { bearerToken, credentialLabel, resolveBearer } from "@/lib/bearer-auth";
 import { corsPreflight, withCors } from "@/lib/oauth/cors";
@@ -153,7 +152,11 @@ export async function POST(req: Request) {
       // single fact that decides if the panel can work, and it is knowable
       // only from what it advertises here. Logged so a silent non-render is
       // attributable instead of guessed at.
-      log.info("mcp initialize", { ui: clientUiCapability(body.params) });
+      log.info("mcp initialize", {
+        clientExtensions: Object.keys(
+          ((body.params?.capabilities ?? {}) as Record<string, unknown>).extensions ?? {},
+        ),
+      });
       return ok(body.id, {
         protocolVersion: PROTOCOL_VERSION,
         capabilities: serverCapabilities(),
@@ -194,20 +197,20 @@ export async function POST(req: Request) {
     case "tools/list":
       // PROTOTYPE: the MCP Apps tool rides alongside the explore surface.
       return ok(body.id, {
-        tools: [...hosted.descriptors, helloAppTool(`[${env.INSTANCE_NAME}]`)],
+        tools: [...hosted.descriptors, dashboardAppTool(`[${env.INSTANCE_NAME}]`)],
       });
 
     // PROTOTYPE: MCP Apps (the extension MotherDuck's view_dive uses). The
     // HTML below is loaded into a sandboxed iframe by the client and driven
     // over postMessage — see src/lib/mcp-app.ts.
     case "resources/list":
-      return ok(body.id, { resources: [helloAppResource(originFromRequest(req))] });
+      return ok(body.id, { resources: [dashboardAppResource()] });
 
     case "resources/read": {
       const uri = String((body.params ?? {}).uri ?? "");
-      if (uri !== HELLO_APP_URI) return err(body.id, -32002, `resource not found: ${uri}`);
+      if (uri !== DASHBOARD_APP_URI) return err(body.id, -32002, `resource not found: ${uri}`);
       return ok(body.id, {
-        contents: [helloAppResourceContents(originFromRequest(req))],
+        contents: [dashboardAppResourceContents()],
       });
     }
 
@@ -221,8 +224,8 @@ export async function POST(req: Request) {
       const start = Date.now();
       log.info("mcp tool call", { tool: name });
       try {
-        const result = isHelloAppTool(name)
-          ? callHelloApp(args)
+        const result = isDashboardAppTool(name)
+          ? callDashboardApp(args)
           : await hosted.call(name, args);
         log.info("mcp tool ok", { tool: name, durationMs: Date.now() - start });
         return ok(body.id, result);

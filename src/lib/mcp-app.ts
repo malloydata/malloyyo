@@ -2,198 +2,277 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * PROTOTYPE — the smallest possible MCP App: a panel whose text is written by
- * JavaScript. Nothing is rendered by the HTML itself, so if the words appear at
- * all, the host loaded the resource AND ran its script AND the postMessage
- * handshake completed. That is the whole point of starting here: the first
- * attempt framed the wordfinder dashboards and rendered nothing, which left
- * "the host ignored my tool metadata" and "my iframe is broken" indistinguishable.
+ * PROTOTYPE — a Word Finder dashboard rendered inline as an MCP App.
  *
- * Wire format checked against @modelcontextprotocol/ext-apps@2.0.0 (SEP-1865),
- * which is the SDK MotherDuck's dive viewer ships:
+ * The wordfinder dashboards are already a static, fully client-side site
+ * (DuckDB-WASM over a Parquet dictionary, no server), so this app is a thin
+ * frame that points an inner iframe at the published dashboard with the givens
+ * the model chose encoded into the query string — the same `$given` / `~state`
+ * convention as a shareable link (packages/cli/src/shared/givens-url.ts).
  *
- *   - RESOURCE_MIME_TYPE is "text/html;profile=mcp-app".
- *   - A tool binds a resource with `_meta.ui.resourceUri` (preferred) or the
- *     legacy flat `_meta["ui/resourceUri"]`. The SDK says hosts "must check
- *     both formats", so we send both — a host that only knows the old spelling
- *     is otherwise indistinguishable from one that ignores us.
- *   - `_meta.ui` on the resources/list entry is a listing-level default; the
- *     content item returned by resources/read may carry its own, which TAKES
- *     PRECEDENCE. We now send it in both places; previously only the listing
- *     had it.
- *   - EXTENSION_ID is "io.modelcontextprotocol/ui", negotiated through
- *     `capabilities.extensions`. That is how a client advertises MCP Apps
- *     support, and `getUiCapability()` is how a server reads it — see
- *     clientUiCapability() below, which exists to answer, from logs, whether
- *     the client asking us is willing to render an App at all.
+ * Wire format matches @modelcontextprotocol/ext-apps@2.0.0 (SEP-1865):
+ *   - resource mimeType "text/html;profile=mcp-app", `_meta.ui` carrying csp;
+ *   - the tool binds it with `_meta.ui.resourceUri` AND the legacy flat
+ *     `_meta["ui/resourceUri"]`, because hosts must check both;
+ *   - the host loads the HTML into a sandboxed iframe and speaks JSON-RPC over
+ *     postMessage: the app sends `ui/initialize`, the host answers, then pushes
+ *     `ui/notifications/tool-result` carrying the ordinary CallToolResult.
+ *
+ * Two hard-won details, kept deliberately:
+ *   - <body> ships with STATIC content that the script replaces. An empty body
+ *     made "panel rendered, script blocked" indistinguishable from "no panel",
+ *     which cost several rounds of debugging.
+ *   - `resultType` on the result envelope is stamped centrally in the route's
+ *     ok() helper — required by protocol revision 2026-07-28 for every result,
+ *     not just this tool's.
  */
 
-export const HELLO_APP_URI = "ui://malloyyo/hello.html";
+export const DASHBOARD_APP_URI = "ui://malloyyo/dashboard.html";
 
 export const UI_EXTENSION_ID = "io.modelcontextprotocol/ui";
 
 export const APP_MIME_TYPE = "text/html;profile=mcp-app";
-const MIME = APP_MIME_TYPE;
+
+/** Where the built dashboards live. Wordfinder publishes to GitHub Pages. */
+const SITE = process.env.DASHBOARD_APP_SITE ?? "https://lloydtabb.github.io/wordfinder";
+
+const SITE_ORIGIN = new URL(SITE).origin;
 
 /**
- * The `_meta.ui` block, built per-request so the CSP can name this instance's
- * own origin.
- *
- * This has now been all three ways. Explicit empty arrays, then the key omitted
- * entirely, and neither rendered. MotherDuck's dive viewer — which does render
- * here — declares a real csp naming its own domain, and that is the last
- * structural difference between their resource and this one, so mirror it.
- *
- * The app genuinely needs no network: its HTML is inlined and its only channel
- * is postMessage to the host. Declaring the origin anyway costs nothing and
- * removes the possibility that an absent or empty policy is what stops the
- * frame bootstrapping.
+ * DuckDB-WASM fetches its worker and wasm from jsdelivr, then pulls the `json`
+ * and `icu` extensions from extensions.duckdb.org at startup. MotherDuck's dive
+ * viewer declares the same extension host for the same reason.
  */
-function uiMeta(origin: string) {
+const DASHBOARD_CDNS = ["https://cdn.jsdelivr.net", "https://extensions.duckdb.org"];
+
+/**
+ * The dashboards, and the query-string key each one's primary input uses.
+ *
+ * Which namespace that key lives in is per-dashboard: word-grep's regex is a
+ * declared `$REGEX` given, while the anagram rack is `~rack` view state owned by
+ * a JS component. Both round-trip through the same shareable-link encoder.
+ */
+const DASHBOARDS = {
+  anagram: {
+    title: "Anagram",
+    summary: "Every word you can spell from a set of letters (`?` is a blank).",
+    inputKey: "~rack",
+    inputHint: "letters to spell from, e.g. `retinas`",
+  },
+  "phrase-anagram": {
+    title: "Phrase Anagram",
+    summary: "Rearranges a whole phrase into other phrases using every letter once.",
+    inputKey: "~phrase",
+    inputHint: "a phrase to rearrange, e.g. `dormitory`",
+  },
+  scrabble: {
+    title: "Scrabble Cheat",
+    summary: "Plays across a board row from your rack and the tiles already down.",
+    inputKey: "~rack",
+    inputHint: "your rack, e.g. `aeinrst`",
+  },
+  "word-grep": {
+    title: "Word Grep",
+    summary: "Matches dictionary words against a regular expression.",
+    inputKey: "$REGEX",
+    inputHint: "a regular expression, e.g. `^q[^u]`",
+  },
+} as const;
+
+type DashboardName = keyof typeof DASHBOARDS;
+
+const NAMES = Object.keys(DASHBOARDS) as DashboardName[];
+
+/** Exact `$DICT` values from the model's `in_dict` pick-chain. */
+const DICTIONARIES = ["top10k", "common", "enable", "twl", "collins", "all"] as const;
+
+function isDashboard(v: unknown): v is DashboardName {
+  return typeof v === "string" && (NAMES as string[]).includes(v);
+}
+
+function uiMeta() {
   return {
     csp: {
-      connectDomains: [origin],
-      resourceDomains: [origin],
-      frameDomains: [],
+      // The dashboard runs at its published origin in a nested iframe, so
+      // frameDomains is the directive that matters here.
+      frameDomains: [SITE_ORIGIN],
+      connectDomains: [SITE_ORIGIN, ...DASHBOARD_CDNS],
+      resourceDomains: [SITE_ORIGIN, ...DASHBOARD_CDNS],
     },
   };
 }
 
-/**
- * What the client advertised under `capabilities.extensions`. Logged on every
- * initialize so a silent non-render can be attributed: a client that never
- * advertises the UI extension is telling us it will not render an App, and no
- * amount of server-side metadata will change that.
- */
-export function clientUiCapability(params: Record<string, unknown> | undefined) {
-  const caps = (params?.capabilities ?? {}) as Record<string, unknown>;
-  const extensions = (caps.extensions ?? {}) as Record<string, unknown>;
+export function dashboardAppResource() {
   return {
-    advertisesUi: Object.prototype.hasOwnProperty.call(extensions, UI_EXTENSION_ID),
-    ui: extensions[UI_EXTENSION_ID] ?? null,
-    extensionIds: Object.keys(extensions),
-    capabilityKeys: Object.keys(caps),
+    uri: DASHBOARD_APP_URI,
+    name: "Word Finder Dashboard",
+    description: "Renders a Word Finder dashboard inline.",
+    mimeType: APP_MIME_TYPE,
+    _meta: { ui: uiMeta() },
   };
 }
 
-export function helloAppResource(origin: string) {
+export function dashboardAppResourceContents() {
   return {
-    uri: HELLO_APP_URI,
-    name: "Hello World",
-    description: "A minimal MCP App that writes its text from JavaScript.",
-    mimeType: MIME,
-    _meta: { ui: uiMeta(origin) },
+    uri: DASHBOARD_APP_URI,
+    mimeType: APP_MIME_TYPE,
+    text: dashboardAppHtml(),
+    // Takes precedence over the listing-level copy.
+    _meta: { ui: uiMeta() },
   };
 }
 
-export function helloAppResourceContents(origin: string) {
-  return {
-    uri: HELLO_APP_URI,
-    mimeType: MIME,
-    text: helloAppHtml(),
-    // Takes precedence over the listing-level copy above.
-    _meta: { ui: uiMeta(origin) },
-  };
-}
-
-export function helloAppTool(tag: string) {
+export function dashboardAppTool(tag: string) {
   return {
     name: "show_dashboard",
-    title: "Show the hello-world panel",
+    title: "Show a Word Finder dashboard",
     description:
-      `${tag} EXPERIMENTAL — an MCP App smoke test. Renders a small panel whose ` +
-      `text is written by JavaScript inside the app. Call it with any message ` +
-      `and report to the user whether a panel appeared; the point is the panel, ` +
-      `not the text you get back.`,
+      `${tag} Renders one of the Word Finder dashboards inline, as an interactive ` +
+      `panel the user can then drive themselves. Dashboards: ` +
+      NAMES.map((n) => `\`${n}\` — ${DASHBOARDS[n].summary}`).join(" ") +
+      ` Pass \`input\` to open it on a specific question; the user can change ` +
+      `anything from there. Every search runs in their browser over a Parquet ` +
+      `dictionary, so this queries no dataset on this instance. Once it renders, ` +
+      `tell the user it is there rather than restating results you cannot see.`,
+    // Directory submission requires a title plus one of these hints on every
+    // tool. Nothing here writes: the dashboard is a view over a static file.
+    annotations: { title: "Show a Word Finder dashboard", readOnlyHint: true },
     inputSchema: {
       type: "object",
       properties: {
-        message: {
+        dashboard: { type: "string", enum: NAMES, description: "Which dashboard to open." },
+        input: {
           type: "string",
-          description: "Text for the panel to echo. Defaults to 'Hello world'.",
+          description:
+            "The dashboard's main input: " +
+            NAMES.map((n) => `${n} → ${DASHBOARDS[n].inputHint}`).join("; ") + ".",
+        },
+        dictionary: {
+          type: "string",
+          enum: DICTIONARIES,
+          description:
+            "Word list to search. `enable` (default) is the open word-game standard; " +
+            "`top10k` is the 8k most frequent words, `all` is everything (451k).",
+        },
+        params: {
+          type: "object",
+          additionalProperties: { type: "string" },
+          description: "Escape hatch: extra query keys, `$NAME` given or `~name` view state.",
         },
       },
+      required: ["dashboard"],
     },
     _meta: {
-      // Preferred form.
-      ui: { resourceUri: HELLO_APP_URI },
-      // Legacy flat form; the SDK says hosts must check both.
-      "ui/resourceUri": HELLO_APP_URI,
+      ui: { resourceUri: DASHBOARD_APP_URI },
+      "ui/resourceUri": DASHBOARD_APP_URI,
     },
   };
 }
 
-export function isHelloAppTool(name: string) {
+export function isDashboardAppTool(name: string) {
   return name === "show_dashboard";
 }
 
-export function callHelloApp(args: Record<string, unknown>) {
-  const message =
-    typeof args.message === "string" && args.message.trim() ? args.message.trim() : "Hello world";
+export function callDashboardApp(args: Record<string, unknown>) {
+  const name = args.dashboard;
+  if (!isDashboard(name)) {
+    throw new Error(
+      `unknown dashboard "${String(args.dashboard)}" — try one of: ${NAMES.join(", ")}`,
+    );
+  }
+  const spec = DASHBOARDS[name];
+
+  const params = new URLSearchParams();
+  const input = typeof args.input === "string" ? args.input.trim() : "";
+  if (input) params.set(spec.inputKey, input);
+  if (typeof args.dictionary === "string" && args.dictionary) params.set("$DICT", args.dictionary);
+  const extra = args.params;
+  if (extra && typeof extra === "object") {
+    for (const [k, v] of Object.entries(extra as Record<string, unknown>)) {
+      if (v == null) continue;
+      // Keep both namespaces addressable; a bare key defaults to a given.
+      params.set(k.charAt(0) === "$" || k.charAt(0) === "~" ? k : "$" + k, String(v));
+    }
+  }
+
+  const qs = params.toString();
+  const url = `${SITE}/${name}.html${qs ? "?" + qs : ""}`;
+
   return {
     content: [
       {
         type: "text",
         text:
-          `Rendered the hello-world panel with the message "${message}". Ask the ` +
-          `user whether a panel actually appeared above this message — that, not ` +
-          `this text, is the result being tested.`,
+          `Opened the ${spec.title} dashboard${input ? ` on "${input}"` : ""}. ` +
+          `It is rendered above and the user can change the inputs themselves.`,
       },
     ],
-    structuredContent: { message },
+    structuredContent: { url, dashboard: name, title: spec.title, input: input || null },
   };
 }
 
 /**
- * The app. `<body>` ships empty on purpose: every visible character is written
- * by the script, so "I see words" cannot be satisfied by static HTML slipping
- * through. It also reports what it heard from the host, which turns a
- * half-working handshake into something readable instead of a blank box.
+ * The app. Hand-rolled against the wire protocol rather than pulled from the
+ * SDK — it is ~70 lines of JSON-RPC over postMessage, and this is a prototype.
  */
-export function helloAppHtml(): string {
+export function dashboardAppHtml(): string {
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Hello world</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Word Finder</title>
 <style>
-  body { margin: 0; font: 14px/1.6 ui-sans-serif, system-ui, sans-serif; padding: 20px; }
-  h1 { font-size: 20px; margin: 0 0 8px; }
-  dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 12px 0 0; }
-  dt { color: #6a6a6a; }
+  html, body { margin: 0; padding: 0; background: transparent; }
+  #frame { display: block; width: 100%; height: 640px; border: 0; }
+  #status { font: 13px/1.6 ui-sans-serif, system-ui, sans-serif; color: #6a6a6a; padding: 20px; }
+  #status[hidden] { display: none !important; }
   code { font-family: ui-monospace, monospace; }
 </style>
 </head>
 <body>
-  <h1>Hello world</h1>
-  <div id="fallback">
-    This is STATIC HTML. If you are reading this sentence, the panel rendered
-    but its JavaScript did not run.
+<div id="status">
+  Loading the dashboard&hellip;
+  <div style="margin-top:6px">
+    If this line is still here after a few seconds, the panel rendered but its
+    JavaScript did not run.
   </div>
-</body>
+</div>
+<iframe id="frame" hidden title="Word Finder dashboard"
+        sandbox="allow-scripts allow-same-origin allow-popups allow-forms"></iframe>
 <script>
 (function () {
   var PROTOCOL_VERSION = "2026-01-26";
   var pending = {};
   var nextId = 0;
+  var loaded = false;
 
-  function paint(title, rows) {
-    var dl = rows.map(function (r) {
-      return "<dt>" + r[0] + "</dt><dd><code>" + r[1] + "</code></dd>";
-    }).join("");
-    document.body.innerHTML = "<h1>" + title + "</h1>" +
-      "<div>This text was written by JavaScript inside the MCP App.</div>" +
-      "<dl>" + dl + "</dl>";
+  function status(html) {
+    var el = document.getElementById("status");
+    el.hidden = false;
+    el.innerHTML = html;
   }
 
-  // Paint immediately, replacing the static fallback in <body>. Which of the
-  // three texts appears is the whole diagnostic:
-  //   the static sentence  -> panel renders, script blocked (CSP)
-  //   "handshake pending"  -> script runs, host never answers ui/initialize
-  //   "handshake ok"       -> everything works
-  // The previous version shipped an empty <body>, which made the first case
-  // indistinguishable from the panel not rendering at all.
-  paint("Hello world", [["handshake", "pending"]]);
+  function show(url) {
+    if (loaded || !url) return;
+    loaded = true;
+    var frame = document.getElementById("frame");
+    frame.src = url;
+    frame.hidden = false;
+    document.getElementById("status").hidden = true;
+    // The host sizes the panel from this: the inner document is cross-origin,
+    // so its height is not observable from here.
+    parent.postMessage({
+      jsonrpc: "2.0",
+      method: "ui/notifications/size-changed",
+      params: { height: 660 }
+    }, "*");
+  }
+
+  function urlFrom(result) {
+    var sc = result && result.structuredContent;
+    return sc && typeof sc.url === "string" ? sc.url : null;
+  }
 
   window.addEventListener("message", function (event) {
     var msg = event.data;
@@ -202,32 +281,31 @@ export function helloAppHtml(): string {
       var resolve = pending[msg.id];
       delete pending[msg.id];
       resolve(msg.result);
+      return;
     }
+    if (msg.method === "ui/notifications/tool-result") show(urlFrom(msg.params));
   });
 
-  function request(method, params) {
-    var id = ++nextId;
-    parent.postMessage({ jsonrpc: "2.0", id: id, method: method, params: params || {} }, "*");
-    return new Promise(function (r) { pending[id] = r; });
-  }
-
-  request("ui/initialize", {
-    protocolVersion: PROTOCOL_VERSION,
-    appInfo: { name: "malloyyo-hello", version: "0.1.0" },
-    appCapabilities: {}
-  }).then(function (result) {
-    var host = (result && result.hostInfo) || {};
-    paint("Hello world", [
-      ["handshake", "ok"],
-      ["host", (host.name || "?") + " " + (host.version || "")],
-      ["protocol", (result && result.protocolVersion) || "?"]
-    ]);
-    parent.postMessage({
-      jsonrpc: "2.0",
-      method: "ui/notifications/size-changed",
-      params: { height: document.documentElement.scrollHeight }
-    }, "*");
-  });
+  var id = ++nextId;
+  parent.postMessage({
+    jsonrpc: "2.0", id: id, method: "ui/initialize",
+    params: {
+      protocolVersion: PROTOCOL_VERSION,
+      appInfo: { name: "malloyyo-wordfinder", version: "0.1.0" },
+      appCapabilities: {}
+    }
+  }, "*");
+  pending[id] = function (result) {
+    // A tool result may already be waiting in hostContext rather than arriving
+    // as a notification; take it from either.
+    var ctx = result && result.hostContext;
+    if (ctx && ctx.toolResult) show(urlFrom(ctx.toolResult));
+    setTimeout(function () {
+      if (!loaded) {
+        status("Connected to the host, but no dashboard was named in the tool result.");
+      }
+    }, 3000);
+  };
 })();
 </script>
 </html>

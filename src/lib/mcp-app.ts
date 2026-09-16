@@ -11,7 +11,8 @@
  * convention as a shareable link (packages/cli/src/shared/givens-url.ts).
  *
  * Wire format matches @modelcontextprotocol/ext-apps@2.0.0 (SEP-1865):
- *   - resource mimeType "text/html;profile=mcp-app", `_meta.ui` carrying csp;
+ *   - resource mimeType "text/html;profile=mcp-app" and nothing else: the
+ *     shipped examples register with `{ mimeType }` alone, no `_meta.ui`;
  *   - the tool binds it with `_meta.ui.resourceUri` AND the legacy flat
  *     `_meta["ui/resourceUri"]`, because hosts must check both;
  *   - the host loads the HTML into a sandboxed iframe and speaks JSON-RPC over
@@ -90,25 +91,12 @@ function isDashboard(v: unknown): v is DashboardName {
   return typeof v === "string" && (NAMES as string[]).includes(v);
 }
 
-function uiMeta() {
-  return {
-    csp: {
-      // The dashboard runs at its published origin in a nested iframe, so
-      // frameDomains is the directive that matters here.
-      frameDomains: [SITE_ORIGIN],
-      connectDomains: [SITE_ORIGIN, ...DASHBOARD_CDNS],
-      resourceDomains: [SITE_ORIGIN, ...DASHBOARD_CDNS],
-    },
-  };
-}
-
 export function dashboardAppResource() {
   return {
     uri: DASHBOARD_APP_URI,
     name: "Word Finder Dashboard",
     description: "Renders a Word Finder dashboard inline.",
     mimeType: APP_MIME_TYPE,
-    _meta: { ui: uiMeta() },
   };
 }
 
@@ -117,8 +105,6 @@ export function dashboardAppResourceContents() {
     uri: DASHBOARD_APP_URI,
     mimeType: APP_MIME_TYPE,
     text: dashboardAppHtml(),
-    // Takes precedence over the listing-level copy.
-    _meta: { ui: uiMeta() },
   };
 }
 

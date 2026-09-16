@@ -241,7 +241,12 @@ export async function POST(req: Request) {
         //
         // public: this HTML is identical for every user; it embeds no session,
         // no query result, and nothing user-specific.
-        ttlMs: 3_600_000,
+        // Near-zero TTL. An hour of caching meant a client kept serving the
+        // app it had already fetched, so redeploys were invisible — the very
+        // problem the URI aliasing was added to solve, reintroduced through
+        // cache metadata. This is a prototype whose HTML changes constantly;
+        // correctness beats efficiency until it stops moving.
+        ttlMs: 1_000,
         cacheScope: "public",
       });
     }

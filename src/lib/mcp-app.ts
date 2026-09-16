@@ -28,7 +28,13 @@
  *     not just this tool's.
  */
 
-export const DASHBOARD_APP_URI = "ui://malloyyo/dashboard.html";
+/**
+ * `ui://<tool-name>/mcp-app.html` — the convention every shipped example
+ * follows (get-time → ui://get-time/mcp-app.html, debug-tool →
+ * ui://debug-tool/mcp-app.html). Ours was ui://malloyyo/dashboard.html, which
+ * ties to nothing a host could correlate with the tool.
+ */
+export const DASHBOARD_APP_URI = "ui://show_dashboard/mcp-app.html";
 
 export const UI_EXTENSION_ID = "io.modelcontextprotocol/ui";
 
@@ -94,9 +100,26 @@ function isDashboard(v: unknown): v is DashboardName {
 export function dashboardAppResource() {
   return {
     uri: DASHBOARD_APP_URI,
-    name: "Word Finder Dashboard",
-    description: "Renders a Word Finder dashboard inline.",
+    name: DASHBOARD_APP_URI,
     mimeType: APP_MIME_TYPE,
+    // The reference apps carry no `_meta.ui` because they render their own
+    // content. This one nests an iframe, and `frameDomains` maps to CSP
+    // frame-src where "empty or omitted" means NO nested iframes at all — so
+    // stripping this block to match the reference is what blocks the frame.
+    //
+    // Serving the dashboard literally would remove the need for any of this,
+    // and is the better shape; it is ~6.9MB of Malloy/DuckDB runtime to inline,
+    // which is a change worth making once rendering is confirmed.
+    _meta: {
+      ui: {
+        frameDomains: [SITE_ORIGIN],
+        csp: {
+          frameDomains: [SITE_ORIGIN],
+          connectDomains: [SITE_ORIGIN, ...DASHBOARD_CDNS],
+          resourceDomains: [SITE_ORIGIN, ...DASHBOARD_CDNS],
+        },
+      },
+    },
   };
 }
 
@@ -252,6 +275,27 @@ export function dashboardAppHtml(): string {
     el.innerHTML = html;
   }
 
+  // Report height IMMEDIATELY and on every change, the way the SDK's
+  // setupSizeChangedNotifications() does. Previously this fired only after a
+  // tool result arrived — so if that notification never landed, the frame kept
+  // a zero height and a perfectly rendered panel was invisible, which looks
+  // exactly like "nothing rendered".
+  var lastH = 0;
+  function reportSize(h) {
+    var height = h || Math.max(
+      document.documentElement.scrollHeight,
+      document.body ? document.body.scrollHeight : 0,
+      120
+    );
+    if (height === lastH) return;
+    lastH = height;
+    parent.postMessage({
+      jsonrpc: "2.0",
+      method: "ui/notifications/size-changed",
+      params: { width: Math.ceil(window.innerWidth), height: height }
+    }, "*");
+  }
+
   function show(url) {
     if (loaded || !url) return;
     loaded = true;
@@ -259,13 +303,9 @@ export function dashboardAppHtml(): string {
     frame.src = url;
     frame.hidden = false;
     document.getElementById("status").hidden = true;
-    // The host sizes the panel from this: the inner document is cross-origin,
-    // so its height is not observable from here.
-    parent.postMessage({
-      jsonrpc: "2.0",
-      method: "ui/notifications/size-changed",
-      params: { height: 660 }
-    }, "*");
+    // The inner document is cross-origin, so its height is not observable
+    // from here — name the frame's own fixed height instead.
+    reportSize(660);
   }
 
   function urlFrom(result) {
@@ -284,6 +324,13 @@ export function dashboardAppHtml(): string {
     }
     if (msg.method === "ui/notifications/tool-result") show(urlFrom(msg.params));
   });
+
+  reportSize();
+  if (typeof ResizeObserver === "function") {
+    var ro = new ResizeObserver(function () { if (!loaded) reportSize(); });
+    ro.observe(document.documentElement);
+    if (document.body) ro.observe(document.body);
+  }
 
   var id = ++nextId;
   parent.postMessage({

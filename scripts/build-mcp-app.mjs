@@ -32,16 +32,35 @@ const sdkSource = sdk.slice(0, m.index) + `globalThis.__EXT_APPS__ = {${globals}
 const STYLE = `
   :root { color-scheme: light dark; }
   body { margin: 0; padding: 16px; font: 14px/1.5 ui-sans-serif, system-ui, sans-serif; }
-  h1 { font-size: 16px; font-weight: 600; margin: 0 0 14px; }
-  section { margin: 0 0 18px; }
-  h2 { font-size: 14px; font-weight: 600; margin: 0 0 6px; }
-  h2 span { font-weight: 400; opacity: .6; font-size: 12px; margin-left: 6px; }
-  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
-  h3 { font-size: 11px; font-weight: 500; opacity: .6; margin: 0 0 3px;
+  h1 { font-size: 16px; font-weight: 600; margin: 0 0 10px; }
+  header { margin-bottom: 16px; }
+  .controls { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  input[type=search] {
+    font: inherit; padding: 4px 8px; border-radius: 6px; min-width: 150px;
+    border: 1px solid rgba(128,128,128,.4); background: transparent; color: inherit;
+  }
+  .seg { display: inline-flex; border: 1px solid rgba(128,128,128,.35); border-radius: 6px; overflow: hidden; }
+  .seg button {
+    font: inherit; font-size: 12px; padding: 4px 10px; border: 0; cursor: pointer;
+    background: transparent; color: inherit;
+  }
+  .seg button.on { background: rgba(128,128,128,.22); font-weight: 600; }
+  section { margin: 0 0 20px; }
+  h2 { font-size: 14px; font-weight: 600; margin: 0 0 8px; display: flex; align-items: baseline; gap: 8px; }
+  h2 span { font-weight: 400; opacity: .55; font-size: 12px; }
+  button.ask {
+    font: inherit; font-size: 11px; padding: 2px 8px; cursor: pointer; margin-left: auto;
+    border: 1px solid rgba(128,128,128,.4); border-radius: 999px; background: transparent; color: inherit;
+  }
+  button.ask:hover { background: rgba(128,128,128,.15); }
+  .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 18px; }
+  h3 { font-size: 11px; font-weight: 500; opacity: .6; margin: 0 0 5px;
        text-transform: uppercase; letter-spacing: .04em; }
-  table { border-collapse: collapse; width: 100%; font-size: 13px; }
-  td { padding: 2px 0; border-bottom: 1px solid rgba(128,128,128,.18); }
-  td.n { text-align: right; font-variant-numeric: tabular-nums; opacity: .7; }
+  .bar { display: grid; grid-template-columns: 5.5em 1fr 4.5em; align-items: center; gap: 8px; padding: 1px 0; }
+  .bar .nm { font-size: 13px; }
+  .bar .track { height: 9px; border-radius: 999px; background: rgba(128,128,128,.16); overflow: hidden; }
+  .bar .track i { display: block; height: 100%; background: currentColor; opacity: .55; border-radius: 999px; }
+  .bar .ct { font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; opacity: .7; }
   pre { white-space: pre-wrap; font-size: 12px; }
   .muted { opacity: .6; font-size: 12px; }
 `;

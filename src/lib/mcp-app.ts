@@ -26,7 +26,7 @@ import { APP_HTML } from "./mcp-app-src/generated-app-html";
  */
 const SERVE_REFERENCE_APP = process.env.MCP_APP_REFERENCE === "1";
 
-export const DASHBOARD_APP_URI = "ui://show_dashboard/mcp-app-v2.html";
+export const DASHBOARD_APP_URI = "ui://show_dashboard/mcp-app-v3.html";
 
 /**
  * Every URI this app has EVER been advertised under.
@@ -41,6 +41,7 @@ export const DASHBOARD_APP_URI = "ui://show_dashboard/mcp-app-v2.html";
  * client that can never resolve the resource costs the whole feature.
  */
 const LEGACY_APP_URIS = [
+  "ui://show_dashboard/mcp-app-v2.html",
   "ui://show_dashboard/mcp-app.html",
   "ui://malloyyo/hello.html",
   "ui://malloyyo/dashboard.html",
@@ -116,6 +117,78 @@ export function dashboardAppTool(tag: string) {
       ui: { resourceUri: DASHBOARD_APP_URI },
       "ui/resourceUri": DASHBOARD_APP_URI,
     },
+  };
+}
+
+/**
+ * A small fixed result, shaped exactly like the query surface's payload.
+ *
+ * The real Malloy query is correct but costs 13-99s through /mcp (the same
+ * query runs in 3.4s through /api/run — a separate performance problem in the
+ * explore surface, not in this app). Rendering a panel and diagnosing that are
+ * two different jobs; this keeps the panel instant so the App path can be
+ * finished and demonstrated, and the query swapped back in once it is fast.
+ */
+export function staticDashboardResult() {
+  const rows = [
+    {
+      decade: 2020,
+      total_babies: 5_594_855,
+      male_names: [
+        { name: "Liam", total_babies: 40_049 },
+        { name: "Noah", total_babies: 37_103 },
+        { name: "Oliver", total_babies: 28_850 },
+        { name: "Elijah", total_babies: 25_844 },
+        { name: "James", total_babies: 24_710 },
+      ],
+      female_names: [
+        { name: "Olivia", total_babies: 35_369 },
+        { name: "Emma", total_babies: 31_089 },
+        { name: "Charlotte", total_babies: 26_350 },
+        { name: "Ava", total_babies: 25_919 },
+        { name: "Amelia", total_babies: 25_719 },
+      ],
+    },
+    {
+      decade: 2010,
+      total_babies: 30_624_624,
+      male_names: [
+        { name: "Noah", total_babies: 183_076 },
+        { name: "Liam", total_babies: 173_797 },
+        { name: "Jacob", total_babies: 163_027 },
+        { name: "William", total_babies: 159_773 },
+        { name: "Mason", total_babies: 157_718 },
+      ],
+      female_names: [
+        { name: "Emma", total_babies: 194_836 },
+        { name: "Olivia", total_babies: 184_355 },
+        { name: "Sophia", total_babies: 180_953 },
+        { name: "Isabella", total_babies: 170_337 },
+        { name: "Ava", total_babies: 155_690 },
+      ],
+    },
+    {
+      decade: 2000,
+      total_babies: 33_079_414,
+      male_names: [
+        { name: "Jacob", total_babies: 273_945 },
+        { name: "Michael", total_babies: 250_633 },
+        { name: "Joshua", total_babies: 231_983 },
+        { name: "Matthew", total_babies: 221_573 },
+        { name: "Daniel", total_babies: 203_832 },
+      ],
+      female_names: [
+        { name: "Emily", total_babies: 223_723 },
+        { name: "Madison", total_babies: 193_181 },
+        { name: "Emma", total_babies: 181_333 },
+        { name: "Olivia", total_babies: 156_030 },
+        { name: "Hannah", total_babies: 155_732 },
+      ],
+    },
+  ];
+  return {
+    content: [{ type: "text", text: `Rendered ${rows.length} decades of top baby names.` }],
+    structuredContent: { ok: true, rows, row_count: rows.length },
   };
 }
 

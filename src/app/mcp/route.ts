@@ -7,6 +7,7 @@ import {
   BACKING_TOOL,
   DASHBOARD_APP_URI,
   dashboardQueryArgs,
+  staticDashboardResult,
   UI_EXTENSION_ID,
   dashboardAppResources,
   isAppResourceUri,
@@ -96,6 +97,31 @@ function serverCapabilities() {
     extensions: { [UI_EXTENSION_ID]: { mimeTypes: [APP_MIME_TYPE] } },
   };
 }
+/**
+ * The app's query is fixed and takes seconds, and the panel may ask for it
+ * again itself. Without this, each render stacks another expensive query
+ * behind the last — which is exactly how a wedged dev server happened.
+ *
+ * In-flight calls share one promise, so concurrent renders never duplicate
+ * work. Module scope, so it dies with the process; a prototype does not need
+ * more than that.
+ */
+const DASHBOARD_TTL_MS = 900_000; // 15 min — the query is fixed, and it costs 13-70s cold
+let dashboardCache: { at: number; promise: Promise<unknown> } | null = null;
+
+function cachedDashboardResult(run: () => Promise<unknown>): Promise<unknown> {
+  const now = Date.now();
+  if (!dashboardCache || now - dashboardCache.at > DASHBOARD_TTL_MS) {
+    // Drop a failed result so the next call retries rather than caching an error.
+    const promise = run().catch((e) => {
+      if (dashboardCache?.promise === promise) dashboardCache = null;
+      throw e;
+    });
+    dashboardCache = { at: now, promise };
+  }
+  return dashboardCache.promise;
+}
+
 const SERVER_INFO = { name: env.INSTANCE_NAME, version: VERSION };
 
 export async function POST(req: Request) {
@@ -264,8 +290,13 @@ export async function POST(req: Request) {
         // The app tool is one fixed query, run through the instance's own
         // query surface — same Malloy path, real data, no arguments to get
         // wrong. Its `_meta.ui.resourceUri` is what makes a host render it.
+        // Static for now — see staticDashboardResult(). Set DASHBOARD_LIVE_QUERY=1
+        // to run the real Malloy query instead, once /mcp's query path is not
+        // 20x slower than /api/run for the same text.
         const result = isDashboardAppTool(name)
-          ? await hosted.call(BACKING_TOOL, dashboardQueryArgs())
+          ? process.env.DASHBOARD_LIVE_QUERY === "1"
+            ? await cachedDashboardResult(() => hosted.call(BACKING_TOOL, dashboardQueryArgs()))
+            : staticDashboardResult()
           : await hosted.call(name, args);
         log.info("mcp tool ok", { tool: name, durationMs: Date.now() - start });
         return ok(body.id, result);

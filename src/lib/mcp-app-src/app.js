@@ -1,23 +1,27 @@
-// The Baby-names panel, written against the official MCP Apps SDK.
+// The dashboard panel, on the official MCP Apps SDK.
 //
-// Hand-rolling the postMessage handshake is what made this hard: the SDK owns
-// the initialize exchange, the request handlers the host may send, teardown,
-// size reporting and theming. The `App` class here comes from the inlined
-// @modelcontextprotocol/ext-apps bundle — same SDK the reference app ships.
+// Deliberately exercises the things a panel needs to be more than a picture:
+// live DOM updates from user input, client-side sort/filter, SVG drawn from
+// data, and the host bridge in the outbound direction (sendMessage puts text
+// back into the conversation; openLink asks the host to open a URL).
 const { App, applyDocumentTheme, applyHostStyleVariables, applyHostFonts } =
   globalThis.__EXT_APPS__;
 
 const root = document.getElementById("root");
 
-function esc(v) {
-  return String(v).replace(/[&<>]/g, (c) =>
-    c === "&" ? "&amp;" : c === "<" ? "&lt;" : "&gt;",
+const esc = (v) =>
+  String(v).replace(/[&<>"]/g, (c) =>
+    c === "&" ? "&amp;" : c === "<" ? "&lt;" : c === ">" ? "&gt;" : "&quot;",
   );
-}
 const num = (v) => (typeof v === "number" ? v.toLocaleString() : esc(v));
 
-// The query surface owns the result envelope, so take the first array of
-// objects rather than assuming a key.
+// ---- state ----------------------------------------------------------------
+let DATA = [];
+let filter = "";
+let sort = "count"; // "count" | "name"
+let show = "both"; // "both" | "male" | "female"
+
+// The query surface owns the envelope, so find the rows rather than assume.
 function findRows(node, depth) {
   if (!node || depth > 6) return null;
   if (Array.isArray(node)) {
@@ -33,45 +37,133 @@ function findRows(node, depth) {
   return null;
 }
 
-function nameList(label, list) {
-  if (!Array.isArray(list) || !list.length) return "";
-  const body = list
-    .map((r) => {
-      const keys = Object.keys(r);
-      const nameKey = keys.find((k) => typeof r[k] === "string") ?? keys[0];
-      const numKey = keys.find((k) => typeof r[k] === "number");
-      return `<tr><td>${esc(r[nameKey])}</td><td class="n">${numKey ? num(r[numKey]) : ""}</td></tr>`;
-    })
+function prepare(list) {
+  let out = (list ?? []).map((r) => {
+    const keys = Object.keys(r);
+    return {
+      name: String(r[keys.find((k) => typeof r[k] === "string") ?? keys[0]]),
+      count: Number(r[keys.find((k) => typeof r[k] === "number")] ?? 0),
+    };
+  });
+  if (filter) {
+    const f = filter.toLowerCase();
+    out = out.filter((x) => x.name.toLowerCase().includes(f));
+  }
+  out.sort((a, b) => (sort === "name" ? a.name.localeCompare(b.name) : b.count - a.count));
+  return out;
+}
+
+function bars(list) {
+  if (!list.length) return `<p class="muted">no match</p>`;
+  const max = Math.max(...list.map((x) => x.count), 1);
+  return list
+    .map(
+      (x) => `<div class="bar">
+        <span class="nm">${esc(x.name)}</span>
+        <span class="track"><i style="width:${((x.count / max) * 100).toFixed(1)}%"></i></span>
+        <span class="ct">${num(x.count)}</span>
+      </div>`,
+    )
     .join("");
-  return `<div><h3>${esc(label)}</h3><table>${body}</table></div>`;
+}
+
+function draw() {
+  const decades = DATA.map((row) => {
+    const male = prepare(row.male_names);
+    const female = prepare(row.female_names);
+    const cols = [];
+    if (show !== "female") cols.push(`<div><h3>Boys</h3>${bars(male)}</div>`);
+    if (show !== "male") cols.push(`<div><h3>Girls</h3>${bars(female)}</div>`);
+    return `<section>
+      <h2>${esc(row.decade)}s
+        <span>${num(row.total_babies)} births</span>
+        <button class="ask" data-decade="${esc(row.decade)}">Ask about this decade</button>
+      </h2>
+      <div class="cols">${cols.join("")}</div>
+    </section>`;
+  }).join("");
+
+  root.className = "";
+  root.innerHTML = `
+    <header>
+      <h1>Top names by decade</h1>
+      <div class="controls">
+        <input id="q" type="search" placeholder="filter names…" value="${esc(filter)}">
+        <div class="seg" id="show">
+          ${["both", "male", "female"]
+            .map(
+              (v) =>
+                `<button data-show="${v}"${v === show ? ' class="on"' : ""}>${
+                  v === "both" ? "Both" : v === "male" ? "Boys" : "Girls"
+                }</button>`,
+            )
+            .join("")}
+        </div>
+        <div class="seg" id="sort">
+          ${["count", "name"]
+            .map(
+              (v) =>
+                `<button data-sort="${v}"${v === sort ? ' class="on"' : ""}>${
+                  v === "count" ? "By births" : "A–Z"
+                }</button>`,
+            )
+            .join("")}
+        </div>
+      </div>
+    </header>
+    ${decades}
+    <p class="muted" id="status"></p>`;
+
+  const q = document.getElementById("q");
+  q.addEventListener("input", (e) => {
+    filter = e.target.value;
+    const at = e.target.selectionStart;
+    draw();
+    const nq = document.getElementById("q");
+    nq.focus();
+    nq.setSelectionRange(at, at);
+  });
+  root.querySelectorAll("[data-show]").forEach((b) =>
+    b.addEventListener("click", () => {
+      show = b.dataset.show;
+      draw();
+    }),
+  );
+  root.querySelectorAll("[data-sort]").forEach((b) =>
+    b.addEventListener("click", () => {
+      sort = b.dataset.sort;
+      draw();
+    }),
+  );
+  // Outbound bridge: put a question into the conversation from the panel.
+  root.querySelectorAll("button.ask").forEach((b) =>
+    b.addEventListener("click", async () => {
+      const decade = b.dataset.decade;
+      const status = document.getElementById("status");
+      status.textContent = "sending…";
+      try {
+        const { isError } = await app.sendMessage({
+          role: "user",
+          content: [
+            { type: "text", text: `Tell me what was happening in the ${decade}s that might explain these baby names.` },
+          ],
+        });
+        status.textContent = isError ? "host rejected the message" : `asked about the ${decade}s`;
+      } catch (e) {
+        status.textContent = `sendMessage failed: ${e && e.message ? e.message : e}`;
+      }
+    }),
+  );
 }
 
 function render(result) {
   const rows = findRows(result && result.structuredContent, 0);
   if (!rows) {
-    const text = ((result && result.content) || [])
-      .filter((c) => c && c.type === "text")
-      .map((c) => c.text)
-      .join(" ");
-    root.innerHTML = `<h1>No rows</h1><pre>${esc(text.slice(0, 4000))}</pre>`;
+    root.innerHTML = `<h1>No rows</h1>`;
     return;
   }
-  let html = "<h1>Top names by decade</h1>";
-  for (const row of rows) {
-    const nested = [];
-    const scalars = [];
-    for (const k of Object.keys(row)) (Array.isArray(row[k]) ? nested : scalars).push(k);
-    const head = scalars[0];
-    const rest = scalars.slice(1).map((k) => `${esc(k)} ${num(row[k])}`).join(" · ");
-    html +=
-      `<section><h2>${esc(row[head])}` +
-      (rest ? `<span>${rest}</span>` : "") +
-      `</h2><div class="cols">` +
-      nested.map((k) => nameList(k.replace(/_/g, " "), row[k])).join("") +
-      `</div></section>`;
-  }
-  root.className = "";
-  root.innerHTML = html;
+  DATA = rows;
+  draw();
 }
 
 function applyHostContext(ctx) {
@@ -83,15 +175,38 @@ function applyHostContext(ctx) {
 
 const app = new App({ name: "Malloyyo Dashboard", version: "1.0.0" });
 
-// Handlers BEFORE connect(): the host may have already sent the tool result by
-// the time the handshake completes, and these are one-shot events.
-app.ontoolresult = render;
+let rendered = false;
+function renderOnce(result) {
+  if (rendered) return;
+  rendered = true;
+  try {
+    render(result);
+  } catch (e) {
+    console.error("render failed", e);
+    root.innerHTML = `<h1>Render error</h1><pre>${esc(String((e && e.stack) || e))}</pre>`;
+  }
+}
+
+// Handlers BEFORE connect(): tool-result is a one-shot the host may already hold.
+app.ontoolresult = renderOnce;
 app.onerror = console.error;
 app.onhostcontextchanged = applyHostContext;
 app.onteardown = async () => ({});
 
-app.connect().then(() => {
+app.connect().then(async () => {
   applyHostContext(app.getHostContext());
-  // Size reporting, driven by the SDK's own ResizeObserver.
   app.setupSizeChangedNotifications();
+  const ctx = app.getHostContext();
+  if (ctx && ctx.toolResult) renderOnce(ctx.toolResult);
+  // Fallback only, and late: a dropped notification should not leave the panel
+  // spinning, but firing early just stacks a second query behind the first.
+  setTimeout(async () => {
+    if (rendered) return;
+    root.textContent = "Running query…";
+    try {
+      renderOnce(await app.callServerTool({ name: "show_dashboard", arguments: {} }));
+    } catch (e) {
+      root.innerHTML = `<h1>Query failed</h1><pre>${esc(String((e && e.message) || e))}</pre>`;
+    }
+  }, 8000);
 });

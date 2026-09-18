@@ -152,9 +152,9 @@ test("bootMigrationsEnabled: off on Vercel, where the build migrates instead", (
   // …and the readiness gate follows, so a correctly-migrated instance is ready.
   assert.equal(migrationGateError(), null);
 
-  // An operator who really wants boot migrations on Vercel can still say so.
+  // A stale explicit enable cannot revive the known-broken runtime path.
   process.env.RUN_MIGRATIONS_ON_BOOT = "1";
-  assert.equal(bootMigrationsEnabled(), true);
+  assert.equal(bootMigrationsEnabled(), false);
 
   // Off Vercel, production is unchanged: still on by default.
   delete process.env.RUN_MIGRATIONS_ON_BOOT;

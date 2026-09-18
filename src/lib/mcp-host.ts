@@ -35,8 +35,10 @@ import {
 /** What the explore `query` tool returns on an executed run: the run result,
     the model it resolved to, and the host-only SQL channel. */
 type QueryRunResult = WithHostOnly<RunResult & { model_ref?: string }>;
+import { listDashboardsForModel } from "./dashboards";
 import { withModelRuntime } from "./malloy";
 import { isAdmin } from "./admin";
+import { logger, serializeErr } from "./logger";
 import {
   canReadDataset,
   latestModel,
@@ -110,6 +112,14 @@ function ltoolLink(baseUrl: string, slug: string | null): LtoolLink | undefined 
   return url ? { text: `↗ ${env.INSTANCE_NAME}`, url } : undefined;
 }
 
+/** Where a person opens a dashboard: the trusted page that renders it. The
+    inline route is show_dashboard (src/app/mcp/route.ts), which only a client
+    that renders MCP Apps can use; this link works in every client. */
+function dashboardUrl(baseUrl: string, modelRef: string, name: string): string {
+  const base = baseUrl.replace(/\/$/, "");
+  return `${base}/datasets/${encodeURIComponent(modelRef)}/dashboard/${encodeURIComponent(name)}`;
+}
+
 type DatasetRow = { id: string; name: string };
 
 // Datasets this user may query — via the shared visibility predicate.
@@ -147,7 +157,7 @@ async function leaseDataset<T>(
 // The engine's ExploreHost: withModel resolves + leases a pooled Runtime; list
 // compiles each visible model and renders it through the engine's ONE catalog
 // projection (modelCatalogEntry) — no per-host copy of the listing shape.
-function makeExploreHost(userId: string): ExploreHost {
+function makeExploreHost(userId: string, baseUrl: string): ExploreHost {
   return {
     withModel: async (ref, fn) => {
       const found = await findModelByRef(userId, ref);
@@ -161,18 +171,49 @@ function makeExploreHost(userId: string): ExploreHost {
       for (const ds of await visibleDatasets(userId)) {
         const model = await latestModel(ds.id);
         if (!model) continue;
+        let entry: ModelEntry;
         try {
-          entries.push(
-            await leaseDataset(model, async (m) => {
-              const compiled = await compile(m.runtime, m.entry, { exportedOnly: true });
-              return compiled.ok && compiled.model
-                ? modelCatalogEntry(ds.name, compiled.model)
-                : { model_ref: ds.name };
-            }),
-          );
+          entry = await leaseDataset(model, async (m) => {
+            const compiled = await compile(m.runtime, m.entry, { exportedOnly: true });
+            return compiled.ok && compiled.model
+              ? modelCatalogEntry(ds.name, compiled.model)
+              : { model_ref: ds.name };
+          });
         } catch {
-          entries.push({ model_ref: ds.name }); // a model that won't compile lists as a bare ref
+          entry = { model_ref: ds.name }; // a model that won't compile lists as a bare ref
         }
+        // A dashboard is part of what a model offers, so it belongs in the same
+        // listing as the sources — an agent should not need a second tool, or
+        // prior knowledge that one exists, to find out a dataset has views
+        // built for it.
+        //
+        // Read from the artifact table, NOT from the compile above: a dashboard
+        // is listed whether or not the model currently compiles, and listing
+        // must not depend on holding a runtime lease.
+        //
+        // Addressed by MODEL ID, not back through the dataset: `visibleDatasets`
+        // has already settled visibility and `latestModel` has already picked
+        // the version, so re-resolving both would cost two extra queries per
+        // dataset and could pick up a newer model than the one just compiled.
+        //
+        // GUARDED, because dashboards are advisory and the sources are what
+        // this tool is for: an artifact-table failure degrades to "no
+        // dashboards" rather than taking the whole catalog down with it.
+        try {
+          const dashboards = (await listDashboardsForModel(model.id, ds.id, ds.name)).map((d) => ({
+            name: d.name,
+            title: d.title,
+            description: d.description,
+            url: dashboardUrl(baseUrl, ds.name, d.name),
+          }));
+          if (dashboards.length) entry.dashboards = dashboards;
+        } catch (err) {
+          logger.warn("list_sources: dashboards unavailable", {
+            datasetId: ds.id,
+            err: serializeErr(err),
+          });
+        }
+        entries.push(entry);
       }
       return { entries };
     },
@@ -319,7 +360,7 @@ export function buildHostedExploreSurface(
   baseUrl: string,
   ctx: HostedSurfaceCtx = {},
 ): HostedSurface {
-  const surface = exploreSurface(makeExploreHost(user.id));
+  const surface = exploreSurface(makeExploreHost(user.id, baseUrl));
   const inApp = ctx.style === "inapp";
   const entrypoint = ctx.entrypoint ?? "mcp";
   const mintSlugs = ctx.mintSlugs ?? true;

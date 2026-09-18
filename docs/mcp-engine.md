@@ -631,8 +631,8 @@ hosted endpoint. Fixed by folding skill content into the topic index.)
   architecture passes `Runtime` instances across the boundary and the error
   path does `instanceof MalloyError`; two copies of the package would make
   every compile error degrade to `internal-error`. The peer declaration makes
-  the shared-instance requirement enforceable. `@modelcontextprotocol/sdk` is
-  an *optional* peer (only `./mcp-sdk` touches it). No regular runtime deps.
+  the shared-instance requirement enforceable. `@modelcontextprotocol/server`
+  (v2) is an *optional* peer (only `./mcp-sdk` touches it). No regular runtime deps.
 - **Content is compiled into the bundle as strings** (esbuild
   `--loader:.md=text`). No runtime file reads → no Vercel
   `outputFileTracingIncludes` exposure, and the zero-fs claim is literal.

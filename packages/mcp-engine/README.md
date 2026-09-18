@@ -44,9 +44,9 @@ const host: DevelopHost = {
 };
 ```
 
-SDK hosts attach via the optional subpath (`@modelcontextprotocol/sdk` is an
-optional peer; tools go through the low-level handlers so JSON Schema is used
-verbatim):
+SDK hosts attach via the optional subpath (`@modelcontextprotocol/server` v2 is
+an optional peer; tools register through `registerTool` + `fromJsonSchema`, so
+the JSON Schema is used verbatim):
 
 ```ts
 import { attachSurface } from '@malloyyo/mcp-engine/mcp-sdk';

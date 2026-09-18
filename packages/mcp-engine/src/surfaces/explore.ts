@@ -25,6 +25,7 @@ import type {
   CompactField,
   ExploreDescribedSource,
   ListedModel,
+  ListedDashboard,
   ListedSource,
   ListSourcesResult,
   ModelEntry,
@@ -360,6 +361,19 @@ function listSourcesTool(host: ExploreHost): ToolDef {
             sources[s.source_ref] = o;
           }
           m.sources = sources;
+        }
+        if (e.dashboards?.length) {
+          // Same null-prototype keying as sources: the name is the key, so a
+          // dashboard called `constructor` stays ordinary data.
+          const dashboards: Record<string, ListedDashboard> = Object.create(null);
+          for (const d of e.dashboards) {
+            const o: ListedDashboard = {};
+            if (d.title) o.title = d.title;
+            if (d.description) o.description = d.description;
+            if (d.url) o.url = d.url;
+            dashboards[d.name] = o;
+          }
+          m.dashboards = dashboards;
         }
         models[e.model_ref] = m;
       }

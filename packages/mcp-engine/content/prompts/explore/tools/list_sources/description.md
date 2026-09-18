@@ -1,1 +1,1 @@
-List the sources you can query, grouped by the model that publishes them, with each model's named queries. Drill into a source with describe_source before writing a query.
+List the sources you can query, grouped by the model that publishes them, with each model's named queries. Drill into a source with describe_source before writing a query. A model may also report `dashboards` — pre-built pages for that model, each with a `url` a person can open; offer one when it already covers the question, and query the sources otherwise.

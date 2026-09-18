@@ -380,6 +380,29 @@ export interface ModelEntry {
       describe_source treat a named query as the source it is — needs more design,
       so it is deferred out of the MVP listing. */
   sources?: SourceEntry[];
+  /** The model's dashboards — pre-built pages a host can render. Advisory, like
+      `sources`: a host that has none omits the field, and a host that cannot
+      render anything need not report them. Listed here rather than behind a
+      tool of their own because a dashboard is part of what a model OFFERS, so
+      an agent should learn about it from the same call that tells it what the
+      sources are.
+
+      Includes a model's written About page where a host has one: it renders the
+      same way and is the introduction a reader wants before any chart means
+      anything, so withholding it would hide the most useful page of the set. */
+  dashboards?: DashboardEntry[];
+}
+
+/** One dashboard in the catalog. `name` is what a host's render tool takes. */
+export interface DashboardEntry {
+  name: string;
+  title?: string;
+  description?: string;
+  /** Where a person can open this dashboard, if the host serves one. A host
+      that can also render dashboards inline (the hosted app's show_dashboard)
+      takes `name` for that; the url is the fallback every client can use.
+      Host-supplied because only the host knows its own base URL. */
+  url?: string;
 }
 
 export interface ModelList {
@@ -406,6 +429,14 @@ export interface ListedModel {
   description?: string;
   instructions?: string;
   sources?: Record<string, ListedSource>;
+  /** Dashboards keyed by name, mirroring how sources are keyed by source_ref. */
+  dashboards?: Record<string, ListedDashboard>;
+}
+
+export interface ListedDashboard {
+  title?: string;
+  description?: string;
+  url?: string;
 }
 
 /** `list_sources` wire shape: models keyed by `model_ref`, each model's sources

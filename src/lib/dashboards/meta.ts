@@ -63,12 +63,32 @@ function summary(
   };
 }
 
+/** Dashboards on ONE model version, addressed by model id.
+ *
+ * For a caller that has already resolved the dataset and picked the model
+ * version — the MCP catalog listing walks every visible dataset and leases each
+ * one's latest model, so it is holding both. Going back through
+ * `findByDatasetRef` there would re-select the dataset and re-pick the latest
+ * model per dataset, and the re-pick can land on a NEWER version than the one
+ * the caller is describing, listing v(n+1)'s dashboards beside v(n)'s sources.
+ *
+ * Takes no userId and does NO visibility check: the model id is the
+ * authorization. Only call it with a model the caller has already established
+ * the user may see — `listDashboards` below is the checked entry point. */
+export async function listDashboardsForModel(
+  modelId: string,
+  datasetId: string,
+  datasetName: string,
+): Promise<DashboardSummary[]> {
+  const rows = await artifactsForModel(modelId);
+  return rows.map((a) => summary(datasetId, datasetName, a));
+}
+
 /** Dashboards on a single dataset's current (latest) model, if visible. */
 export async function listDashboards(userId: string, datasetId: string): Promise<DashboardSummary[]> {
   const found = await findByDatasetRef(userId, datasetId);
   if (!found) return [];
-  const rows = await artifactsForModel(found.model.id);
-  return rows.map((a) => summary(datasetId, found.ds.name, a));
+  return listDashboardsForModel(found.model.id, datasetId, found.ds.name);
 }
 
 /** Every visible dataset's current dashboards — for the home page. */
@@ -78,8 +98,7 @@ export async function listAllDashboards(userId: string): Promise<DashboardSummar
   for (const ds of dsList) {
     const model = await latestModel(ds.id);
     if (!model) continue;
-    const rows = await artifactsForModel(model.id);
-    for (const a of rows) out.push(summary(ds.id, ds.name, a));
+    for (const d of await listDashboardsForModel(model.id, ds.id, ds.name)) out.push(d);
   }
   return out;
 }

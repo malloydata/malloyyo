@@ -17,7 +17,16 @@
 import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
 import { desc, eq, and, isNotNull } from "drizzle-orm";
-import { db, users, datasets, malloyModels, malloyModelFiles, history, type User } from "@/db";
+import {
+  db,
+  users,
+  datasets,
+  malloyModels,
+  malloyModelFiles,
+  malloyArtifacts,
+  history,
+  type User,
+} from "@/db";
 import { buildHostedExploreSurface } from "@/lib/mcp-host";
 import { loadSharedQuery, runQueryForWeb } from "@/lib/mcp-tools";
 
@@ -78,6 +87,41 @@ before(async () => {
     { modelId: m2.id, path: "index.malloy", content: INDEX },
     { modelId: m2.id, path: "child.malloy", content: CHILD },
   ]);
+
+  // A dataset with DASHBOARDS on a model that does NOT compile. Both halves
+  // matter: dashboards are read from the artifact table rather than from the
+  // compile, so a broken model must still advertise them — that is the whole
+  // reason the listing doesn't take them off the compiled model.
+  const [ds3] = await db
+    .insert(datasets)
+    .values({ userId: u.id, name: "dashmod", status: "ready", isPublic: false })
+    .returning();
+  const BROKEN = `source: nope is duckdb.sql("select 1 as one") extend {\n  view: bad is { group_by: no_such_column }\n}\n`;
+  const [m3] = await db
+    .insert(malloyModels)
+    .values({
+      datasetId: ds3.id,
+      version: 1,
+      source: BROKEN,
+      generatedBy: "test",
+      compiledAt: new Date(),
+      sources: [],
+    })
+    .returning();
+  await db.insert(malloyModelFiles).values({ modelId: m3.id, path: "index.malloy", content: BROKEN });
+  await db.insert(malloyArtifacts).values([
+    {
+      modelId: m3.id,
+      name: "overview",
+      title: "Business Overview",
+      manifest: { description: "The one on the home page", tiles: ["nope -> bad"] },
+      source: "",
+    },
+    // A reserved word as a name, seeded end to end rather than only against a
+    // stubbed host: the listing keys dashboards by name, so this must stay
+    // ordinary data all the way out to the wire.
+    { modelId: m3.id, name: "constructor", title: null, manifest: {}, source: "" },
+  ]);
 });
 
 function host() {
@@ -104,6 +148,46 @@ test("list_sources surfaces each model's sources with their annotations", async 
   assert.ok(sales, "its `sales` source is listed");
   // Description comes from the model's #" annotation (compiled fresh), not the DB.
   assert.equal(sales!.description, "Pet shop sales.");
+});
+
+test("list_sources reports a model's dashboards — even when the model won't compile", async () => {
+  const r = await host().call("list_sources", {});
+  const data = JSON.parse(blockText(r, 0)) as {
+    models: Record<
+      string,
+      {
+        sources?: Record<string, unknown>;
+        dashboards?: Record<string, { title?: string; description?: string; url?: string }>;
+      }
+    >;
+  };
+
+  const entry = data.models["dashmod"];
+  assert.ok(entry, "a model that won't compile still lists");
+  assert.equal(entry!.sources, undefined, "…with no sources, because it didn't compile");
+
+  const dashboards = entry!.dashboards;
+  assert.ok(dashboards, "…and its dashboards, which don't come from the compile");
+  assert.deepEqual(Object.keys(dashboards!).sort(), ["constructor", "overview"]);
+
+  assert.equal(dashboards!["overview"]!.title, "Business Overview");
+  assert.equal(dashboards!["overview"]!.description, "The one on the home page");
+  // The url is the actionable part: no tool takes a dashboard name, so without
+  // it the agent learns a dashboard exists and can do nothing about it. Points
+  // at the page that renders it — src/app/datasets/[id]/dashboard/[name].
+  assert.equal(
+    dashboards!["overview"]!.url,
+    "http://localhost:3000/datasets/dashmod/dashboard/overview",
+  );
+  // Untitled artifacts fall back to their name rather than reporting nothing.
+  assert.equal(dashboards!["constructor"]!.title, "constructor");
+});
+
+test("list_sources omits `dashboards` for a model that has none", async () => {
+  const r = await host().call("list_sources", {});
+  const data = JSON.parse(blockText(r, 0)) as { models: Record<string, object> };
+  assert.ok(data.models["petshop"], "petshop is listed");
+  assert.equal("dashboards" in data.models["petshop"]!, false, "no dashboards → no key");
 });
 
 test("describe_source resolves a bare source: schema (block 0) + verbatim text (block 1)", async () => {

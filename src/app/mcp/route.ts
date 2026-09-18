@@ -26,9 +26,8 @@ import {
   RUN_TOOL,
   SHOW_TOOL,
   dashboardBundlePayload,
-  panelHtml,
-  panelUri,
 } from "@/lib/mcp-app-dashboard";
+import { dashboardPanel, type DashboardPanel } from "@/lib/mcp-app-panel";
 import { runDashboard } from "@/lib/dashboards/engine";
 import { bearerToken, credentialLabel, resolveBearer } from "@/lib/bearer-auth";
 import { corsPreflight, withCors } from "@/lib/oauth/cors";
@@ -77,7 +76,7 @@ function logged<A>(scope: RequestScope, tool: string, fn: (args: A) => Promise<C
 }
 
 function buildServer(scope: RequestScope): McpServer {
-  const { hosted, userId } = scope;
+  const { hosted } = scope;
   const server = new McpServer(
     { name: env.INSTANCE_NAME, version: VERSION },
     {
@@ -98,9 +97,18 @@ function buildServer(scope: RequestScope): McpServer {
     );
   }
 
-  // The dashboard app: one panel resource, one model-visible tool, and two
-  // tools only the panel calls.
-  const uri = panelUri();
+  // The dashboard app, only when its panel could be built: a missing panel
+  // asset costs the dashboard tools, never the explore tools above.
+  const panel = dashboardPanel();
+  if (panel) registerDashboardApp(server, scope, panel);
+
+  return server;
+}
+
+/** One panel resource, one model-visible tool, and two tools only the panel calls. */
+function registerDashboardApp(server: McpServer, scope: RequestScope, panel: DashboardPanel): void {
+  const { userId } = scope;
+  const { uri } = panel;
   const tag = `[${env.INSTANCE_NAME}]`;
 
   registerAppResource(
@@ -109,7 +117,7 @@ function buildServer(scope: RequestScope): McpServer {
     uri,
     // One shell for every dashboard and user; the URI changes when it does.
     { cacheHint: { ttlMs: 3_600_000, cacheScope: "public" } } as never,
-    async () => ({ contents: [{ uri, mimeType: RESOURCE_MIME_TYPE, text: panelHtml() }] }),
+    async () => ({ contents: [{ uri, mimeType: RESOURCE_MIME_TYPE, text: panel.html }] }),
   );
 
   registerAppTool(
@@ -195,7 +203,6 @@ function buildServer(scope: RequestScope): McpServer {
     }),
   );
 
-  return server;
 }
 
 // One handler for the process; each request gets a fresh server from the

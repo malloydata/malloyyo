@@ -111,7 +111,7 @@ test("a publish-only token cannot open /mcp", async () => {
   await assert.rejects(connect(publishToken));
 });
 
-const MODES: Array<[string, Negotiation]> = [
+const MODES: Array<[string, Negotiation | undefined]> = [
   ["legacy (2025 initialize)", { mode: "legacy" }],
   ["modern (2026-07-28 server/discover)", { mode: { pin: "2026-07-28" } }],
   ["auto (the client default)", undefined],

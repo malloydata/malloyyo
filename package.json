@@ -50,6 +50,7 @@
     "clsx": "^2.1.1",
     "drizzle-orm": "^0.45.2",
     "esbuild": "^0.24.0",
+    "esbuild-wasm": "^0.24.2",
     "lucide-react": "^1.28.0",
     "nanoid": "^5.1.11",
     "next": "16.2.6",

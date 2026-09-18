@@ -11,10 +11,16 @@
 // are shimmed to the vendor globals, and the only real input is the artifact
 // source. That keeps it reliable in a traced serverless function.
 //
+// esbuild-wasm, not native esbuild: same API and output, but no per-platform
+// binary to trace (native esbuild resolves @esbuild/<os>-<arch> dynamically,
+// so an arm64 host or image silently lost it). Its Node API runs the WASM in a
+// child `node` process kept alive across builds: ~130 ms for the first build
+// in a process, a few ms after, and the hash cache below skips repeats.
+//
 // An empty `source` means the `# artifact` tag ships no custom component —
 // mount the runtime's default dashboard.
 
-import * as esbuild from "esbuild";
+import * as esbuild from "esbuild-wasm";
 import { createHash } from "node:crypto";
 
 // The frame entry: mount whatever virtual:dashboard resolves to (null = the

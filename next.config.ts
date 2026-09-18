@@ -77,6 +77,15 @@ const DUCKDB_NATIVE = [
   "./node_modules/**/@duckdb/node-bindings*/**/*",
 ];
 
+/**
+ * esbuild-wasm, for compiling dashboard artifacts at request time
+ * (src/lib/dashboards/bundle.ts). Its Node API spawns `node bin/esbuild`, which
+ * reads wasm_exec_node.js and esbuild.wasm by path — no import names them, so
+ * tracing cannot find them. One architecture-independent package: unlike
+ * native esbuild there is no @esbuild/<os>-<arch> binary to get wrong.
+ */
+const ESBUILD_WASM = ["./node_modules/esbuild-wasm/**"];
+
 const nextConfig: NextConfig = {
   // Emit .next/standalone (minimal server + traced node_modules) for the Docker image.
   output: "standalone",
@@ -137,9 +146,10 @@ const nextConfig: NextConfig = {
   serverExternalPackages: [
     "@duckdb/node-api",
     "@duckdb/node-bindings",
-    // esbuild ships a native binary + dynamic requires; let it stay external so
-    // Turbopack doesn't try to bundle it (used to compile dashboard artifacts).
-    "esbuild",
+    // esbuild-wasm compiles dashboard artifacts at request time. Its API
+    // locates its launcher and .wasm by path relative to itself, so it cannot
+    // be bundled — keep it external (and traced, below).
+    "esbuild-wasm",
   ],
   outputFileTracingIncludes: {
     // The migration journal, applied at boot by src/lib/migrate.ts when
@@ -163,26 +173,15 @@ const nextConfig: NextConfig = {
       ...DUCKDB_NATIVE,
       "./public/dashboard-vendor.js",
       "./node_modules/@modelcontextprotocol/ext-apps/dist/src/app-with-deps.js",
-      // dashboard_bundle compiles a dashboard with esbuild at request time —
-      // the same reason the /bundle route traces it.
-      "./node_modules/esbuild/**",
-      // Only the platform Vercel runs; @esbuild/** would drag in every host's
-      // binary, ~9 MB each, for nothing.
-      "./node_modules/@esbuild/linux-x64/**",
+      // dashboard_bundle compiles a dashboard at request time — the same
+      // reason the /bundle route traces esbuild-wasm.
+      ...ESBUILD_WASM,
     ],
-    // The dashboard bundle route runs esbuild at request time (to compile the
-    // frame runtime + the artifact) — trace esbuild's binary in. React and the
-    // renderer are NOT bundled at runtime (they come from the prebuilt
+    // The dashboard bundle route compiles the artifact at request time. React
+    // and the renderer are NOT bundled at runtime (they come from the prebuilt
     // public/dashboard-vendor.js), so they don't need tracing here.
     // Wildcards, not "[datasetId]/[name]" — see the note on DUCKDB_NATIVE_ROUTES.
-    // esbuild currently survives on natural tracing, so this key being dead did
-    // not show; it is spelled the working way so it stays a real guarantee.
-    "/api/dashboards/*/*/bundle": [
-      "./node_modules/esbuild/**",
-      // Only the platform Vercel runs; @esbuild/** would drag in every host's
-      // binary, ~9 MB each, for nothing.
-      "./node_modules/@esbuild/linux-x64/**",
-    ],
+    "/api/dashboards/*/*/bundle": ESBUILD_WASM,
   },
 };
 

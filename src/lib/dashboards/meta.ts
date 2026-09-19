@@ -13,7 +13,7 @@
 // This module must NEVER import ./engine or @/lib/malloy (statically or lazily).
 
 import { and, eq, asc, desc } from "drizzle-orm";
-import { db, datasets, malloyArtifacts, malloyModelFiles } from "@/db";
+import { db, datasets, malloyArtifacts, malloyModelFiles, scratchDashboards } from "@/db";
 import { visibleDatasetWhere, findByDatasetRef, latestModel } from "@/lib/mcp-tools";
 import { aboutFirst } from "./about";
 
@@ -33,6 +33,17 @@ export interface DashboardDetail extends DashboardSummary {
   manifest: Record<string, unknown>;
   source: string;
   modelId: string;
+  /** Set for a scratch dashboard: its own files, laid over the model's, and a
+      version that changes on every save (the runtime cache key must, too). */
+  scratch?: { id: string; files: Record<string, string>; version: string };
+}
+
+/** Scratch dashboards are addressed as `scratch-<slug>` wherever a dashboard
+    name goes, so every dashboard route serves them without knowing about them. */
+export const SCRATCH_PREFIX = "scratch-";
+
+export function scratchSlug(name: string): string | null {
+  return name.startsWith(SCRATCH_PREFIX) ? name.slice(SCRATCH_PREFIX.length) : null;
 }
 
 async function artifactsForModel(modelId: string) {
@@ -106,6 +117,29 @@ export async function listAllDashboards(userId: string): Promise<DashboardSummar
 export async function getDashboard(userId: string, datasetId: string, name: string): Promise<DashboardDetail | null> {
   const found = await findByDatasetRef(userId, datasetId);
   if (!found) return null;
+  const slug = scratchSlug(name);
+  if (slug !== null) {
+    // Visibility is the dataset's (checked above); the slug must belong to it.
+    const [s] = await db
+      .select()
+      .from(scratchDashboards)
+      .where(and(eq(scratchDashboards.slug, slug), eq(scratchDashboards.datasetId, found.ds.id)))
+      .limit(1);
+    if (!s) return null;
+    const entryFile = typeof s.manifest.entryFile === "string" ? s.manifest.entryFile : `dashboards/${s.name}.malloy`;
+    return {
+      datasetId,
+      datasetName: found.ds.name,
+      name,
+      title: s.title ?? s.name,
+      manifest: s.manifest,
+      source: s.source,
+      // Pinned: a scratch dashboard runs against the model version it was
+      // built on, not whatever the dataset has moved to since.
+      modelId: s.modelId,
+      scratch: { id: s.id, files: { [entryFile]: s.malloy }, version: s.updatedAt.toISOString() },
+    };
+  }
   const [a] = await db
     .select()
     .from(malloyArtifacts)

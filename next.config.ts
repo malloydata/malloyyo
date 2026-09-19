@@ -57,6 +57,7 @@ const DUCKDB_NATIVE_ROUTES = [
   "/api/datasets/[id]/model/push",
   "/api/datasets/[id]/model/status",
   "/api/datasets/[id]/webhook/github",
+  "/api/datasets/*/scratch",
   "/api/ltool/share/*",
 ];
 
@@ -182,6 +183,9 @@ const nextConfig: NextConfig = {
     // public/dashboard-vendor.js), so they don't need tracing here.
     // Wildcards, not "[datasetId]/[name]" — see the note on DUCKDB_NATIVE_ROUTES.
     "/api/dashboards/*/*/bundle": ESBUILD_WASM,
+    // Saving a scratch dashboard compiles its Malloy AND its component, so it
+    // needs both (this key overrides its DUCKDB_NATIVE_ROUTES entry above).
+    "/api/datasets/*/scratch": [...DUCKDB_NATIVE, ...ESBUILD_WASM],
   },
 };
 

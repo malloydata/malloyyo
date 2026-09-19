@@ -4,10 +4,15 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync, chmodSync } from "n
 
 // Tokens obtained via `malloyyo login`, keyed by instance URL so one machine can
 // be logged in to several instances (main / staging / Guild) at once.
+//
+// Two kinds share the store: an OAuth grant from the browser flow (refreshable,
+// so clientId + refreshToken), and a token pasted with `--token-stdin` — e.g.
+// one an agent got from the instance's issue_cli_token tool — which has
+// neither and simply expires.
 export interface Creds {
-  clientId: string;
+  clientId?: string;
   accessToken: string;
-  refreshToken: string;
+  refreshToken?: string;
   /** Epoch ms when the access token expires. */
   expiresAt: number;
 }

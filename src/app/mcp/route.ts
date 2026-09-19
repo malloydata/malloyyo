@@ -29,6 +29,8 @@ import {
 } from "@/lib/mcp-app-dashboard";
 import { dashboardPanel, type DashboardPanel } from "@/lib/mcp-app-panel";
 import { getDashboard, listDashboards } from "@/lib/dashboards";
+import { saveScratchDashboard } from "@/lib/dashboards/scratch";
+import { createApiToken } from "@/lib/api-tokens";
 import { runDashboard } from "@/lib/dashboards/engine";
 import { bearerToken, credentialLabel, resolveBearer } from "@/lib/bearer-auth";
 import { corsPreflight, withCors } from "@/lib/oauth/cors";
@@ -48,6 +50,8 @@ interface RequestScope {
   userId: string;
   hosted: Hosted;
   log: Log;
+  /** The URL this client reached us at — what the CLI must use too. */
+  origin: string;
 }
 
 type Json = Record<string, unknown>;
@@ -103,7 +107,117 @@ function buildServer(scope: RequestScope): McpServer {
   const panel = dashboardPanel();
   if (panel) registerDashboardApp(server, scope, panel);
 
+  registerAuthoringTools(server, scope);
+
   return server;
+}
+
+/** How long a CLI token from issue_cli_token lives. */
+const CLI_TOKEN_TTL_MS = 60 * 60 * 1000;
+const ISSUE_CLI_TOKEN_TOOL = "issue_cli_token";
+const SAVE_SCRATCH_TOOL = "save_scratch_dashboard";
+
+/**
+ * Dashboard authoring from an agent: a CLI credential, and scratch dashboards.
+ *
+ * issue_cli_token lets an agent that is already connected here (Claude Code,
+ * say) drive the `malloyyo` CLI against THIS instance without a browser
+ * login. The token is keyed to the URL the client connected to, lives an hour,
+ * and carries only the `mcp` scope — the caller's own scope, never publish.
+ */
+function registerAuthoringTools(server: McpServer, scope: RequestScope): void {
+  const { userId, origin } = scope;
+  const tag = `[${env.INSTANCE_NAME}]`;
+
+  server.registerTool(
+    ISSUE_CLI_TOKEN_TOOL,
+    {
+      title: "Issue a CLI token",
+      description:
+        `${tag} Issues a short-lived token so the \`malloyyo\` CLI can act as you against THIS ` +
+        `instance (${origin}) — e.g. \`malloyyo scratch push\` to build a dashboard from files. ` +
+        `Scope: query only (not publish); expires in an hour. Returns the URL and the command ` +
+        `that stores it. If a dataset exists on more than one connected instance, confirm with ` +
+        `the user which instance first.`,
+      annotations: { readOnlyHint: false },
+      inputSchema: fromJsonSchema<Json>({ type: "object", properties: {} }),
+    },
+    logged(scope, ISSUE_CLI_TOKEN_TOOL, async () => {
+      const expiresAt = new Date(Date.now() + CLI_TOKEN_TTL_MS);
+      const created = await createApiToken({
+        userId,
+        name: `CLI via MCP (${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC)`,
+        scopes: ["mcp"],
+        expiresAt,
+      });
+      if (!created.ok) {
+        return { content: text(created.error), structuredContent: { ok: false, error: created.error }, isError: true };
+      }
+      const login = `malloyyo login ${origin} --token-stdin`;
+      return {
+        content: text(
+          `Token for ${origin} (query scope, expires ${expiresAt.toISOString()}). Store it with:\n` +
+            `  printf '%s' '${created.raw}' | ${login}\n` +
+            `Then target this instance with \`-i ${origin}\`. When it expires, call ${ISSUE_CLI_TOKEN_TOOL} again.`,
+        ),
+        structuredContent: {
+          ok: true,
+          url: origin,
+          token: created.raw,
+          expires_at: expiresAt.toISOString(),
+          login,
+        },
+      };
+    }),
+  );
+
+  type SaveArgs = { dataset: string; name: string; malloy: string; source?: string; slug?: string };
+  server.registerTool(
+    SAVE_SCRATCH_TOOL,
+    {
+      title: "Save a scratch dashboard",
+      description:
+        `${tag} Saves a scratch (draft) dashboard: the text of dashboards/<name>.malloy (which ` +
+        `imports "../index.malloy" and tags its query \`# artifact\`) and an optional JSX/TSX ` +
+        `component. The .malloy may only build on what the model publishes (restricted rules, as ` +
+        `in \`query\`). Returns a URL to view it, each tile's test run, and component compile ` +
+        `errors. Pass \`slug\` to update one you saved before. show_dashboard renders it with ` +
+        `the returned \`dashboard\` name.`,
+      annotations: { readOnlyHint: false },
+      inputSchema: fromJsonSchema<SaveArgs>({
+        type: "object",
+        properties: {
+          dataset: { type: "string", description: "Dataset name (the model_ref list_sources reports)." },
+          name: { type: "string", description: "The dashboard's file basename, e.g. \"trend\"." },
+          malloy: { type: "string", description: "Contents of dashboards/<name>.malloy." },
+          source: { type: "string", description: "Optional component source (JSX/TSX)." },
+          slug: { type: "string", description: "Update this scratch dashboard instead of creating one." },
+        },
+        required: ["dataset", "name", "malloy"],
+      }),
+    },
+    logged(scope, SAVE_SCRATCH_TOOL, async (a: SaveArgs) => {
+      const r = await saveScratchDashboard(userId, a.dataset, a, origin);
+      if (!r.ok) {
+        const detail = r.problems?.map((p) => `  - ${p.message}`).join("\n");
+        return {
+          content: text(detail ? `${r.error}\n${detail}` : r.error),
+          structuredContent: r as unknown as Json,
+          isError: true,
+        };
+      }
+      const failed = r.tiles.filter((t) => !t.ok);
+      return {
+        content: text(
+          `Saved '${r.title}' as ${r.dashboard} — ${r.url}\n` +
+            `Tiles: ${r.tiles.length - failed.length}/${r.tiles.length} ran` +
+            (failed.length ? `; failed: ${failed.map((t) => `${t.run} (${t.error})`).join("; ")}` : "") +
+            (r.component.ok ? "" : `\nComponent error${r.component.line ? ` (line ${r.component.line})` : ""}: ${r.component.error}`),
+        ),
+        structuredContent: r as unknown as Json,
+      };
+    }),
+  );
 }
 
 /** One panel resource, one model-visible tool, and two tools only the panel calls. */
@@ -274,7 +388,7 @@ async function serve(req: Request): Promise<Response> {
     userAgent: req.headers.get("user-agent"),
     authorModel: req.headers.get("x-author-model"),
   });
-  const scope: RequestScope = { userId: auth.user.id, hosted, log };
+  const scope: RequestScope = { userId: auth.user.id, hosted, log, origin: originFromRequest(req) };
   const res = await handler.fetch(req, {
     authInfo: { token: raw, clientId: credentialLabel(auth.cred), scopes: ["mcp"], extra: { scope } },
   });

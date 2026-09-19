@@ -19,7 +19,7 @@ import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type Server, type IncomingMessage } from "node:http";
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,12 +35,15 @@ import {
   oauthClients,
   oauthAccessTokens,
   apiTokens,
+  scratchDashboards,
   type ApiTokenScope,
   type User,
 } from "@/db";
 import { createApiToken } from "@/lib/api-tokens";
 import { POST as pushRoute } from "@/app/api/datasets/[id]/model/push/route";
 import { GET as statusRoute } from "@/app/api/datasets/[id]/model/status/route";
+import { POST as scratchRoute } from "@/app/api/datasets/[id]/scratch/route";
+import { GET as whoamiRoute } from "@/app/api/cli/whoami/route";
 
 // Everything this test creates is suffixed with a per-run id, and torn down in
 // after(): the suite is re-runnable against a database that already has rows,
@@ -61,6 +64,8 @@ type Handler = (req: Request, ctx: { params: Promise<{ id: string }> }) => Promi
 const ROUTES: Array<{ method: string; pattern: RegExp; handler: Handler }> = [
   { method: "POST", pattern: /^\/api\/datasets\/([^/]+)\/model\/push$/, handler: pushRoute },
   { method: "GET", pattern: /^\/api\/datasets\/([^/]+)\/model\/status$/, handler: statusRoute },
+  { method: "POST", pattern: /^\/api\/datasets\/([^/]+)\/scratch$/, handler: scratchRoute },
+  { method: "GET", pattern: /^\/api\/cli\/(whoami)$/, handler: whoamiRoute },
 ];
 
 function readBody(req: IncomingMessage): Promise<Buffer> {
@@ -120,9 +125,15 @@ interface CliResult {
   stderr: string;
 }
 
-function runCli(args: string[], cwd: string, env: Record<string, string> = {}): Promise<CliResult> {
+function runCli(
+  args: string[],
+  cwd: string,
+  env: Record<string, string> = {},
+  /** Written to the CLI's stdin, then closed (e.g. a token for --token-stdin). */
+  input?: string,
+): Promise<CliResult> {
   return new Promise((resolve) => {
-    execFile(
+    const child = execFile(
       process.execPath,
       [CLI, ...args],
       {
@@ -143,6 +154,7 @@ function runCli(args: string[], cwd: string, env: Record<string, string> = {}): 
         resolve({ code, stdout, stderr });
       },
     );
+    if (input !== undefined) child.stdin?.end(input);
   });
 }
 
@@ -773,4 +785,114 @@ test("a repo without a dev container publishes without one", async () => {
   assert.equal(files.some((f) => f.path === ".devcontainer/devcontainer.json"), false);
   // And the model itself still published, so this is not a vacuous pass.
   assert.ok(files.some((f) => f.path === "index.malloy"));
+});
+
+// ── scratch dashboards: login --token-stdin, scratch push ────────────────────
+
+const DS_SCRATCH = `petshop_scratch_${RUN}`;
+
+/** A draft dashboard file, as a repo would hold it. */
+const SCRATCH = `import "../index.malloy"
+# artifact { title="By state" }
+query: by_state is sales -> { group_by: state; aggregate: total_qty }
+`;
+
+/** A published dataset plus a project dir to push drafts from, and an isolated
+    credential store (so a developer's real ~/.config/malloyyo is never read). */
+async function scratchProject(): Promise<{ dir: string; env: Record<string, string> }> {
+  const dir = makeProject(DS_SCRATCH);
+  const published = await runCli(["publish", "--create-dataset", "--token", token], dir);
+  assert.equal(published.code, 0, published.stderr);
+  mkdirSync(join(dir, "dashboards"), { recursive: true });
+  writeFileSync(join(dir, "dashboards", "by_state.malloy"), SCRATCH);
+  const xdg = mkdtempSync(join(tmpdir(), "malloyyo-xdg-"));
+  projects.push(xdg);
+  return { dir, env: { XDG_CONFIG_HOME: xdg } };
+}
+
+let scratch: { dir: string; env: Record<string, string> } | undefined;
+async function scratchFixture() {
+  return (scratch ??= await scratchProject());
+}
+
+test("login --token-stdin stores a token only after the instance accepts it", async () => {
+  const { dir, env } = await scratchFixture();
+  const mcpToken = await mintFor(admin.id, ["mcp"]);
+
+  const bogus = await runCli(["login", serverUrl, "--token-stdin"], dir, env, "myo_x_not-a-real-token");
+  assert.notEqual(bogus.code, 0);
+  assert.match(bogus.stderr, /did not accept that token/);
+
+  const ok = await runCli(["login", serverUrl, "--token-stdin"], dir, env, `${mcpToken}\n`);
+  assert.equal(ok.code, 0, ok.stderr);
+  assert.match(ok.stdout, new RegExp(`logged in to ${serverUrl.replace(/[.]/g, "\\.")} as publisher-${RUN}@test\\.local`));
+  const stored = JSON.parse(readFileSync(join(env.XDG_CONFIG_HOME, "malloyyo", "credentials.json"), "utf8"));
+  assert.equal(stored[serverUrl].accessToken, mcpToken);
+  assert.equal(stored[serverUrl].refreshToken, undefined, "a pasted token has nothing to refresh with");
+});
+
+test("scratch push saves a draft, test-runs it, and a re-push updates the same draft", async () => {
+  const { dir, env } = await scratchFixture();
+  const mcpToken = await mintFor(admin.id, ["mcp"]);
+  await runCli(["login", serverUrl, "--token-stdin"], dir, env, mcpToken);
+
+  const first = await runCli(["scratch", "push", "by_state"], dir, env);
+  assert.equal(first.code, 0, first.stderr + first.stdout);
+  assert.match(first.stdout, /saved 'By state'/);
+  assert.match(first.stdout, /✓ by_state — ran: state, total_qty/);
+  const url = /→ (\S+)/.exec(first.stdout)?.[1] ?? "";
+  assert.match(url, new RegExp(`/datasets/${DS_SCRATCH}/dashboard/scratch-[a-z0-9]+$`));
+
+  writeFileSync(join(dir, "dashboards", "by_state.malloy"), SCRATCH.replace('"By state"', '"By state, v2"'));
+  const second = await runCli(["scratch", "push", "by_state"], dir, env);
+  assert.equal(second.code, 0, second.stderr + second.stdout);
+  assert.match(second.stdout, /updated 'By state, v2' → (\S+)/);
+  assert.equal(/→ (\S+)/.exec(second.stdout)?.[1], url, "same draft, same URL");
+  const rows = await db.select().from(scratchDashboards).where(eq(scratchDashboards.title, "By state, v2"));
+  assert.equal(rows.length, 1);
+});
+
+test("scratch push refuses a draft that reaches past the model, and saves nothing", async () => {
+  const { dir, env } = await scratchFixture();
+  const before = (await db.select().from(scratchDashboards)).length;
+  writeFileSync(
+    join(dir, "dashboards", "leak.malloy"),
+    `import "../index.malloy"\n# artifact { title="x" }\nquery: q is duckdb.sql("select 1 as x") -> { select: x }\n`,
+  );
+  const r = await runCli(["scratch", "push", "leak", "--token", token], dir, env);
+  assert.notEqual(r.code, 0);
+  assert.match(r.stderr, /restricted check/);
+  assert.match(r.stderr, /raw SQL is not permitted/);
+  assert.equal((await db.select().from(scratchDashboards)).length, before);
+});
+
+test("scratch push reports a component that doesn't compile, with its line", async () => {
+  const { dir, env } = await scratchFixture();
+  writeFileSync(join(dir, "dashboards", "by_state.jsx"), `export default function D() {\n  return <div>\n}\n`);
+  try {
+    const r = await runCli(["scratch", "push", "by_state", "--token", token, "--new"], dir, env);
+    assert.equal(r.code, 1, "saved, but the command fails so an agent notices");
+    assert.match(r.stdout, /✗ component \(line \d+\)/);
+  } finally {
+    rmSync(join(dir, "dashboards", "by_state.jsx"));
+  }
+});
+
+test("a draft can only be overwritten by the person who made it", async () => {
+  const { dir, env } = await scratchFixture();
+  const made = await runCli(["scratch", "push", "by_state", "--token", token, "--new"], dir, env);
+  const slug = /scratch-([a-z0-9]+)/.exec(made.stdout)?.[1];
+  assert.ok(slug, made.stdout + made.stderr);
+
+  // Someone who can see the dataset (it's public) but didn't make the draft.
+  await db.update(datasets).set({ isPublic: true }).where(eq(datasets.name, DS_SCRATCH));
+  const other = await seedMember(`other-${RUN}@test.local`);
+  const res = await fetch(`${serverUrl}/api/datasets/${DS_SCRATCH}/scratch`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${await mintFor(other.id, ["mcp"])}` },
+    body: JSON.stringify({ name: "by_state", malloy: SCRATCH, slug }),
+  });
+  const out = (await res.json()) as { ok: boolean; error?: string };
+  assert.equal(out.ok, false);
+  assert.match(out.error ?? "", /belongs to someone else/);
 });

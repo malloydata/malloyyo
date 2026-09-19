@@ -628,6 +628,47 @@ export const chatResults = pgTable(
   (t) => [index("chat_results_chat_idx").on(t.chatId)],
 );
 
+// Scratch dashboards: drafts made from the MCP surface or `malloyyo scratch
+// push`, stored here until they move into the model repo. Each is one
+// dashboard's pair of files — the `dashboards/<name>.malloy` text and the
+// optional component — pinned to the model version it was built against, and
+// addressed as the dashboard name `scratch-<slug>` so every dashboard route
+// (page, frame, bundle, run, the MCP panel) serves it unchanged.
+//
+// Unlisted, not private: anyone who can read the dataset and has the slug can
+// view it; only its creator can overwrite it. The .malloy text has passed the
+// restricted gate (no raw SQL / connections / imports) before it is stored —
+// see src/lib/dashboards/scratch.ts — which is what makes it safe to compile
+// as a model file.
+export const scratchDashboards = pgTable(
+  "scratch_dashboards",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    slug: text("slug").notNull().unique(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    datasetId: uuid("dataset_id")
+      .notNull()
+      .references(() => datasets.id, { onDelete: "cascade" }),
+    modelId: uuid("model_id")
+      .notNull()
+      .references(() => malloyModels.id, { onDelete: "cascade" }),
+    // The dashboard's own name (its file basename), e.g. "trend".
+    name: text("name").notNull(),
+    title: text("title"),
+    // Same shape as malloy_artifacts.manifest (entryFile, tiles/query, …).
+    manifest: jsonb("manifest").$type<Record<string, unknown>>().notNull(),
+    // dashboards/<name>.malloy, as submitted.
+    malloy: text("malloy").notNull(),
+    // The optional component (JSX/TSX); empty for a tag-only dashboard.
+    source: text("source").notNull().default(""),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`now()`),
+  },
+  (t) => [index("scratch_dashboards_user_idx").on(t.userId, t.updatedAt)],
+);
+
 export type Dataset = typeof datasets.$inferSelect;
 export type NewDataset = typeof datasets.$inferInsert;
 export type DatasetStatus = (typeof datasetStatus.enumValues)[number];
@@ -648,3 +689,4 @@ export type IntegrationSetting = typeof integrationSettings.$inferSelect;
 export type Chat = typeof chats.$inferSelect;
 export type ChatMessage = typeof chatMessages.$inferSelect;
 export type ChatResult = typeof chatResults.$inferSelect;
+export type ScratchDashboard = typeof scratchDashboards.$inferSelect;

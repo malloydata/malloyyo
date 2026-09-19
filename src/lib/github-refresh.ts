@@ -8,6 +8,7 @@ import { GitHubURLReader, fetchGitHubFile, listGitHubDir, parseGitHubRepo } from
 import { DEVCONTAINER_PATH } from "./github-source-link";
 import { introspectModelWithReader, withReaderRuntime, fileUrl, type SourceInfo } from "./malloy";
 import { ABOUT_NAME, ABOUT_TITLE } from "@/lib/dashboards/about";
+import { artifactManifest } from "@/lib/dashboards/manifest";
 import { logger } from "./logger";
 
 export type RefreshResult =
@@ -138,15 +139,7 @@ export async function refreshGitHubModel(datasetId: string): Promise<RefreshResu
           // no component with this extension — try the next / render the default
         }
       }
-      const manifest: Record<string, unknown> = { title: a.title, entryFile: `dashboards/${base}.malloy` };
-      if (a.tiles) manifest.tiles = a.tiles;
-      // Single-query artifact (no tiles): persist its run-expression — the app
-      // needs manifest.query to run/introspect it.
-      else if (a.query) manifest.query = a.query;
-      if (a.dashboard_columns !== undefined) manifest.dashboard_columns = a.dashboard_columns;
-      if (a.description) manifest.description = a.description;
-      if (a.givens) manifest.givens = a.givens;
-      if (a.autorun === false) manifest.autorun = false;
+      const manifest = artifactManifest(base, a);
       rows.push({ modelId: created.id, name: a.name || base, title: a.title, manifest, source });
     }
     // The written front door: `dashboards/index.jsx|tsx` with no `index.malloy`.

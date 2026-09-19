@@ -18,7 +18,7 @@ import assert from "node:assert/strict";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { eq } from "drizzle-orm";
 import { db, users, datasets, malloyModels, malloyModelFiles, malloyArtifacts, apiTokens } from "@/db";
-import { createApiToken } from "@/lib/api-tokens";
+import { createApiToken, hashApiToken } from "@/lib/api-tokens";
 import { DELETE, GET, POST } from "@/app/mcp/route";
 
 const MCP_URL = "http://localhost:3000/mcp";
@@ -258,6 +258,97 @@ test("show_dashboard refuses a dashboard that doesn't exist, naming the ones tha
     });
     assert.equal(noDataset.isError, true);
     assert.match(JSON.stringify(noDataset.content), /No dashboards found for 'no_such_dataset'/);
+  } finally {
+    await client.close();
+  }
+});
+
+test("issue_cli_token: a query-only, hour-long token for THIS server's URL, that works", async () => {
+  const client = await connect(mcpToken, { mode: { pin: "2026-07-28" } });
+  try {
+    const r = await client.callTool({ name: "issue_cli_token", arguments: {} });
+    assert.notEqual(r.isError, true);
+    const out = r.structuredContent as { url: string; token: string; expires_at: string; login: string };
+    assert.equal(out.url, "http://localhost:3000", "the URL the client reached us at");
+    assert.equal(out.login, "malloyyo login http://localhost:3000 --token-stdin");
+    const ttl = Date.parse(out.expires_at) - Date.now();
+    assert.ok(ttl > 55 * 60_000 && ttl <= 60 * 60_000, `expires in about an hour (${ttl} ms)`);
+
+    const [row] = await db.select().from(apiTokens).where(eq(apiTokens.tokenHash, hashApiToken(out.token)));
+    assert.deepEqual(row?.scopes, ["mcp"], "query scope only, never publish");
+
+    // And it opens /mcp.
+    const cli = await connect(out.token, { mode: "legacy" });
+    assert.ok((await cli.listTools()).tools.length > 0);
+    await cli.close();
+  } finally {
+    await client.close();
+  }
+});
+
+test("save_scratch_dashboard: saves a draft that every dashboard tool then serves", async () => {
+  const client = await connect(mcpToken, { mode: { pin: "2026-07-28" } });
+  try {
+    const malloy = `##! experimental { access_modifiers givens }\nimport "../index.malloy"\n# artifact { title="Animals" }\nquery: animals is sales -> { group_by: animal; aggregate: total_qty }\n`;
+    const saved = await client.callTool({
+      name: "save_scratch_dashboard",
+      arguments: { dataset: "petshop", name: "animals", malloy },
+    });
+    assert.notEqual(saved.isError, true, JSON.stringify(saved.content));
+    const out = saved.structuredContent as {
+      dashboard: string;
+      slug: string;
+      url: string;
+      tiles: Array<{ ok: boolean; rowCount?: number }>;
+    };
+    assert.match(out.dashboard, /^scratch-[a-z0-9]+$/);
+    assert.equal(out.url, `http://localhost:3000/datasets/petshop/dashboard/${out.dashboard}`);
+    assert.equal(out.tiles.length, 1);
+    assert.ok(out.tiles[0].ok);
+
+    // The draft is a dashboard like any other, by its scratch name.
+    const shown = await client.callTool({
+      name: "show_dashboard",
+      arguments: { dataset: "petshop", dashboard: out.dashboard },
+    });
+    assert.notEqual(shown.isError, true);
+    const ran = await client.callTool({
+      name: "dashboard_run",
+      arguments: { datasetId: "petshop", name: out.dashboard, query: "animals" },
+    });
+    const run = ran.structuredContent as { ok: boolean; rowCount?: number; error?: string };
+    assert.equal(run.ok, true, run.error);
+    assert.equal(run.rowCount, 2);
+
+    // Re-saving with the slug updates it in place.
+    const again = await client.callTool({
+      name: "save_scratch_dashboard",
+      arguments: { dataset: "petshop", name: "animals", malloy: malloy.replace("Animals", "Animals v2"), slug: out.slug },
+    });
+    assert.equal((again.structuredContent as { slug: string }).slug, out.slug);
+    assert.match(JSON.stringify(again.content), /Animals v2/);
+  } finally {
+    await client.close();
+  }
+});
+
+test("save_scratch_dashboard: the restricted gate runs before anything compiles", async () => {
+  const client = await connect(mcpToken, { mode: { pin: "2026-07-28" } });
+  try {
+    const TAG = `# artifact { title="x" }`;
+    for (const [what, malloy, why] of [
+      ["raw SQL", `import "../index.malloy"\n${TAG}\nquery: q is duckdb.sql("select 1 as x") -> { select: x }`, /raw SQL is not permitted/],
+      ["a connection", `import "../index.malloy"\n${TAG}\nquery: q is duckdb.table("t") -> { select: * }`, /direct table access is not permitted/],
+      ["another import", `import "../index.malloy"\nimport "../other.malloy"\n${TAG}\nquery: q is sales -> { aggregate: total_qty }`, /file imports are not permitted/],
+      ["an unlisted flag", `##! experimental { sql_functions }\nimport "../index.malloy"\n${TAG}\nquery: q is sales -> { aggregate: total_qty }`, /compiler-flag annotations/],
+    ] as const) {
+      const r = await client.callTool({
+        name: "save_scratch_dashboard",
+        arguments: { dataset: "petshop", name: "x", malloy },
+      });
+      assert.equal(r.isError, true, `${what} should be refused`);
+      assert.match(JSON.stringify(r.content), why, what);
+    }
   } finally {
     await client.close();
   }

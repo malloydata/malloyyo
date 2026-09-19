@@ -21,6 +21,7 @@ import { initCmd } from "./init.js";
 import { sqlCmd } from "./sql.js";
 import { launchCmd } from "./launch.js";
 import { clearCreds } from "./store.js";
+import { loginWithToken, scratchPush } from "./scratch.js";
 import { registerCloudCommands } from "./cloud/index.js";
 import type { PublishRequest, ModelStatus } from "./protocol.js";
 // Single source of truth: the build runs after the release bump, so esbuild
@@ -246,8 +247,12 @@ async function status(target: string | undefined, opts: { token?: string }): Pro
   console.log(`  ${s.compileError ? `✗ ${s.compileError}` : `✓ compiled ${s.compiledAt ?? ""}`}`);
 }
 
-async function loginCmd(target: string | undefined, opts: { browser?: boolean }): Promise<void> {
+async function loginCmd(
+  target: string | undefined,
+  opts: { browser?: boolean; tokenStdin?: boolean },
+): Promise<void> {
   const inst = resolveInstance(resolve("."), target);
+  if (opts.tokenStdin) return loginWithToken(inst.url);
   // commander maps `--no-browser` to browser:false, defaulting to true.
   await login(inst.url, { noBrowser: opts.browser === false });
   console.log(`✓ logged in to ${inst.name} (${inst.url})`);
@@ -268,8 +273,24 @@ program
   .command("login")
   .argument("[target]", "target name or instance URL (optional if the config has one target)")
   .option("--no-browser", "print the sign-in URL instead of launching a browser")
+  .option("--token-stdin", "store a token read from stdin (checked against the instance first)")
   .description("sign in to an instance in your browser (stores a token)")
   .action(loginCmd);
+
+const scratch = program
+  .command("scratch")
+  .description("draft dashboards stored on an instance, not in the published model");
+
+scratch
+  .command("push")
+  .argument("<name>", "dashboard name: pushes dashboards/<name>.malloy (+ .tsx/.jsx if present)")
+  .argument("[dir]", "model directory", ".")
+  .option("-i, --instance <instance>", "instance URL, or a configured target name")
+  .option("--dataset <dataset>", "dataset to draft against; overrides the config")
+  .option("--token <token>", "bearer token (overrides login/env)")
+  .option("--new", "save as a new draft instead of updating the last one pushed from here")
+  .description("save a draft dashboard; prints its URL and test-runs its queries")
+  .action(scratchPush);
 
 program
   .command("logout")

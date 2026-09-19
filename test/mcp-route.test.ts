@@ -16,7 +16,8 @@
 import test, { before } from "node:test";
 import assert from "node:assert/strict";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
-import { db, users, datasets, malloyModels, malloyModelFiles, malloyArtifacts } from "@/db";
+import { eq } from "drizzle-orm";
+import { db, users, datasets, malloyModels, malloyModelFiles, malloyArtifacts, apiTokens } from "@/db";
 import { createApiToken } from "@/lib/api-tokens";
 import { DELETE, GET, POST } from "@/app/mcp/route";
 
@@ -32,7 +33,14 @@ source: sales is duckdb.sql("""
 }
 `;
 
+const LOCAL_DASHBOARD = `import "../index.malloy"
+source: local_sales is sales extend {
+  measure: animal_count is count()
+}
+`;
+
 let mcpToken: string;
+let streamToken: { id: string; raw: string };
 let publishToken: string;
 
 before(async () => {
@@ -55,20 +63,30 @@ before(async () => {
       sources: [{ name: "sales", description: "Pet shop sales." }],
     })
     .returning();
-  await db.insert(malloyModelFiles).values({ modelId: m.id, path: "index.malloy", content: MODEL });
-  await db.insert(malloyArtifacts).values({
-    modelId: m.id,
-    name: "overview",
-    title: "Overview",
-    manifest: {},
-    source: "",
-  });
+  await db.insert(malloyModelFiles).values([
+    { modelId: m.id, path: "index.malloy", content: MODEL },
+    // A v2 dashboard file defining a source index.malloy does NOT publish.
+    { modelId: m.id, path: "dashboards/local.malloy", content: LOCAL_DASHBOARD },
+  ]);
+  await db.insert(malloyArtifacts).values([
+    { modelId: m.id, name: "overview", title: "Overview", manifest: {}, source: "" },
+    {
+      modelId: m.id,
+      name: "local",
+      title: "Local",
+      manifest: { entryFile: "dashboards/local.malloy" },
+      source: "",
+    },
+  ]);
 
   const mcp = await createApiToken({ userId: u.id, name: "route-mcp", scopes: ["mcp"], expiresAt: null });
   const pub = await createApiToken({ userId: u.id, name: "route-pub", scopes: ["publish"], expiresAt: null });
   assert.ok(mcp.ok && pub.ok);
   mcpToken = mcp.raw;
   publishToken = pub.raw;
+  const stream = await createApiToken({ userId: u.id, name: "route-stream", scopes: ["mcp"], expiresAt: null });
+  assert.ok(stream.ok);
+  streamToken = { id: stream.token.id, raw: stream.raw };
 });
 
 /** Route the client's HTTP straight into the handler. */
@@ -172,4 +190,50 @@ test("the engine, not the SDK, validates explore-tool arguments", async () => {
   } finally {
     await client.close();
   }
+});
+
+test("dashboard_run: ad-hoc Malloy sees the dashboard file's own sources", async () => {
+  // Suggestions and <VegaChart malloy=…> send ad-hoc text that may name a source
+  // only the dashboard file defines. It must compile against that file, as it
+  // does in `malloyyo dashboard dev` — not against index.malloy.
+  const client = await connect(mcpToken, { mode: { pin: "2026-07-28" } });
+  try {
+    for (const args of [
+      { query: "run: local_sales -> { aggregate: animal_count }" }, // the panel's one-field form
+      { malloy: "run: local_sales -> { aggregate: animal_count }" }, // the web frame's form
+    ]) {
+      const r = await client.callTool({
+        name: "dashboard_run",
+        arguments: { datasetId: "petshop", name: "local", ...args },
+      });
+      const out = r.structuredContent as { ok: boolean; error?: string; rowCount?: number };
+      assert.equal(out.ok, true, `${JSON.stringify(args)} → ${out.error}`);
+      assert.equal(out.rowCount, 1);
+    }
+  } finally {
+    await client.close();
+  }
+});
+
+test("GET and DELETE answer 405 without touching last_used_at", async () => {
+  const lastUsed = async () =>
+    (await db.select().from(apiTokens).where(eq(apiTokens.id, streamToken.id)))[0]?.lastUsedAt ?? null;
+
+  // Opening a stream (or ending a session that doesn't exist) is not a use:
+  // a client that reconnects its GET in a loop must not write on every try.
+  for (const method of ["GET", "DELETE"]) {
+    for (const headers of [{}, { authorization: `Bearer ${streamToken.raw}` }] as Record<string, string>[]) {
+      const res = await (method === "GET" ? GET : DELETE)(new Request(MCP_URL, { method, headers }));
+      assert.equal(res.status, 405, `${method} ${Object.keys(headers).length ? "with" : "without"} a token`);
+      assert.equal(res.headers.get("allow"), "POST, OPTIONS");
+    }
+  }
+  assert.equal(await lastUsed(), null);
+
+  // The same token on a real request IS a use — so the assertion above means something.
+  const client = await connect(streamToken.raw, { mode: "legacy" });
+  await client.listTools();
+  await client.close();
+  for (let i = 0; i < 20 && (await lastUsed()) === null; i++) await new Promise((r) => setTimeout(r, 100));
+  assert.notEqual(await lastUsed(), null);
 });

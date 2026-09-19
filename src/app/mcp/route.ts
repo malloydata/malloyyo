@@ -267,6 +267,51 @@ async function serve(req: Request): Promise<Response> {
 }
 
 export const POST = serve;
-export const GET = serve;
-export const DELETE = serve;
 export async function OPTIONS() { return corsPreflight(); }
+
+/**
+ * GET /mcp — 405, per the Streamable HTTP transport.
+ *
+ * Clients open GET on the MCP endpoint to listen for server→client messages
+ * over SSE. We send none (every response rides the POST), so the spec's answer
+ * is 405: "the server MUST return HTTP 405 Method Not Allowed, indicating that
+ * the server does not offer an SSE stream at this endpoint."
+ *
+ * Returning 200 here — as we used to — puts a client into an endless reconnect
+ * loop, and one client did exactly that for ~11h at ~1 req/s. In the reference
+ * client (@modelcontextprotocol/sdk client/streamableHttp.js) our 200 is
+ * `response.ok`, so it is adopted as an open stream with isReconnectable=true;
+ * the plain-text body yields zero SSE events and ends at once; the graceful-end
+ * path re-arms with `_scheduleReconnection(…, 0)`, resetting the attempt
+ * counter so the maxRetries=2 cap never trips; and the flat 1000ms
+ * initialReconnectionDelay sets the cadence. A 405 is a bare `return` — no
+ * error surfaced, no reconnect.
+ *
+ * The body text stays: browsers render it regardless of status, so a human who
+ * pastes the URL still gets pointed at the right verb.
+ *
+ * DELETE (2025 session termination) gets the same answer: the server is
+ * stateless, so there is no session to end. Neither verb reaches the SDK — it
+ * would answer 405 too, but only after the full auth path, which writes
+ * last_used_at.
+ */
+export async function GET(req: Request) {
+  // No auth needed to answer, but Streamable HTTP clients send their bearer
+  // token when opening the stream — resolve it purely so the log names who is
+  // behind any residual traffic. Two indexed lookups (credential, then user),
+  // and deliberately no last_used_at write: opening a stream is not a use.
+  const raw = bearerToken(req);
+  const resolved = raw ? await resolveBearer(raw, { scope: "mcp", recordUse: false }) : null;
+  logger.info(`mcp ${req.method}`, {
+    requestId: req.headers.get("x-request-id") ?? undefined,
+    userId: resolved?.ok ? resolved.user.id : undefined,
+    credential: resolved?.ok ? credentialLabel(resolved.cred) : undefined,
+    userAgent: req.headers.get("user-agent"),
+  });
+  return withCors(new Response(
+    "POST JSON-RPC requests to this URL. See https://modelcontextprotocol.io",
+    { status: 405, headers: { Allow: "POST, OPTIONS" } },
+  ));
+}
+
+export const DELETE = GET;

@@ -65,6 +65,18 @@ before(async () => {
     .returning();
   await db.insert(malloyModelFiles).values([
     { modelId: m.id, path: "index.malloy", content: MODEL },
+    // The repo's image allowlist: the panel must carry it as a CSP, or a
+    // dashboard's <img src> silently shows nothing inside Claude.
+    {
+      modelId: m.id,
+      path: "malloy-config.json",
+      // The connections block is the rest of a real repo's config: a config
+      // file with none replaces the model's default connection.
+      content: JSON.stringify({
+        connections: { duckdb: { is: "duckdb" } },
+        malloyyo: { image_hosts: ["image.tmdb.org", "*.cdn.example.com"] },
+      }),
+    },
     // A v2 dashboard file defining a source index.malloy does NOT publish.
     { modelId: m.id, path: "dashboards/local.malloy", content: LOCAL_DASHBOARD },
   ]);
@@ -392,6 +404,21 @@ export default function D() {
     assert.equal(bundle.ok, true);
     assert.equal(bundle.title, "Inline");
     assert.ok((bundle.js ?? "").length > 0);
+  } finally {
+    await client.close();
+  }
+});
+
+test("the panel declares the image hosts the models allow, so dashboard images load", async () => {
+  const client = await connect(mcpToken, { mode: { pin: "2026-07-28" } });
+  try {
+    const show = (await client.listTools()).tools.find((t) => t.name === "show_dashboard")!;
+    const uri = (show._meta?.ui as { resourceUri: string }).resourceUri;
+    const read = await client.readResource({ uri });
+    const meta = read.contents[0]?._meta as { ui?: { csp?: { resourceDomains?: string[] } } } | undefined;
+    const domains = meta?.ui?.csp?.resourceDomains ?? [];
+    assert.ok(domains.includes("https://image.tmdb.org"), `got ${JSON.stringify(domains)}`);
+    assert.ok(domains.includes("https://*.cdn.example.com"), "wildcards survive");
   } finally {
     await client.close();
   }

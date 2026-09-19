@@ -16,6 +16,7 @@ import { and, eq, asc, desc } from "drizzle-orm";
 import { db, datasets, malloyArtifacts, malloyModelFiles, scratchDashboards } from "@/db";
 import { visibleDatasetWhere, findByDatasetRef, latestModel } from "@/lib/mcp-tools";
 import { aboutFirst } from "./about";
+import { imageHostsFromConfig } from "./image-hosts";
 
 export interface DashboardSummary {
   datasetId: string;
@@ -182,4 +183,32 @@ export async function modelConfigJson(modelId: string): Promise<string | undefin
     .where(and(eq(malloyModelFiles.modelId, modelId), eq(malloyModelFiles.path, "malloy-config.json")))
     .limit(1);
   return row?.content;
+}
+
+/**
+ * Every image host declared by a model this user can see, as `https://host`
+ * tokens (wildcards included) — the CSP the MCP App panel must carry for a
+ * dashboard's `<img src>` to load inside it.
+ *
+ * The panel is ONE resource for every dashboard, so it cannot carry one
+ * dashboard's hosts: it carries the union, which is the same set the web app
+ * would allow this user across the dashboards they can open. Each entry was
+ * validated on the way in (see ./image-hosts — the values come from a repo's
+ * malloy-config.json and end up in a policy).
+ *
+ * One query per visible dataset, so it is called from `resources/read` (rare,
+ * and cached by the client) rather than per tool call.
+ */
+export async function visibleImageHosts(userId: string, max = 16): Promise<string[]> {
+  const dsList = await db.select().from(datasets).where(visibleDatasetWhere(userId));
+  const hosts = new Set<string>();
+  for (const ds of dsList) {
+    const model = await latestModel(ds.id);
+    if (!model) continue;
+    for (const host of imageHostsFromConfig(await modelConfigJson(model.id))) {
+      hosts.add(host);
+      if (hosts.size >= max) return [...hosts];
+    }
+  }
+  return [...hosts];
 }

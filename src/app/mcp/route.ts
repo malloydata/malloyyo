@@ -28,7 +28,7 @@ import {
   dashboardBundlePayload,
 } from "@/lib/mcp-app-dashboard";
 import { dashboardPanel, type DashboardPanel } from "@/lib/mcp-app-panel";
-import { getDashboard, listDashboards } from "@/lib/dashboards";
+import { getDashboard, listDashboards, visibleImageHosts } from "@/lib/dashboards";
 import { saveScratchDashboard } from "@/lib/dashboards/scratch";
 import { createApiToken } from "@/lib/api-tokens";
 import { runDashboard } from "@/lib/dashboards/engine";
@@ -241,13 +241,34 @@ function registerDashboardApp(server: McpServer, scope: RequestScope, panel: Das
   const { uri } = panel;
   const tag = `[${env.INSTANCE_NAME}]`;
 
+  // One shell for every dashboard. PRIVATE rather than public, because the
+  // policy below is this user's: the body is identical for everyone, the image
+  // hosts are not.
   registerAppResource(
     server,
     "Dashboard panel",
     uri,
-    // One shell for every dashboard and user; the URI changes when it does.
-    { cacheHint: { ttlMs: 3_600_000, cacheScope: "public" } } as never,
-    async () => ({ contents: [{ uri, mimeType: RESOURCE_MIME_TYPE, text: panel.html }] }),
+    { cacheHint: { ttlMs: 3_600_000, cacheScope: "private" } } as never,
+    async () => {
+      // A panel runs under a default-deny policy, so a dashboard that builds
+      // <img src> from a model column (poster art, logos, avatars) shows
+      // nothing inside Claude while working fine on the web app — which widens
+      // its own frame's img-src from the same malloy-config.json list.
+      // resourceDomains is broader than img-src (scripts, styles, fonts, media
+      // too), so it stays an allowlist the model's own author declared, never
+      // a blanket https:.
+      const hosts = await visibleImageHosts(userId);
+      return {
+        contents: [
+          {
+            uri,
+            mimeType: RESOURCE_MIME_TYPE,
+            text: panel.html,
+            ...(hosts.length > 0 ? { _meta: { ui: { csp: { resourceDomains: hosts } } } } : {}),
+          },
+        ],
+      };
+    },
   );
 
   registerAppTool(

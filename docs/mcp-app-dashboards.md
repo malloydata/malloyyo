@@ -85,26 +85,20 @@ name, and cannot begin with `run:`.
 const isMalloyText = (s: string) => /^\s*run\s*:/.test(s);
 ```
 
-Dispatch, and **which model each compiles against**:
+Dispatch — both compile against the dashboard's own file:
 
 | Input | Runner | Entry |
 |---|---|---|
-| `run: …` | `runRestricted` | `index.malloy` — the model's published surface |
+| `run: …` | `runRestricted` | `manifest.entryFile` |
 | `orders -> by_month` | `runNamedMalloyFiles` | `manifest.entryFile` |
 
-**Worth deciding explicitly, because it is a change.** Ad-hoc `run:` text
-against `index.malloy` is the right call: that is the published surface the
-restricted runner is designed to gate, and the same surface the MCP `query` tool
-already uses, so a panel gets exactly the reach a model gets — no more. But note
-it is *not* what `runDashboard` does today for `malloy` (it uses `entryFile`, so
-the dashboard's own imports are in scope). Splitting them means:
-
-- a **tile** keeps `entryFile` — it must see the dashboard's inline query;
-- **ad-hoc text** uses `index.malloy` — it must not.
-
-If instead ad-hoc text should also see the dashboard's imports, say so and it
-stays on `entryFile`; the restricted gate is what provides safety either way,
-not the entry file.
+**Decided: ad-hoc text stays on `entryFile`.** Compiling it against
+`index.malloy` instead was tried and reverted: a `suggest { query=… }` or a
+`<VegaChart malloy=…>` may name a source only the dashboard file defines, and
+the CLI dev server compiles against `entryFile`, so the split passed in
+`malloyyo dashboard dev` and failed once published. Reach is unchanged either
+way — the restricted gate bounds it, not the entry file, and the dashboard
+file imports `index.malloy`.
 
 The existing two-field form stays accepted, so nothing that calls it breaks.
 

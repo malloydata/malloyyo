@@ -37,13 +37,6 @@ export type DashboardRunResult =
   | { ok: true; stableResult: unknown; rows?: unknown[]; rowCount: number }
   | { ok: false; error: string };
 
-/** Run a dashboard. Structure v2: every request compiles against the
-    dashboard's OWN file (`manifest.entryFile` = `dashboards/<name>.malloy`),
-    not `index.malloy`, so its inline query and imports are in scope. `req`:
-    `query` runs a single run-expression (a component's `<Panel query=…>`, and how
-    a composite dashboard's grid runs each of its tiles); `malloy` runs restricted
-    Malloy text (suggestion queries / ad-hoc panels). Falls back to `index.malloy`
-    for a v1 manifest with no `entryFile`. */
 /**
  * A run string beginning with `run:` is Malloy TEXT; anything else names a
  * run-expression. Unambiguous, because a run-expression is `source -> view` or
@@ -56,6 +49,13 @@ export function isMalloyText(s: string): boolean {
   return /^\s*run\s*:/.test(s);
 }
 
+/** Run a dashboard. Structure v2: every request compiles against the
+    dashboard's OWN file (`manifest.entryFile` = `dashboards/<name>.malloy`),
+    not `index.malloy`, so its inline query and imports are in scope. `req`:
+    `query` runs a single run-expression (a component's `<Panel query=…>`, and how
+    a composite dashboard's grid runs each of its tiles); `malloy` runs restricted
+    Malloy text (suggestion queries / ad-hoc panels). Falls back to `index.malloy`
+    for a v1 manifest with no `entryFile`. */
 export async function runDashboard(
   userId: string,
   datasetId: string,
@@ -87,11 +87,14 @@ export async function runDashboard(
         ? req.query
         : null;
 
-  // Ad-hoc Malloy compiles against index.malloy — the model's PUBLISHED
-  // surface, the same one the MCP `query` tool uses — so a panel gets exactly
-  // the reach a model gets. A tile keeps the dashboard's own entry, because it
-  // must see the dashboard's inline query and imports.
-  const entry = fileUrl(malloyText !== null ? "index.malloy" : entryFile);
+  // Tiles AND ad-hoc text compile against the dashboard's own file, as the
+  // CLI dev server does (packages/cli/src/dashboard.ts): a suggest query or a
+  // <VegaChart malloy=…> may name a source that only the dashboard file
+  // defines. Compiling ad-hoc text against index.malloy instead would pass in
+  // `malloyyo dashboard dev` and fail once published. Reach is unchanged —
+  // the restricted gate below is what bounds it, and the dashboard file
+  // imports index.malloy anyway.
+  const entry = fileUrl(entryFile);
 
   if (malloyText !== null) {
     // Restricted text: core rejects anything outside the model's published

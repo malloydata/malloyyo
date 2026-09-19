@@ -237,3 +237,28 @@ test("GET and DELETE answer 405 without touching last_used_at", async () => {
   for (let i = 0; i < 20 && (await lastUsed()) === null; i++) await new Promise((r) => setTimeout(r, 100));
   assert.notEqual(await lastUsed(), null);
 });
+
+test("show_dashboard refuses a dashboard that doesn't exist, naming the ones that do", async () => {
+  const client = await connect(mcpToken, { mode: { pin: "2026-07-28" } });
+  try {
+    const missing = await client.callTool({
+      name: "show_dashboard",
+      arguments: { dataset: "petshop", dashboard: "nope" },
+    });
+    assert.equal(missing.isError, true);
+    const msg = JSON.stringify(missing.content);
+    assert.match(msg, /No dashboard 'nope' in 'petshop'/);
+    assert.match(msg, /overview/);
+    assert.match(msg, /local/);
+
+    // An unknown dataset reads the same as one the user can't see.
+    const noDataset = await client.callTool({
+      name: "show_dashboard",
+      arguments: { dataset: "no_such_dataset", dashboard: "overview" },
+    });
+    assert.equal(noDataset.isError, true);
+    assert.match(JSON.stringify(noDataset.content), /No dashboards found for 'no_such_dataset'/);
+  } finally {
+    await client.close();
+  }
+});

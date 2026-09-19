@@ -28,6 +28,7 @@ import {
   dashboardBundlePayload,
 } from "@/lib/mcp-app-dashboard";
 import { dashboardPanel, type DashboardPanel } from "@/lib/mcp-app-panel";
+import { getDashboard, listDashboards } from "@/lib/dashboards";
 import { runDashboard } from "@/lib/dashboards/engine";
 import { bearerToken, credentialLabel, resolveBearer } from "@/lib/bearer-auth";
 import { corsPreflight, withCors } from "@/lib/oauth/cors";
@@ -140,10 +141,24 @@ function registerDashboardApp(server: McpServer, scope: RequestScope, panel: Das
       }),
       _meta: { ui: { resourceUri: uri } },
     },
-    logged(scope, SHOW_TOOL, async ({ dataset, dashboard }: { dataset: string; dashboard: string }) => ({
-      content: text(`Opened the '${dashboard}' dashboard above.`),
-      structuredContent: { ok: true, datasetId: dataset, name: dashboard },
-    })),
+    logged(scope, SHOW_TOOL, async ({ dataset, dashboard }: { dataset: string; dashboard: string }) => {
+      // Check before claiming success: otherwise the model reports a dashboard
+      // as shown while the panel says "not found" — or, in a client that
+      // doesn't draw panels, shows nothing at all. getDashboard answers null
+      // for a dataset the user can't see, so this can't reveal one exists.
+      const dash = await getDashboard(userId, dataset, dashboard);
+      if (!dash) {
+        const names = (await listDashboards(userId, dataset)).map((d) => d.name);
+        const msg = names.length
+          ? `No dashboard '${dashboard}' in '${dataset}'. Its dashboards: ${names.join(", ")}.`
+          : `No dashboards found for '${dataset}'. list_sources reports each model's dashboards.`;
+        return { content: text(msg), structuredContent: { ok: false, error: msg }, isError: true };
+      }
+      return {
+        content: text(`Showing the '${dash.title}' dashboard in an inline panel.`),
+        structuredContent: { ok: true, datasetId: dataset, name: dash.name },
+      };
+    }),
   );
 
   const appOnly = { ui: { resourceUri: uri, visibility: ["app" as const] } };

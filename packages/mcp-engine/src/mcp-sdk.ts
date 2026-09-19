@@ -1,78 +1,73 @@
 // Copyright (c) The Malloy Foundation
 // SPDX-License-Identifier: MIT
 
-// Optional adapter for @modelcontextprotocol/sdk hosts (the SDK is an
-// optional peer dependency; only this subpath touches it). Tools register
-// through the LOW-LEVEL request handlers, where tool definitions are plain
-// JSON — the engine's JSON Schema descriptors are the wire format already.
-// (The high-level registerTool path is zod-only, which is exactly the
-// coupling the engine avoids.)
+// Optional adapter for hosts built on the official MCP server SDK
+// (@modelcontextprotocol/server v2 — an optional peer dependency; only this
+// subpath touches it). Tools register through McpServer.registerTool with
+// `publishedSchema`, so the engine's JSON Schema descriptors go on the wire
+// as-is — no zod, which is exactly the coupling the engine avoids.
 //
 // Caveats for hosts:
 // - Pass `surface.instructions` to the server constructor yourself — the SDK
 //   accepts instructions only at construction.
-// - Declare the `tools` capability (and `prompts`/`resources` when
-//   registering skills) at construction.
-// - Do not mix this with McpServer.registerTool on the same server: both
-//   want the tools/list and tools/call handlers.
 
 import {
-  CallToolRequestSchema,
-  ListToolsRequestSchema,
-} from '@modelcontextprotocol/sdk/types.js';
-import type { Server } from '@modelcontextprotocol/sdk/server/index.js';
-import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+  fromJsonSchema,
+  type CallToolResult,
+  type jsonSchemaValidator,
+  type McpServer,
+  type StandardSchemaWithJSON,
+} from '@modelcontextprotocol/server';
 import { toContent, type ToolSurface } from './surfaces/shared';
 
+/** Accepts every input: the engine's handlers validate their own arguments. */
+const PASS_THROUGH: jsonSchemaValidator = {
+  getValidator: () => (input) => ({ valid: true, data: input as never, errorMessage: undefined }),
+};
+
+/**
+ * A tool's JSON Schema for the SDK: published verbatim in tools/list, but NOT
+ * enforced by the SDK before dispatch.
+ *
+ * The SDK would otherwise reject a call that fails the schema with a bare
+ * "Input validation error". The engine is deliberately more forgiving than
+ * its published schema (e.g. `query` resolves `source` from the Malloy text
+ * when omitted) and reports what is wrong as problems[] data with a fix —
+ * which only happens if the call reaches the handler.
+ */
+export function publishedSchema<T = Record<string, unknown>>(
+  schema: Record<string, unknown>,
+): StandardSchemaWithJSON<T, T> {
+  return fromJsonSchema<T>(schema as never, PASS_THROUGH);
+}
+
 export interface AttachOptions {
-  /** Also expose surface.skills as MCP prompts + resources (McpServer only). */
+  /** Also expose surface.skills as MCP prompts + resources. */
   registerSkillsAsPrompts?: boolean;
 }
 
-function lowLevel(server: Server | McpServer): Server {
-  return 'server' in server ? (server as McpServer).server : (server as Server);
-}
-
-/**
- * Attach a ToolSurface to an SDK server. Accepts the high-level McpServer
- * (so skills can register as prompts/resources) or the low-level Server.
- */
+/** Attach a ToolSurface (and optionally its skills) to an SDK McpServer. */
 export function attachSurface(
-  server: Server | McpServer,
+  server: McpServer,
   surface: ToolSurface,
   opts: AttachOptions = {},
 ): void {
-  const s = lowLevel(server);
-  const byName = new Map(surface.tools.map((t) => [t.name, t]));
-
-  s.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: surface.tools.map((t) => ({
-      name: t.name,
-      title: t.title,
-      description: t.description,
-      inputSchema: t.inputSchema as { type: 'object'; [k: string]: unknown },
-    })),
-  }));
-
-  s.setRequestHandler(CallToolRequestSchema, async (req) => {
-    const tool = byName.get(req.params.name);
-    if (!tool) {
-      return {
-        content: [{ type: 'text' as const, text: `unknown tool: ${req.params.name}` }],
-        isError: true,
-      };
-    }
-    // Compile/run failures are data (problems[]), never protocol errors.
-    const result = await tool.handler(
-      (req.params.arguments ?? {}) as Record<string, unknown>,
+  for (const tool of surface.tools) {
+    server.registerTool(
+      tool.name,
+      {
+        title: tool.title,
+        description: tool.description,
+        inputSchema: publishedSchema(tool.inputSchema),
+      },
+      // Compile/run failures are data (problems[]), never protocol errors.
+      async (args) => toContent(await tool.handler(args ?? {})) as CallToolResult,
     );
-    return toContent(result);
-  });
+  }
 
-  if (opts.registerSkillsAsPrompts && 'registerPrompt' in server) {
-    const mcp = server as McpServer;
+  if (opts.registerSkillsAsPrompts) {
     for (const skill of surface.skills) {
-      mcp.registerPrompt(
+      server.registerPrompt(
         skill.name,
         { title: skill.name, description: skill.description },
         () => ({
@@ -81,7 +76,7 @@ export function attachSurface(
           ],
         }),
       );
-      mcp.registerResource(
+      server.registerResource(
         skill.name,
         `malloy-skill://${skill.name}`,
         { title: skill.name, description: skill.description, mimeType: 'text/markdown' },

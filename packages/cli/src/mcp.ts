@@ -18,8 +18,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import url from "node:url";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { McpServer } from "@modelcontextprotocol/server";
+import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import {
   MalloyConfig,
   Runtime,
@@ -256,7 +256,6 @@ export async function serveMcp(opts: {
     { name: serverName, version: opts.version },
     {
       instructions: renderInstructions(surface.instructions, instanceName) + MODE_STUB[mode],
-      capabilities: { tools: {}, prompts: {}, resources: {} },
     },
   );
   attachSurface(server, surface, { registerSkillsAsPrompts: true });

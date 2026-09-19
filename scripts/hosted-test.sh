@@ -3,7 +3,8 @@
 # SPDX-License-Identifier: MIT
 #
 # Stand up a Postgres, apply the schema, and run the DB-backed integration
-# tests against it: the hosted-explore surface (test/hosted-explore.test.ts)
+# tests against it: the hosted-explore surface (test/hosted-explore.test.ts),
+# the /mcp route over the official MCP client (test/mcp-route.test.ts),
 # and the CLI publish flow (test/publish-flow.test.ts). Postgres is the only
 # external dep — the Malloy models run on in-process DuckDB.
 #
@@ -235,6 +236,10 @@ npx tsx --test test/lent-capabilities.test.ts
 echo "→ running hosted-explore test"
 reset_schema
 npx tsx --test test/hosted-explore.test.ts
+
+echo "→ running mcp-route test (official MCP client → /mcp, both protocol eras)"
+reset_schema
+npx tsx --test test/mcp-route.test.ts
 
 # The publish test drives the REAL CLI binary, so build it (this also builds the
 # mcp-engine the CLI bundles against).

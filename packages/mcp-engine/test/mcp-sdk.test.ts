@@ -1,11 +1,10 @@
 // End-to-end proof of the optional SDK adapter: a real SDK client talks to a
 // real SDK server over the in-memory transport, with the engine's EXPLORE
-// surface attached through the low-level handlers (raw JSON Schema, no zod).
+// surface attached via registerTool + fromJsonSchema (raw JSON Schema, no zod).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
+import { McpServer, InMemoryTransport } from '@modelcontextprotocol/server';
+import { Client } from '@modelcontextprotocol/client';
 import { attachSurface } from '../src/mcp-sdk';
 import { exploreSurface } from '../src/index';
 import { testExploreHost } from './helpers';
@@ -14,10 +13,7 @@ async function connectedPair() {
   const surface = exploreSurface(testExploreHost({ withList: true }));
   const server = new McpServer(
     { name: 'engine-test', version: '0.0.0' },
-    {
-      instructions: surface.instructions,
-      capabilities: { tools: {}, prompts: {}, resources: {} },
-    },
+    { instructions: surface.instructions },
   );
   attachSurface(server, surface, { registerSkillsAsPrompts: true });
   const client = new Client({ name: 'test-client', version: '0.0.0' });
@@ -38,6 +34,23 @@ test('sdk adapter: tools/list exposes the surface with JSON Schema', async () =>
     const query = tools.find((t) => t.name === 'query');
     assert.equal(query?.inputSchema.type, 'object');
     assert.ok((query?.inputSchema.properties as Record<string, unknown>)['malloy']);
+  } finally {
+    await client.close();
+    await server.close();
+  }
+});
+
+test('sdk adapter: the engine, not the SDK, validates arguments', async () => {
+  const { client, server } = await connectedPair();
+  try {
+    // `source` is required in the published schema, but the engine resolves it
+    // from the Malloy text; SDK-side validation would reject this outright.
+    const ran = await client.callTool({
+      name: 'query',
+      arguments: { model_ref: 'flights.malloy', malloy: 'run: top_carriers' },
+    });
+    assert.notEqual(ran.isError, true);
+    assert.equal((ran.structuredContent as { ok: boolean }).ok, true);
   } finally {
     await client.close();
     await server.close();
@@ -67,7 +80,7 @@ test('sdk adapter: tools/call round-trips a real describe and a real query', asy
   }
 });
 
-test('sdk adapter: failures are problems data, unknown tools are isError', async () => {
+test('sdk adapter: failures are problems data, unknown tools are protocol errors', async () => {
   const { client, server } = await connectedPair();
   try {
     const bad = await client.callTool({
@@ -79,8 +92,11 @@ test('sdk adapter: failures are problems data, unknown tools are isError', async
     assert.equal(result.ok, false);
     assert.equal(result.problems[0]?.code, 'restricted-construct-forbidden');
 
-    const unknown = await client.callTool({ name: 'no_such_tool', arguments: {} });
-    assert.equal(unknown.isError, true);
+    // The SDK answers an unknown tool with JSON-RPC -32602, per the spec.
+    await assert.rejects(
+      client.callTool({ name: 'no_such_tool', arguments: {} }),
+      (e: { code?: number }) => e.code === -32602,
+    );
   } finally {
     await client.close();
     await server.close();

@@ -39,7 +39,7 @@
     "@malloydata/malloy-connections": "^0.0.431",
     "@malloydata/malloy-filter": "^0.0.431",
     "@malloydata/render": "^0.0.431",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/server": "^2.0.0",
     "commander": "^12.1.0",
     "esbuild": "^0.24.0",
     "react": "19.2.4",

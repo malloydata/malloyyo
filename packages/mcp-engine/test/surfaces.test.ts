@@ -8,6 +8,8 @@ import {
   HOST_ONLY,
   mergeSurfaces,
   toContent,
+  type ListedModel,
+  type ListSourcesResult,
   type SourceDescribeResult,
   type QueryValidationResult,
   type RunResult,
@@ -321,4 +323,50 @@ test('toContent: serializes typed results to MCP content + structuredContent', (
   assert.equal(out.content[0]?.type, 'text');
   assert.deepEqual(JSON.parse(out.content[0]!.text), { ok: true, rows: [1] });
   assert.deepEqual(out.structuredContent, { ok: true, rows: [1] });
+});
+
+test('explore: list_sources carries a model\'s dashboards, keyed by name', async () => {
+  // A host that reports dashboards. Deliberately independent of compiling: a
+  // host lists dashboards from its own store, so a model that will not compile
+  // still advertises them.
+  const host = testExploreHost({ withList: true });
+  const inner = host.list!;
+  host.list = async () => {
+    const { entries } = await inner();
+    entries[0]!.dashboards = [
+      {
+        name: 'overview',
+        title: 'Business Overview',
+        description: 'The one on the home page',
+        url: 'https://yo.example/datasets/shop/dashboard/overview',
+      },
+      { name: 'constructor' }, // a reserved word must stay ordinary data
+    ];
+    return { entries };
+  };
+
+  const s = exploreSurface(host);
+  const result = (await tool(s, 'list_sources').handler({})) as ListSourcesResult;
+  assert.equal(result.ok, true);
+
+  const first = Object.keys(result.models ?? {})[0]!;
+  const dashboards = result.models![first]!.dashboards!;
+  assert.deepEqual(Object.keys(dashboards).sort(), ['constructor', 'overview']);
+  assert.equal(dashboards['overview']!.title, 'Business Overview');
+  assert.equal(dashboards['overview']!.description, 'The one on the home page');
+  // The url is what makes the discovery actionable — no tool here takes a
+  // dashboard name, so an entry without one is a dead end for the agent.
+  assert.equal(dashboards['overview']!.url, 'https://yo.example/datasets/shop/dashboard/overview');
+  // Absent fields are omitted rather than emitted empty, like sources — a host
+  // that renders nothing reports no url, and the key simply isn't there.
+  assert.deepEqual(dashboards['constructor'], {});
+});
+
+test('explore: a model with no dashboards omits the field', async () => {
+  const s = exploreSurface(testExploreHost({ withList: true }));
+  const result = (await tool(s, 'list_sources').handler({})) as ListSourcesResult;
+  assert.equal(result.ok, true);
+  for (const m of Object.values(result.models ?? {}) as ListedModel[]) {
+    assert.equal('dashboards' in m, false, 'no dashboards → no key');
+  }
 });

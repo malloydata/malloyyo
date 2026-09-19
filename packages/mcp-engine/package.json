@@ -29,17 +29,18 @@
   },
   "peerDependencies": {
     "@malloydata/malloy": ">=0.0.414",
-    "@modelcontextprotocol/sdk": ">=1.10.0"
+    "@modelcontextprotocol/server": ">=2.0.0"
   },
   "peerDependenciesMeta": {
-    "@modelcontextprotocol/sdk": {
+    "@modelcontextprotocol/server": {
       "optional": true
     }
   },
   "devDependencies": {
     "@malloydata/db-duckdb": "^0.0.431",
     "@malloydata/malloy": "^0.0.431",
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/client": "^2.0.0",
+    "@modelcontextprotocol/server": "^2.0.0",
     "@types/node": "^20",
     "esbuild": "^0.24.0",
     "tsx": "^4.21.0",

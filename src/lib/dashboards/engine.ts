@@ -37,6 +37,18 @@ export type DashboardRunResult =
   | { ok: true; stableResult: unknown; rows?: unknown[]; rowCount: number }
   | { ok: false; error: string };
 
+/**
+ * A run string beginning with `run:` is Malloy TEXT; anything else names a
+ * run-expression. Unambiguous, because a run-expression is `source -> view` or
+ * a bare view name and cannot begin with `run:`.
+ *
+ * This lets one wire field carry either, which is what a panel needs — it has
+ * a single `run` call, not two.
+ */
+export function isMalloyText(s: string): boolean {
+  return /^\s*run\s*:/.test(s);
+}
+
 /** Run a dashboard. Structure v2: every request compiles against the
     dashboard's OWN file (`manifest.entryFile` = `dashboards/<name>.malloy`),
     not `index.malloy`, so its inline query and imports are in scope. `req`:
@@ -65,16 +77,33 @@ export async function runDashboard(
 
   const manifest = a.manifest as Record<string, unknown>;
   const entryFile = typeof manifest.entryFile === "string" ? manifest.entryFile : "index.malloy";
+
+  // One field, two meanings: `query` carrying `run:` IS Malloy text. Callers
+  // that still set `malloy` explicitly keep working.
+  const malloyText =
+    typeof req.malloy === "string"
+      ? req.malloy
+      : typeof req.query === "string" && isMalloyText(req.query)
+        ? req.query
+        : null;
+
+  // Tiles AND ad-hoc text compile against the dashboard's own file, as the
+  // CLI dev server does (packages/cli/src/dashboard.ts): a suggest query or a
+  // <VegaChart malloy=…> may name a source that only the dashboard file
+  // defines. Compiling ad-hoc text against index.malloy instead would pass in
+  // `malloyyo dashboard dev` and fail once published. Reach is unchanged —
+  // the restricted gate below is what bounds it, and the dashboard file
+  // imports index.malloy anyway.
   const entry = fileUrl(entryFile);
 
-  if (typeof req.malloy === "string") {
+  if (malloyText !== null) {
     // Restricted text: core rejects anything outside the model's published
     // surface with 'restricted-construct-forbidden'. The runtime cast bridges
     // the app/engine duplicate @malloydata/malloy installs (same seam as
     // mcp-host.ts) — one runtime object, two identical declaration trees.
     type EngineRuntime = Parameters<typeof runRestricted>[0];
     const out = await withModelRuntime(files, found.model.id, (runtime) =>
-      runRestricted(runtime as unknown as EngineRuntime, entry, req.malloy as string, {
+      runRestricted(runtime as unknown as EngineRuntime, entry, malloyText, {
         givens: givens ?? {},
         stableResult: true,
         rowLimit: maxRows,

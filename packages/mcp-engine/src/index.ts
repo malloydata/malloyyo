@@ -37,6 +37,8 @@ export type {
   HelpTopic,
   HostOnly,
   JoinInfo,
+  DashboardEntry,
+  ListedDashboard,
   ListedModel,
   ListedSource,
   ListSourcesResult,

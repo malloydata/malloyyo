@@ -189,8 +189,9 @@ function registerAuthoringTools(server: McpServer, scope: RequestScope): void {
         `\`useQuery({ malloy: "run: flights -> { group_by: carrier; aggregate: flight_count }" })\` ` +
         `— plus a \`title\`. Malloy runs against the model's published surface under the same ` +
         `rules as the \`query\` tool. For controls, named queries or a chart with no code, add ` +
-        `\`malloy\`: a dashboards/<name>.malloy tagged \`# artifact\` (yo_help ` +
-        `"dashboards/authoring"). Reports each query's result and any component compile error, ` +
+        `\`malloy\`: a dashboards/<name>.malloy tagged \`# artifact\`. Read ` +
+        `yo_help("dashboards/drafts") BEFORE writing one — it has the component shape, what you ` +
+        `may import, and the query rules. Reports each query's result and any component compile error, ` +
         `so fix what it reports before showing the user. Pass \`slug\` to update a draft you ` +
         `already saved; show_dashboard renders it by the returned \`dashboard\` name.`,
       annotations: { readOnlyHint: false },

@@ -114,12 +114,16 @@ function readComponent(root: string, name: string): string {
 export async function scratchPush(
   name: string,
   dir: string,
-  opts: { instance?: string; dataset?: string; token?: string; new?: boolean },
+  opts: { instance?: string; dataset?: string; token?: string; new?: boolean; title?: string },
 ): Promise<void> {
   const root = resolve(dir);
   const malloyPath = join(root, "dashboards", `${name}.malloy`);
-  if (!existsSync(malloyPath)) {
-    throw new Error(`${malloyPath} not found — a scratch dashboard is dashboards/<name>.malloy (+ optional .jsx/.tsx)`);
+  const malloy = existsSync(malloyPath) ? readFileSync(malloyPath, "utf8") : "";
+  const source = readComponent(root, name);
+  if (!malloy && !source) {
+    throw new Error(
+      `nothing to push: expected dashboards/${name}.tsx (or .jsx), dashboards/${name}.malloy, or both, under ${root}`,
+    );
   }
   const t = resolvePublishTarget(root, undefined, { instance: opts.instance, dataset: opts.dataset });
   const bearer = await getAccessToken(t, { tokenFlag: opts.token });
@@ -131,12 +135,7 @@ export async function scratchPush(
   const res = await apiFetch(`${t.url}/api/datasets/${encodeURIComponent(t.dataset)}/scratch`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${bearer}` },
-    body: JSON.stringify({
-      name,
-      malloy: readFileSync(malloyPath, "utf8"),
-      source: readComponent(root, name),
-      slug,
-    }),
+    body: JSON.stringify({ name, malloy, source, title: opts.title, slug }),
   });
   const out = (await res.json().catch(() => ({ ok: false, error: `${res.status} ${res.statusText}` }))) as PushResult;
 

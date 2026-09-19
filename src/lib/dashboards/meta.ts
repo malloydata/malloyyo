@@ -137,7 +137,12 @@ export async function getDashboard(userId: string, datasetId: string, name: stri
       // Pinned: a scratch dashboard runs against the model version it was
       // built on, not whatever the dataset has moved to since.
       modelId: s.modelId,
-      scratch: { id: s.id, files: { [entryFile]: s.malloy }, version: s.updatedAt.toISOString() },
+      // A component-only draft has no dashboard file to lay over the model.
+      scratch: {
+        id: s.id,
+        files: s.malloy.trim() ? { [entryFile]: s.malloy } : {},
+        version: s.updatedAt.toISOString(),
+      },
     };
   }
   const [a] = await db

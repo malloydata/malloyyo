@@ -171,29 +171,43 @@ function registerAuthoringTools(server: McpServer, scope: RequestScope): void {
     }),
   );
 
-  type SaveArgs = { dataset: string; name: string; malloy: string; source?: string; slug?: string };
+  type SaveArgs = {
+    dataset: string;
+    name: string;
+    source?: string;
+    malloy?: string;
+    title?: string;
+    slug?: string;
+  };
   server.registerTool(
     SAVE_SCRATCH_TOOL,
     {
       title: "Save a scratch dashboard",
       description:
-        `${tag} Saves a scratch (draft) dashboard: the text of dashboards/<name>.malloy (which ` +
-        `imports "../index.malloy" and tags its query \`# artifact\`) and an optional JSX/TSX ` +
-        `component. The .malloy may only build on what the model publishes (restricted rules, as ` +
-        `in \`query\`). Returns a URL to view it, each tile's test run, and component compile ` +
-        `errors. Pass \`slug\` to update one you saved before. show_dashboard renders it with ` +
-        `the returned \`dashboard\` name.`,
+        `${tag} Saves a draft dashboard and returns a URL to open it. Simplest form: a React ` +
+        `component (\`source\`) that runs its own queries inline — ` +
+        `\`useQuery({ malloy: "run: flights -> { group_by: carrier; aggregate: flight_count }" })\` ` +
+        `— plus a \`title\`. Malloy runs against the model's published surface under the same ` +
+        `rules as the \`query\` tool. For controls, named queries or a chart with no code, add ` +
+        `\`malloy\`: a dashboards/<name>.malloy tagged \`# artifact\` (yo_help ` +
+        `"dashboards/authoring"). Reports each query's result and any component compile error, ` +
+        `so fix what it reports before showing the user. Pass \`slug\` to update a draft you ` +
+        `already saved; show_dashboard renders it by the returned \`dashboard\` name.`,
       annotations: { readOnlyHint: false },
       inputSchema: fromJsonSchema<SaveArgs>({
         type: "object",
         properties: {
           dataset: { type: "string", description: "Dataset name (the model_ref list_sources reports)." },
-          name: { type: "string", description: "The dashboard's file basename, e.g. \"trend\"." },
-          malloy: { type: "string", description: "Contents of dashboards/<name>.malloy." },
-          source: { type: "string", description: "Optional component source (JSX/TSX)." },
-          slug: { type: "string", description: "Update this scratch dashboard instead of creating one." },
+          name: { type: "string", description: 'A short name, e.g. "revenue_trend".' },
+          source: { type: "string", description: "The React component (JSX/TSX), default-exported." },
+          malloy: {
+            type: "string",
+            description: "Optional dashboards/<name>.malloy — needed only for controls, named queries, or a tag-only dashboard.",
+          },
+          title: { type: "string", description: "Shown as the dashboard's title (a .malloy carries its own)." },
+          slug: { type: "string", description: "Update this draft instead of creating one." },
         },
-        required: ["dataset", "name", "malloy"],
+        required: ["dataset", "name"],
       }),
     },
     logged(scope, SAVE_SCRATCH_TOOL, async (a: SaveArgs) => {

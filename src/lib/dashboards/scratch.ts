@@ -53,8 +53,11 @@ const EXPERIMENT_RE = /^[ \t]*##![ \t]*experimental[ \t]*\{([^}\n]*)\}[ \t]*$/gm
 export interface ScratchInput {
   /** The dashboard's name — its file basename, e.g. "trend". */
   name: string;
-  /** dashboards/<name>.malloy */
-  malloy: string;
+  /** dashboards/<name>.malloy. Optional: a component that runs its own
+      queries inline (useQuery({malloy})) needs no dashboard file at all. */
+  malloy?: string;
+  /** Title for a component-only draft; a .malloy file carries its own. */
+  title?: string;
   /** The optional component (JSX/TSX). Empty or absent: a tag-only dashboard. */
   source?: string;
   /** Overwrite this scratch dashboard (it must be the caller's) instead of making a new one. */
@@ -83,6 +86,28 @@ export type ScratchSaveResult =
       component: { ok: boolean; error?: string; line?: number };
     }
   | { ok: false; error: string; problems?: Problem[] };
+
+/**
+ * The Malloy a component runs inline: `useQuery({ malloy: `run: …` })`,
+ * `<VegaChart malloy={`run: …`}>`, `runData(`run: …`)`. Checked at save so a
+ * component-only draft gets the same "this query is wrong, and why" report a
+ * dashboard file gets — otherwise its queries fail for the first viewer.
+ *
+ * Literals only: a query built from a template expression is skipped (it can
+ * only be judged when it runs), as is anything not starting with `run:`.
+ */
+export function inlineQueries(source: string): string[] {
+  const out = new Set<string>();
+  const patterns = [/\b(?:malloy|query)\s*:\s*`([^`]*)`/g, /\brunData\s*\(\s*`([^`]*)`/g];
+  for (const re of patterns) {
+    for (const m of source.matchAll(re)) {
+      const text = m[1];
+      if (text.includes("${") || !/^\s*run\s*:/.test(text)) continue;
+      out.add(text.trim());
+    }
+  }
+  return [...out];
+}
 
 /** The file minus its `import "../index.malloy"` and its allowed
     `##! experimental { … }` line — what the gate checks. */
@@ -113,7 +138,9 @@ export async function saveScratchDashboard(
   }
   const malloy = String(input.malloy ?? "");
   const source = String(input.source ?? "");
-  if (!malloy.trim()) return { ok: false, error: `dashboards/${name}.malloy is empty` };
+  if (!malloy.trim() && !source.trim()) {
+    return { ok: false, error: "give a component (source), a dashboards/<name>.malloy, or both" };
+  }
   if (malloy.length > MAX_TEXT || source.length > MAX_TEXT) {
     return { ok: false, error: `each file is limited to ${MAX_TEXT / 1024} KB` };
   }
@@ -135,39 +162,48 @@ export async function saveScratchDashboard(
   }
 
   const baseFiles = await modelFileMap(found.model);
+  const files = new Map(baseFiles);
+  const entryFile = `dashboards/${name}.malloy`;
   type EngineRuntime = Parameters<typeof validateRestricted>[0];
 
-  // 1. The gate — against the model's own files, before this file is compiled.
-  const gate = await withModelRuntime(baseFiles, found.model.id, (runtime) =>
-    validateRestricted(runtime as unknown as EngineRuntime, fileUrl("index.malloy"), scratchBody(malloy)),
-  );
-  const blocking = gate.ok ? [] : gate.problems.filter((p) => p.severity === "error" && !isNoQueriesProblem(p));
-  if (blocking.length > 0) {
-    return {
-      ok: false,
-      error: `dashboards/${name}.malloy failed the restricted check (it may only build on what index.malloy publishes)`,
-      problems: blocking,
-    };
-  }
+  // A component-only draft has no dashboard file to gate or read a tag from:
+  // its queries are inline restricted Malloy, checked when they run, against
+  // the model's published surface. The manifest is then just a title — the
+  // same queryless shape the written About page uses.
+  let manifest: Record<string, unknown> = { title: String(input.title ?? name) };
+  let title = String(input.title ?? name);
 
-  // 2. Now safe to compile as the dashboard's own entry: read its `# artifact`.
-  const entryFile = `dashboards/${name}.malloy`;
-  const files = new Map(baseFiles);
-  files.set(entryFile, malloy);
-  const art = await withModelRuntime(files, undefined, (runtime) =>
-    modelArtifact(runtime as unknown as Parameters<typeof modelArtifact>[0], fileUrl(entryFile), name),
-  );
-  if (!art.ok) return { ok: false, error: `dashboards/${name}.malloy does not compile: ${art.error}` };
-  if (!art.artifact) {
-    return {
-      ok: false,
-      error:
-        `dashboards/${name}.malloy declares no dashboard: tag a query \`# artifact\`, ` +
-        "or the file `## artifact { tiles=[…] }` (yo_help dashboards/authoring)",
-    };
+  if (malloy.trim()) {
+    // 1. The gate — against the model's own files, before this file is compiled.
+    const gate = await withModelRuntime(baseFiles, found.model.id, (runtime) =>
+      validateRestricted(runtime as unknown as EngineRuntime, fileUrl("index.malloy"), scratchBody(malloy)),
+    );
+    const blocking = gate.ok ? [] : gate.problems.filter((p) => p.severity === "error" && !isNoQueriesProblem(p));
+    if (blocking.length > 0) {
+      return {
+        ok: false,
+        error: `dashboards/${name}.malloy failed the restricted check (it may only build on what index.malloy publishes)`,
+        problems: blocking,
+      };
+    }
+
+    // 2. Now safe to compile as the dashboard's own entry: read its `# artifact`.
+    files.set(entryFile, malloy);
+    const art = await withModelRuntime(files, undefined, (runtime) =>
+      modelArtifact(runtime as unknown as Parameters<typeof modelArtifact>[0], fileUrl(entryFile), name),
+    );
+    if (!art.ok) return { ok: false, error: `dashboards/${name}.malloy does not compile: ${art.error}` };
+    if (!art.artifact) {
+      return {
+        ok: false,
+        error:
+          `dashboards/${name}.malloy declares no dashboard: tag a query \`# artifact\`, ` +
+          "or the file `## artifact { tiles=[…] }` (yo_help dashboards/authoring)",
+      };
+    }
+    manifest = artifactManifest(name, art.artifact);
+    title = String(art.artifact.title ?? name);
   }
-  const manifest = artifactManifest(name, art.artifact);
-  const title = String(art.artifact.title ?? name);
 
   // 3. The component compiles (esbuild-wasm). A failure is reported, not fatal:
   //    the dashboard still saves, so its data side can be checked meanwhile.
@@ -223,6 +259,24 @@ export async function saveScratchDashboard(
     } catch (e) {
       tiles.push({ run, ok: false, error: e instanceof Error ? e.message : String(e) });
     }
+  }
+
+  // 6. The component's own inline queries, compiled (not run) against the
+  //    model — the only check a component-only draft can get before a viewer
+  //    opens it.
+  const inline = inlineQueries(source);
+  if (inline.length > 0) {
+    await withModelRuntime(baseFiles, found.model.id, async (runtime) => {
+      for (const text of inline) {
+        const v = await validateRestricted(runtime as unknown as EngineRuntime, fileUrl("index.malloy"), text);
+        const label = text.replace(/\s+/g, " ").slice(0, 60);
+        tiles.push(
+          v.ok
+            ? { run: label, ok: true }
+            : { run: label, ok: false, error: v.problems.map((p) => p.message).join("; ") },
+        );
+      }
+    });
   }
 
   const dashboard = `${SCRATCH_PREFIX}${row.slug}`;

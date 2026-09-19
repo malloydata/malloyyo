@@ -353,3 +353,46 @@ test("save_scratch_dashboard: the restricted gate runs before anything compiles"
     await client.close();
   }
 });
+
+test("save_scratch_dashboard: a component alone is a dashboard, and its inline queries are checked", async () => {
+  const client = await connect(mcpToken, { mode: { pin: "2026-07-28" } });
+  try {
+    const component = (field: string) => `import { useQuery } from "@malloyyo/dashboard";
+export default function D() {
+  const { rows } = useQuery({ malloy: \`run: sales -> { group_by: ${field}; aggregate: total_qty }\` });
+  return <ol>{rows.map((r) => <li key={String(r.${field})}>{String(r.${field})}</li>)}</ol>;
+}
+`;
+    // No dashboards/<name>.malloy at all: the queries live in the component and
+    // run against the model's published surface, like any restricted query.
+    const bad = await client.callTool({
+      name: "save_scratch_dashboard",
+      arguments: { dataset: "petshop", name: "inline", title: "Inline", source: component("animl") },
+    });
+    assert.notEqual(bad.isError, true, "a bad inline query is a report, not a refusal");
+    const badOut = bad.structuredContent as { slug: string; tiles: Array<{ ok: boolean; error?: string }> };
+    assert.equal(badOut.tiles[0]?.ok, false);
+    assert.match(badOut.tiles[0]?.error ?? "", /'animl' is not defined/);
+
+    const good = await client.callTool({
+      name: "save_scratch_dashboard",
+      arguments: { dataset: "petshop", name: "inline", title: "Inline", source: component("animal"), slug: badOut.slug },
+    });
+    const out = good.structuredContent as { slug: string; title: string; tiles: Array<{ ok: boolean }> };
+    assert.equal(out.slug, badOut.slug);
+    assert.equal(out.title, "Inline");
+    assert.ok(out.tiles.every((t) => t.ok));
+
+    // It renders as a custom dashboard: a queryless manifest, source and all.
+    const view = await client.callTool({
+      name: "dashboard_bundle",
+      arguments: { datasetId: "petshop", name: `scratch-${out.slug}` },
+    });
+    const bundle = view.structuredContent as { ok: boolean; title: string; js?: string };
+    assert.equal(bundle.ok, true);
+    assert.equal(bundle.title, "Inline");
+    assert.ok((bundle.js ?? "").length > 0);
+  } finally {
+    await client.close();
+  }
+});

@@ -283,11 +283,12 @@ const scratch = program
 
 scratch
   .command("push")
-  .argument("<name>", "dashboard name: pushes dashboards/<name>.malloy (+ .tsx/.jsx if present)")
+  .argument("<name>", "dashboard name: pushes dashboards/<name>.tsx|jsx and/or <name>.malloy")
   .argument("[dir]", "model directory", ".")
   .option("-i, --instance <instance>", "instance URL, or a configured target name")
   .option("--dataset <dataset>", "dataset to draft against; overrides the config")
   .option("--token <token>", "bearer token (overrides login/env)")
+  .option("--title <title>", "title for a component-only draft (a .malloy carries its own)")
   .option("--new", "save as a new draft instead of updating the last one pushed from here")
   .description("save a draft dashboard; prints its URL and test-runs its queries")
   .action(scratchPush);

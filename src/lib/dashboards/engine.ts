@@ -29,17 +29,17 @@ export type { DashboardDetail };
 /**
  * The files a dashboard compiles against and the key its runtime is pooled
  * under. A published dashboard: its model's files, keyed by the model. A
- * scratch dashboard: its PINNED model's files with its own dashboard file laid
- * over them, keyed by the scratch row's version — so a save is a new runtime,
- * never a stale compile of the previous text.
+ * draft: the model's files (the dataset's CURRENT version — meta.ts resolves
+ * it) with its own dashboard file laid over them, keyed by the draft row's
+ * version, so a save is a new runtime rather than a stale compile.
  */
 async function dashboardFiles(dash: DashboardDetail): Promise<{ files: Map<string, string>; cacheKey: string }> {
   const [model] = await db.select().from(malloyModels).where(eq(malloyModels.id, dash.modelId)).limit(1);
   if (!model) throw new Error("dashboard model not found");
   const files = await modelFileMap(model);
-  if (!dash.scratch) return { files, cacheKey: model.id };
-  for (const [path, content] of Object.entries(dash.scratch.files)) files.set(path, content);
-  return { files, cacheKey: `${model.id}:scratch:${dash.scratch.id}:${dash.scratch.version}` };
+  if (!dash.draft) return { files, cacheKey: model.id };
+  for (const [path, content] of Object.entries(dash.draft.files)) files.set(path, content);
+  return { files, cacheKey: `${model.id}:draft:${dash.draft.id}:${dash.draft.version}` };
 }
 
 /** Card name for a tile run-expression: the view name from `source -> view`,

@@ -21,7 +21,7 @@ import { initCmd } from "./init.js";
 import { sqlCmd } from "./sql.js";
 import { launchCmd } from "./launch.js";
 import { clearCreds } from "./store.js";
-import { loginWithToken, scratchPush } from "./scratch.js";
+import { draftList, draftPromote, loginWithToken } from "./draft.js";
 import { registerCloudCommands } from "./cloud/index.js";
 import type { PublishRequest, ModelStatus } from "./protocol.js";
 // Single source of truth: the build runs after the release bump, so esbuild
@@ -277,21 +277,31 @@ program
   .description("sign in to an instance in your browser (stores a token)")
   .action(loginCmd);
 
-const scratch = program
-  .command("scratch")
-  .description("draft dashboards stored on an instance, not in the published model");
+const draft = program
+  .command("draft")
+  .description("draft dashboards made on an instance, before they live in the model repo");
 
-scratch
-  .command("push")
-  .argument("<name>", "dashboard name: pushes dashboards/<name>.tsx|jsx and/or <name>.malloy")
+draft
+  .command("list")
   .argument("[dir]", "model directory", ".")
   .option("-i, --instance <instance>", "instance URL, or a configured target name")
-  .option("--dataset <dataset>", "dataset to draft against; overrides the config")
+  .option("--dataset <dataset>", "dataset whose drafts to list; overrides the config")
   .option("--token <token>", "bearer token (overrides login/env)")
-  .option("--title <title>", "title for a component-only draft (a .malloy carries its own)")
-  .option("--new", "save as a new draft instead of updating the last one pushed from here")
-  .description("save a draft dashboard; prints its URL and test-runs its queries")
-  .action(scratchPush);
+  .description("list your drafts on an instance")
+  .action(draftList);
+
+draft
+  .command("promote")
+  .argument("<slug>", "draft slug, as `malloyyo draft list` prints it")
+  .argument("[dir]", "model directory to write into", ".")
+  .option("-i, --instance <instance>", "instance URL, or a configured target name")
+  .option("--dataset <dataset>", "dataset the draft belongs to; overrides the config")
+  .option("--token <token>", "bearer token (overrides login/env)")
+  .option("--name <name>", "dashboard name to write as (default: the draft's own)")
+  .option("--tsx", "write the component as .tsx instead of .jsx")
+  .option("--force", "overwrite existing dashboard files of that name")
+  .description("write a draft into this repo as dashboards/<name>.malloy + component")
+  .action(draftPromote);
 
 program
   .command("logout")

@@ -7,7 +7,7 @@ import type { ArtifactInfo } from "@malloyyo/mcp-engine";
  * The stored manifest for a structure-v2 dashboard read from
  * `dashboards/<base>.malloy`: `entryFile` (so the server runs it against its
  * own file) plus `tiles` or `query`, and the tag's presentation settings.
- * Shared by the GitHub refresh and scratch dashboards so the two can't drift
+ * Shared by the GitHub refresh and draft dashboards so the two can't drift
  * from each other — or from what the CLI publish path sends.
  */
 export function artifactManifest(base: string, a: ArtifactInfo): Record<string, unknown> {

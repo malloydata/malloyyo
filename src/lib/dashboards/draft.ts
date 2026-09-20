@@ -1,46 +1,46 @@
 // Copyright (c) The Malloy Foundation
 // SPDX-License-Identifier: MIT
 
-// Saving a scratch dashboard — the Malloy half, so API routes only (it reaches
+// Saving a draft dashboard — the Malloy half, so API routes only (it reaches
 // @/lib/malloy and DuckDB; see the note at the top of ./engine). Reading one
 // back is ./meta's getDashboard, which every dashboard route already calls.
 //
-// A scratch dashboard is exactly what a model repo would hold for one
+// A draft dashboard is exactly what a model repo would hold for one
 // dashboard: `dashboards/<name>.malloy` (importing ../index.malloy) and an
 // optional component. Keeping that shape is what lets it move into the repo
 // unchanged later.
 //
 // GOVERNANCE. A published dashboard file is trusted because its author
-// committed it. A scratch file comes from any member with the `mcp` scope, and
+// committed it. A draft's file comes from any member with the `mcp` scope, and
 // compiling Malloy can already run SQL (schema lookups on `duckdb.sql(...)`,
 // `connection.table(...)`). So before the file is compiled as a model file at
 // all, its body — the file minus its `import "../index.malloy"` line — must
 // pass core's restricted gate against index.malloy: no raw SQL, no connection
 // access, no other imports, no `given:` declarations. That is the same contract
-// the explore `query` tool runs under, so a scratch dashboard can reach exactly
+// the explore `query` tool runs under, so a draft dashboard can reach exactly
 // what a query can. The stored text is the validated text; every save
 // re-validates.
 
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { modelArtifact, validateRestricted, type Problem } from "@malloyyo/mcp-engine";
-import { db, scratchDashboards } from "@/db";
+import { db, draftDashboards } from "@/db";
 import { findByDatasetRef, modelFileMap } from "@/lib/mcp-tools";
 import { fileUrl, runNamedMalloyFiles, withModelRuntime } from "@/lib/malloy";
 import { newDatasetSlug } from "@/lib/slug";
 import { bundleDashboard } from "./bundle";
 import { artifactManifest } from "./manifest";
-import { SCRATCH_PREFIX } from "./meta";
+import { DRAFT_PREFIX } from "./meta";
 
 const NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 const MAX_TEXT = 256 * 1024;
 /** Rows fetched per tile when a save test-runs its queries — a check, not a read. */
 const TILE_SAMPLE_ROWS = 3;
 
-/** The one import a scratch dashboard file may carry: the model's own entry. */
+/** The one import a draft dashboard file may carry: the model's own entry. */
 const INDEX_IMPORT_RE = /^[ \t]*import[ \t]+(["'])\.\.\/index\.malloy\1[ \t]*;?[ \t]*$/gm;
 
 /**
- * The compiler flags a scratch dashboard file may set. Restricted mode forbids
+ * The compiler flags a draft dashboard file may set. Restricted mode forbids
  * `##!` outright, but a dashboard using givens can't compile without
  * `##! experimental { givens }` in its own file — every real dashboard file
  * starts with it. These two switch on language features (given references,
@@ -50,7 +50,7 @@ const INDEX_IMPORT_RE = /^[ \t]*import[ \t]+(["'])\.\.\/index\.malloy\1[ \t]*;?[
 const ALLOWED_EXPERIMENTS = new Set(["givens", "access_modifiers"]);
 const EXPERIMENT_RE = /^[ \t]*##![ \t]*experimental[ \t]*\{([^}\n]*)\}[ \t]*$/gm;
 
-export interface ScratchInput {
+export interface DraftInput {
   /** The dashboard's name — its file basename, e.g. "trend". */
   name: string;
   /** dashboards/<name>.malloy. Optional: a component that runs its own
@@ -60,11 +60,11 @@ export interface ScratchInput {
   title?: string;
   /** The optional component (JSX/TSX). Empty or absent: a tag-only dashboard. */
   source?: string;
-  /** Overwrite this scratch dashboard (it must be the caller's) instead of making a new one. */
+  /** Overwrite this draft dashboard (it must be the caller's) instead of making a new one. */
   slug?: string;
 }
 
-export interface ScratchTileReport {
+export interface DraftTileReport {
   run: string;
   ok: boolean;
   rowCount?: number;
@@ -73,16 +73,16 @@ export interface ScratchTileReport {
   error?: string;
 }
 
-export type ScratchSaveResult =
+export type DraftSaveResult =
   | {
       ok: true;
       slug: string;
-      /** The dashboard name every route takes: `scratch-<slug>`. */
+      /** The dashboard name every route takes: `draft-<slug>`. */
       dashboard: string;
       dataset: string;
       title: string;
       url: string;
-      tiles: ScratchTileReport[];
+      tiles: DraftTileReport[];
       component: { ok: boolean; error?: string; line?: number };
     }
   | { ok: false; error: string; problems?: Problem[] };
@@ -111,7 +111,7 @@ export function inlineQueries(source: string): string[] {
 
 /** The file minus its `import "../index.malloy"` and its allowed
     `##! experimental { … }` line — what the gate checks. */
-export function scratchBody(malloy: string): string {
+export function draftBody(malloy: string): string {
   return malloy
     .replace(INDEX_IMPORT_RE, "")
     .replace(EXPERIMENT_RE, (line, flags: string) => {
@@ -126,12 +126,12 @@ function isNoQueriesProblem(p: Problem): boolean {
   return /Model has no queries/.test(p.message);
 }
 
-export async function saveScratchDashboard(
+export async function saveDraftDashboard(
   userId: string,
   datasetRef: string,
-  input: ScratchInput,
+  input: DraftInput,
   origin: string,
-): Promise<ScratchSaveResult> {
+): Promise<DraftSaveResult> {
   const name = String(input.name ?? "").trim();
   if (!NAME_RE.test(name)) {
     return { ok: false, error: "name must be letters, digits, '-' or '_' (the dashboard file's basename)" };
@@ -150,15 +150,15 @@ export async function saveScratchDashboard(
   if (found.ds.status !== "ready") return { ok: false, error: "dataset not ready" };
 
   // Overwrite only your own. Checked before any compile work.
-  let existing: typeof scratchDashboards.$inferSelect | undefined;
+  let existing: typeof draftDashboards.$inferSelect | undefined;
   if (input.slug) {
     [existing] = await db
       .select()
-      .from(scratchDashboards)
-      .where(and(eq(scratchDashboards.slug, input.slug), eq(scratchDashboards.datasetId, found.ds.id)))
+      .from(draftDashboards)
+      .where(and(eq(draftDashboards.slug, input.slug), eq(draftDashboards.datasetId, found.ds.id)))
       .limit(1);
-    if (!existing) return { ok: false, error: `no scratch dashboard '${input.slug}' in '${found.ds.name}'` };
-    if (existing.userId !== userId) return { ok: false, error: "that scratch dashboard belongs to someone else" };
+    if (!existing) return { ok: false, error: `no draft dashboard '${input.slug}' in '${found.ds.name}'` };
+    if (existing.userId !== userId) return { ok: false, error: "that draft dashboard belongs to someone else" };
   }
 
   const baseFiles = await modelFileMap(found.model);
@@ -176,7 +176,7 @@ export async function saveScratchDashboard(
   if (malloy.trim()) {
     // 1. The gate — against the model's own files, before this file is compiled.
     const gate = await withModelRuntime(baseFiles, found.model.id, (runtime) =>
-      validateRestricted(runtime as unknown as EngineRuntime, fileUrl("index.malloy"), scratchBody(malloy)),
+      validateRestricted(runtime as unknown as EngineRuntime, fileUrl("index.malloy"), draftBody(malloy)),
     );
     const blocking = gate.ok ? [] : gate.problems.filter((p) => p.severity === "error" && !isNoQueriesProblem(p));
     if (blocking.length > 0) {
@@ -228,9 +228,9 @@ export async function saveScratchDashboard(
     updatedAt: new Date(),
   };
   const [row] = existing
-    ? await db.update(scratchDashboards).set(values).where(eq(scratchDashboards.id, existing.id)).returning()
+    ? await db.update(draftDashboards).set(values).where(eq(draftDashboards.id, existing.id)).returning()
     : await db
-        .insert(scratchDashboards)
+        .insert(draftDashboards)
         .values({ ...values, slug: newDatasetSlug(), userId, datasetId: found.ds.id })
         .returning();
 
@@ -242,8 +242,8 @@ export async function saveScratchDashboard(
     : typeof manifest.query === "string"
       ? [manifest.query]
       : [];
-  const cacheKey = `${found.model.id}:scratch:${row.id}:${row.updatedAt.toISOString()}`;
-  const tiles: ScratchTileReport[] = [];
+  const cacheKey = `${found.model.id}:draft:${row.id}:${row.updatedAt.toISOString()}`;
+  const tiles: DraftTileReport[] = [];
   for (const run of runs) {
     try {
       const r = await runNamedMalloyFiles(files, entryFile, run, {}, { rowLimit: TILE_SAMPLE_ROWS, cacheKey });
@@ -279,7 +279,7 @@ export async function saveScratchDashboard(
     });
   }
 
-  const dashboard = `${SCRATCH_PREFIX}${row.slug}`;
+  const dashboard = `${DRAFT_PREFIX}${row.slug}`;
   return {
     ok: true,
     slug: row.slug,
@@ -292,3 +292,97 @@ export async function saveScratchDashboard(
   };
 }
 
+// ── promotion ────────────────────────────────────────────────────────────────
+
+export interface DraftSummary {
+  slug: string;
+  dashboard: string;
+  name: string;
+  title: string;
+  updatedAt: string;
+  hasComponent: boolean;
+  hasMalloy: boolean;
+  promotedAs: string | null;
+}
+
+/** This user's drafts on a dataset, newest first — what `malloyyo draft list`
+    shows so a promoter can pick one without hunting for a slug. */
+export async function listDrafts(userId: string, datasetRef: string): Promise<DraftSummary[]> {
+  const found = await findByDatasetRef(userId, datasetRef);
+  if (!found) return [];
+  const rows = await db
+    .select()
+    .from(draftDashboards)
+    .where(and(eq(draftDashboards.datasetId, found.ds.id), eq(draftDashboards.userId, userId)))
+    .orderBy(desc(draftDashboards.updatedAt));
+  return rows.map((r) => ({
+    slug: r.slug,
+    dashboard: `${DRAFT_PREFIX}${r.slug}`,
+    name: r.name,
+    title: r.title ?? r.name,
+    updatedAt: r.updatedAt.toISOString(),
+    hasComponent: r.source.trim().length > 0,
+    hasMalloy: r.malloy.trim().length > 0,
+    promotedAs: r.promotedAs,
+  }));
+}
+
+export interface DraftFiles extends DraftSummary {
+  malloy: string;
+  source: string;
+  /** The literal Malloy the component runs inline — what promotion must lift
+      into named queries, since a repo dashboard's queries live in its
+      .malloy file. */
+  inline: string[];
+}
+
+/** One draft's files. Readable by anyone who can see the dataset: they can
+    already open the dashboard and read its compiled bundle. */
+export async function getDraftFiles(userId: string, datasetRef: string, slug: string): Promise<DraftFiles | null> {
+  const found = await findByDatasetRef(userId, datasetRef);
+  if (!found) return null;
+  const [r] = await db
+    .select()
+    .from(draftDashboards)
+    .where(and(eq(draftDashboards.slug, slug), eq(draftDashboards.datasetId, found.ds.id)))
+    .limit(1);
+  if (!r) return null;
+  return {
+    slug: r.slug,
+    dashboard: `${DRAFT_PREFIX}${r.slug}`,
+    name: r.name,
+    title: r.title ?? r.name,
+    updatedAt: r.updatedAt.toISOString(),
+    hasComponent: r.source.trim().length > 0,
+    hasMalloy: r.malloy.trim().length > 0,
+    promotedAs: r.promotedAs,
+    malloy: r.malloy,
+    source: r.source,
+    inline: inlineQueries(r.source),
+  };
+}
+
+/**
+ * Record that a draft was written into a repo as `name`, with a hash of what
+ * was written.
+ *
+ * NOT a delete and NOT a lock. The draft stays the only usable copy until the
+ * model version carrying the promoted dashboard goes live, people hold its
+ * URL, and nothing bad happens if it keeps being edited afterwards — the hash
+ * is what shows the two have diverged.
+ */
+export async function recordPromotion(
+  userId: string,
+  datasetRef: string,
+  slug: string,
+  promoted: { name: string; hash: string },
+): Promise<boolean> {
+  const found = await findByDatasetRef(userId, datasetRef);
+  if (!found) return false;
+  const rows = await db
+    .update(draftDashboards)
+    .set({ promotedAs: promoted.name, promotedHash: promoted.hash, promotedAt: new Date() })
+    .where(and(eq(draftDashboards.slug, slug), eq(draftDashboards.datasetId, found.ds.id)))
+    .returning({ id: draftDashboards.id });
+  return rows.length > 0;
+}

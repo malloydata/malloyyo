@@ -298,12 +298,12 @@ test("issue_cli_token: a query-only, hour-long token for THIS server's URL, that
   }
 });
 
-test("save_scratch_dashboard: saves a draft that every dashboard tool then serves", async () => {
+test("save_draft_dashboard: saves a draft that every dashboard tool then serves", async () => {
   const client = await connect(mcpToken, { mode: { pin: "2026-07-28" } });
   try {
     const malloy = `##! experimental { access_modifiers givens }\nimport "../index.malloy"\n# artifact { title="Animals" }\nquery: animals is sales -> { group_by: animal; aggregate: total_qty }\n`;
     const saved = await client.callTool({
-      name: "save_scratch_dashboard",
+      name: "save_draft_dashboard",
       arguments: { dataset: "petshop", name: "animals", malloy },
     });
     assert.notEqual(saved.isError, true, JSON.stringify(saved.content));
@@ -313,7 +313,7 @@ test("save_scratch_dashboard: saves a draft that every dashboard tool then serve
       url: string;
       tiles: Array<{ ok: boolean; rowCount?: number }>;
     };
-    assert.match(out.dashboard, /^scratch-[a-z0-9]+$/);
+    assert.match(out.dashboard, /^draft-[a-z0-9]+$/);
     assert.equal(out.url, `http://localhost:3000/datasets/petshop/dashboard/${out.dashboard}`);
     assert.equal(out.tiles.length, 1);
     assert.ok(out.tiles[0].ok);
@@ -334,7 +334,7 @@ test("save_scratch_dashboard: saves a draft that every dashboard tool then serve
 
     // Re-saving with the slug updates it in place.
     const again = await client.callTool({
-      name: "save_scratch_dashboard",
+      name: "save_draft_dashboard",
       arguments: { dataset: "petshop", name: "animals", malloy: malloy.replace("Animals", "Animals v2"), slug: out.slug },
     });
     assert.equal((again.structuredContent as { slug: string }).slug, out.slug);
@@ -344,7 +344,7 @@ test("save_scratch_dashboard: saves a draft that every dashboard tool then serve
   }
 });
 
-test("save_scratch_dashboard: the restricted gate runs before anything compiles", async () => {
+test("save_draft_dashboard: the restricted gate runs before anything compiles", async () => {
   const client = await connect(mcpToken, { mode: { pin: "2026-07-28" } });
   try {
     const TAG = `# artifact { title="x" }`;
@@ -355,7 +355,7 @@ test("save_scratch_dashboard: the restricted gate runs before anything compiles"
       ["an unlisted flag", `##! experimental { sql_functions }\nimport "../index.malloy"\n${TAG}\nquery: q is sales -> { aggregate: total_qty }`, /compiler-flag annotations/],
     ] as const) {
       const r = await client.callTool({
-        name: "save_scratch_dashboard",
+        name: "save_draft_dashboard",
         arguments: { dataset: "petshop", name: "x", malloy },
       });
       assert.equal(r.isError, true, `${what} should be refused`);
@@ -366,7 +366,7 @@ test("save_scratch_dashboard: the restricted gate runs before anything compiles"
   }
 });
 
-test("save_scratch_dashboard: a component alone is a dashboard, and its inline queries are checked", async () => {
+test("save_draft_dashboard: a component alone is a dashboard, and its inline queries are checked", async () => {
   const client = await connect(mcpToken, { mode: { pin: "2026-07-28" } });
   try {
     const component = (field: string) => `import { useQuery } from "@malloyyo/dashboard";
@@ -378,7 +378,7 @@ export default function D() {
     // No dashboards/<name>.malloy at all: the queries live in the component and
     // run against the model's published surface, like any restricted query.
     const bad = await client.callTool({
-      name: "save_scratch_dashboard",
+      name: "save_draft_dashboard",
       arguments: { dataset: "petshop", name: "inline", title: "Inline", source: component("animl") },
     });
     assert.notEqual(bad.isError, true, "a bad inline query is a report, not a refusal");
@@ -387,7 +387,7 @@ export default function D() {
     assert.match(badOut.tiles[0]?.error ?? "", /'animl' is not defined/);
 
     const good = await client.callTool({
-      name: "save_scratch_dashboard",
+      name: "save_draft_dashboard",
       arguments: { dataset: "petshop", name: "inline", title: "Inline", source: component("animal"), slug: badOut.slug },
     });
     const out = good.structuredContent as { slug: string; title: string; tiles: Array<{ ok: boolean }> };
@@ -398,7 +398,7 @@ export default function D() {
     // It renders as a custom dashboard: a queryless manifest, source and all.
     const view = await client.callTool({
       name: "dashboard_bundle",
-      arguments: { datasetId: "petshop", name: `scratch-${out.slug}` },
+      arguments: { datasetId: "petshop", name: `draft-${out.slug}` },
     });
     const bundle = view.structuredContent as { ok: boolean; title: string; js?: string };
     assert.equal(bundle.ok, true);

@@ -13,7 +13,7 @@
 // This module must NEVER import ./engine or @/lib/malloy (statically or lazily).
 
 import { and, eq, asc, desc } from "drizzle-orm";
-import { db, datasets, malloyArtifacts, malloyModelFiles, scratchDashboards } from "@/db";
+import { db, datasets, malloyArtifacts, malloyModelFiles, draftDashboards } from "@/db";
 import { visibleDatasetWhere, findByDatasetRef, latestModel } from "@/lib/mcp-tools";
 import { aboutFirst } from "./about";
 import { imageHostsFromConfig } from "./image-hosts";
@@ -34,17 +34,17 @@ export interface DashboardDetail extends DashboardSummary {
   manifest: Record<string, unknown>;
   source: string;
   modelId: string;
-  /** Set for a scratch dashboard: its own files, laid over the model's, and a
+  /** Set for a draft dashboard: its own files, laid over the model's, and a
       version that changes on every save (the runtime cache key must, too). */
-  scratch?: { id: string; files: Record<string, string>; version: string };
+  draft?: { id: string; files: Record<string, string>; version: string };
 }
 
-/** Scratch dashboards are addressed as `scratch-<slug>` wherever a dashboard
+/** Draft dashboards are addressed as `draft-<slug>` wherever a dashboard
     name goes, so every dashboard route serves them without knowing about them. */
-export const SCRATCH_PREFIX = "scratch-";
+export const DRAFT_PREFIX = "draft-";
 
-export function scratchSlug(name: string): string | null {
-  return name.startsWith(SCRATCH_PREFIX) ? name.slice(SCRATCH_PREFIX.length) : null;
+export function draftSlug(name: string): string | null {
+  return name.startsWith(DRAFT_PREFIX) ? name.slice(DRAFT_PREFIX.length) : null;
 }
 
 async function artifactsForModel(modelId: string) {
@@ -118,13 +118,13 @@ export async function listAllDashboards(userId: string): Promise<DashboardSummar
 export async function getDashboard(userId: string, datasetId: string, name: string): Promise<DashboardDetail | null> {
   const found = await findByDatasetRef(userId, datasetId);
   if (!found) return null;
-  const slug = scratchSlug(name);
+  const slug = draftSlug(name);
   if (slug !== null) {
     // Visibility is the dataset's (checked above); the slug must belong to it.
     const [s] = await db
       .select()
-      .from(scratchDashboards)
-      .where(and(eq(scratchDashboards.slug, slug), eq(scratchDashboards.datasetId, found.ds.id)))
+      .from(draftDashboards)
+      .where(and(eq(draftDashboards.slug, slug), eq(draftDashboards.datasetId, found.ds.id)))
       .limit(1);
     if (!s) return null;
     const entryFile = typeof s.manifest.entryFile === "string" ? s.manifest.entryFile : `dashboards/${s.name}.malloy`;
@@ -135,11 +135,11 @@ export async function getDashboard(userId: string, datasetId: string, name: stri
       title: s.title ?? s.name,
       manifest: s.manifest,
       source: s.source,
-      // Pinned: a scratch dashboard runs against the model version it was
+      // Pinned: a draft dashboard runs against the model version it was
       // built on, not whatever the dataset has moved to since.
       modelId: s.modelId,
       // A component-only draft has no dashboard file to lay over the model.
-      scratch: {
+      draft: {
         id: s.id,
         files: s.malloy.trim() ? { [entryFile]: s.malloy } : {},
         version: s.updatedAt.toISOString(),

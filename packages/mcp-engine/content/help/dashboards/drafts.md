@@ -1,8 +1,8 @@
 ---
-description: Writing a draft (scratch) dashboard from a chat client — one component file, queries inline, saved with save_scratch_dashboard
+description: Writing a draft dashboard from a chat client — one component file, queries inline, saved with save_draft_dashboard; and how one is promoted into the model repo
 ---
 
-# Draft dashboards (`save_scratch_dashboard`)
+# Draft dashboards (`save_draft_dashboard`)
 
 A draft is a dashboard stored on this instance rather than in the model repo.
 It gets a URL, renders like any other dashboard, and can be re-saved as often
@@ -31,7 +31,7 @@ export default function Dashboard() {
 }
 ```
 
-Save it with `save_scratch_dashboard({ dataset, name, title, source })`. The
+Save it with `save_draft_dashboard({ dataset, name, title, source })`. The
 result carries a `url` to open and a `dashboard` name that `show_dashboard`
 renders. Pass the returned `slug` back on the next save to update the same
 draft instead of making another.
@@ -91,8 +91,24 @@ Pass `malloy` as well when the dashboard needs:
   renderer, which is often the better dashboard.
 
 That file is `dashboards/<name>.malloy`: it imports `"../index.malloy"` and
-tags a query `# artifact`. It's also the form a draft takes when it graduates
-into the model repo.
+tags a query `# artifact`.
+
+## Promotion
+
+A draft lives on the instance; the model repo is where dashboards belong. To
+move one in, from a checkout of the repo:
+
+```bash
+malloyyo draft list                  # find the slug
+malloyyo draft promote <slug>        # writes dashboards/<name>.malloy + component
+```
+
+Promotion writes the files and records what the draft became; it never deletes
+the draft, whose URL people may already hold. A draft whose queries are inline
+needs them LIFTED into its `.malloy` as named queries — the component then uses
+`useQuery({ query: "<name>" })` — because a repo dashboard's queries live in
+the model, not the component. The written `.malloy` carries them as comments to
+work from. Then `malloyyo lint`, and the usual PR.
 
 ## Iterating
 

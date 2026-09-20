@@ -29,7 +29,7 @@ import {
 } from "@/lib/mcp-app-dashboard";
 import { dashboardPanel, type DashboardPanel } from "@/lib/mcp-app-panel";
 import { getDashboard, listDashboards, visibleImageHosts } from "@/lib/dashboards";
-import { saveScratchDashboard } from "@/lib/dashboards/scratch";
+import { saveDraftDashboard } from "@/lib/dashboards/draft";
 import { createApiToken } from "@/lib/api-tokens";
 import { runDashboard } from "@/lib/dashboards/engine";
 import { bearerToken, credentialLabel, resolveBearer } from "@/lib/bearer-auth";
@@ -115,10 +115,10 @@ function buildServer(scope: RequestScope): McpServer {
 /** How long a CLI token from issue_cli_token lives. */
 const CLI_TOKEN_TTL_MS = 60 * 60 * 1000;
 const ISSUE_CLI_TOKEN_TOOL = "issue_cli_token";
-const SAVE_SCRATCH_TOOL = "save_scratch_dashboard";
+const SAVE_DRAFT_TOOL = "save_draft_dashboard";
 
 /**
- * Dashboard authoring from an agent: a CLI credential, and scratch dashboards.
+ * Dashboard authoring from an agent: a CLI credential, and draft dashboards.
  *
  * issue_cli_token lets an agent that is already connected here (Claude Code,
  * say) drive the `malloyyo` CLI against THIS instance without a browser
@@ -135,10 +135,10 @@ function registerAuthoringTools(server: McpServer, scope: RequestScope): void {
       title: "Issue a CLI token",
       description:
         `${tag} Issues a short-lived token so the \`malloyyo\` CLI can act as you against THIS ` +
-        `instance (${origin}) — e.g. \`malloyyo scratch push\` to build a dashboard from files. ` +
-        `Scope: query only (not publish); expires in an hour. Returns the URL and the command ` +
-        `that stores it. If a dataset exists on more than one connected instance, confirm with ` +
-        `the user which instance first.`,
+        `instance (${origin}) — \`malloyyo draft list\` and \`malloyyo draft promote <slug>\`, which ` +
+        `write a draft dashboard into a model checkout. Scope: query only (never publish); expires ` +
+        `in an hour. Returns the URL and the command that stores it. If a dataset exists on more ` +
+        `than one connected instance, confirm with the user which instance first.`,
       annotations: { readOnlyHint: false },
       inputSchema: fromJsonSchema<Json>({ type: "object", properties: {} }),
     },
@@ -180,9 +180,9 @@ function registerAuthoringTools(server: McpServer, scope: RequestScope): void {
     slug?: string;
   };
   server.registerTool(
-    SAVE_SCRATCH_TOOL,
+    SAVE_DRAFT_TOOL,
     {
-      title: "Save a scratch dashboard",
+      title: "Save a draft dashboard",
       description:
         `${tag} Saves a draft dashboard and returns a URL to open it. Simplest form: a React ` +
         `component (\`source\`) that runs its own queries inline — ` +
@@ -211,8 +211,8 @@ function registerAuthoringTools(server: McpServer, scope: RequestScope): void {
         required: ["dataset", "name"],
       }),
     },
-    logged(scope, SAVE_SCRATCH_TOOL, async (a: SaveArgs) => {
-      const r = await saveScratchDashboard(userId, a.dataset, a, origin);
+    logged(scope, SAVE_DRAFT_TOOL, async (a: SaveArgs) => {
+      const r = await saveDraftDashboard(userId, a.dataset, a, origin);
       if (!r.ok) {
         const detail = r.problems?.map((p) => `  - ${p.message}`).join("\n");
         return {

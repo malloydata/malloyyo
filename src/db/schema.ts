@@ -628,20 +628,20 @@ export const chatResults = pgTable(
   (t) => [index("chat_results_chat_idx").on(t.chatId)],
 );
 
-// Scratch dashboards: drafts made from the MCP surface or `malloyyo scratch
-// push`, stored here until they move into the model repo. Each is one
+// Draft dashboards: made from the MCP surface (save_draft_dashboard), stored
+// here until they are promoted into the model repo. Each is one
 // dashboard's pair of files — the `dashboards/<name>.malloy` text and the
 // optional component — pinned to the model version it was built against, and
-// addressed as the dashboard name `scratch-<slug>` so every dashboard route
+// addressed as the dashboard name `draft-<slug>` so every dashboard route
 // (page, frame, bundle, run, the MCP panel) serves it unchanged.
 //
 // Unlisted, not private: anyone who can read the dataset and has the slug can
 // view it; only its creator can overwrite it. The .malloy text has passed the
 // restricted gate (no raw SQL / connections / imports) before it is stored —
-// see src/lib/dashboards/scratch.ts — which is what makes it safe to compile
+// see src/lib/dashboards/draft.ts — which is what makes it safe to compile
 // as a model file.
-export const scratchDashboards = pgTable(
-  "scratch_dashboards",
+export const draftDashboards = pgTable(
+  "draft_dashboards",
   {
     id: uuid("id").primaryKey().defaultRandom(),
     slug: text("slug").notNull().unique(),
@@ -651,6 +651,9 @@ export const scratchDashboards = pgTable(
     datasetId: uuid("dataset_id")
       .notNull()
       .references(() => datasets.id, { onDelete: "cascade" }),
+    // The model version this draft was last saved against — provenance. A
+    // draft RENDERS against the dataset's current model, so an additive model
+    // change reaches it and a real break shows up instead of being deferred.
     modelId: uuid("model_id")
       .notNull()
       .references(() => malloyModels.id, { onDelete: "cascade" }),
@@ -663,10 +666,18 @@ export const scratchDashboards = pgTable(
     malloy: text("malloy").notNull(),
     // The optional component (JSX/TSX); empty for a tag-only dashboard.
     source: text("source").notNull().default(""),
+    // Set when the draft has been promoted into a repo: the dashboard name it
+    // was written as, and a hash of what was written. Kept so a promoted draft
+    // can later forward to the published dashboard instead of 404ing, and so
+    // divergence (the draft kept being edited after promotion) is detectable.
+    // The draft row is never deleted by promotion.
+    promotedAs: text("promoted_as"),
+    promotedHash: text("promoted_hash"),
+    promotedAt: timestamp("promoted_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`now()`),
   },
-  (t) => [index("scratch_dashboards_user_idx").on(t.userId, t.updatedAt)],
+  (t) => [index("draft_dashboards_user_idx").on(t.userId, t.updatedAt)],
 );
 
 export type Dataset = typeof datasets.$inferSelect;
@@ -689,4 +700,4 @@ export type IntegrationSetting = typeof integrationSettings.$inferSelect;
 export type Chat = typeof chats.$inferSelect;
 export type ChatMessage = typeof chatMessages.$inferSelect;
 export type ChatResult = typeof chatResults.$inferSelect;
-export type ScratchDashboard = typeof scratchDashboards.$inferSelect;
+export type DraftDashboard = typeof draftDashboards.$inferSelect;

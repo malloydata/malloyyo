@@ -131,9 +131,12 @@ export const config = {
   // Exclude static assets and the app icons (icon.svg / apple-icon) — otherwise an
   // anonymous browser's background favicon request gets auth-redirected, and its
   // callbackUrl (e.g. /icon.svg?<hash>) can win the sign-in round-trip.
-  // dashboard-vendor.js is generic library code (React + Malloy renderer, no
-  // secrets, no user data) loaded by the sandboxed dashboard iframe, whose opaque
-  // origin sends no session cookie — it must be publicly fetchable. See
+  // dashboard-vendor.js and mcp-app-sdk.js are generic library code (React +
+  // Malloy renderer; the ext-apps client SDK — no secrets, no user data) loaded
+  // by the sandboxed dashboard iframe and by the MCP App panel, whose opaque
+  // origins send no session cookie — they must be publicly fetchable. See
   // docs/dashboard-iframe-security.md.
-  matcher: ["/((?!_next/static|_next/image|favicon.ico|icon.svg|apple-icon|dashboard-vendor.js).*)"],
+  matcher: [
+    "/((?!_next/static|_next/image|favicon.ico|icon.svg|apple-icon|dashboard-vendor.js|mcp-app-sdk.js).*)",
+  ],
 };

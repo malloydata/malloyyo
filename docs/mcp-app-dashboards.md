@@ -107,11 +107,22 @@ The existing two-field form stays accepted, so nothing that calls it breaks.
 An MCP App is one self-contained HTML resource, loaded into a sandboxed iframe
 by the host, addressed by a `ui://` URI. Three consequences:
 
-**1. Everything inlines.** No `/dashboard-vendor.js`, no `?t=` bundle fetch —
-the panel cannot reach our origin without CSP entries we should not want. The
-resource must carry the runtime *and* the compiled dashboard. That is ~4.4 MB of
-vendor plus the dashboard's own bundle. MotherDuck's dive viewer ships 4.6 MB
-through the same channel, so this is heavy but not disqualifying.
+**1. The panel is a shell; its scripts come from our origin.** ~~Everything
+inlines.~~ This was written the wrong way round and shipped that way: the panel
+carried the whole 4.4 MB runtime inline, which makes `resources/read` a ~5 MB
+JSON-RPC message. That is over Vercel's 4.5 MB function-response limit and past
+what a host will take, so the panel simply never loaded — the client said
+"Unable to reach <instance>" while the function logged a 200 (2026-09-21).
+
+`_meta.ui.csp.resourceDomains` maps to `script-src` (as well as `img-src`,
+`style-src`, `font-src`, `media-src`), and the ext spec tells you to declare
+"where your bundled JS/CSS is served from". So the panel is a few hundred bytes
+of markup with two `<script src>` onto the instance's own origin
+(`/mcp-app-sdk.js`, `/dashboard-vendor.js`, both proxy-exempt static assets),
+and `/mcp` declares that origin in the resource's `resourceDomains` alongside
+the repos' `image_hosts`. The browser caches both across panels instead of the
+protocol re-sending megabytes per read. Only the per-dashboard bundle still
+arrives through a tool call, base64'd.
 
 **2. The server is reached through the host.** `app.callServerTool` asks the
 host to proxy a `tools/call` as the connected user. No CORS, no credentials in

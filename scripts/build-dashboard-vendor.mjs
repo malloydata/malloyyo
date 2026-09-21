@@ -15,7 +15,8 @@
 // See src/lib/dashboards/bundle.ts.
 
 import * as esbuild from "esbuild";
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
+import vm from "node:vm";
 
 const ENTRY = `
 import * as React from "react";
@@ -60,3 +61,46 @@ if (unresolved.length > 0) {
 }
 
 console.log("✓ built public/dashboard-vendor.js");
+
+// ── public/mcp-app-sdk.js ───────────────────────────────────────────────────
+//
+// The ext-apps client SDK, the second script an MCP App panel loads. It ships
+// as an ES module; the panel loads it as a CLASSIC script (a cross-origin
+// `type="module"` needs CORS, a classic one doesn't), so the trailing export
+// statement is rewritten onto a global the panel's loader reads.
+//
+// Both of these are static assets rather than markup inlined into the panel
+// resource on purpose: a `resources/read` carrying 4.6 MB of runtime is a 5 MB
+// JSON-RPC message, which is over Vercel's 4.5 MB function-response limit and
+// past what a host will accept — the panel then never loads at all. The ext
+// spec's own guidance is to serve bundled JS from your origin and declare it
+// in `_meta.ui.csp.resourceDomains`, which src/lib/mcp-app-panel.ts does.
+const SDK_SRC = "node_modules/@modelcontextprotocol/ext-apps/dist/src/app-with-deps.js";
+const sdkRaw = await readFile(SDK_SRC, "utf8");
+const exports_ = /export\s*\{([^}]*)\}\s*;?\s*$/.exec(sdkRaw);
+if (!exports_) {
+  console.error(`✗ ${SDK_SRC}: no trailing export statement to rewrite`);
+  process.exit(1);
+}
+const globals = exports_[1]
+  .split(",")
+  .map((x) => x.trim())
+  .filter(Boolean)
+  .map((x) => {
+    const [local, , exported] = x.split(/\s+/);
+    return `${JSON.stringify(exported ?? local)}: ${local}`;
+  })
+  .join(", ");
+const sdkClassic = sdkRaw.slice(0, exports_.index) + `globalThis.__EXT_APPS__ = {${globals}};\n`;
+
+// Parse it as a classic script here, where the build can still fail, rather
+// than discovering in a panel that some other module syntax survived.
+try {
+  new vm.Script(sdkClassic, { filename: "mcp-app-sdk.js" });
+} catch (e) {
+  console.error(`✗ mcp-app-sdk.js is not valid as a classic script: ${e.message}`);
+  process.exit(1);
+}
+
+await writeFile("public/mcp-app-sdk.js", sdkClassic);
+console.log("✓ built public/mcp-app-sdk.js");

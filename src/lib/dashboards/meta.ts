@@ -13,9 +13,10 @@
 // This module must NEVER import ./engine or @/lib/malloy (statically or lazily).
 
 import { and, eq, asc, desc } from "drizzle-orm";
-import { db, datasets, malloyArtifacts, malloyModelFiles } from "@/db";
+import { db, datasets, malloyArtifacts, malloyModelFiles, draftDashboards, users } from "@/db";
 import { visibleDatasetWhere, findByDatasetRef, latestModel } from "@/lib/mcp-tools";
 import { aboutFirst } from "./about";
+import { imageHostsFromConfig } from "./image-hosts";
 
 export interface DashboardSummary {
   datasetId: string;
@@ -27,12 +28,30 @@ export interface DashboardSummary {
       summaries — and without it a written page's cards render as bare titles on
       the hosted app while showing their subtitles in dev and in the bundle. */
   description?: string;
+  /** A draft, not a dashboard the model publishes. */
+  isDraft?: boolean;
+  /** Who made it — drafts only, where "whose is this?" is the first question.
+      A published dashboard's author is in the repo's history instead. */
+  author?: string;
+  /** Its author's id, so a caller can tell a reader's own from everyone else's. */
+  authorId?: string;
 }
 
 export interface DashboardDetail extends DashboardSummary {
   manifest: Record<string, unknown>;
   source: string;
   modelId: string;
+  /** Set for a draft dashboard: its own files, laid over the model's, and a
+      version that changes on every save (the runtime cache key must, too). */
+  draft?: { id: string; files: Record<string, string>; version: string };
+}
+
+/** Draft dashboards are addressed as `draft-<slug>` wherever a dashboard
+    name goes, so every dashboard route serves them without knowing about them. */
+export const DRAFT_PREFIX = "draft-";
+
+export function draftSlug(name: string): string | null {
+  return name.startsWith(DRAFT_PREFIX) ? name.slice(DRAFT_PREFIX.length) : null;
 }
 
 async function artifactsForModel(modelId: string) {
@@ -91,6 +110,19 @@ export async function listDashboards(userId: string, datasetId: string): Promise
   return listDashboardsForModel(found.model.id, datasetId, found.ds.name);
 }
 
+/** One dataset's dashboards AND the drafts people made on it — what the home
+    page and a dataset's nav both show. Separate from `listDashboards`, which
+    stays the model's own: a draft is not a sibling of a published dashboard
+    (the frame injects that list into a dashboard's own switcher). */
+export async function listDashboardsAndDrafts(userId: string, datasetRef: string): Promise<DashboardSummary[]> {
+  const found = await findByDatasetRef(userId, datasetRef);
+  if (!found) return [];
+  return [
+    ...(await listDashboardsForModel(found.model.id, found.ds.id, found.ds.name)),
+    ...(await listDraftsOnDataset(found.ds.id, found.ds.name)),
+  ];
+}
+
 /** Every visible dataset's current dashboards — for the home page. */
 export async function listAllDashboards(userId: string): Promise<DashboardSummary[]> {
   const dsList = await db.select().from(datasets).where(visibleDatasetWhere(userId)).orderBy(desc(datasets.createdAt));
@@ -99,13 +131,78 @@ export async function listAllDashboards(userId: string): Promise<DashboardSummar
     const model = await latestModel(ds.id);
     if (!model) continue;
     for (const d of await listDashboardsForModel(model.id, ds.id, ds.name)) out.push(d);
+    for (const d of await listDraftsOnDataset(ds.id, ds.name)) out.push(d);
   }
   return out;
+}
+
+/**
+ * Every draft on one dataset, newest first — carrying its author, because a
+ * draft is someone's work in progress and "whose?" is the first question a
+ * reader has. Listed to everyone who can see the dataset, which is the same
+ * rule its URL already follows (and the rule the dataset's own dashboards
+ * follow).
+ */
+export async function listDraftsOnDataset(datasetId: string, datasetName: string): Promise<DashboardSummary[]> {
+  const rows = await db
+    .select({ draft: draftDashboards, authorName: users.name, authorEmail: users.email })
+    .from(draftDashboards)
+    .leftJoin(users, eq(users.id, draftDashboards.userId))
+    .where(eq(draftDashboards.datasetId, datasetId))
+    .orderBy(desc(draftDashboards.updatedAt));
+  return rows.map(({ draft: r, authorName, authorEmail }) => {
+    const description = r.manifest?.description;
+    return {
+      datasetId,
+      datasetName,
+      name: `${DRAFT_PREFIX}${r.slug}`,
+      title: r.title ?? r.name,
+      ...(typeof description === "string" && description ? { description } : {}),
+      isDraft: true,
+      author: authorName || authorEmail || "unknown",
+      authorId: r.userId,
+    };
+  });
 }
 
 export async function getDashboard(userId: string, datasetId: string, name: string): Promise<DashboardDetail | null> {
   const found = await findByDatasetRef(userId, datasetId);
   if (!found) return null;
+  const slug = draftSlug(name);
+  if (slug !== null) {
+    // Visibility is the dataset's (checked above); the slug must belong to it.
+    const [d] = await db
+      .select()
+      .from(draftDashboards)
+      .where(and(eq(draftDashboards.slug, slug), eq(draftDashboards.datasetId, found.ds.id)))
+      .limit(1);
+    if (d) {
+      const entryFile =
+        typeof d.manifest.entryFile === "string" ? d.manifest.entryFile : `dashboards/${d.name}.malloy`;
+      return {
+        datasetId,
+        datasetName: found.ds.name,
+        name,
+        title: d.title ?? d.name,
+        manifest: d.manifest,
+        source: d.source,
+        // The dataset's CURRENT model, not the version this draft was saved
+        // against (kept on the row as provenance): an additive model change
+        // reaches a draft at once, and a real break surfaces now rather than
+        // whenever someone next saves.
+        modelId: found.model.id,
+        // A component-only draft has no dashboard file to lay over the model.
+        draft: {
+          id: d.id,
+          files: d.malloy.trim() ? { [entryFile]: d.malloy } : {},
+          version: d.updatedAt.toISOString(),
+        },
+      };
+    }
+    // No draft by that slug: `draft-<slug>` is a naming convention, not a
+    // reserved namespace, so fall through to the model's own artifacts — a
+    // repo that ships a dashboard called draft-notes stays reachable.
+  }
   const [a] = await db
     .select()
     .from(malloyArtifacts)
@@ -143,4 +240,32 @@ export async function modelConfigJson(modelId: string): Promise<string | undefin
     .where(and(eq(malloyModelFiles.modelId, modelId), eq(malloyModelFiles.path, "malloy-config.json")))
     .limit(1);
   return row?.content;
+}
+
+/**
+ * Every image host declared by a model this user can see, as `https://host`
+ * tokens (wildcards included) — the CSP the MCP App panel must carry for a
+ * dashboard's `<img src>` to load inside it.
+ *
+ * The panel is ONE resource for every dashboard, so it cannot carry one
+ * dashboard's hosts: it carries the union, which is the same set the web app
+ * would allow this user across the dashboards they can open. Each entry was
+ * validated on the way in (see ./image-hosts — the values come from a repo's
+ * malloy-config.json and end up in a policy).
+ *
+ * One query per visible dataset, so it is called from `resources/read` (rare,
+ * and cached by the client) rather than per tool call.
+ */
+export async function visibleImageHosts(userId: string, max = 16): Promise<string[]> {
+  const dsList = await db.select().from(datasets).where(visibleDatasetWhere(userId));
+  const hosts = new Set<string>();
+  for (const ds of dsList) {
+    const model = await latestModel(ds.id);
+    if (!model) continue;
+    for (const host of imageHostsFromConfig(await modelConfigJson(model.id))) {
+      hosts.add(host);
+      if (hosts.size >= max) return [...hosts];
+    }
+  }
+  return [...hosts];
 }

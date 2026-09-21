@@ -19,7 +19,7 @@ import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type Server, type IncomingMessage } from "node:http";
 import { execFile } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,12 +35,16 @@ import {
   oauthClients,
   oauthAccessTokens,
   apiTokens,
+  draftDashboards,
   type ApiTokenScope,
   type User,
 } from "@/db";
 import { createApiToken } from "@/lib/api-tokens";
 import { POST as pushRoute } from "@/app/api/datasets/[id]/model/push/route";
 import { GET as statusRoute } from "@/app/api/datasets/[id]/model/status/route";
+import { GET as draftListRoute, POST as draftSaveRoute } from "@/app/api/datasets/[id]/drafts/route";
+import { GET as draftGetRoute, POST as draftPromoteRoute } from "@/app/api/datasets/[id]/drafts/[slug]/route";
+import { GET as whoamiRoute } from "@/app/api/cli/whoami/route";
 
 // Everything this test creates is suffixed with a per-run id, and torn down in
 // after(): the suite is re-runnable against a database that already has rows,
@@ -56,11 +60,29 @@ const CLI = process.env.MALLOYYO_CLI_BIN ?? join(REPO_ROOT, "packages/cli/dist/i
 
 // ── a test Malloyyo server ────────────────────────────────────────────────────
 
-type Handler = (req: Request, ctx: { params: Promise<{ id: string }> }) => Promise<Response>;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- routes differ in their params shape
+type Handler = (req: Request, ctx: { params: Promise<any> }) => Promise<Response>;
 
-const ROUTES: Array<{ method: string; pattern: RegExp; handler: Handler }> = [
+/** `params` names the pattern's capture groups, so a route with a second
+    segment (a draft's slug) mounts like any other. */
+const ROUTES: Array<{ method: string; pattern: RegExp; handler: Handler; params?: string[] }> = [
   { method: "POST", pattern: /^\/api\/datasets\/([^/]+)\/model\/push$/, handler: pushRoute },
   { method: "GET", pattern: /^\/api\/datasets\/([^/]+)\/model\/status$/, handler: statusRoute },
+  { method: "POST", pattern: /^\/api\/datasets\/([^/]+)\/drafts$/, handler: draftSaveRoute },
+  { method: "GET", pattern: /^\/api\/datasets\/([^/]+)\/drafts$/, handler: draftListRoute },
+  {
+    method: "GET",
+    pattern: /^\/api\/datasets\/([^/]+)\/drafts\/([^/]+)$/,
+    handler: draftGetRoute,
+    params: ["id", "slug"],
+  },
+  {
+    method: "POST",
+    pattern: /^\/api\/datasets\/([^/]+)\/drafts\/([^/]+)$/,
+    handler: draftPromoteRoute,
+    params: ["id", "slug"],
+  },
+  { method: "GET", pattern: /^\/api\/cli\/(whoami)$/, handler: whoamiRoute },
 ];
 
 function readBody(req: IncomingMessage): Promise<Buffer> {
@@ -84,7 +106,9 @@ async function bootServer(): Promise<{ url: string; server: Server }> {
           res.end(JSON.stringify({ error: "no route" }));
           return;
         }
-        const id = decodeURIComponent(route.pattern.exec(url.pathname)![1]);
+        const m = route.pattern.exec(url.pathname)!;
+        const names = route.params ?? ["id"];
+        const params = Object.fromEntries(names.map((n, i) => [n, decodeURIComponent(m[i + 1])]));
         const headers = new Headers();
         for (const [k, v] of Object.entries(req.headers)) {
           if (typeof v === "string") headers.set(k, v);
@@ -96,7 +120,7 @@ async function bootServer(): Promise<{ url: string; server: Server }> {
           headers,
           body: raw.length > 0 ? new Uint8Array(raw) : undefined,
         });
-        const response = await route.handler(request, { params: Promise.resolve({ id }) });
+        const response = await route.handler(request, { params: Promise.resolve(params) });
         const out = Buffer.from(await response.arrayBuffer());
         res.writeHead(response.status, { "content-type": response.headers.get("content-type") ?? "application/json" });
         res.end(out);
@@ -120,9 +144,15 @@ interface CliResult {
   stderr: string;
 }
 
-function runCli(args: string[], cwd: string, env: Record<string, string> = {}): Promise<CliResult> {
+function runCli(
+  args: string[],
+  cwd: string,
+  env: Record<string, string> = {},
+  /** Written to the CLI's stdin, then closed (e.g. a token for --token-stdin). */
+  input?: string,
+): Promise<CliResult> {
   return new Promise((resolve) => {
-    execFile(
+    const child = execFile(
       process.execPath,
       [CLI, ...args],
       {
@@ -143,6 +173,7 @@ function runCli(args: string[], cwd: string, env: Record<string, string> = {}): 
         resolve({ code, stdout, stderr });
       },
     );
+    if (input !== undefined) child.stdin?.end(input);
   });
 }
 
@@ -773,4 +804,177 @@ test("a repo without a dev container publishes without one", async () => {
   assert.equal(files.some((f) => f.path === ".devcontainer/devcontainer.json"), false);
   // And the model itself still published, so this is not a vacuous pass.
   assert.ok(files.some((f) => f.path === "index.malloy"));
+});
+
+// ── draft dashboards: login --token-stdin, draft list, draft promote ─────────
+
+const DS_DRAFT = `petshop_draft_${RUN}`;
+
+/** What a draft made from a chat client looks like: one component, queries
+    inline. Promotion has to turn that into a repo dashboard. */
+const DRAFT_COMPONENT = `import { useQuery } from "@malloyyo/dashboard";
+export default function D() {
+  const q = useQuery({ malloy: \`run: sales -> { group_by: state; aggregate: total_qty }\` });
+  return <ol>{(q.rows ?? []).map((r) => <li key={String(r.state)}>{String(r.state)}</li>)}</ol>;
+}
+`;
+
+/** A published dataset, a checkout to promote into, and an isolated credential
+    store (so a developer's real ~/.config/malloyyo is never read). */
+async function draftProject(): Promise<{ dir: string; env: Record<string, string> }> {
+  const dir = makeProject(DS_DRAFT);
+  const published = await runCli(["publish", "--create-dataset", "--token", token], dir);
+  assert.equal(published.code, 0, published.stderr);
+  const xdg = mkdtempSync(join(tmpdir(), "malloyyo-xdg-"));
+  projects.push(xdg);
+  return { dir, env: { XDG_CONFIG_HOME: xdg } };
+}
+
+let draftCtx: { dir: string; env: Record<string, string> } | undefined;
+async function draftFixture() {
+  return (draftCtx ??= await draftProject());
+}
+
+/** Drafts are made on the instance, never pushed from a checkout — so the
+    tests make them the way a chat client does. */
+async function makeDraft(body: Record<string, unknown>): Promise<{ slug: string; dashboard: string }> {
+  const res = await fetch(`${serverUrl}/api/datasets/${DS_DRAFT}/drafts`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+    body: JSON.stringify(body),
+  });
+  const out = (await res.json()) as { ok: boolean; error?: string; slug: string; dashboard: string };
+  assert.equal(out.ok, true, out.error);
+  return out;
+}
+
+test("login --token-stdin stores a token only after the instance accepts it", async () => {
+  const { dir, env } = await draftFixture();
+  const mcpToken = await mintFor(admin.id, ["mcp"]);
+
+  const bogus = await runCli(["login", serverUrl, "--token-stdin"], dir, env, "myo_x_not-a-real-token");
+  assert.notEqual(bogus.code, 0);
+  assert.match(bogus.stderr, /did not accept that token/);
+
+  const ok = await runCli(["login", serverUrl, "--token-stdin"], dir, env, `${mcpToken}\n`);
+  assert.equal(ok.code, 0, ok.stderr);
+  assert.match(ok.stdout, new RegExp(`logged in to ${serverUrl.replace(/[.]/g, "\\.")} as publisher-${RUN}@test\\.local`));
+  const stored = JSON.parse(readFileSync(join(env.XDG_CONFIG_HOME, "malloyyo", "credentials.json"), "utf8"));
+  assert.equal(stored[serverUrl].accessToken, mcpToken);
+  assert.equal(stored[serverUrl].refreshToken, undefined, "a pasted token has nothing to refresh with");
+});
+
+test("draft list shows what is on the instance, with the slug promotion takes", async () => {
+  const { dir, env } = await draftFixture();
+  const { slug } = await makeDraft({ name: "by_state", title: "By state", source: DRAFT_COMPONENT });
+  const r = await runCli(["draft", "list", ".", "--token", token], dir, env);
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, new RegExp(`${slug}\\s+By state\\s+\\(component,`));
+});
+
+test("draft promote writes the repo files, records what it became, and keeps the draft", async () => {
+  const { dir, env } = await draftFixture();
+  const { slug, dashboard } = await makeDraft({ name: "by_state", title: "By state", source: DRAFT_COMPONENT });
+
+  const r = await runCli(["draft", "promote", slug, ".", "--name", "states", "--token", token], dir, env);
+  assert.equal(r.code, 0, r.stderr + r.stdout);
+  assert.match(r.stdout, /promoted 'By state'/);
+
+  // The component lands as-is; the .malloy is a scaffold carrying the inline
+  // queries, because a repo dashboard's queries live in the model.
+  const component = readFileSync(join(dir, "dashboards", "states.jsx"), "utf8");
+  assert.match(component, /useQuery/);
+  const malloy = readFileSync(join(dir, "dashboards", "states.malloy"), "utf8");
+  assert.match(malloy, /import "\.\.\/index\.malloy"/);
+  assert.match(malloy, /# artifact \{ title="By state" \}/);
+  assert.match(malloy, /run: sales -> \{ group_by: state; aggregate: total_qty \}/, "the inline query, to lift");
+  assert.match(r.stdout, /lift 1 inline query/);
+
+  // Recorded, not deleted: people hold the draft's URL.
+  const [row] = await db.select().from(draftDashboards).where(eq(draftDashboards.slug, slug));
+  assert.equal(row?.promotedAs, "states");
+  assert.ok(row?.promotedHash && row.promotedAt, "hash + timestamp recorded");
+  assert.match(r.stdout, new RegExp(`the draft stays live .*${dashboard}`));
+});
+
+test("draft promote carries a two-file draft's .malloy through unchanged", async () => {
+  const { dir, env } = await draftFixture();
+  const malloySource = `import "../index.malloy"\n# artifact { title="Animals" }\nquery: animals is sales -> { group_by: animal; aggregate: total_qty }\n`;
+  const { slug } = await makeDraft({ name: "animals", malloy: malloySource });
+
+  const r = await runCli(["draft", "promote", slug, ".", "--token", token], dir, env);
+  assert.equal(r.code, 0, r.stderr + r.stdout);
+  assert.equal(readFileSync(join(dir, "dashboards", "animals.malloy"), "utf8").trim(), malloySource.trim());
+  assert.doesNotMatch(r.stdout, /lift/, "nothing to lift — its queries are already in the model file");
+});
+
+test("draft promote won't quietly overwrite a dashboard that already exists", async () => {
+  const { dir, env } = await draftFixture();
+  const { slug } = await makeDraft({ name: "by_state", title: "By state", source: DRAFT_COMPONENT });
+  await runCli(["draft", "promote", slug, ".", "--name", "collide", "--token", token], dir, env);
+  const before = readFileSync(join(dir, "dashboards", "collide.jsx"), "utf8");
+
+  const second = await runCli(["draft", "promote", slug, ".", "--name", "collide", "--token", token], dir, env);
+  assert.notEqual(second.code, 0);
+  assert.match(second.stderr, /already exist/);
+  assert.equal(readFileSync(join(dir, "dashboards", "collide.jsx"), "utf8"), before);
+
+  const forced = await runCli(["draft", "promote", slug, ".", "--name", "collide", "--force", "--token", token], dir, env);
+  assert.equal(forced.code, 0, forced.stderr);
+});
+
+test("a draft's own files are refused when they reach past the model", async () => {
+  const before = (await db.select().from(draftDashboards)).length;
+  const res = await fetch(`${serverUrl}/api/datasets/${DS_DRAFT}/drafts`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+    body: JSON.stringify({
+      name: "leak",
+      malloy: `import "../index.malloy"\n# artifact { title="x" }\nquery: q is duckdb.sql("select 1 as x") -> { select: x }\n`,
+    }),
+  });
+  const out = (await res.json()) as { ok: boolean; error?: string };
+  assert.equal(out.ok, false);
+  assert.match(out.error ?? "", /restricted check/);
+  assert.equal((await db.select().from(draftDashboards)).length, before, "nothing stored");
+});
+
+test("a draft can only be overwritten by the person who made it", async () => {
+  const { slug } = await makeDraft({ name: "by_state", title: "By state", source: DRAFT_COMPONENT });
+
+  // Someone who can see the dataset (it's public) but didn't make the draft.
+  await db.update(datasets).set({ isPublic: true }).where(eq(datasets.name, DS_DRAFT));
+  const other = await seedMember(`other-${RUN}@test.local`);
+  const res = await fetch(`${serverUrl}/api/datasets/${DS_DRAFT}/drafts`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${await mintFor(other.id, ["mcp"])}` },
+    body: JSON.stringify({ name: "by_state", source: DRAFT_COMPONENT, slug }),
+  });
+  const out = (await res.json()) as { ok: boolean; error?: string };
+  assert.equal(out.ok, false);
+  assert.match(out.error ?? "", /belongs to someone else/);
+});
+
+test("draft promote validates --name instead of writing outside dashboards/", async () => {
+  const { dir, env } = await draftFixture();
+  const { slug } = await makeDraft({ name: "by_state", title: "By state", source: DRAFT_COMPONENT });
+  const r = await runCli(["draft", "promote", slug, ".", "--name", "../escape", "--token", token], dir, env);
+  assert.notEqual(r.code, 0);
+  assert.match(r.stderr, /--name must be letters, digits/);
+  assert.equal(existsSync(join(dir, "..", "escape.malloy")), false, "nothing written outside the checkout");
+});
+
+test("a draft is recorded by its own author; a colleague gets the files and a note", async () => {
+  const { dir, env } = await draftFixture();
+  const { slug } = await makeDraft({ name: "by_state", title: "By state", source: DRAFT_COMPONENT });
+  await db.update(datasets).set({ isPublic: true }).where(eq(datasets.name, DS_DRAFT));
+  const colleague = await seedMember(`promoter-${RUN}@test.local`);
+  const theirToken = await mintFor(colleague.id, ["mcp"]);
+
+  const r = await runCli(["draft", "promote", slug, ".", "--name", "theirs", "--token", theirToken], dir, env);
+  assert.equal(r.code, 0, r.stderr + r.stdout);
+  assert.ok(existsSync(join(dir, "dashboards", "theirs.jsx")), "the files are still written");
+  assert.match(r.stdout, /not recorded on the draft/);
+  const [row] = await db.select().from(draftDashboards).where(eq(draftDashboards.slug, slug));
+  assert.equal(row?.promotedAs, null, "the author's row is untouched");
 });

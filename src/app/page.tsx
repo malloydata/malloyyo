@@ -105,7 +105,9 @@ export default function HomePage() {
   const [chatEnabled, setChatEnabled] = useState(false);
   const [sources, setSources] = useState<DatasetGroup[] | null>(null);
   const [favQueries, setFavQueries] = useState<FavQuery[]>([]);
-  const [dashboards, setDashboards] = useState<Array<{ dataset: string; name: string; title: string }>>([]);
+  const [dashboards, setDashboards] = useState<
+    Array<DashboardChip & { dataset: string }>
+  >([]);
   // Claude connect-instructions modal — shown when clicking a source's Claude
   // button before the connector is linked. claudeTargetUrl is the explore chat
   // to continue to after setup.
@@ -152,17 +154,90 @@ export default function HomePage() {
     list.push(q);
   }
 
-  // The catalogue arrives grouped; just index it for lookup by name.
+  type DashboardChip = {
+  name: string;
+  title: string;
+  description?: string;
+  isDraft?: boolean;
+  author?: string;
+  mine?: boolean;
+};
+
+const modelDashboards = (all: DashboardChip[]): DashboardChip[] => all.filter((d) => !d.isDraft);
+// Yours first: on a dataset other people also build on, your own are what you
+// came back for.
+const userDashboards = (all: DashboardChip[]): DashboardChip[] =>
+  all.filter((d) => d.isDraft).sort((a, b) => Number(b.mine ?? false) - Number(a.mine ?? false));
+
+/** One labelled row of dashboard chips. `collapseAfter` keeps a long row to a
+    line or two until someone asks for the rest — user dashboards accumulate,
+    and the row is a way in, not an inventory. */
+function DashboardRow({
+  label,
+  dataset,
+  items,
+  collapseAfter,
+}: {
+  label: string;
+  dataset: string;
+  items: DashboardChip[];
+  collapseAfter?: number;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const hidden = collapseAfter && !expanded ? Math.max(items.length - collapseAfter, 0) : 0;
+  const shown = hidden > 0 ? items.slice(0, collapseAfter) : items;
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="text-[10px] uppercase tracking-wide text-gray-400 dark:text-gray-500">{label}</span>
+      {shown.map((d) => (
+        <Link
+          key={d.name}
+          href={`/datasets/${encodeURIComponent(dataset)}/dashboard/${encodeURIComponent(d.name)}`}
+          title={[d.description, d.isDraft && d.author ? `by ${d.author}` : null].filter(Boolean).join(" — ") || undefined}
+          className={
+            "text-xs px-2 py-0.5 rounded border hover:bg-gray-50 dark:hover:bg-gray-900 " +
+            (d.isDraft
+              ? "border-dashed border-gray-400 dark:border-gray-600 text-gray-600 dark:text-gray-400"
+              : "border-gray-300 dark:border-gray-700")
+          }
+        >
+          {d.title}
+          {d.isDraft && d.author && !d.mine && (
+            <span className="ml-1 text-[9px] text-gray-400 dark:text-gray-500">{shortAuthor(d.author)}</span>
+          )}
+        </Link>
+      ))}
+      {hidden > 0 && (
+        <button
+          onClick={() => setExpanded(true)}
+          className="text-xs px-2 py-0.5 rounded border border-gray-300 dark:border-gray-700 text-gray-500 hover:bg-gray-50 dark:hover:bg-gray-900"
+        >
+          +{hidden} more
+        </button>
+      )}
+    </div>
+  );
+}
+
+// A draft's author, short enough for a chip: a first name, or the local part
+// of an email. The full value is in the link's tooltip.
+function shortAuthor(author: string): string {
+  const name = author.includes("@") ? author.split("@")[0] : author.split(" ")[0];
+  return name.length > 14 ? `${name.slice(0, 13)}…` : name;
+}
+
+// The catalogue arrives grouped; just index it for lookup by name.
   const datasetGroups: DatasetGroup[] = sources ?? [];
   const datasetByName = new Map(datasetGroups.map((g) => [g.dataset, g]));
 
   // Dashboards grouped by dataset, for the per-dataset row below.
-  const dashByDataset = new Map<string, Array<{ name: string; title: string }>>();
+  const dashByDataset = new Map<string, DashboardChip[]>();
   for (const d of dashboards) {
     let arr = dashByDataset.get(d.dataset);
     if (!arr) { arr = []; dashByDataset.set(d.dataset, arr); }
-    arr.push({ name: d.name, title: d.title });
+    arr.push({ name: d.name, title: d.title, description: d.description, isDraft: d.isDraft, author: d.author, mine: d.mine });
   }
+
 
   // Datasets to render: those with questions first (recency order), then any
   // remaining datasets (their sources still show, just with no questions).
@@ -381,17 +456,26 @@ export default function HomePage() {
                       </div>
 
                       {(dashByDataset.get(dsName)?.length ?? 0) > 0 && (
-                        <div className="px-3 py-2 border-b border-gray-200 dark:border-gray-800 flex flex-wrap items-center gap-2">
-                          <span className="text-[10px] uppercase tracking-wide text-gray-400 dark:text-gray-500">dashboards</span>
-                          {dashByDataset.get(dsName)!.map((d) => (
-                            <Link
-                              key={d.name}
-                              href={`/datasets/${encodeURIComponent(g?.dataset ?? dsName)}/dashboard/${encodeURIComponent(d.name)}`}
-                              className="text-xs px-2 py-0.5 rounded border border-gray-300 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-900"
-                            >
-                              {d.title}
-                            </Link>
-                          ))}
+                        <div className="px-3 py-2 border-b border-gray-200 dark:border-gray-800 space-y-1.5">
+                          {/* The model's own dashboards: few, curated, the way in. */}
+                          {modelDashboards(dashByDataset.get(dsName)!).length > 0 && (
+                            <DashboardRow
+                              label="dashboards"
+                              dataset={g?.dataset ?? dsName}
+                              items={modelDashboards(dashByDataset.get(dsName)!)}
+                            />
+                          )}
+                          {/* Dashboards people made here. Many, and they churn —
+                              so they sit on their own row, yours first, capped
+                              until you ask for the rest. */}
+                          {userDashboards(dashByDataset.get(dsName)!).length > 0 && (
+                            <DashboardRow
+                              label="user dashboards"
+                              dataset={g?.dataset ?? dsName}
+                              items={userDashboards(dashByDataset.get(dsName)!)}
+                              collapseAfter={6}
+                            />
+                          )}
                         </div>
                       )}
 

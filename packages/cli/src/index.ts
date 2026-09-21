@@ -21,6 +21,7 @@ import { initCmd } from "./init.js";
 import { sqlCmd } from "./sql.js";
 import { launchCmd } from "./launch.js";
 import { clearCreds } from "./store.js";
+import { draftList, draftPromote, loginWithToken } from "./draft.js";
 import { registerCloudCommands } from "./cloud/index.js";
 import type { PublishRequest, ModelStatus } from "./protocol.js";
 // Single source of truth: the build runs after the release bump, so esbuild
@@ -246,8 +247,12 @@ async function status(target: string | undefined, opts: { token?: string }): Pro
   console.log(`  ${s.compileError ? `✗ ${s.compileError}` : `✓ compiled ${s.compiledAt ?? ""}`}`);
 }
 
-async function loginCmd(target: string | undefined, opts: { browser?: boolean }): Promise<void> {
+async function loginCmd(
+  target: string | undefined,
+  opts: { browser?: boolean; tokenStdin?: boolean },
+): Promise<void> {
   const inst = resolveInstance(resolve("."), target);
+  if (opts.tokenStdin) return loginWithToken(inst.url);
   // commander maps `--no-browser` to browser:false, defaulting to true.
   await login(inst.url, { noBrowser: opts.browser === false });
   console.log(`✓ logged in to ${inst.name} (${inst.url})`);
@@ -268,8 +273,35 @@ program
   .command("login")
   .argument("[target]", "target name or instance URL (optional if the config has one target)")
   .option("--no-browser", "print the sign-in URL instead of launching a browser")
+  .option("--token-stdin", "store a token read from stdin (checked against the instance first)")
   .description("sign in to an instance in your browser (stores a token)")
   .action(loginCmd);
+
+const draft = program
+  .command("draft")
+  .description("draft dashboards made on an instance, before they live in the model repo");
+
+draft
+  .command("list")
+  .argument("[dir]", "model directory", ".")
+  .option("-i, --instance <instance>", "instance URL, or a configured target name")
+  .option("--dataset <dataset>", "dataset whose drafts to list; overrides the config")
+  .option("--token <token>", "bearer token (overrides login/env)")
+  .description("list your drafts on an instance")
+  .action(draftList);
+
+draft
+  .command("promote")
+  .argument("<slug>", "draft slug, as `malloyyo draft list` prints it")
+  .argument("[dir]", "model directory to write into", ".")
+  .option("-i, --instance <instance>", "instance URL, or a configured target name")
+  .option("--dataset <dataset>", "dataset the draft belongs to; overrides the config")
+  .option("--token <token>", "bearer token (overrides login/env)")
+  .option("--name <name>", "dashboard name to write as (default: the draft's own)")
+  .option("--tsx", "write the component as .tsx instead of .jsx")
+  .option("--force", "overwrite existing dashboard files of that name")
+  .description("write a draft into this repo as dashboards/<name>.malloy + component")
+  .action(draftPromote);
 
 program
   .command("logout")

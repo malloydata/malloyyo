@@ -15,9 +15,9 @@
 // connection.* / raw SQL / ##! flags) is the gate, the same contract the explore
 // MCP surface uses.
 
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { dashboardGivenSpecs, runRestricted, type DashboardGivenSpec } from "@malloyyo/mcp-engine";
-import { db, malloyArtifacts } from "@/db";
+import { db, malloyModels } from "@/db";
 import { findByDatasetRef, modelFileMap } from "@/lib/mcp-tools";
 import { runNamedMalloyFiles, withModelRuntime, fileUrl } from "@/lib/malloy";
 import { getDashboard, modelConfigJson, type DashboardDetail } from "./meta";
@@ -25,6 +25,22 @@ import { imageHostsFromConfig } from "./image-hosts";
 import { rendersNoData } from "./about";
 
 export type { DashboardDetail };
+
+/**
+ * The files a dashboard compiles against and the key its runtime is pooled
+ * under. A published dashboard: its model's files, keyed by the model. A
+ * draft: the model's files (the dataset's CURRENT version — meta.ts resolves
+ * it) with its own dashboard file laid over them, keyed by the draft row's
+ * version, so a save is a new runtime rather than a stale compile.
+ */
+async function dashboardFiles(dash: DashboardDetail): Promise<{ files: Map<string, string>; cacheKey: string }> {
+  const [model] = await db.select().from(malloyModels).where(eq(malloyModels.id, dash.modelId)).limit(1);
+  if (!model) throw new Error("dashboard model not found");
+  const files = await modelFileMap(model);
+  if (!dash.draft) return { files, cacheKey: model.id };
+  for (const [path, content] of Object.entries(dash.draft.files)) files.set(path, content);
+  return { files, cacheKey: `${model.id}:draft:${dash.draft.id}:${dash.draft.version}` };
+}
 
 /** Card name for a tile run-expression: the view name from `source -> view`,
     else the query name. */
@@ -67,15 +83,11 @@ export async function runDashboard(
   const found = await findByDatasetRef(userId, datasetId);
   if (!found) return { ok: false, error: "dataset not found" };
   if (found.ds.status !== "ready") return { ok: false, error: "dataset not ready" };
-  const [a] = await db
-    .select()
-    .from(malloyArtifacts)
-    .where(and(eq(malloyArtifacts.modelId, found.model.id), eq(malloyArtifacts.name, name)))
-    .limit(1);
+  const a = await getDashboard(userId, datasetId, name);
   if (!a) return { ok: false, error: `dashboard '${name}' not found` };
-  const files = await modelFileMap(found.model);
+  const { files, cacheKey } = await dashboardFiles(a);
 
-  const manifest = a.manifest as Record<string, unknown>;
+  const manifest = a.manifest;
   const entryFile = typeof manifest.entryFile === "string" ? manifest.entryFile : "index.malloy";
 
   // One field, two meanings: `query` carrying `run:` IS Malloy text. Callers
@@ -102,7 +114,7 @@ export async function runDashboard(
     // the app/engine duplicate @malloydata/malloy installs (same seam as
     // mcp-host.ts) — one runtime object, two identical declaration trees.
     type EngineRuntime = Parameters<typeof runRestricted>[0];
-    const out = await withModelRuntime(files, found.model.id, (runtime) =>
+    const out = await withModelRuntime(files, cacheKey, (runtime) =>
       runRestricted(runtime as unknown as EngineRuntime, entry, malloyText, {
         givens: givens ?? {},
         stableResult: true,
@@ -124,7 +136,7 @@ export async function runDashboard(
   try {
     const res = await runNamedMalloyFiles(files, entryFile, runExpr, givens ?? {}, {
       rowLimit: maxRows,
-      cacheKey: found.model.id,
+      cacheKey,
     });
     return { ok: true, stableResult: res.stableResult, rows: res.rows, rowCount: res.rowCount };
   } catch (e) {
@@ -155,15 +167,13 @@ export async function dashboardTileSpecs(
 ): Promise<DashboardTilesResult> {
   const dash = await getDashboard(userId, datasetId, name);
   if (!dash) return { ok: false, error: "dashboard not found" };
-  const found = await findByDatasetRef(userId, datasetId);
-  if (!found) return { ok: false, error: "dataset not found" };
   const tiles = Array.isArray(dash.manifest.tiles) ? (dash.manifest.tiles as string[]) : null;
   if (!tiles) return { ok: false, error: "dashboard is not composite" };
-  const files = await modelFileMap(found.model);
+  const { files, cacheKey } = await dashboardFiles(dash);
   const entryFile = typeof dash.manifest.entryFile === "string" ? dash.manifest.entryFile : "index.malloy";
   const entry = fileUrl(entryFile);
   type EngineRuntime = Parameters<typeof dashboardGivenSpecs>[0];
-  return withModelRuntime(files, found.model.id, async (runtime) => {
+  return withModelRuntime(files, cacheKey, async (runtime) => {
     const rt = runtime as unknown as EngineRuntime;
     const byName = new Map<string, DashboardGivenSpec>();
     const out: DashboardTileSpec[] = [];
@@ -251,9 +261,7 @@ export async function dashboardGivens(
 ): Promise<DashboardGivensResult> {
   const dash = await getDashboard(userId, datasetId, name);
   if (!dash) return { ok: false, error: "dashboard not found" };
-  const found = await findByDatasetRef(userId, datasetId);
-  if (!found) return { ok: false, error: "dataset not found" };
-  const files = await modelFileMap(found.model);
+  const { files, cacheKey } = await dashboardFiles(dash);
   const entryFile = typeof dash.manifest.entryFile === "string" ? dash.manifest.entryFile : "index.malloy";
   const entry = fileUrl(entryFile);
   const tiles = Array.isArray(dash.manifest.tiles) ? (dash.manifest.tiles as string[]) : null;
@@ -262,7 +270,7 @@ export async function dashboardGivens(
   // Composite: the controls are the UNION of givens across the tiles, resolved
   // in the dashboard file's own scope (a given is declared once at model scope).
   if (tiles) {
-    return withModelRuntime(files, found.model.id, async (runtime) => {
+    return withModelRuntime(files, cacheKey, async (runtime) => {
       const rt = runtime as unknown as EngineRuntime;
       const byName = new Map<string, DashboardGivenSpec>();
       for (const tile of tiles) {
@@ -276,7 +284,7 @@ export async function dashboardGivens(
   // v1: a single stored query.
   const query = dash.manifest.query;
   if (typeof query !== "string") return { ok: false, error: "dashboard manifest has no query" };
-  return withModelRuntime(files, found.model.id, (runtime) =>
+  return withModelRuntime(files, cacheKey, (runtime) =>
     dashboardGivenSpecs(runtime as unknown as EngineRuntime, entry, query),
   );
 }

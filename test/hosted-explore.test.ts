@@ -24,10 +24,12 @@ import {
   malloyModels,
   malloyModelFiles,
   malloyArtifacts,
+  draftDashboards,
   history,
   type User,
 } from "@/db";
 import { buildHostedExploreSurface } from "@/lib/mcp-host";
+import { getDashboard, listAllDashboards, listDashboardsAndDrafts } from "@/lib/dashboards";
 import { loadSharedQuery, runQueryForWeb } from "@/lib/mcp-tools";
 
 const MODEL = `#" Pet shop sales.
@@ -454,4 +456,88 @@ test("a compile-only (execute:false) query is audited but records no run artifac
 after(async () => {
   // postgres-js keeps the event loop alive; close the pool so the run exits.
   await (globalThis as { __pg__?: { end?: () => Promise<void> } }).__pg__?.end?.().catch(() => {});
+});
+
+test("the dashboard listing carries drafts, with their author", async () => {
+  // A draft belongs to a person, so the listing that shows it says whose it
+  // is — and shows it to everyone who can see the dataset, the same rule its
+  // URL and the dataset's own dashboards follow.
+  const [ds] = await db.select().from(datasets).where(eq(datasets.name, "petshop"));
+  const [model] = await db
+    .select()
+    .from(malloyModels)
+    .where(eq(malloyModels.datasetId, ds.id))
+    .orderBy(desc(malloyModels.version))
+    .limit(1);
+  const [mate] = await db
+    .insert(users)
+    .values({ email: "vixen@test.local", name: "Vixen", status: "active", role: "member" })
+    .returning();
+  await db.insert(draftDashboards).values({
+    slug: "listed1",
+    userId: mate.id,
+    datasetId: ds.id,
+    modelId: model.id,
+    name: "wip",
+    title: "Work in progress",
+    manifest: { title: "Work in progress", description: "Half an idea" },
+    malloy: "",
+    source: "export default function D() { return <div/>; }",
+  });
+
+  const all = await listAllDashboards(user.id);
+  const draft = all.find((d) => d.name === "draft-listed1");
+  assert.ok(draft, "someone else's draft is listed on a dataset I can see");
+  assert.equal(draft?.title, "Work in progress");
+  assert.equal(draft?.description, "Half an idea");
+  assert.equal(draft?.isDraft, true);
+  assert.equal(draft?.author, "Vixen");
+  assert.ok(all.some((d) => d.name === "overview" && !d.isDraft), "published dashboards still listed");
+
+  // The per-dataset listing (the nav's dropdown) sees both kinds: petshop
+  // carries the draft, dashmod is the one with published dashboards.
+  const onPetshop = await listDashboardsAndDrafts(user.id, "petshop");
+  assert.ok(onPetshop.some((d) => d.name === "draft-listed1" && d.author === "Vixen"));
+  const onDashmod = await listDashboardsAndDrafts(user.id, "dashmod");
+  assert.ok(onDashmod.some((d) => d.name === "overview" && !d.isDraft));
+});
+
+test("a draft renders against the dataset's current model, not the one it was saved on", async () => {
+  // Additive model changes should reach a draft, and a real break should show
+  // up now rather than whenever someone next saves it.
+  const [ds] = await db.select().from(datasets).where(eq(datasets.name, "petshop"));
+  const [saved] = await db
+    .select()
+    .from(malloyModels)
+    .where(eq(malloyModels.datasetId, ds.id))
+    .orderBy(desc(malloyModels.version))
+    .limit(1);
+  await db.insert(draftDashboards).values({
+    slug: "follows1",
+    userId: user.id,
+    datasetId: ds.id,
+    modelId: saved.id,
+    name: "wip",
+    title: "Follows the model",
+    manifest: { title: "Follows the model" },
+    malloy: "",
+    source: "export default function D() { return <div/>; }",
+  });
+
+  // The dataset moves on.
+  const [next] = await db
+    .insert(malloyModels)
+    .values({
+      datasetId: ds.id,
+      version: saved.version + 1,
+      source: MODEL,
+      generatedBy: "test",
+      compiledAt: new Date(),
+      sources: [{ name: "sales", description: "Pet shop sales." }],
+    })
+    .returning();
+
+  const dash = await getDashboard(user.id, "petshop", "draft-follows1");
+  assert.equal(dash?.modelId, next.id, "renders against the new version");
+  assert.notEqual(dash?.modelId, saved.id);
 });

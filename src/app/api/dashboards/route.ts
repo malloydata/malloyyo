@@ -3,7 +3,7 @@
 
 import { NextResponse } from "next/server";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
-import { listDashboards, listAllDashboards } from "@/lib/dashboards";
+import { listAllDashboards, listDashboardsAndDrafts } from "@/lib/dashboards";
 
 export const runtime = "nodejs";
 
@@ -18,11 +18,19 @@ export async function GET(req: Request) {
     throw err;
   }
   const datasetId = new URL(req.url).searchParams.get("datasetId");
-  const list = datasetId ? await listDashboards(user.id, datasetId) : await listAllDashboards(user.id);
+  const list = datasetId ? await listDashboardsAndDrafts(user.id, datasetId) : await listAllDashboards(user.id);
   // The summaries carry the dataset id for server-side callers; the wire form
   // identifies a dataset by NAME, which is what links are built from and what
   // the front page joins on.
   return NextResponse.json(
-    list.map(({ datasetName, name, title }) => ({ dataset: datasetName, name, title })),
+    list.map(({ datasetName, name, title, description, isDraft, author, authorId }) => ({
+      dataset: datasetName,
+      name,
+      title,
+      ...(description ? { description } : {}),
+      // `mine` rather than the author id: the page sorts a reader's own first,
+      // and no client needs other people's ids.
+      ...(isDraft ? { isDraft: true, author, mine: authorId === user.id } : {}),
+    })),
   );
 }

@@ -270,7 +270,7 @@ export async function login(baseUrl: string, opts: LoginOptions = {}): Promise<C
   }
 }
 
-async function refresh(baseUrl: string, creds: Creds): Promise<Creds> {
+async function refresh(baseUrl: string, creds: Creds & { clientId: string; refreshToken: string }): Promise<Creds> {
   const ep = await discover(baseUrl);
   const res = await apiFetch(ep.token_endpoint, {
     method: "POST",
@@ -362,8 +362,17 @@ export async function getAccessToken(
     throw new Error(`Not authenticated for ${target.url}.\nRun:  malloyyo login ${target.name}`);
   }
   if (creds.expiresAt - Date.now() < 60_000) {
+    // A pasted token (login --token-stdin) has nothing to refresh with.
+    const { clientId, refreshToken } = creds;
+    if (!refreshToken || !clientId) {
+      throw new Error(
+        `The token stored for ${target.url} has expired.\n` +
+          `Get a new one (the instance's issue_cli_token tool, or ${target.url}/settings/tokens)\n` +
+          `and store it with:  malloyyo login ${target.url} --token-stdin`,
+      );
+    }
     try {
-      creds = await refresh(target.url, creds);
+      creds = await refresh(target.url, { ...creds, clientId, refreshToken });
     } catch {
       throw new Error(`Session expired for ${target.url}.\nRun:  malloyyo login ${target.name}`);
     }

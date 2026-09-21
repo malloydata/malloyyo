@@ -28,7 +28,9 @@ import {
   dashboardBundlePayload,
 } from "@/lib/mcp-app-dashboard";
 import { dashboardPanel, type DashboardPanel } from "@/lib/mcp-app-panel";
-import { getDashboard, listDashboards } from "@/lib/dashboards";
+import { getDashboard, listDashboards, visibleImageHosts } from "@/lib/dashboards";
+import { saveDraftDashboard } from "@/lib/dashboards/draft";
+import { createApiToken } from "@/lib/api-tokens";
 import { runDashboard } from "@/lib/dashboards/engine";
 import { bearerToken, credentialLabel, resolveBearer } from "@/lib/bearer-auth";
 import { corsPreflight, withCors } from "@/lib/oauth/cors";
@@ -48,6 +50,8 @@ interface RequestScope {
   userId: string;
   hosted: Hosted;
   log: Log;
+  /** The URL this client reached us at — what the CLI must use too. */
+  origin: string;
 }
 
 type Json = Record<string, unknown>;
@@ -103,7 +107,137 @@ function buildServer(scope: RequestScope): McpServer {
   const panel = dashboardPanel();
   if (panel) registerDashboardApp(server, scope, panel);
 
+  registerAuthoringTools(server, scope);
+
   return server;
+}
+
+/** How long a CLI token from issue_cli_token lives. */
+const CLI_TOKEN_TTL_MS = 60 * 60 * 1000;
+const ISSUE_CLI_TOKEN_TOOL = "issue_cli_token";
+const SAVE_DRAFT_TOOL = "save_draft_dashboard";
+
+/**
+ * Dashboard authoring from an agent: a CLI credential, and draft dashboards.
+ *
+ * issue_cli_token lets an agent that is already connected here (Claude Code,
+ * say) drive the `malloyyo` CLI against THIS instance without a browser
+ * login. The token is keyed to the URL the client connected to, lives an hour,
+ * and carries only the `mcp` scope — the caller's own scope, never publish.
+ */
+function registerAuthoringTools(server: McpServer, scope: RequestScope): void {
+  const { userId, origin } = scope;
+  const tag = `[${env.INSTANCE_NAME}]`;
+
+  server.registerTool(
+    ISSUE_CLI_TOKEN_TOOL,
+    {
+      title: "Issue a CLI token",
+      description:
+        `${tag} Issues a short-lived token so the \`malloyyo\` CLI can act as you against THIS ` +
+        `instance (${origin}) — \`malloyyo draft list\` and \`malloyyo draft promote <slug>\`, which ` +
+        `write a draft dashboard into a model checkout. Scope: query only (never publish); expires ` +
+        `in an hour. Returns the URL and the command that stores it. If a dataset exists on more ` +
+        `than one connected instance, confirm with the user which instance first.`,
+      annotations: { readOnlyHint: false },
+      inputSchema: fromJsonSchema<Json>({ type: "object", properties: {} }),
+    },
+    logged(scope, ISSUE_CLI_TOKEN_TOOL, async () => {
+      const expiresAt = new Date(Date.now() + CLI_TOKEN_TTL_MS);
+      const created = await createApiToken({
+        userId,
+        name: `CLI via MCP (${new Date().toISOString().slice(0, 16).replace("T", " ")} UTC)`,
+        scopes: ["mcp"],
+        expiresAt,
+      });
+      if (!created.ok) {
+        return { content: text(created.error), structuredContent: { ok: false, error: created.error }, isError: true };
+      }
+      const login = `malloyyo login ${origin} --token-stdin`;
+      return {
+        content: text(
+          `Token for ${origin} (query scope, expires ${expiresAt.toISOString()}). Store it with:\n` +
+            `  printf '%s' '${created.raw}' | ${login}\n` +
+            `Then target this instance with \`-i ${origin}\`. When it expires, call ${ISSUE_CLI_TOKEN_TOOL} again.`,
+        ),
+        structuredContent: {
+          ok: true,
+          url: origin,
+          token: created.raw,
+          expires_at: expiresAt.toISOString(),
+          login,
+        },
+      };
+    }),
+  );
+
+  type SaveArgs = {
+    dataset: string;
+    name: string;
+    source?: string;
+    malloy?: string;
+    title?: string;
+    description?: string;
+    slug?: string;
+  };
+  server.registerTool(
+    SAVE_DRAFT_TOOL,
+    {
+      title: "Save a draft dashboard",
+      description:
+        `${tag} Saves a draft dashboard and returns a URL to open it. Simplest form: a React ` +
+        `component (\`source\`) that runs its own queries inline — ` +
+        `\`useQuery({ malloy: "run: flights -> { group_by: carrier; aggregate: flight_count }" })\` ` +
+        `— plus a \`title\`. Malloy runs against the model's published surface under the same ` +
+        `rules as the \`query\` tool. For controls, named queries or a chart with no code, add ` +
+        `\`malloy\`: a dashboards/<name>.malloy tagged \`# artifact\`. Read ` +
+        `yo_help("dashboards/drafts") BEFORE writing one — it has the component shape, what you ` +
+        `may import, and the query rules. Reports each query's result and any component compile error, ` +
+        `so fix what it reports before showing the user. Pass \`slug\` to update a draft you ` +
+        `already saved; show_dashboard renders it by the returned \`dashboard\` name.`,
+      annotations: { readOnlyHint: false },
+      inputSchema: fromJsonSchema<SaveArgs>({
+        type: "object",
+        properties: {
+          dataset: { type: "string", description: "Dataset name (the model_ref list_sources reports)." },
+          name: { type: "string", description: 'A short name, e.g. "revenue_trend".' },
+          source: { type: "string", description: "The React component (JSX/TSX), default-exported." },
+          malloy: {
+            type: "string",
+            description: "Optional dashboards/<name>.malloy — needed only for controls, named queries, or a tag-only dashboard.",
+          },
+          title: { type: "string", description: "Shown as the dashboard's title (a .malloy carries its own)." },
+          description: {
+            type: "string",
+            description: "One line on what it answers, shown under the title in listings.",
+          },
+          slug: { type: "string", description: "Update this draft instead of creating one." },
+        },
+        required: ["dataset", "name"],
+      }),
+    },
+    logged(scope, SAVE_DRAFT_TOOL, async (a: SaveArgs) => {
+      const r = await saveDraftDashboard(userId, a.dataset, a, origin);
+      if (!r.ok) {
+        const detail = r.problems?.map((p) => `  - ${p.message}`).join("\n");
+        return {
+          content: text(detail ? `${r.error}\n${detail}` : r.error),
+          structuredContent: r as unknown as Json,
+          isError: true,
+        };
+      }
+      const failed = r.tiles.filter((t) => !t.ok);
+      return {
+        content: text(
+          `Saved '${r.title}' as ${r.dashboard} — ${r.url}\n` +
+            `Tiles: ${r.tiles.length - failed.length}/${r.tiles.length} ran` +
+            (failed.length ? `; failed: ${failed.map((t) => `${t.run} (${t.error})`).join("; ")}` : "") +
+            (r.component.ok ? "" : `\nComponent error${r.component.line ? ` (line ${r.component.line})` : ""}: ${r.component.error}`),
+        ),
+        structuredContent: r as unknown as Json,
+      };
+    }),
+  );
 }
 
 /** One panel resource, one model-visible tool, and two tools only the panel calls. */
@@ -112,13 +246,34 @@ function registerDashboardApp(server: McpServer, scope: RequestScope, panel: Das
   const { uri } = panel;
   const tag = `[${env.INSTANCE_NAME}]`;
 
+  // One shell for every dashboard. PRIVATE rather than public, because the
+  // policy below is this user's: the body is identical for everyone, the image
+  // hosts are not.
   registerAppResource(
     server,
     "Dashboard panel",
     uri,
-    // One shell for every dashboard and user; the URI changes when it does.
-    { cacheHint: { ttlMs: 3_600_000, cacheScope: "public" } } as never,
-    async () => ({ contents: [{ uri, mimeType: RESOURCE_MIME_TYPE, text: panel.html }] }),
+    { cacheHint: { ttlMs: 3_600_000, cacheScope: "private" } } as never,
+    async () => {
+      // A panel runs under a default-deny policy, so a dashboard that builds
+      // <img src> from a model column (poster art, logos, avatars) shows
+      // nothing inside Claude while working fine on the web app — which widens
+      // its own frame's img-src from the same malloy-config.json list.
+      // resourceDomains is broader than img-src (scripts, styles, fonts, media
+      // too), so it stays an allowlist the model's own author declared, never
+      // a blanket https:.
+      const hosts = await visibleImageHosts(userId);
+      return {
+        contents: [
+          {
+            uri,
+            mimeType: RESOURCE_MIME_TYPE,
+            text: panel.html,
+            ...(hosts.length > 0 ? { _meta: { ui: { csp: { resourceDomains: hosts } } } } : {}),
+          },
+        ],
+      };
+    },
   );
 
   registerAppTool(
@@ -274,7 +429,7 @@ async function serve(req: Request): Promise<Response> {
     userAgent: req.headers.get("user-agent"),
     authorModel: req.headers.get("x-author-model"),
   });
-  const scope: RequestScope = { userId: auth.user.id, hosted, log };
+  const scope: RequestScope = { userId: auth.user.id, hosted, log, origin: originFromRequest(req) };
   const res = await handler.fetch(req, {
     authInfo: { token: raw, clientId: credentialLabel(auth.cred), scopes: ["mcp"], extra: { scope } },
   });

@@ -2,52 +2,28 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * The MCP App panel document: the ext-apps SDK, the frame runtime, and a
- * loader, inlined into one HTML resource that is identical for every
- * dashboard (see mcp-app-dashboard.ts for what the panel then fetches).
+ * The MCP App panel document: a few hundred bytes of markup and a loader that
+ * pull the frame runtime and the ext-apps SDK from this instance's own origin
+ * (see mcp-app-dashboard.ts for what the panel then fetches).
  *
- * Kept apart from mcp-app-dashboard.ts on purpose: this module reads two files
- * and nothing else — no database, no Malloy — so it can be built, cached, and
- * tested on its own.
+ * The scripts are REFERENCED, not inlined. Inlining them made `resources/read`
+ * a ~5 MB JSON-RPC message — over Vercel's 4.5 MB function-response limit and
+ * past what a host will accept — so the panel silently never loaded ("Unable to
+ * reach <instance>" in the client, while the function logged a cheerful 200).
+ * The ext spec expects exactly this shape: serve your bundle from your own
+ * origin and declare that origin in the resource's `_meta.ui.csp.resourceDomains`,
+ * which /mcp does. It also means the 4.6 MB runtime is fetched by URL and cached
+ * by the browser rather than re-sent through the protocol per panel.
+ *
+ * Kept apart from mcp-app-dashboard.ts on purpose: this module touches no
+ * database and no Malloy, so it can be built, cached, and tested on its own.
  */
 
 import { createHash } from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
 
-import { logger } from "@/lib/logger";
-
-let vendorCache: string | null = null;
-function vendor(): string {
-  if (vendorCache === null) {
-    vendorCache = fs.readFileSync(path.join(process.cwd(), "public/dashboard-vendor.js"), "utf8");
-  }
-  return vendorCache;
-}
-
-let sdkCache: string | null = null;
-/** The ext-apps bundle, its minified export list rewritten onto a global. */
-function sdk(): string {
-  if (sdkCache === null) {
-    const raw = fs.readFileSync(
-      path.join(process.cwd(), "node_modules/@modelcontextprotocol/ext-apps/dist/src/app-with-deps.js"),
-      "utf8",
-    );
-    const m = /export\s*\{([^}]*)\}\s*;?\s*$/.exec(raw);
-    if (!m) throw new Error("ext-apps bundle: no export statement found");
-    const globals = m[1]
-      .split(",")
-      .map((x) => x.trim())
-      .filter(Boolean)
-      .map((x) => {
-        const [local, , exported] = x.split(/\s+/);
-        return `${JSON.stringify(exported ?? local)}: ${local}`;
-      })
-      .join(", ");
-    sdkCache = raw.slice(0, m.index) + `globalThis.__EXT_APPS__ = {${globals}};`;
-  }
-  return sdkCache;
-}
+/** Built by scripts/build-dashboard-vendor.mjs, served from public/. */
+const RUNTIME_SRC = "/dashboard-vendor.js";
+const SDK_SRC = "/mcp-app-sdk.js";
 
 /**
  * The loader. Written as a plain string with no interpolation of anything
@@ -147,46 +123,42 @@ app.connect().then(() => {
 });
 `;
 
-/** The panel document and its content-addressed URI. Identical for every
-    dashboard. The URI hashes the RUNTIME, so it changes when the shell changes
-    and not when a dashboard does — which is what lets a dashboard edit skip a
-    client reconnect. */
+/**
+ * The panel document and its content-addressed URI.
+ *
+ * The URI hashes the SHELL — markup, loader, and the origin its scripts come
+ * from — so it changes when the shell changes and not when a dashboard does,
+ * which is what lets a dashboard edit skip a client reconnect. The runtime
+ * itself now sits behind a URL, so a runtime rebuild no longer moves the URI
+ * either; the browser's own cache validators handle that.
+ */
 export interface DashboardPanel {
   html: string;
   uri: string;
 }
 
-let panelCache: DashboardPanel | null = null;
-let panelFailed = false;
+const panelCache = new Map<string, DashboardPanel>();
 
 /**
- * The panel, built once per process — both inputs are files read once, and
- * /mcp builds a server per request — or null when those files can't be read.
+ * The panel for one origin, built once per process per origin (an instance
+ * answers on one, but a preview deployment also answers on its generated URL).
  *
- * Null rather than a throw so a missing or unreadable asset (a build that
- * skipped `public/dashboard-vendor.js`, a tracing miss) costs only the
- * dashboard tools: /mcp keeps serving list_sources, describe_source and query.
- * The failure is logged once and remembered; the files won't appear later in
- * the same deployment.
+ * `origin` is where the panel's scripts are fetched from — the URL the client
+ * reached /mcp at — and it must also be declared in the resource's
+ * `_meta.ui.csp.resourceDomains`, or the sandboxed panel loads nothing.
  */
-export function dashboardPanel(): DashboardPanel | null {
-  if (panelCache) return panelCache;
-  if (panelFailed) return null;
-  try {
-    const html = buildPanelHtml();
-    const hash = createHash("sha256").update(html).digest("hex").slice(0, 12);
-    panelCache = { html, uri: `ui://dashboard/panel-${hash}.html` };
-    return panelCache;
-  } catch (e) {
-    panelFailed = true;
-    logger.error("mcp dashboard panel unavailable — dashboard tools disabled", {
-      error: e instanceof Error ? e.message : String(e),
-    });
-    return null;
-  }
+export function dashboardPanel(origin: string): DashboardPanel {
+  const cached = panelCache.get(origin);
+  if (cached) return cached;
+  const html = buildPanelHtml(origin);
+  const hash = createHash("sha256").update(html).digest("hex").slice(0, 12);
+  const panel = { html, uri: `ui://dashboard/panel-${hash}.html` };
+  panelCache.set(origin, panel);
+  return panel;
 }
 
-function buildPanelHtml(): string {
+function buildPanelHtml(origin: string): string {
+  const base = origin.replace(/\/$/, "");
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -199,17 +171,18 @@ function buildPanelHtml(): string {
 <div id="root"></div>
 <script>
 // A panel that fails silently is indistinguishable from one that never
-// rendered — the most expensive failure mode in this whole surface.
+// rendered — the most expensive failure mode in this whole surface. A script
+// that 404s or is blocked by the panel's CSP reports itself here too.
 window.addEventListener("error", function (e) {
   var r = document.getElementById("root");
+  var what = e && e.target && e.target.src ? "Could not load " + e.target.src : String((e && e.message) || e);
   if (r && !r.childNodes.length) {
-    r.innerHTML = "<pre style='white-space:pre-wrap;padding:12px;font:12px ui-monospace'>" +
-      String((e && e.message) || e) + "</pre>";
+    r.innerHTML = "<pre style='white-space:pre-wrap;padding:12px;font:12px ui-monospace'>" + what + "</pre>";
   }
-});
+}, true);
 </script>
-<script type="module">${sdk()}</script>
-<script>${vendor()}</script>
+<script src="${base}${SDK_SRC}"></script>
+<script src="${base}${RUNTIME_SRC}"></script>
 <script type="module">${LOADER}</script>
 </body>
 </html>

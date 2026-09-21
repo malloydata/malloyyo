@@ -512,3 +512,82 @@ test("a published dashboard whose name starts with draft- is still reachable", a
     await client.close();
   }
 });
+
+test("a query held in a const is checked at save, like one written in the call", async () => {
+  // Real components keep their query in a `const` and pass the variable. A
+  // check that only looked inside useQuery({…}) reported "0/0 ran" and left
+  // the mistake for the first person to open the page.
+  const client = await connect(mcpToken, { mode: { pin: "2026-07-28" } });
+  try {
+    const r = await client.callTool({
+      name: "save_draft_dashboard",
+      arguments: {
+        dataset: "petshop",
+        name: "const_query",
+        title: "Const query",
+        source: `import { useQuery } from "@malloyyo/dashboard";
+const TREND = \`run: sales -> { group_by: animl; aggregate: total_qty }\`;
+export default function D() {
+  const q = useQuery({ malloy: TREND });
+  return <div>{(q.rows ?? []).length}</div>;
+}`,
+      },
+    });
+    const out = r.structuredContent as { tiles: Array<{ ok: boolean; error?: string }> };
+    assert.equal(out.tiles.length, 1, "the const's query was found");
+    assert.equal(out.tiles[0].ok, false);
+    assert.match(out.tiles[0].error ?? "", /'animl' is not defined/);
+  } finally {
+    await client.close();
+  }
+});
+
+test("a document — source: … run: … — is accepted wherever a query is", async () => {
+  // The same text the `query` tool takes. The runtime used to prefix it with
+  // `run:`, making `run: source: …`.
+  const client = await connect(mcpToken, { mode: { pin: "2026-07-28" } });
+  try {
+    const doc = `source: recent is sales extend { measure: n is total_qty }\nrun: recent -> { group_by: animal; aggregate: n }`;
+    const saved = await client.callTool({
+      name: "save_draft_dashboard",
+      arguments: {
+        dataset: "petshop",
+        name: "doc_query",
+        title: "Document query",
+        source: `import { useQuery } from "@malloyyo/dashboard";\nconst Q = \`${doc}\`;\nexport default function D() { const q = useQuery({ malloy: Q }); return <div>{(q.rows ?? []).length}</div>; }`,
+      },
+    });
+    const out = saved.structuredContent as { dashboard: string; tiles: Array<{ ok: boolean; error?: string }> };
+    assert.equal(out.tiles[0]?.ok, true, out.tiles[0]?.error);
+
+    const ran = await client.callTool({
+      name: "dashboard_run",
+      arguments: { datasetId: "petshop", name: out.dashboard, malloy: doc },
+    });
+    const run = ran.structuredContent as { ok: boolean; rowCount?: number; error?: string };
+    assert.equal(run.ok, true, run.error);
+    assert.equal(run.rowCount, 2);
+  } finally {
+    await client.close();
+  }
+});
+
+test("Malloy that defines things but runs nothing says so", async () => {
+  const client = await connect(mcpToken, { mode: { pin: "2026-07-28" } });
+  try {
+    const saved = await client.callTool({
+      name: "save_draft_dashboard",
+      arguments: { dataset: "petshop", name: "norun", title: "No run", source: "export default function D() { return <div/>; }" },
+    });
+    const { dashboard } = saved.structuredContent as { dashboard: string };
+    const ran = await client.callTool({
+      name: "dashboard_run",
+      arguments: { datasetId: "petshop", name: dashboard, malloy: "source: x is sales extend { measure: n is count() }" },
+    });
+    const run = ran.structuredContent as { ok: boolean; error?: string };
+    assert.equal(run.ok, false);
+    assert.match(run.error ?? "", /never runs one/, "not an internal compiler error");
+  } finally {
+    await client.close();
+  }
+});

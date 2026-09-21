@@ -102,10 +102,10 @@ function buildServer(scope: RequestScope): McpServer {
     );
   }
 
-  // The dashboard app, only when its panel could be built: a missing panel
-  // asset costs the dashboard tools, never the explore tools above.
-  const panel = dashboardPanel();
-  if (panel) registerDashboardApp(server, scope, panel);
+  // The dashboard app. Its panel is markup plus two <script src> onto this
+  // instance's own origin, so there is nothing to read off disk and nothing
+  // that can be missing from a deployment at this point.
+  registerDashboardApp(server, scope, dashboardPanel(scope.origin));
 
   registerAuthoringTools(server, scope);
 
@@ -242,7 +242,7 @@ function registerAuthoringTools(server: McpServer, scope: RequestScope): void {
 
 /** One panel resource, one model-visible tool, and two tools only the panel calls. */
 function registerDashboardApp(server: McpServer, scope: RequestScope, panel: DashboardPanel): void {
-  const { userId } = scope;
+  const { userId, origin } = scope;
   const { uri } = panel;
   const tag = `[${env.INSTANCE_NAME}]`;
 
@@ -255,21 +255,27 @@ function registerDashboardApp(server: McpServer, scope: RequestScope, panel: Das
     uri,
     { cacheHint: { ttlMs: 3_600_000, cacheScope: "private" } } as never,
     async () => {
-      // A panel runs under a default-deny policy, so a dashboard that builds
-      // <img src> from a model column (poster art, logos, avatars) shows
-      // nothing inside Claude while working fine on the web app — which widens
-      // its own frame's img-src from the same malloy-config.json list.
+      // A panel runs under a default-deny policy, so every origin it loads
+      // anything from has to be declared here. Two kinds:
+      //
+      //   - THIS INSTANCE, where the panel's own two scripts live. Without it
+      //     the panel is an empty document.
+      //   - The model repos' declared image_hosts, so a dashboard that builds
+      //     <img src> from a model column (poster art, logos, avatars) shows
+      //     them inside Claude as it does on the web app — which widens its own
+      //     frame's img-src from the same malloy-config.json list.
+      //
       // resourceDomains is broader than img-src (scripts, styles, fonts, media
-      // too), so it stays an allowlist the model's own author declared, never
-      // a blanket https:.
-      const hosts = await visibleImageHosts(userId);
+      // too), so the repo half stays an allowlist the model's own author
+      // declared, never a blanket https:.
+      const resourceDomains = [origin, ...(await visibleImageHosts(userId))];
       return {
         contents: [
           {
             uri,
             mimeType: RESOURCE_MIME_TYPE,
             text: panel.html,
-            ...(hosts.length > 0 ? { _meta: { ui: { csp: { resourceDomains: hosts } } } } : {}),
+            _meta: { ui: { csp: { resourceDomains } } },
           },
         ],
       };

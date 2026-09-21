@@ -117,7 +117,10 @@ one:
   embedding it in the **bundle** URL (`?t=…`). The **bundle route** validates the
   token instead of the cookie and scopes `getDashboard` to the token's viewer.
   The **vendor JS** is generic library code (no secrets, no user data), so it's
-  made public via a proxy-matcher exemption rather than token-gated. The token
+  made public via a proxy-matcher exemption rather than token-gated. The same
+  exemption carries `/mcp-app-sdk.js`, the ext-apps client SDK, for the same
+  reason: an MCP App panel loads both from this origin under an opaque origin
+  that sends no cookie (see docs/mcp-app-dashboards.md). The token
   grants reading this dashboard's own static assets only — never a data run
   (still brokered by the trusted parent's session) — so reading it out of the
   guest document yields no escalation. For a **separate artifact origin** later

@@ -167,14 +167,13 @@ const nextConfig: NextConfig = {
     // /api/history and /api/ltool/share 500'd on a cold start. It also named
     // /api/datasets/[id]/model, which no longer exists.
     ...Object.fromEntries(DUCKDB_NATIVE_ROUTES.map((route) => [route, DUCKDB_NATIVE])),
-    // The MCP App panel is assembled at request time from two files read off
-    // disk: the frame runtime and the ext-apps SDK. Nothing imports them, so
-    // tracing cannot see them — without this the panel 500s in production
-    // while working perfectly in dev, where the filesystem is just there.
+    // The MCP App panel reads nothing off disk: it is markup that points at
+    // public/dashboard-vendor.js and public/mcp-app-sdk.js by URL, which the
+    // CDN serves as static assets. (They used to be inlined into the panel
+    // resource and traced into this function — a 5 MB JSON-RPC response that
+    // no host would take.)
     "/mcp": [
       ...DUCKDB_NATIVE,
-      "./public/dashboard-vendor.js",
-      "./node_modules/@modelcontextprotocol/ext-apps/dist/src/app-with-deps.js",
       // dashboard_bundle compiles a dashboard at request time — the same
       // reason the /bundle route traces esbuild-wasm.
       ...ESBUILD_WASM,

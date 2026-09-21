@@ -78,4 +78,6 @@ crash.*.log
 # data dumps / scratch
 /tmp/
 /scratch/
+# built by scripts/build-dashboard-vendor.mjs
 /public/dashboard-vendor.js
+/public/mcp-app-sdk.js

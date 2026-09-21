@@ -33,6 +33,8 @@ export interface DashboardSummary {
   /** Who made it — drafts only, where "whose is this?" is the first question.
       A published dashboard's author is in the repo's history instead. */
   author?: string;
+  /** Its author's id, so a caller can tell a reader's own from everyone else's. */
+  authorId?: string;
 }
 
 export interface DashboardDetail extends DashboardSummary {
@@ -108,6 +110,19 @@ export async function listDashboards(userId: string, datasetId: string): Promise
   return listDashboardsForModel(found.model.id, datasetId, found.ds.name);
 }
 
+/** One dataset's dashboards AND the drafts people made on it — what the home
+    page and a dataset's nav both show. Separate from `listDashboards`, which
+    stays the model's own: a draft is not a sibling of a published dashboard
+    (the frame injects that list into a dashboard's own switcher). */
+export async function listDashboardsAndDrafts(userId: string, datasetRef: string): Promise<DashboardSummary[]> {
+  const found = await findByDatasetRef(userId, datasetRef);
+  if (!found) return [];
+  return [
+    ...(await listDashboardsForModel(found.model.id, found.ds.id, found.ds.name)),
+    ...(await listDraftsOnDataset(found.ds.id, found.ds.name)),
+  ];
+}
+
 /** Every visible dataset's current dashboards — for the home page. */
 export async function listAllDashboards(userId: string): Promise<DashboardSummary[]> {
   const dsList = await db.select().from(datasets).where(visibleDatasetWhere(userId)).orderBy(desc(datasets.createdAt));
@@ -145,6 +160,7 @@ export async function listDraftsOnDataset(datasetId: string, datasetName: string
       ...(typeof description === "string" && description ? { description } : {}),
       isDraft: true,
       author: authorName || authorEmail || "unknown",
+      authorId: r.userId,
     };
   });
 }

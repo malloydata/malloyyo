@@ -29,7 +29,7 @@ import {
   type User,
 } from "@/db";
 import { buildHostedExploreSurface } from "@/lib/mcp-host";
-import { listAllDashboards } from "@/lib/dashboards";
+import { listAllDashboards, listDashboardsAndDrafts } from "@/lib/dashboards";
 import { loadSharedQuery, runQueryForWeb } from "@/lib/mcp-tools";
 
 const MODEL = `#" Pet shop sales.
@@ -493,4 +493,11 @@ test("the dashboard listing carries drafts, with their author", async () => {
   assert.equal(draft?.isDraft, true);
   assert.equal(draft?.author, "Vixen");
   assert.ok(all.some((d) => d.name === "overview" && !d.isDraft), "published dashboards still listed");
+
+  // The per-dataset listing (the nav's dropdown) sees both kinds: petshop
+  // carries the draft, dashmod is the one with published dashboards.
+  const onPetshop = await listDashboardsAndDrafts(user.id, "petshop");
+  assert.ok(onPetshop.some((d) => d.name === "draft-listed1" && d.author === "Vixen"));
+  const onDashmod = await listDashboardsAndDrafts(user.id, "dashmod");
+  assert.ok(onDashmod.some((d) => d.name === "overview" && !d.isDraft));
 });

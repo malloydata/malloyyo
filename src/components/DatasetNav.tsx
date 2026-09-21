@@ -50,6 +50,26 @@ export function DatasetNav({
   // page is decided by /datasets/<name> itself, so no dashboard list is needed.
   const [catalog, setCatalog] = useState<{ dataset: string; status: string }[]>([]);
   const [switcherOpen, setSwitcherOpen] = useState(false);
+  // Dashboards people made on this dataset. Kept out of the bar itself: there
+  // can be many, and the bar is for the model's own pages.
+  const [userDashboards, setUserDashboards] = useState<
+    { name: string; title: string; description?: string; author?: string; mine?: boolean }[]
+  >([]);
+  const [userOpen, setUserOpen] = useState(false);
+
+  useEffect(() => {
+    fetch(`/api/dashboards?datasetId=${encodeURIComponent(datasetId)}`)
+      .then((r) => (r.ok ? r.json() : []))
+      .then((rows: Array<{ name: string; title: string; description?: string; isDraft?: boolean; author?: string; mine?: boolean }>) => {
+        if (!Array.isArray(rows)) return;
+        // Yours first — on a dataset several people build on, your own are what
+        // you came back for.
+        setUserDashboards(
+          rows.filter((r) => r.isDraft).sort((a, b) => Number(b.mine ?? false) - Number(a.mine ?? false)),
+        );
+      })
+      .catch(() => {});
+  }, [datasetId]);
 
   useEffect(() => {
     fetch(`/api/datasets/${datasetId}`)
@@ -206,6 +226,48 @@ export function DatasetNav({
             {d.title ?? d.name}
           </Link>
         ))}
+        {userDashboards.length > 0 && (
+          <div className="relative">
+            <button
+              onClick={() => setUserOpen((o) => !o)}
+              className={`inline-flex items-center gap-1 ${pill(
+                !!activeDashboard && userDashboards.some((d) => d.name === activeDashboard),
+              )}`}
+              title="Dashboards people made on this dataset"
+            >
+              user dashboards
+              <span className="text-[10px] text-gray-400">{userDashboards.length}</span>
+              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden className="text-gray-400">
+                <path d="M6 9l6 6 6-6" />
+              </svg>
+            </button>
+            {userOpen && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setUserOpen(false)} />
+                <div className="absolute left-0 top-full mt-1 z-50 min-w-[240px] max-h-80 overflow-y-auto rounded-md border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950 shadow-lg py-1">
+                  {userDashboards.map((d) => (
+                    <Link
+                      key={d.name}
+                      href={`/datasets/${encodeURIComponent(datasetName || datasetId)}/dashboard/${encodeURIComponent(d.name)}`}
+                      onClick={() => setUserOpen(false)}
+                      title={d.description}
+                      className={`block px-3 py-1.5 truncate hover:bg-gray-100 dark:hover:bg-gray-800/60 ${
+                        d.name === activeDashboard
+                          ? "font-semibold text-gray-900 dark:text-gray-100 bg-gray-50 dark:bg-gray-900"
+                          : "text-gray-700 dark:text-gray-300"
+                      }`}
+                    >
+                      {d.title}
+                      {!d.mine && d.author && (
+                        <span className="ml-1.5 text-[10px] text-gray-400 dark:text-gray-500">{d.author}</span>
+                      )}
+                    </Link>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
         <Link
           href={`/datasets/${encodeURIComponent(datasetName || datasetId)}/questions`}
           title="Questions asked and answered on this dataset"

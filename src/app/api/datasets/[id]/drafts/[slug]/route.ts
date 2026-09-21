@@ -29,7 +29,9 @@ export async function GET(req: Request, ctx: Ctx) {
  * into a repo as `name`, with a hash of what was written. Body: { name, hash }.
  *
  * Records, never deletes: the draft stays the only usable copy until the model
- * version carrying it is live, and its URL keeps working afterwards.
+ * version carrying it is live, and its URL keeps working afterwards. The
+ * draft's own author records it; anyone who can see the dataset may still read
+ * the files above and write them into a checkout.
  */
 export async function POST(req: Request, ctx: Ctx) {
   const auth = await requireBearer(req, { scope: "mcp" });
@@ -44,8 +46,12 @@ export async function POST(req: Request, ctx: Ctx) {
   const hash = String(body.hash ?? "");
   if (!name || !hash) return NextResponse.json({ ok: false, error: "name and hash are required" }, { status: 400 });
   const { id, slug } = await ctx.params;
-  const ok = await recordPromotion(auth.user.id, id, slug, { name, hash });
-  return ok
-    ? NextResponse.json({ ok: true, promotedAs: name })
+  const outcome = await recordPromotion(auth.user.id, id, slug, { name, hash });
+  if (outcome === "recorded") return NextResponse.json({ ok: true, promotedAs: name });
+  return outcome === "not-yours"
+    ? NextResponse.json(
+        { ok: false, error: "that draft belongs to someone else — its own author records a promotion" },
+        { status: 403 },
+      )
     : NextResponse.json({ ok: false, error: `no draft '${slug}' in '${id}'` }, { status: 404 });
 }

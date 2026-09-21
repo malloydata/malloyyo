@@ -72,6 +72,17 @@ interface DraftSummary {
   promotedAs: string | null;
 }
 
+/** An HTTP failure from the instance, carrying the status so a caller can tell
+    "not yours" from "gone" without matching on prose. */
+class DraftRequestError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+  }
+}
+
 async function draftFetch<T>(t: Target, path: string, bearer: string, init?: RequestInit): Promise<T> {
   const res = await apiFetch(`${t.url}/api/datasets/${encodeURIComponent(t.dataset)}${path}`, {
     ...init,
@@ -81,11 +92,13 @@ async function draftFetch<T>(t: Target, path: string, bearer: string, init?: Req
     | ({ ok: true } & T)
     | { ok: false; error?: string };
   if (!out.ok) {
+    // 403 is two different things: a credential that cannot act here, and a
+    // draft that is someone else's. Only the first is worth a login hint.
     const auth =
-      res.status === 401 || res.status === 403
+      res.status === 401
         ? `\n  Get a token for ${t.url} (its issue_cli_token tool) and run:  malloyyo login ${t.url} --token-stdin`
         : "";
-    throw new Error(`${out.error ?? res.status}${auth}`);
+    throw new DraftRequestError(`${out.error ?? res.status}${auth}`, res.status);
   }
   return out as T;
 }
@@ -149,8 +162,13 @@ export async function draftPromote(
   const { draft } = await draftFetch<{ draft: DraftFiles }>(t, `/drafts/${encodeURIComponent(slug)}`, bearer);
 
   // The filename IS the dashboard's identity in the repo: its URL, its
-  // `# drill { to= }` target, and the component's basename.
+  // `# drill { to= }` target, and the component's basename. A draft's own name
+  // was checked when it was saved; --name is checked here, so a stray path
+  // cannot write outside dashboards/.
   const name = opts.name ?? draft.name;
+  if (!/^[a-z0-9][a-z0-9_-]{0,63}$/i.test(name)) {
+    throw new Error(`--name must be letters, digits, '-' or '_' (a dashboard's file basename), not "${name}"`);
+  }
   const dashboards = join(root, "dashboards");
   mkdirSync(dashboards, { recursive: true });
 
@@ -168,20 +186,32 @@ export async function draftPromote(
   const malloy = draft.malloy.trim() ? draft.malloy : malloyScaffold(name, draft.title, draft.inline);
   written.push({ path: malloyPath, content: malloy });
   if (draft.source.trim()) written.push({ path: componentPath, content: draft.source });
-  for (const f of written) writeFileSync(f.path, f.content.endsWith("\n") ? f.content : `${f.content}\n`);
 
-  // What was written, so a later look can tell whether the draft moved on.
+  // Record BEFORE writing: a token that lapsed between the read and here would
+  // otherwise leave files in the checkout that the instance knows nothing
+  // about, and a retry would then refuse to overwrite them.
   const hash = createHash("sha256");
   for (const f of written) hash.update(f.content).update("\0");
-  await draftFetch(t, `/drafts/${encodeURIComponent(slug)}`, bearer, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ name, hash: hash.digest("hex").slice(0, 16) }),
-  });
+  let unrecorded = "";
+  try {
+    await draftFetch(t, `/drafts/${encodeURIComponent(slug)}`, bearer, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name, hash: hash.digest("hex").slice(0, 16) }),
+    });
+  } catch (e) {
+    // Someone else's draft: the files are still worth having — that is how a
+    // colleague moves a draft into the repo — but its author's row is theirs.
+    if (e instanceof DraftRequestError && e.status === 403) unrecorded = e.message;
+    else throw e;
+  }
+
+  for (const f of written) writeFileSync(f.path, f.content.endsWith("\n") ? f.content : `${f.content}\n`);
 
   console.log(`✓ promoted '${draft.title}' into ${root.replace(process.env.HOME ?? "", "~")}`);
   for (const f of written) console.log(`  ${f.path.replace(`${root}/`, "")}`);
   console.log(`  the draft stays live at ${t.url}/datasets/${t.dataset}/dashboard/${draft.dashboard}`);
+  if (unrecorded) console.log(`  (not recorded on the draft: ${unrecorded})`);
   if (!draft.malloy.trim()) {
     console.log(
       `\nNext: lift ${draft.inline.length || "the"} inline quer${draft.inline.length === 1 ? "y" : "ies"} out of ` +

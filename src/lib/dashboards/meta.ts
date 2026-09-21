@@ -171,30 +171,37 @@ export async function getDashboard(userId: string, datasetId: string, name: stri
   const slug = draftSlug(name);
   if (slug !== null) {
     // Visibility is the dataset's (checked above); the slug must belong to it.
-    const [s] = await db
+    const [d] = await db
       .select()
       .from(draftDashboards)
       .where(and(eq(draftDashboards.slug, slug), eq(draftDashboards.datasetId, found.ds.id)))
       .limit(1);
-    if (!s) return null;
-    const entryFile = typeof s.manifest.entryFile === "string" ? s.manifest.entryFile : `dashboards/${s.name}.malloy`;
-    return {
-      datasetId,
-      datasetName: found.ds.name,
-      name,
-      title: s.title ?? s.name,
-      manifest: s.manifest,
-      source: s.source,
-      // Pinned: a draft dashboard runs against the model version it was
-      // built on, not whatever the dataset has moved to since.
-      modelId: s.modelId,
-      // A component-only draft has no dashboard file to lay over the model.
-      draft: {
-        id: s.id,
-        files: s.malloy.trim() ? { [entryFile]: s.malloy } : {},
-        version: s.updatedAt.toISOString(),
-      },
-    };
+    if (d) {
+      const entryFile =
+        typeof d.manifest.entryFile === "string" ? d.manifest.entryFile : `dashboards/${d.name}.malloy`;
+      return {
+        datasetId,
+        datasetName: found.ds.name,
+        name,
+        title: d.title ?? d.name,
+        manifest: d.manifest,
+        source: d.source,
+        // The dataset's CURRENT model, not the version this draft was saved
+        // against (kept on the row as provenance): an additive model change
+        // reaches a draft at once, and a real break surfaces now rather than
+        // whenever someone next saves.
+        modelId: found.model.id,
+        // A component-only draft has no dashboard file to lay over the model.
+        draft: {
+          id: d.id,
+          files: d.malloy.trim() ? { [entryFile]: d.malloy } : {},
+          version: d.updatedAt.toISOString(),
+        },
+      };
+    }
+    // No draft by that slug: `draft-<slug>` is a naming convention, not a
+    // reserved namespace, so fall through to the model's own artifacts — a
+    // repo that ships a dashboard called draft-notes stays reachable.
   }
   const [a] = await db
     .select()

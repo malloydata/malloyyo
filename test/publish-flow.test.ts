@@ -954,3 +954,27 @@ test("a draft can only be overwritten by the person who made it", async () => {
   assert.equal(out.ok, false);
   assert.match(out.error ?? "", /belongs to someone else/);
 });
+
+test("draft promote validates --name instead of writing outside dashboards/", async () => {
+  const { dir, env } = await draftFixture();
+  const { slug } = await makeDraft({ name: "by_state", title: "By state", source: DRAFT_COMPONENT });
+  const r = await runCli(["draft", "promote", slug, ".", "--name", "../escape", "--token", token], dir, env);
+  assert.notEqual(r.code, 0);
+  assert.match(r.stderr, /--name must be letters, digits/);
+  assert.equal(existsSync(join(dir, "..", "escape.malloy")), false, "nothing written outside the checkout");
+});
+
+test("a draft is recorded by its own author; a colleague gets the files and a note", async () => {
+  const { dir, env } = await draftFixture();
+  const { slug } = await makeDraft({ name: "by_state", title: "By state", source: DRAFT_COMPONENT });
+  await db.update(datasets).set({ isPublic: true }).where(eq(datasets.name, DS_DRAFT));
+  const colleague = await seedMember(`promoter-${RUN}@test.local`);
+  const theirToken = await mintFor(colleague.id, ["mcp"]);
+
+  const r = await runCli(["draft", "promote", slug, ".", "--name", "theirs", "--token", theirToken], dir, env);
+  assert.equal(r.code, 0, r.stderr + r.stdout);
+  assert.ok(existsSync(join(dir, "dashboards", "theirs.jsx")), "the files are still written");
+  assert.match(r.stdout, /not recorded on the draft/);
+  const [row] = await db.select().from(draftDashboards).where(eq(draftDashboards.slug, slug));
+  assert.equal(row?.promotedAs, null, "the author's row is untouched");
+});

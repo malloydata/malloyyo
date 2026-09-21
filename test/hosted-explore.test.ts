@@ -29,7 +29,7 @@ import {
   type User,
 } from "@/db";
 import { buildHostedExploreSurface } from "@/lib/mcp-host";
-import { listAllDashboards, listDashboardsAndDrafts } from "@/lib/dashboards";
+import { getDashboard, listAllDashboards, listDashboardsAndDrafts } from "@/lib/dashboards";
 import { loadSharedQuery, runQueryForWeb } from "@/lib/mcp-tools";
 
 const MODEL = `#" Pet shop sales.
@@ -500,4 +500,44 @@ test("the dashboard listing carries drafts, with their author", async () => {
   assert.ok(onPetshop.some((d) => d.name === "draft-listed1" && d.author === "Vixen"));
   const onDashmod = await listDashboardsAndDrafts(user.id, "dashmod");
   assert.ok(onDashmod.some((d) => d.name === "overview" && !d.isDraft));
+});
+
+test("a draft renders against the dataset's current model, not the one it was saved on", async () => {
+  // Additive model changes should reach a draft, and a real break should show
+  // up now rather than whenever someone next saves it.
+  const [ds] = await db.select().from(datasets).where(eq(datasets.name, "petshop"));
+  const [saved] = await db
+    .select()
+    .from(malloyModels)
+    .where(eq(malloyModels.datasetId, ds.id))
+    .orderBy(desc(malloyModels.version))
+    .limit(1);
+  await db.insert(draftDashboards).values({
+    slug: "follows1",
+    userId: user.id,
+    datasetId: ds.id,
+    modelId: saved.id,
+    name: "wip",
+    title: "Follows the model",
+    manifest: { title: "Follows the model" },
+    malloy: "",
+    source: "export default function D() { return <div/>; }",
+  });
+
+  // The dataset moves on.
+  const [next] = await db
+    .insert(malloyModels)
+    .values({
+      datasetId: ds.id,
+      version: saved.version + 1,
+      source: MODEL,
+      generatedBy: "test",
+      compiledAt: new Date(),
+      sources: [{ name: "sales", description: "Pet shop sales." }],
+    })
+    .returning();
+
+  const dash = await getDashboard(user.id, "petshop", "draft-follows1");
+  assert.equal(dash?.modelId, next.id, "renders against the new version");
+  assert.notEqual(dash?.modelId, saved.id);
 });

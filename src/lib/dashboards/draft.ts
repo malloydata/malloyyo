@@ -173,12 +173,21 @@ export async function saveDraftDashboard(
   // its queries are inline restricted Malloy, checked when they run, against
   // the model's published surface. The manifest is then just a title — the
   // same queryless shape the written About page uses.
-  const description = String(input.description ?? "").trim();
+  //
+  // What the caller leaves out on an update it KEEPS: iterating on a draft
+  // means re-sending the component, not restating its title every time.
+  const previous = (existing?.manifest ?? {}) as { description?: unknown };
+  const description =
+    input.description !== undefined
+      ? String(input.description).trim()
+      : typeof previous.description === "string"
+        ? previous.description
+        : "";
+  let title = String(input.title ?? existing?.title ?? name);
   let manifest: Record<string, unknown> = {
-    title: String(input.title ?? name),
+    title,
     ...(description ? { description } : {}),
   };
-  let title = String(input.title ?? name);
 
   if (malloy.trim()) {
     // 1. The gate — against the model's own files, before this file is compiled.
@@ -268,14 +277,21 @@ export async function saveDraftDashboard(
     }
   }
 
-  // 6. The component's own inline queries, compiled (not run) against the
-  //    model — the only check a component-only draft can get before a viewer
-  //    opens it.
+  // 6. The component's own inline queries, compiled (not run) — the only check
+  //    a component-only draft can get before a viewer opens it.
+  //
+  //    Against the file they will actually compile against at runtime: a
+  //    draft's own dashboards/<name>.malloy when it has one (runDashboard uses
+  //    entryFile), index.malloy when it doesn't. Checking a two-file draft's
+  //    inline queries against index.malloy would report a working query that
+  //    names a source the draft file defines as undefined.
   const inline = inlineQueries(source);
   if (inline.length > 0) {
-    await withModelRuntime(baseFiles, found.model.id, async (runtime) => {
+    const hasMalloy = malloy.trim().length > 0;
+    const inlineEntry = fileUrl(hasMalloy ? entryFile : "index.malloy");
+    await withModelRuntime(hasMalloy ? files : baseFiles, hasMalloy ? cacheKey : found.model.id, async (runtime) => {
       for (const text of inline) {
-        const v = await validateRestricted(runtime as unknown as EngineRuntime, fileUrl("index.malloy"), text);
+        const v = await validateRestricted(runtime as unknown as EngineRuntime, inlineEntry, text);
         const label = text.replace(/\s+/g, " ").slice(0, 60);
         tiles.push(
           v.ok
@@ -377,19 +393,30 @@ export async function getDraftFiles(userId: string, datasetRef: string, slug: st
  * model version carrying the promoted dashboard goes live, people hold its
  * URL, and nothing bad happens if it keeps being edited afterwards — the hash
  * is what shows the two have diverged.
+ *
+ * The draft's OWNER writes this, as with saving one: the record is what a
+ * later forward and any divergence check read, so it should say what the
+ * author did, not what a passer-by did with a copy. Anyone who can see the
+ * dataset may still read the files and write them into a checkout.
  */
 export async function recordPromotion(
   userId: string,
   datasetRef: string,
   slug: string,
   promoted: { name: string; hash: string },
-): Promise<boolean> {
+): Promise<"recorded" | "not-found" | "not-yours"> {
   const found = await findByDatasetRef(userId, datasetRef);
-  if (!found) return false;
-  const rows = await db
+  if (!found) return "not-found";
+  const [row] = await db
+    .select()
+    .from(draftDashboards)
+    .where(and(eq(draftDashboards.slug, slug), eq(draftDashboards.datasetId, found.ds.id)))
+    .limit(1);
+  if (!row) return "not-found";
+  if (row.userId !== userId) return "not-yours";
+  await db
     .update(draftDashboards)
     .set({ promotedAs: promoted.name, promotedHash: promoted.hash, promotedAt: new Date() })
-    .where(and(eq(draftDashboards.slug, slug), eq(draftDashboards.datasetId, found.ds.id)))
-    .returning({ id: draftDashboards.id });
-  return rows.length > 0;
+    .where(eq(draftDashboards.id, row.id));
+  return "recorded";
 }

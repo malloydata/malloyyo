@@ -19,6 +19,7 @@ import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/cli
 import { eq } from "drizzle-orm";
 import { db, users, datasets, malloyModels, malloyModelFiles, malloyArtifacts, apiTokens } from "@/db";
 import { createApiToken, hashApiToken } from "@/lib/api-tokens";
+import { listDashboardsAndDrafts } from "@/lib/dashboards";
 import { DELETE, GET, POST } from "@/app/mcp/route";
 
 const MCP_URL = "http://localhost:3000/mcp";
@@ -39,6 +40,7 @@ source: local_sales is sales extend {
 }
 `;
 
+let userId: string;
 let mcpToken: string;
 let streamToken: { id: string; raw: string };
 let publishToken: string;
@@ -48,6 +50,7 @@ before(async () => {
     .insert(users)
     .values({ email: "route@test.local", status: "active", role: "member" })
     .returning();
+  userId = u.id;
   const [ds] = await db
     .insert(datasets)
     .values({ userId: u.id, name: "petshop", status: "ready", isPublic: false })
@@ -419,6 +422,92 @@ test("the panel declares the image hosts the models allow, so dashboard images l
     const domains = meta?.ui?.csp?.resourceDomains ?? [];
     assert.ok(domains.includes("https://image.tmdb.org"), `got ${JSON.stringify(domains)}`);
     assert.ok(domains.includes("https://*.cdn.example.com"), "wildcards survive");
+  } finally {
+    await client.close();
+  }
+});
+
+test("a draft's inline queries are checked against its own .malloy, not index.malloy", async () => {
+  const client = await connect(mcpToken, { mode: { pin: "2026-07-28" } });
+  try {
+    // The component queries a source only the draft's own file defines — which
+    // is what it will compile against when a reader opens it.
+    const r = await client.callTool({
+      name: "save_draft_dashboard",
+      arguments: {
+        dataset: "petshop",
+        name: "local_src",
+        malloy: `import "../index.malloy"\nsource: local_sales is sales extend { measure: n is count() }\n# artifact { title="Local" }\nquery: q is local_sales -> { aggregate: n }\n`,
+        source: `import { useQuery } from "@malloyyo/dashboard";
+export default function D() {
+  const q = useQuery({ malloy: \`run: local_sales -> { aggregate: n }\` });
+  return <div>{(q.rows ?? []).length}</div>;
+}
+`,
+      },
+    });
+    assert.notEqual(r.isError, true, JSON.stringify(r.content));
+    const out = r.structuredContent as { tiles: Array<{ run: string; ok: boolean; error?: string }> };
+    const failed = out.tiles.filter((t) => !t.ok);
+    assert.equal(failed.length, 0, `nothing should fail: ${JSON.stringify(failed)}`);
+  } finally {
+    await client.close();
+  }
+});
+
+test("re-saving a draft keeps the title and description it already had", async () => {
+  const client = await connect(mcpToken, { mode: { pin: "2026-07-28" } });
+  try {
+    const component = `export default function D() { return <div/>; }`;
+    const first = await client.callTool({
+      name: "save_draft_dashboard",
+      arguments: {
+        dataset: "petshop",
+        name: "keeps",
+        title: "Keeps its name",
+        description: "and its subtitle",
+        source: component,
+      },
+    });
+    const { slug } = first.structuredContent as { slug: string };
+
+    // The iterate loop: component only, no title restated.
+    const again = await client.callTool({
+      name: "save_draft_dashboard",
+      arguments: { dataset: "petshop", name: "keeps", source: `${component}\n// edited`, slug },
+    });
+    const out = again.structuredContent as { title: string };
+    assert.equal(out.title, "Keeps its name");
+    const listed = await listDashboardsAndDrafts(userId, "petshop");
+    const row = listed.find((d) => d.name === `draft-${slug}`);
+    assert.equal(row?.title, "Keeps its name");
+    assert.equal(row?.description, "and its subtitle");
+  } finally {
+    await client.close();
+  }
+});
+
+test("a published dashboard whose name starts with draft- is still reachable", async () => {
+  // `draft-<slug>` is a convention, not a reserved namespace.
+  const [model] = await db
+    .select()
+    .from(malloyModels)
+    .where(eq(malloyModels.datasetId, (await db.select().from(datasets).where(eq(datasets.name, "petshop")))[0].id))
+    .limit(1);
+  await db.insert(malloyArtifacts).values({
+    modelId: model.id,
+    name: "draft-notes",
+    title: "Notes",
+    manifest: { title: "Notes" },
+    source: "",
+  });
+  const client = await connect(mcpToken, { mode: { pin: "2026-07-28" } });
+  try {
+    const shown = await client.callTool({
+      name: "show_dashboard",
+      arguments: { dataset: "petshop", dashboard: "draft-notes" },
+    });
+    assert.notEqual(shown.isError, true, JSON.stringify(shown.content));
   } finally {
     await client.close();
   }

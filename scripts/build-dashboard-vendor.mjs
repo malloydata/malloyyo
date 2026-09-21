@@ -15,6 +15,7 @@
 // See src/lib/dashboards/bundle.ts.
 
 import * as esbuild from "esbuild";
+import { readFile } from "node:fs/promises";
 
 const ENTRY = `
 import * as React from "react";
@@ -38,5 +39,24 @@ await esbuild.build({
   minify: true,
   logLevel: "info",
 });
+
+// The bundle is minified, so every identifier the runtime defines gets
+// renamed. One of its own helper names surviving as a CALL means the bundle
+// references something it never defines — which is what `export { x } from
+// "./m"` produces when the module also CALLS x: the name reaches consumers,
+// the local scope keeps nothing, and the dashboard dies at runtime with "x is
+// not defined". Shipped once; caught in production rather than by a test,
+// because nothing here executes the bundle.
+const built = await readFile("public/dashboard-vendor.js", "utf8");
+const unresolved = ["asRunText", "runQuery", "runData", "combineTiles"].filter((name) =>
+  new RegExp(`\\b${name}\\(`).test(built),
+);
+if (unresolved.length > 0) {
+  console.error(
+    `✗ dashboard-vendor.js calls ${unresolved.join(", ")} but never defines ${unresolved.length > 1 ? "them" : "it"} — ` +
+      "a module re-exports the name instead of importing it.",
+  );
+  process.exit(1);
+}
 
 console.log("✓ built public/dashboard-vendor.js");

@@ -112,8 +112,11 @@ export function runQuery(req, givens) {
   }));
 }
 
-// Query text → what the server compiles; see ./run-text.
-export { asRunText } from "./run-text";
+// Query text → what the server compiles; see ./run-text. IMPORTED, not just
+// re-exported: this module calls it, and `export { x } from "…"` would carry
+// the name to consumers while leaving it undefined in here.
+import { asRunText } from "./run-text";
+export { asRunText };
 
 /** Run restricted Malloy text, resolve to the result rows (array of objects). */
 export function runData(malloy, givens) {

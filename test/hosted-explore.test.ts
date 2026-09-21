@@ -24,10 +24,12 @@ import {
   malloyModels,
   malloyModelFiles,
   malloyArtifacts,
+  draftDashboards,
   history,
   type User,
 } from "@/db";
 import { buildHostedExploreSurface } from "@/lib/mcp-host";
+import { listAllDashboards } from "@/lib/dashboards";
 import { loadSharedQuery, runQueryForWeb } from "@/lib/mcp-tools";
 
 const MODEL = `#" Pet shop sales.
@@ -454,4 +456,41 @@ test("a compile-only (execute:false) query is audited but records no run artifac
 after(async () => {
   // postgres-js keeps the event loop alive; close the pool so the run exits.
   await (globalThis as { __pg__?: { end?: () => Promise<void> } }).__pg__?.end?.().catch(() => {});
+});
+
+test("the dashboard listing carries drafts, with their author", async () => {
+  // A draft belongs to a person, so the listing that shows it says whose it
+  // is — and shows it to everyone who can see the dataset, the same rule its
+  // URL and the dataset's own dashboards follow.
+  const [ds] = await db.select().from(datasets).where(eq(datasets.name, "petshop"));
+  const [model] = await db
+    .select()
+    .from(malloyModels)
+    .where(eq(malloyModels.datasetId, ds.id))
+    .orderBy(desc(malloyModels.version))
+    .limit(1);
+  const [mate] = await db
+    .insert(users)
+    .values({ email: "vixen@test.local", name: "Vixen", status: "active", role: "member" })
+    .returning();
+  await db.insert(draftDashboards).values({
+    slug: "listed1",
+    userId: mate.id,
+    datasetId: ds.id,
+    modelId: model.id,
+    name: "wip",
+    title: "Work in progress",
+    manifest: { title: "Work in progress", description: "Half an idea" },
+    malloy: "",
+    source: "export default function D() { return <div/>; }",
+  });
+
+  const all = await listAllDashboards(user.id);
+  const draft = all.find((d) => d.name === "draft-listed1");
+  assert.ok(draft, "someone else's draft is listed on a dataset I can see");
+  assert.equal(draft?.title, "Work in progress");
+  assert.equal(draft?.description, "Half an idea");
+  assert.equal(draft?.isDraft, true);
+  assert.equal(draft?.author, "Vixen");
+  assert.ok(all.some((d) => d.name === "overview" && !d.isDraft), "published dashboards still listed");
 });

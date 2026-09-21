@@ -177,6 +177,7 @@ function registerAuthoringTools(server: McpServer, scope: RequestScope): void {
     source?: string;
     malloy?: string;
     title?: string;
+    description?: string;
     slug?: string;
   };
   server.registerTool(
@@ -206,6 +207,10 @@ function registerAuthoringTools(server: McpServer, scope: RequestScope): void {
             description: "Optional dashboards/<name>.malloy — needed only for controls, named queries, or a tag-only dashboard.",
           },
           title: { type: "string", description: "Shown as the dashboard's title (a .malloy carries its own)." },
+          description: {
+            type: "string",
+            description: "One line on what it answers, shown under the title in listings.",
+          },
           slug: { type: "string", description: "Update this draft instead of creating one." },
         },
         required: ["dataset", "name"],

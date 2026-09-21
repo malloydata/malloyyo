@@ -105,7 +105,9 @@ export default function HomePage() {
   const [chatEnabled, setChatEnabled] = useState(false);
   const [sources, setSources] = useState<DatasetGroup[] | null>(null);
   const [favQueries, setFavQueries] = useState<FavQuery[]>([]);
-  const [dashboards, setDashboards] = useState<Array<{ dataset: string; name: string; title: string }>>([]);
+  const [dashboards, setDashboards] = useState<
+    Array<{ dataset: string; name: string; title: string; description?: string; isDraft?: boolean; author?: string }>
+  >([]);
   // Claude connect-instructions modal — shown when clicking a source's Claude
   // button before the connector is linked. claudeTargetUrl is the explore chat
   // to continue to after setup.
@@ -152,17 +154,30 @@ export default function HomePage() {
     list.push(q);
   }
 
-  // The catalogue arrives grouped; just index it for lookup by name.
+  // A draft's author, short enough for a chip: a first name, or the local part
+// of an email. The full value is in the link's tooltip.
+function shortAuthor(author: string): string {
+  const name = author.includes("@") ? author.split("@")[0] : author.split(" ")[0];
+  return name.length > 14 ? `${name.slice(0, 13)}…` : name;
+}
+
+// The catalogue arrives grouped; just index it for lookup by name.
   const datasetGroups: DatasetGroup[] = sources ?? [];
   const datasetByName = new Map(datasetGroups.map((g) => [g.dataset, g]));
 
   // Dashboards grouped by dataset, for the per-dataset row below.
-  const dashByDataset = new Map<string, Array<{ name: string; title: string }>>();
+  const dashByDataset = new Map<
+    string,
+    Array<{ name: string; title: string; description?: string; isDraft?: boolean; author?: string }>
+  >();
   for (const d of dashboards) {
     let arr = dashByDataset.get(d.dataset);
     if (!arr) { arr = []; dashByDataset.set(d.dataset, arr); }
-    arr.push({ name: d.name, title: d.title });
+    arr.push({ name: d.name, title: d.title, description: d.description, isDraft: d.isDraft, author: d.author });
   }
+  // Published first, then your own drafts — the model's dashboards are what a
+  // reader came for, and a draft is work in progress.
+  for (const arr of dashByDataset.values()) arr.sort((a, b) => Number(a.isDraft ?? false) - Number(b.isDraft ?? false));
 
   // Datasets to render: those with questions first (recency order), then any
   // remaining datasets (their sources still show, just with no questions).
@@ -387,9 +402,23 @@ export default function HomePage() {
                             <Link
                               key={d.name}
                               href={`/datasets/${encodeURIComponent(g?.dataset ?? dsName)}/dashboard/${encodeURIComponent(d.name)}`}
-                              className="text-xs px-2 py-0.5 rounded border border-gray-300 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-900"
+                              title={[d.description, d.isDraft && d.author ? `draft by ${d.author}` : null]
+                                .filter(Boolean)
+                                .join(" — ") || undefined}
+                              className={
+                                "text-xs px-2 py-0.5 rounded border hover:bg-gray-50 dark:hover:bg-gray-900 " +
+                                (d.isDraft
+                                  ? "border-dashed border-gray-400 dark:border-gray-600 text-gray-600 dark:text-gray-400"
+                                  : "border-gray-300 dark:border-gray-700")
+                              }
                             >
                               {d.title}
+                              {d.isDraft && (
+                                <span className="ml-1 text-[9px] text-gray-400 dark:text-gray-500">
+                                  <span className="uppercase tracking-wide">draft</span>
+                                  {d.author ? ` · ${shortAuthor(d.author)}` : ""}
+                                </span>
+                              )}
                             </Link>
                           ))}
                         </div>

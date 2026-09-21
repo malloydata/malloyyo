@@ -13,7 +13,7 @@
 // This module must NEVER import ./engine or @/lib/malloy (statically or lazily).
 
 import { and, eq, asc, desc } from "drizzle-orm";
-import { db, datasets, malloyArtifacts, malloyModelFiles, draftDashboards } from "@/db";
+import { db, datasets, malloyArtifacts, malloyModelFiles, draftDashboards, users } from "@/db";
 import { visibleDatasetWhere, findByDatasetRef, latestModel } from "@/lib/mcp-tools";
 import { aboutFirst } from "./about";
 import { imageHostsFromConfig } from "./image-hosts";
@@ -28,6 +28,11 @@ export interface DashboardSummary {
       summaries — and without it a written page's cards render as bare titles on
       the hosted app while showing their subtitles in dev and in the bundle. */
   description?: string;
+  /** A draft, not a dashboard the model publishes. */
+  isDraft?: boolean;
+  /** Who made it — drafts only, where "whose is this?" is the first question.
+      A published dashboard's author is in the repo's history instead. */
+  author?: string;
 }
 
 export interface DashboardDetail extends DashboardSummary {
@@ -111,8 +116,37 @@ export async function listAllDashboards(userId: string): Promise<DashboardSummar
     const model = await latestModel(ds.id);
     if (!model) continue;
     for (const d of await listDashboardsForModel(model.id, ds.id, ds.name)) out.push(d);
+    for (const d of await listDraftsOnDataset(ds.id, ds.name)) out.push(d);
   }
   return out;
+}
+
+/**
+ * Every draft on one dataset, newest first — carrying its author, because a
+ * draft is someone's work in progress and "whose?" is the first question a
+ * reader has. Listed to everyone who can see the dataset, which is the same
+ * rule its URL already follows (and the rule the dataset's own dashboards
+ * follow).
+ */
+export async function listDraftsOnDataset(datasetId: string, datasetName: string): Promise<DashboardSummary[]> {
+  const rows = await db
+    .select({ draft: draftDashboards, authorName: users.name, authorEmail: users.email })
+    .from(draftDashboards)
+    .leftJoin(users, eq(users.id, draftDashboards.userId))
+    .where(eq(draftDashboards.datasetId, datasetId))
+    .orderBy(desc(draftDashboards.updatedAt));
+  return rows.map(({ draft: r, authorName, authorEmail }) => {
+    const description = r.manifest?.description;
+    return {
+      datasetId,
+      datasetName,
+      name: `${DRAFT_PREFIX}${r.slug}`,
+      title: r.title ?? r.name,
+      ...(typeof description === "string" && description ? { description } : {}),
+      isDraft: true,
+      author: authorName || authorEmail || "unknown",
+    };
+  });
 }
 
 export async function getDashboard(userId: string, datasetId: string, name: string): Promise<DashboardDetail | null> {

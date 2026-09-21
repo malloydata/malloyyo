@@ -23,6 +23,12 @@ export async function GET(req: Request) {
   // identifies a dataset by NAME, which is what links are built from and what
   // the front page joins on.
   return NextResponse.json(
-    list.map(({ datasetName, name, title }) => ({ dataset: datasetName, name, title })),
+    list.map(({ datasetName, name, title, description, isDraft, author }) => ({
+      dataset: datasetName,
+      name,
+      title,
+      ...(description ? { description } : {}),
+      ...(isDraft ? { isDraft: true, author } : {}),
+    })),
   );
 }

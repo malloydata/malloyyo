@@ -58,6 +58,9 @@ export interface DraftInput {
   malloy?: string;
   /** Title for a component-only draft; a .malloy file carries its own. */
   title?: string;
+  /** One line saying what the dashboard answers — shown under its title in
+      listings. A .malloy file carries its own, as the tag's `#"` doc line. */
+  description?: string;
   /** The optional component (JSX/TSX). Empty or absent: a tag-only dashboard. */
   source?: string;
   /** Overwrite this draft dashboard (it must be the caller's) instead of making a new one. */
@@ -170,7 +173,11 @@ export async function saveDraftDashboard(
   // its queries are inline restricted Malloy, checked when they run, against
   // the model's published surface. The manifest is then just a title — the
   // same queryless shape the written About page uses.
-  let manifest: Record<string, unknown> = { title: String(input.title ?? name) };
+  const description = String(input.description ?? "").trim();
+  let manifest: Record<string, unknown> = {
+    title: String(input.title ?? name),
+    ...(description ? { description } : {}),
+  };
   let title = String(input.title ?? name);
 
   if (malloy.trim()) {

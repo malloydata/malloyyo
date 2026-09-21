@@ -28,6 +28,7 @@ import { findByDatasetRef, modelFileMap } from "@/lib/mcp-tools";
 import { fileUrl, runNamedMalloyFiles, withModelRuntime } from "@/lib/malloy";
 import { newDatasetSlug } from "@/lib/slug";
 import { bundleDashboard } from "./bundle";
+import { explainProblems } from "./engine";
 import { artifactManifest } from "./manifest";
 import { DRAFT_PREFIX } from "./meta";
 
@@ -91,23 +92,26 @@ export type DraftSaveResult =
   | { ok: false; error: string; problems?: Problem[] };
 
 /**
- * The Malloy a component runs inline: `useQuery({ malloy: `run: …` })`,
- * `<VegaChart malloy={`run: …`}>`, `runData(`run: …`)`. Checked at save so a
- * component-only draft gets the same "this query is wrong, and why" report a
- * dashboard file gets — otherwise its queries fail for the first viewer.
+ * The Malloy a component runs, wherever it wrote it.
  *
- * Literals only: a query built from a template expression is skipped (it can
- * only be judged when it runs), as is anything not starting with `run:`.
+ * EVERY template literal in the component that carries a `run:` statement —
+ * not just the ones written inside `useQuery({ malloy: … })`. Real components
+ * hold their query in a `const` and pass the variable, and a check that only
+ * looked inside the call reported "0/0 ran" on a dashboard whose query was
+ * wrong, leaving the mistake for the first person to open the page.
+ *
+ * A literal carrying `${…}` is skipped: it is assembled at runtime and can
+ * only be judged then. So is one with no `run:` — a bare run-expression
+ * (`flights -> by_carrier`) is indistinguishable from ordinary prose, and the
+ * runtime's asRunText is what turns it into a query.
  */
 export function inlineQueries(source: string): string[] {
   const out = new Set<string>();
-  const patterns = [/\b(?:malloy|query)\s*:\s*`([^`]*)`/g, /\brunData\s*\(\s*`([^`]*)`/g];
-  for (const re of patterns) {
-    for (const m of source.matchAll(re)) {
-      const text = m[1];
-      if (text.includes("${") || !/^\s*run\s*:/.test(text)) continue;
-      out.add(text.trim());
-    }
+  for (const m of source.matchAll(/`([^`]*)`/g)) {
+    const text = m[1];
+    if (text.includes("${")) continue;
+    if (!/(^|\n)\s*run\s*:/.test(text)) continue;
+    out.add(text.trim());
   }
   return [...out];
 }
@@ -296,7 +300,7 @@ export async function saveDraftDashboard(
         tiles.push(
           v.ok
             ? { run: label, ok: true }
-            : { run: label, ok: false, error: v.problems.map((p) => p.message).join("; ") },
+            : { run: label, ok: false, error: explainProblems(v.problems) },
         );
       }
     });

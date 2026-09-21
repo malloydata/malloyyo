@@ -112,8 +112,8 @@ export function runQuery(req, givens) {
   }));
 }
 
-// Panel/data query text may come with or without a leading `run:`.
-export const asRunText = (text) => (/^\s*run\s*:/.test(text) ? text : `run: ${text}`);
+// Query text → what the server compiles; see ./run-text.
+export { asRunText } from "./run-text";
 
 /** Run restricted Malloy text, resolve to the result rows (array of objects). */
 export function runData(malloy, givens) {
@@ -231,7 +231,12 @@ export function useQuery(req) {
     runQuery(wire, givens).then((m) => {
       if (cancelled) return;
       if (m.ok) setState({ rows: m.rows, result: m.result, loading: false });
-      else setState({ rows: [], loading: false, error: m.error });
+      else {
+        // A component that ignores `error` would otherwise render an empty
+        // chart with nothing anywhere saying why.
+        console.error("dashboard query failed:", m.error, wire);
+        setState({ rows: [], loading: false, error: m.error });
+      }
     });
     return () => {
       cancelled = true;

@@ -65,6 +65,23 @@ export function isMalloyText(s: string): boolean {
   return /^\s*run\s*:/.test(s);
 }
 
+/**
+ * A dashboard query's problems, as a sentence its author can act on.
+ *
+ * Malloy text here may be a bare run-expression, a `run:` statement, or a
+ * document that defines sources and then runs one — the same three the MCP
+ * `query` tool takes. A document with no `run:` compiles to a model with
+ * nothing to execute, and core reports that as an internal compiler error,
+ * which tells the author nothing. Name the missing piece instead.
+ */
+export function explainProblems(problems: Array<{ message: string }>): string {
+  const text = problems.map((p) => p.message).join("; ");
+  if (/Model has no queries/.test(text)) {
+    return "that Malloy defines things but never runs one — finish it with `run: <source> -> { … }`";
+  }
+  return text || "query failed";
+}
+
 /** Run a dashboard. Structure v2: every request compiles against the
     dashboard's OWN file (`manifest.entryFile` = `dashboards/<name>.malloy`),
     not `index.malloy`, so its inline query and imports are in scope. `req`:
@@ -121,10 +138,7 @@ export async function runDashboard(
         rowLimit: maxRows,
       }),
     );
-    if (!out.ok) {
-      const msg = (out.problems ?? []).map((p) => p.message).join("; ");
-      return { ok: false, error: msg || "query failed" };
-    }
+    if (!out.ok) return { ok: false, error: explainProblems(out.problems ?? []) };
     return { ok: true, stableResult: out.stable_result, rows: out.rows, rowCount: out.row_count ?? 0 };
   }
 

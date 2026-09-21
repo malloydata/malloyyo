@@ -9,6 +9,7 @@
 
 import {
   McpServer,
+  ResourceTemplate,
   createMcpHandler,
   fromJsonSchema,
   type CallToolResult,
@@ -240,45 +241,82 @@ function registerAuthoringTools(server: McpServer, scope: RequestScope): void {
   );
 }
 
+/** Any panel URI this server has ever minted — see the template registration. */
+const PANEL_URI_RE = /^ui:\/\/dashboard\/panel-[0-9a-f]{6,64}\.html$/;
+
 /** One panel resource, one model-visible tool, and two tools only the panel calls. */
 function registerDashboardApp(server: McpServer, scope: RequestScope, panel: DashboardPanel): void {
   const { userId, origin } = scope;
   const { uri } = panel;
   const tag = `[${env.INSTANCE_NAME}]`;
 
+  /**
+   * The panel document, answered at whatever URI was asked for.
+   *
+   * A panel runs under a default-deny policy, so every origin it loads
+   * anything from has to be declared here. Two kinds:
+   *
+   *   - THIS INSTANCE, where the panel's own two scripts live. Without it the
+   *     panel is an empty document.
+   *   - The model repos' declared image_hosts, so a dashboard that builds
+   *     <img src> from a model column (poster art, logos, avatars) shows them
+   *     inside Claude as it does on the web app — which widens its own frame's
+   *     img-src from the same malloy-config.json list.
+   *
+   * resourceDomains is broader than img-src (scripts, styles, fonts, media
+   * too), so the repo half stays an allowlist the model's own author declared,
+   * never a blanket https:.
+   */
+  const panelContents = async (at: string) => {
+    const resourceDomains = [origin, ...(await visibleImageHosts(userId))];
+    return {
+      contents: [
+        {
+          uri: at,
+          mimeType: RESOURCE_MIME_TYPE,
+          text: panel.html,
+          _meta: { ui: { csp: { resourceDomains } } },
+        },
+      ],
+    };
+  };
+
   // One shell for every dashboard. PRIVATE rather than public, because the
-  // policy below is this user's: the body is identical for everyone, the image
+  // policy above is this user's: the body is identical for everyone, the image
   // hosts are not.
   registerAppResource(
     server,
     "Dashboard panel",
     uri,
     { cacheHint: { ttlMs: 3_600_000, cacheScope: "private" } } as never,
-    async () => {
-      // A panel runs under a default-deny policy, so every origin it loads
-      // anything from has to be declared here. Two kinds:
-      //
-      //   - THIS INSTANCE, where the panel's own two scripts live. Without it
-      //     the panel is an empty document.
-      //   - The model repos' declared image_hosts, so a dashboard that builds
-      //     <img src> from a model column (poster art, logos, avatars) shows
-      //     them inside Claude as it does on the web app — which widens its own
-      //     frame's img-src from the same malloy-config.json list.
-      //
-      // resourceDomains is broader than img-src (scripts, styles, fonts, media
-      // too), so the repo half stays an allowlist the model's own author
-      // declared, never a blanket https:.
-      const resourceDomains = [origin, ...(await visibleImageHosts(userId))];
-      return {
-        contents: [
-          {
-            uri,
-            mimeType: RESOURCE_MIME_TYPE,
-            text: panel.html,
-            _meta: { ui: { csp: { resourceDomains } } },
-          },
-        ],
-      };
+    () => panelContents(uri),
+  );
+
+  /**
+   * ...and the same shell for a panel URI from an EARLIER BUILD.
+   *
+   * The URI is content-addressed, so every deploy that changes the shell mints
+   * a new one — while a client goes on holding the tool list it discovered
+   * before, whose `_meta.ui.resourceUri` names the old one. It then reads a URI
+   * this server no longer registers, and the panel fails to load with the tools
+   * around it working perfectly. Observed twice on the same day: the client
+   * asked for panel-5829f82a1dd5.html for half an hour after the deploy that
+   * replaced it.
+   *
+   * Exact registrations are matched before templates (verified in the SDK's
+   * read handler), so this only ever answers the stale case. The body is
+   * current on purpose: a stale URI is a name for "the panel", not for a
+   * version of it, and the runtime it loads is fetched by URL anyway.
+   */
+  server.registerResource(
+    "Dashboard panel (earlier build)",
+    new ResourceTemplate("ui://dashboard/{file}", { list: undefined }),
+    { mimeType: RESOURCE_MIME_TYPE, cacheHint: { ttlMs: 3_600_000, cacheScope: "private" } } as never,
+    async (requested: URL) => {
+      const at = requested.toString();
+      if (!PANEL_URI_RE.test(at)) throw new Error(`no resource at ${at}`);
+      scope.log.info("mcp panel from an earlier build", { requested: at, current: uri });
+      return panelContents(at);
     },
   );
 

@@ -11,6 +11,16 @@ test("a bare run-expression gets the run: it needs", () => {
   assert.equal(asRunText("  by_carrier  "), "run:   by_carrier  ");
 });
 
+test("a source whose name merely starts with a keyword is still a run-expression", () => {
+  // `runs`, `sources`, `importers` — matching the bare prefix left these
+  // unprefixed, and they failed to compile for the first person to open the page.
+  assert.equal(asRunText("runs -> { aggregate: n }"), "run: runs -> { aggregate: n }");
+  assert.equal(asRunText("run_log -> by_day"), "run: run_log -> by_day");
+  assert.equal(asRunText("sources -> all"), "run: sources -> all");
+  assert.equal(asRunText("importers -> { aggregate: n }"), "run: importers -> { aggregate: n }");
+  assert.equal(asRunText("query_log -> recent"), "run: query_log -> recent");
+});
+
 test("a run statement is left alone", () => {
   assert.equal(asRunText("run: flights -> by_carrier"), "run: flights -> by_carrier");
   assert.equal(asRunText("\n  run: flights -> by_carrier\n"), "\n  run: flights -> by_carrier\n");

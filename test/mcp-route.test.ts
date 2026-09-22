@@ -427,6 +427,32 @@ test("the panel declares the image hosts the models allow, so dashboard images l
   }
 });
 
+test("a panel URI from an earlier build still serves the panel", async () => {
+  // The URI is content-addressed, so a deploy that changes the shell mints a
+  // new one — while a client goes on holding the tool list it discovered
+  // before. Reading the old URI must not fail: on production it did, and every
+  // dashboard "failed to load" while the tools around it worked.
+  const client = await connect(mcpToken, { mode: { pin: "2026-07-28" } });
+  try {
+    const show = (await client.listTools()).tools.find((t) => t.name === "show_dashboard")!;
+    const current = (show._meta?.ui as { resourceUri: string }).resourceUri;
+    const stale = "ui://dashboard/panel-000000000000.html";
+    assert.notEqual(stale, current);
+
+    const read = await client.readResource({ uri: stale });
+    assert.equal(read.contents[0]?.uri, stale, "answered at the URI that was asked for");
+    assert.equal(read.contents[0]?.mimeType, APP_MIME);
+    assert.ok(((read.contents[0] as { text?: string }).text ?? "").includes("<!DOCTYPE html>"));
+    const meta = read.contents[0]?._meta as { ui?: { csp?: { resourceDomains?: string[] } } } | undefined;
+    assert.ok((meta?.ui?.csp?.resourceDomains ?? []).length > 0, "still carries its CSP");
+
+    // A URI that is not a panel is still a miss.
+    await assert.rejects(() => client.readResource({ uri: "ui://dashboard/not-a-panel.html" }));
+  } finally {
+    await client.close();
+  }
+});
+
 test("a draft's inline queries are checked against its own .malloy, not index.malloy", async () => {
   const client = await connect(mcpToken, { mode: { pin: "2026-07-28" } });
   try {

@@ -54,6 +54,11 @@ export function DashboardTree({
   // rather than an effect on `open` — there is nothing external to sync to.
   const openMenu = () => {
     setExpanded(new Set([currentDataset]));
+    // Opening is also the retry, so it clears the last attempt's failure.
+    // Latching that flag meant one blip — a restarting dev server, a dropped
+    // connection — left the menu reading "couldn't load" for the rest of the
+    // page's life, the reopen's successful fetch landing behind it unseen.
+    setFailed(false);
     setOpen(true);
   };
   const closeMenu = () => {
@@ -105,7 +110,13 @@ export function DashboardTree({
 
   const group = (ds: TreeDataset) => {
     const own = ds.dashboards.filter((d) => !d.isDraft);
-    const user = ds.dashboards.filter((d) => d.isDraft);
+    // Yours first among the drafts — on a dataset several people build on, your
+    // own is what you came back for. The row of pills this replaced did the
+    // same, and the home page still does; a stable sort keeps the server's
+    // newest-first order inside each half.
+    const user = ds.dashboards
+      .filter((d) => d.isDraft)
+      .sort((a, b) => Number(b.mine ?? false) - Number(a.mine ?? false));
     return (
       <>
         {own.map((d) => leaf(ds.dataset, d))}
@@ -165,10 +176,12 @@ export function DashboardTree({
               </div>
             )}
             <div className="max-h-[60vh] overflow-y-auto p-1">
-              {failed ? (
-                <p className="px-2 py-1.5 text-gray-400">couldn&apos;t load the dashboards</p>
-              ) : !tree ? (
-                <p className="px-2 py-1.5 text-gray-400">loading…</p>
+              {/* What we HAVE beats what once went wrong: a tree that loaded on
+                  the second try is a tree, not an error. */}
+              {!tree ? (
+                <p className="px-2 py-1.5 text-gray-400">
+                  {failed ? "couldn't load the dashboards" : "loading…"}
+                </p>
               ) : shown.length === 0 ? (
                 <p className="px-2 py-1.5 text-gray-400">
                   {query.trim() ? "nothing matches" : "no datasets"}

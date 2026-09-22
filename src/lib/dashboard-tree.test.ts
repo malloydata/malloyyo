@@ -12,6 +12,7 @@ const TREE: TreeDataset[] = [
       { name: "name_explorer", title: "Name explorer" },
       { name: "time-series", title: "Name over Time" },
       { name: "draft-abc", title: "Top Names by Decade", isDraft: true, author: "nick" },
+      { name: "draft-def", title: "Names I am watching", isDraft: true, author: "me", mine: true },
     ],
   },
   {
@@ -39,7 +40,15 @@ test("a dashboard match keeps only the matching leaves, and drops empty branches
     "Name explorer",
     "Name over Time",
     "Top Names by Decade",
+    "Names I am watching",
   ]);
+});
+
+test("filtering leaves the order alone — the menu sorts drafts itself", () => {
+  // The reader's own draft leads the USER DASHBOARDS half (DashboardTree does
+  // that sort at render); the filter must not reshuffle what it hands over.
+  const out = filterTree(TREE, "babynames");
+  assert.deepEqual(out[0].dashboards, TREE[0].dashboards, "same rows, same order");
 });
 
 test("a dataset match keeps ALL of its dashboards — you asked for the dataset", () => {

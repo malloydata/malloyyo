@@ -1,6 +1,6 @@
 {
   "name": "@malloydata/malloyyo",
-  "version": "0.2.50",
+  "version": "0.2.51",
   "description": "Publish Malloy models to a Malloyyo instance",
   "license": "MIT",
   "repository": {

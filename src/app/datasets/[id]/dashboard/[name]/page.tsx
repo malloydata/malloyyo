@@ -46,7 +46,7 @@ export default async function DashboardViewPage({
 
   return (
     <main className="w-full px-6 py-5">
-      <DatasetNav datasetId={id} activeDashboard={name} />
+      <DatasetNav datasetId={id} activeDashboard={name} activeTitle={dash.title} />
       {isCustomDashboard(dash) ? (
         <CustomDashboardFrame key={`${id}/${name}`} id={id} name={name} />
       ) : (

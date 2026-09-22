@@ -29,7 +29,7 @@ import {
   type User,
 } from "@/db";
 import { buildHostedExploreSurface } from "@/lib/mcp-host";
-import { getDashboard, listAllDashboards, listDashboardsAndDrafts } from "@/lib/dashboards";
+import { allDashboardsByDataset, getDashboard, listAllDashboards, listDashboardsAndDrafts } from "@/lib/dashboards";
 import { loadSharedQuery, runQueryForWeb } from "@/lib/mcp-tools";
 
 const MODEL = `#" Pet shop sales.
@@ -500,6 +500,40 @@ test("the dashboard listing carries drafts, with their author", async () => {
   assert.ok(onPetshop.some((d) => d.name === "draft-listed1" && d.author === "Vixen"));
   const onDashmod = await listDashboardsAndDrafts(user.id, "dashmod");
   assert.ok(onDashmod.some((d) => d.name === "overview" && !d.isDraft));
+});
+
+test("the tree listing groups by dataset, model dashboards first, and keeps empty datasets", async () => {
+  // What the nav tree is built from. Three properties it depends on:
+  //   - every visible dataset appears, including ones with nothing on them
+  //     (you still have to be able to navigate to those);
+  //   - a dataset's own dashboards come before the drafts people made on it;
+  //   - the whole thing is a handful of queries, not three per dataset.
+  const { datasets: dsList, byDataset } = await allDashboardsByDataset(user.id);
+  const named = new Map(dsList.map((d) => [d.name, d.id]));
+
+  assert.ok(named.has("petshop") && named.has("dashmod"), `got ${[...named.keys()].join(", ")}`);
+  for (const ds of dsList) {
+    assert.ok(byDataset.has(ds.id), `${ds.name} is in the map even with no dashboards`);
+  }
+
+  const dashmod = byDataset.get(named.get("dashmod")!) ?? [];
+  assert.ok(dashmod.some((d) => d.name === "overview" && !d.isDraft));
+  assert.ok(
+    dashmod.every((d) => d.datasetName === "dashmod"),
+    "entries carry their own dataset, not the previous one's",
+  );
+
+  const petshop = byDataset.get(named.get("petshop")!) ?? [];
+  const firstDraft = petshop.findIndex((d) => d.isDraft);
+  const lastOwn = petshop.map((d) => !!d.isDraft).lastIndexOf(false);
+  if (firstDraft >= 0 && lastOwn >= 0) {
+    assert.ok(lastOwn < firstDraft, "the model's own dashboards come before the drafts");
+  }
+  assert.ok(petshop.some((d) => d.name === "draft-listed1"), "the draft is on its own dataset");
+
+  // The flat listing is the same content — it is built from this one now.
+  const flat = await listAllDashboards(user.id);
+  assert.equal(flat.length, [...byDataset.values()].reduce((n, xs) => n + xs.length, 0));
 });
 
 test("a draft renders against the dataset's current model, not the one it was saved on", async () => {

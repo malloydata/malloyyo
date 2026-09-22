@@ -12,8 +12,8 @@
 //
 // This module must NEVER import ./engine or @/lib/malloy (statically or lazily).
 
-import { and, eq, asc, desc } from "drizzle-orm";
-import { db, datasets, malloyArtifacts, malloyModelFiles, draftDashboards, users } from "@/db";
+import { and, eq, asc, desc, inArray } from "drizzle-orm";
+import { db, datasets, malloyArtifacts, malloyModels, malloyModelFiles, draftDashboards, users } from "@/db";
 import { visibleDatasetWhere, findByDatasetRef, latestModel } from "@/lib/mcp-tools";
 import { aboutFirst } from "./about";
 import { imageHostsFromConfig } from "./image-hosts";
@@ -125,15 +125,81 @@ export async function listDashboardsAndDrafts(userId: string, datasetRef: string
 
 /** Every visible dataset's current dashboards — for the home page. */
 export async function listAllDashboards(userId: string): Promise<DashboardSummary[]> {
-  const dsList = await db.select().from(datasets).where(visibleDatasetWhere(userId)).orderBy(desc(datasets.createdAt));
-  const out: DashboardSummary[] = [];
-  for (const ds of dsList) {
-    const model = await latestModel(ds.id);
-    if (!model) continue;
-    for (const d of await listDashboardsForModel(model.id, ds.id, ds.name)) out.push(d);
-    for (const d of await listDraftsOnDataset(ds.id, ds.name)) out.push(d);
+  const { datasets: dsList, byDataset } = await allDashboardsByDataset(userId);
+  return dsList.flatMap((ds) => byDataset.get(ds.id) ?? []);
+}
+
+/**
+ * Every visible dataset and its dashboards — in FOUR queries, whatever the
+ * instance holds.
+ *
+ * The obvious loop (per dataset: latest model, its artifacts, its drafts) is
+ * three round trips per dataset, and `latestModel` selects the row whole, so it
+ * also drags every model's full Malloy source across the wire to read an id.
+ * On a 23-dataset instance that measured **6 seconds**, which is not a menu.
+ *
+ * Datasets with NO dashboards are kept: the nav tree lists them too, so you can
+ * reach a dataset that has nothing built on it yet.
+ */
+export async function allDashboardsByDataset(userId: string): Promise<{
+  datasets: { id: string; name: string }[];
+  byDataset: Map<string, DashboardSummary[]>;
+}> {
+  const dsList = await db
+    .select({ id: datasets.id, name: datasets.name })
+    .from(datasets)
+    .where(visibleDatasetWhere(userId))
+    .orderBy(desc(datasets.createdAt));
+  const byDataset = new Map<string, DashboardSummary[]>(dsList.map((ds) => [ds.id, []]));
+  if (dsList.length === 0) return { datasets: dsList, byDataset };
+
+  const ids = dsList.map((ds) => ds.id);
+  const nameOf = new Map(dsList.map((ds) => [ds.id, ds.name]));
+
+  // The current model per dataset, as ids alone — DISTINCT ON is Postgres's
+  // "latest row per group", and it matches latestModel's own ordering.
+  const current = await db
+    .selectDistinctOn([malloyModels.datasetId], { id: malloyModels.id, datasetId: malloyModels.datasetId })
+    .from(malloyModels)
+    .where(inArray(malloyModels.datasetId, ids))
+    .orderBy(malloyModels.datasetId, desc(malloyModels.createdAt));
+  const datasetOfModel = new Map(current.map((m) => [m.id, m.datasetId]));
+
+  if (current.length > 0) {
+    const arts = await db
+      .select()
+      .from(malloyArtifacts)
+      .where(inArray(malloyArtifacts.modelId, [...datasetOfModel.keys()]))
+      .orderBy(asc(malloyArtifacts.name));
+    // Group first, then aboutFirst per model: the About page leads its own
+    // dataset's list, which a single global sort cannot express.
+    const perModel = new Map<string, typeof arts>();
+    for (const a of arts) {
+      const rows = perModel.get(a.modelId);
+      if (rows) rows.push(a);
+      else perModel.set(a.modelId, [a]);
+    }
+    for (const [modelId, rows] of perModel) {
+      const dsId = datasetOfModel.get(modelId)!;
+      const into = byDataset.get(dsId)!;
+      for (const a of aboutFirst(rows)) into.push(summary(dsId, nameOf.get(dsId)!, a));
+    }
   }
-  return out;
+
+  // Drafts last, so a dataset reads as what the model publishes and then what
+  // people built on it.
+  const drafts = await db
+    .select({ draft: draftDashboards, authorName: users.name, authorEmail: users.email })
+    .from(draftDashboards)
+    .leftJoin(users, eq(users.id, draftDashboards.userId))
+    .where(inArray(draftDashboards.datasetId, ids))
+    .orderBy(desc(draftDashboards.updatedAt));
+  for (const row of drafts) {
+    const into = byDataset.get(row.draft.datasetId);
+    if (into) into.push(draftSummary(row.draft.datasetId, nameOf.get(row.draft.datasetId)!, row));
+  }
+
+  return { datasets: dsList, byDataset };
 }
 
 /**
@@ -150,19 +216,31 @@ export async function listDraftsOnDataset(datasetId: string, datasetName: string
     .leftJoin(users, eq(users.id, draftDashboards.userId))
     .where(eq(draftDashboards.datasetId, datasetId))
     .orderBy(desc(draftDashboards.updatedAt));
-  return rows.map(({ draft: r, authorName, authorEmail }) => {
-    const description = r.manifest?.description;
-    return {
-      datasetId,
-      datasetName,
-      name: `${DRAFT_PREFIX}${r.slug}`,
-      title: r.title ?? r.name,
-      ...(typeof description === "string" && description ? { description } : {}),
-      isDraft: true,
-      author: authorName || authorEmail || "unknown",
-      authorId: r.userId,
-    };
-  });
+  return rows.map((row) => draftSummary(datasetId, datasetName, row));
+}
+
+/** One draft row as a listing entry — shared by the per-dataset listing and the
+    all-datasets one, which select the same shape by different routes. */
+function draftSummary(
+  datasetId: string,
+  datasetName: string,
+  { draft: r, authorName, authorEmail }: {
+    draft: typeof draftDashboards.$inferSelect;
+    authorName: string | null;
+    authorEmail: string | null;
+  },
+): DashboardSummary {
+  const description = r.manifest?.description;
+  return {
+    datasetId,
+    datasetName,
+    name: `${DRAFT_PREFIX}${r.slug}`,
+    title: r.title ?? r.name,
+    ...(typeof description === "string" && description ? { description } : {}),
+    isDraft: true,
+    author: authorName || authorEmail || "unknown",
+    authorId: r.userId,
+  };
 }
 
 export async function getDashboard(userId: string, datasetId: string, name: string): Promise<DashboardDetail | null> {

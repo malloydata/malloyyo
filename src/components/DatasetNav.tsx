@@ -6,29 +6,32 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { dashboardSourceUrl } from "@/lib/github-source-link";
 import { QueryIcon } from "@/components/QueryIcon";
-
-// A dataset the switcher can jump to, with the landing page it opens: its first
-// dashboard, or the AI Q&A page when it has none.
-type SwitchTarget = { name: string; href: string };
+import { DashboardTree } from "@/components/DashboardTree";
 
 // The horizontal menu shared by a dataset's dashboard-style pages: the dashboard
 // views and the AI Q&A page. It reads like:
-//   <dataset ▾> | [Dashboard a] [Dashboard b] … [AI Q&A]        [Explore in Claude]
-// The dataset name is a switcher (jumps to another dataset's first page); the
-// active item (a dashboard, or the Q&A page) is highlighted.
+//   <dataset / Dashboard a ▾> | [AI Q&A] [Query] [Chat]      [Explore in Claude]
+// Every dashboard on every dataset lives in that first control (DashboardTree),
+// which is a tree rather than a row of pills: one dataset's five dashboards
+// already wrapped this bar onto three lines, and nothing in it could reach
+// another dataset's dashboard in one hop. What stays in the bar is what ISN'T a
+// dashboard — the ways into the data nobody built in advance.
 export function DatasetNav({
   datasetId,
   activeDashboard,
+  activeTitle,
   questionsActive = false,
 }: {
   datasetId: string;
   /** The dashboard slug currently being viewed, if any. */
   activeDashboard?: string;
+  /** Its title, for the tree's button — the page has already resolved it, and a
+      draft's title lives in its own row rather than in the model's artifacts. */
+  activeTitle?: string;
   /** True on the AI Q&A page. */
   questionsActive?: boolean;
 }) {
   const [datasetName, setDatasetName] = useState("");
-  const [dashboards, setDashboards] = useState<{ name: string; title: string | null }[]>([]);
   // Git provenance, for the "view the source on GitHub" link.
   const [repo, setRepo] = useState<{
     datasetRepo: string | null;
@@ -46,30 +49,6 @@ export function DatasetNav({
   const [claudeConnected, setClaudeConnected] = useState(false);
   // Chat needs an ANTHROPIC_API_KEY; without one the pill would go nowhere.
   const [chatEnabled, setChatEnabled] = useState(false);
-  // Switcher: every visible dataset (from /api/sources, grouped). The landing
-  // page is decided by /datasets/<name> itself, so no dashboard list is needed.
-  const [catalog, setCatalog] = useState<{ dataset: string; status: string }[]>([]);
-  const [switcherOpen, setSwitcherOpen] = useState(false);
-  // Dashboards people made on this dataset. Kept out of the bar itself: there
-  // can be many, and the bar is for the model's own pages.
-  const [userDashboards, setUserDashboards] = useState<
-    { name: string; title: string; description?: string; author?: string; mine?: boolean }[]
-  >([]);
-  const [userOpen, setUserOpen] = useState(false);
-
-  useEffect(() => {
-    fetch(`/api/dashboards?datasetId=${encodeURIComponent(datasetId)}`)
-      .then((r) => (r.ok ? r.json() : []))
-      .then((rows: Array<{ name: string; title: string; description?: string; isDraft?: boolean; author?: string; mine?: boolean }>) => {
-        if (!Array.isArray(rows)) return;
-        // Yours first — on a dataset several people build on, your own are what
-        // you came back for.
-        setUserDashboards(
-          rows.filter((r) => r.isDraft).sort((a, b) => Number(b.mine ?? false) - Number(a.mine ?? false)),
-        );
-      })
-      .catch(() => {});
-  }, [datasetId]);
 
   useEffect(() => {
     fetch(`/api/datasets/${datasetId}`)
@@ -77,7 +56,6 @@ export function DatasetNav({
       .then((d) => {
         if (d?.name) setDatasetName(d.name);
         if (Array.isArray(d?.malloyModel?.sources)) setModelSources(d.malloyModel.sources);
-        if (Array.isArray(d?.dashboards)) setDashboards(d.dashboards);
         if (d) {
           setRepo({
             datasetRepo: d.githubRepo ?? null,
@@ -102,33 +80,7 @@ export function DatasetNav({
         if (typeof d?.askEnabled === "boolean") setChatEnabled(d.askEnabled);
       })
       .catch(() => {});
-    fetch("/api/sources")
-      .then((r) => (r.ok ? r.json() : []))
-      .then((d) => setCatalog(Array.isArray(d) ? d : []))
-      .catch(() => {});
   }, []);
-
-  // One entry per visible, ready dataset. The catalogue is already one row per
-  // dataset, so there is nothing to dedupe — it used to be a flat source list
-  // that had to be collapsed here first.
-  //
-  // Every entry points at `/datasets/<name>`, which is not a page: it redirects
-  // to whatever that dataset actually offers (About, else its first dashboard,
-  // else Q&A, else ltool on its first source — @/lib/dataset-landing). This used
-  // to reimplement the first two tiers here from /api/dashboards, which meant a
-  // dataset with neither landed on an empty Q&A page, and meant the same
-  // decision lived in two places and could drift. One redirect hop is cheaper
-  // than that.
-  const switchTargets = useMemo<SwitchTarget[]>(() => {
-    return catalog
-      .filter((d) => d.status === "ready")
-      .map((d) => ({
-        name: d.dataset,
-        // By NAME (readable, resolves via findByDatasetRef), not an id.
-        href: `/datasets/${encodeURIComponent(d.dataset)}`,
-      }))
-      .sort((a, b) => a.name.localeCompare(b.name));
-  }, [catalog]);
 
   // Seed a new Claude chat on this dataset (matches the home page's link). When
   // the connector isn't linked yet, send them to set it up.
@@ -171,103 +123,17 @@ export function DatasetNav({
           <path d="M5 9.5V21h14V9.5" />
         </svg>
       </Link>
-      <div className="relative">
-        <button
-          onClick={() => setSwitcherOpen((o) => !o)}
-          className="flex items-center gap-1 text-sm font-semibold text-gray-900 dark:text-gray-100 hover:text-gray-600 dark:hover:text-gray-300"
-          title="Switch dataset"
-        >
-          {datasetName || "dataset"}
-          <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden className="text-gray-400">
-            <path d="M6 9l6 6 6-6" />
-          </svg>
-        </button>
-        {switcherOpen && (
-          <>
-            <div className="fixed inset-0 z-40" onClick={() => setSwitcherOpen(false)} />
-            <div className="absolute left-0 top-full mt-1 z-50 min-w-[200px] max-h-80 overflow-y-auto rounded-md border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950 shadow-lg py-1">
-              {switchTargets.length === 0 ? (
-                <p className="px-3 py-1.5 text-gray-400">no datasets</p>
-              ) : (
-                switchTargets.map((t) => {
-                  const current = t.name === datasetName || t.name === datasetId;
-                  return (
-                    <Link
-                      key={t.name}
-                      href={t.href}
-                      onClick={() => setSwitcherOpen(false)}
-                      className={`block px-3 py-1.5 truncate hover:bg-gray-100 dark:hover:bg-gray-800/60 ${
-                        current ? "font-semibold text-gray-900 dark:text-gray-100 bg-gray-50 dark:bg-gray-900" : "text-gray-700 dark:text-gray-300"
-                      }`}
-                    >
-                      {t.name}
-                    </Link>
-                  );
-                })
-              )}
-            </div>
-          </>
-        )}
-      </div>
+      <DashboardTree
+        currentDataset={datasetName || datasetId}
+        activeDashboard={activeDashboard}
+        activeLabel={questionsActive ? "AI Q&A" : activeTitle}
+      />
 
       <span className="mx-1 h-4 w-px bg-gray-300 dark:bg-gray-700" />
 
-      {/* The dataset's pages: dashboards, then the AI Q&A. */}
+      {/* What ISN'T a dashboard: the ways into the data nobody built in
+          advance. The dashboards themselves are in the tree above. */}
       <div className="flex items-center gap-1 flex-wrap">
-        {dashboards.map((d) => (
-          <Link
-            key={d.name}
-            // Link by dataset NAME (readable, resolves via findByDatasetRef) once
-            // known; fall back to the incoming ref until the name loads.
-            href={`/datasets/${encodeURIComponent(datasetName || datasetId)}/dashboard/${encodeURIComponent(d.name)}`}
-            title={d.title ?? d.name}
-            className={pill(d.name === activeDashboard)}
-          >
-            {d.title ?? d.name}
-          </Link>
-        ))}
-        {userDashboards.length > 0 && (
-          <div className="relative">
-            <button
-              onClick={() => setUserOpen((o) => !o)}
-              className={`inline-flex items-center gap-1 ${pill(
-                !!activeDashboard && userDashboards.some((d) => d.name === activeDashboard),
-              )}`}
-              title="Dashboards people made on this dataset"
-            >
-              user dashboards
-              <span className="text-[10px] text-gray-400">{userDashboards.length}</span>
-              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden className="text-gray-400">
-                <path d="M6 9l6 6 6-6" />
-              </svg>
-            </button>
-            {userOpen && (
-              <>
-                <div className="fixed inset-0 z-40" onClick={() => setUserOpen(false)} />
-                <div className="absolute left-0 top-full mt-1 z-50 min-w-[240px] max-h-80 overflow-y-auto rounded-md border border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-950 shadow-lg py-1">
-                  {userDashboards.map((d) => (
-                    <Link
-                      key={d.name}
-                      href={`/datasets/${encodeURIComponent(datasetName || datasetId)}/dashboard/${encodeURIComponent(d.name)}`}
-                      onClick={() => setUserOpen(false)}
-                      title={d.description}
-                      className={`block px-3 py-1.5 truncate hover:bg-gray-100 dark:hover:bg-gray-800/60 ${
-                        d.name === activeDashboard
-                          ? "font-semibold text-gray-900 dark:text-gray-100 bg-gray-50 dark:bg-gray-900"
-                          : "text-gray-700 dark:text-gray-300"
-                      }`}
-                    >
-                      {d.title}
-                      {!d.mine && d.author && (
-                        <span className="ml-1.5 text-[10px] text-gray-400 dark:text-gray-500">{d.author}</span>
-                      )}
-                    </Link>
-                  ))}
-                </div>
-              </>
-            )}
-          </div>
-        )}
         <Link
           href={`/datasets/${encodeURIComponent(datasetName || datasetId)}/questions`}
           title="Questions asked and answered on this dataset"

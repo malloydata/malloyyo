@@ -356,12 +356,12 @@ test("ltool round-trip: a shared query resolves AND replays (regression: broken 
 
   // Replay BOTH ways the app does it — by dataset_id (the ltool page) and by
   // source name (legacy). Each must actually RUN and return rows.
-  const byId = await runQueryForWeb(user.id, shared.source ?? "", shared.malloy ?? "", 1000, shared.datasetId);
+  const byId = await runQueryForWeb(user, shared.source ?? "", shared.malloy ?? "", 1000, shared.datasetId);
   assert.ok(byId.ok, `replay by dataset_id runs${byId.ok ? "" : ": " + byId.error}`);
   assert.ok(byId.ok && byId.rows.length === 1, "replay by dataset_id returns the aggregate row");
   assert.equal(byId.ok && (byId.rows[0] as { total_qty: number }).total_qty, 6, "ran against the right model");
 
-  const bySource = await runQueryForWeb(user.id, shared.source ?? "", shared.malloy ?? "", 1000);
+  const bySource = await runQueryForWeb(user, shared.source ?? "", shared.malloy ?? "", 1000);
   assert.ok(bySource.ok, `replay by source name runs${bySource.ok ? "" : ": " + bySource.error}`);
 });
 

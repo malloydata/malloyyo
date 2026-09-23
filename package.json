@@ -17,7 +17,7 @@
     "start": "next start",
     "deploy": "bash scripts/deploy.sh",
     "lint": "eslint",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "next typegen && tsc --noEmit -p tsconfig.json",
     "db:generate": "drizzle-kit generate",
     "db:push": "drizzle-kit push",
     "db:studio": "drizzle-kit studio",

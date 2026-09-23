@@ -100,6 +100,12 @@ run "cli: build + tests"           npm test -w packages/cli
 # tsconfig but not in the app's build graph, so a signature change that breaks
 # a test's call site used to surface 90 seconds later as a Postgres
 # UNDEFINED_VALUE from the integration suite instead of one line naming the file.
+#
+# `npm run typecheck` runs `next typegen` first. Route handlers reference
+# globals Next GENERATES into .next/types (RouteContext, …), so on a clean
+# checkout — CI, always — tsc alone fails with "Cannot find name 'RouteContext'"
+# before it can find anything real. typegen writes just those types, in a couple
+# of seconds, without a build.
 run "server: typecheck"            npm run typecheck
 run "server: lint"                 npm run lint
 # The src/lib unit suite — pure-function tests, no DB, ~2s. It was absent from this

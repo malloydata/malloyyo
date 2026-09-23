@@ -6,6 +6,11 @@ import { loadCreds, saveCreds, type Creds } from "./store.js";
 import { apiFetch } from "./http.js";
 import type { Target } from "./config.js";
 
+/** Env-shaped input. NOT NodeJS.ProcessEnv, which Next augments with a REQUIRED
+    NODE_ENV — so `{}`, the natural way for a test to ask "with nothing set?",
+    stops satisfying it. These read a couple of string keys. */
+type EnvLike = Readonly<Record<string, string | undefined>>;
+
 interface Endpoints {
   authorization_endpoint: string;
   token_endpoint: string;
@@ -56,7 +61,7 @@ async function registerClient(registrationEndpoint: string, redirectUri: string)
     macOS and Windows always have one; Linux needs a display server. */
 export function browserless(
   platform: NodeJS.Platform = process.platform,
-  env: NodeJS.ProcessEnv = process.env,
+  env: EnvLike = process.env,
 ): boolean {
   if (platform === "darwin" || platform === "win32") return false;
   return !env.DISPLAY && !env.WAYLAND_DISPLAY;
@@ -97,7 +102,7 @@ export function openBrowser(url: string): void {
 
     The redirect URI still names `localhost` in either case — that name is
     resolved by the browser, on whatever machine the browser is running. */
-export function listenTarget(env: NodeJS.ProcessEnv = process.env): { host: string; port: number } {
+export function listenTarget(env: EnvLike = process.env): { host: string; port: number } {
   const raw = env.MALLOYYO_OAUTH_PORT;
   let port = 0;
   if (raw !== undefined && raw !== "") {

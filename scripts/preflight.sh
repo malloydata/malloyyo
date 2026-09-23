@@ -14,8 +14,10 @@
 #   2. cli         — typecheck, then `npm test` whose pretest BUILDS the bundle
 #                    (which also rebuilds the engine) — so "the CLI builds and
 #                    works" is proven, not assumed.
-#   3. server      — eslint, `next build` (the real type/route check), and the
-#                    DB-backed integration tests (test:hosted brings up an
+#   3. server      — typecheck (the whole tsconfig, which `next build` does not
+#                    cover: test/ and *.test.ts are outside the app's build
+#                    graph), eslint, `next build` (routes + the app graph), and
+#                    the DB-backed integration tests (test:hosted brings up an
 #                    EPHEMERAL Postgres — Docker, or a local install when there's
 #                    no daemon — plus in-process DuckDB; hermetic either way).
 #
@@ -94,6 +96,11 @@ run "cli: typecheck"               npm run typecheck -w packages/cli
 run "cli: build + tests"           npm test -w packages/cli
 
 # --- 3. server -------------------------------------------------------------
+# Covers what `next build` does NOT: test/ and src/**/*.test.ts are in the
+# tsconfig but not in the app's build graph, so a signature change that breaks
+# a test's call site used to surface 90 seconds later as a Postgres
+# UNDEFINED_VALUE from the integration suite instead of one line naming the file.
+run "server: typecheck"            npm run typecheck
 run "server: lint"                 npm run lint
 # The src/lib unit suite — pure-function tests, no DB, ~2s. It was absent from this
 # script for a long time, which meant every test under src/lib (including the ones

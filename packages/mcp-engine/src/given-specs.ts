@@ -8,6 +8,7 @@
 // vocabulary: label, control, suggest, …). Shared by the CLI dev server and the
 // hosted serving path so the two can't drift.
 
+import { withoutHostGivens, type HostGivens } from './host-givens';
 import type { Runtime } from '@malloydata/malloy';
 
 export interface DashboardGivenSpec {
@@ -151,6 +152,7 @@ export async function dashboardGivenSpecs(
   runtime: Runtime,
   entry: URL,
   runExpr: string,
+  opts: { hostGivens?: HostGivens } = {},
 ): Promise<DashboardGivenSpecsResult> {
   try {
     const mm = runtime.loadModel(entry);
@@ -159,7 +161,10 @@ export async function dashboardGivenSpecs(
     for (const [name, g] of (pq as unknown as { givens: ReadonlyMap<string, unknown> }).givens) {
       specs.push(describeGivenSpec(name, g as GivenLike));
     }
-    return { ok: true, givens: specs };
+    // Minus what the host fills. These specs ARE the dashboard's controls, and
+    // a reader handed a box for a value they do not choose would type into it
+    // and watch nothing happen.
+    return { ok: true, givens: withoutHostGivens(specs, opts.hostGivens) };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }

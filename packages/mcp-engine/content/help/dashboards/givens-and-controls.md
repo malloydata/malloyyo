@@ -4,6 +4,10 @@ description: Dashboard filter controls — declare filter<T> givens with # label
 
 # Dashboard givens & controls
 
+One given is NOT a control: `$MALLOYYO_EMAIL` is filled from the signed-in
+user, cannot be set by a caller, and renders no filter — see
+`yo_help language/who-is-asking` for per-user data.
+
 A dashboard's filters are `filter<T>` **givens** declared in the model; the
 `#` tags on each declaration drive its control. This is part of authoring a
 dashboard — see also `yo_help dashboards/authoring`.

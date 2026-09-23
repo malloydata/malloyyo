@@ -556,6 +556,12 @@ export function Given({ name, ...rest }) {
     changes re-run immediately and no buttons show. */
 export function Controls({ style, children }) {
   const { autorun, apply, reset, dirty } = useDashboard();
+  // Nothing to put in the bar — no controls, and no Apply/Reset because the
+  // dashboard autoruns — so draw no bar. A dashboard whose only given is one
+  // the HOST fills ($MALLOYYO_EMAIL) has an empty spec list by design, and an
+  // empty bordered strip under the title reads as a control that failed to
+  // load rather than as one that was never the reader's to set.
+  if (!children && autorun && givenSpecs().length === 0) return null;
   return (
     <div
       style={{

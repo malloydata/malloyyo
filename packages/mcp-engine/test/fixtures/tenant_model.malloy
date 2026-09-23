@@ -1,0 +1,14 @@
+##! experimental.givens
+given:
+  MALLOYYO_EMAIL :: string is ''
+  REGION :: string is 'all'
+
+source: rows is duckdb.sql("""
+  SELECT 'a@b.com' as who, 'east' as region
+  UNION ALL SELECT 'c@d.com' as who, 'west' as region
+""")
+
+#" Only the asker's own row.
+query: mine is rows -> { select: who; where: who = $MALLOYYO_EMAIL }
+
+run: rows -> { select: who }

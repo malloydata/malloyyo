@@ -16,11 +16,17 @@
 // MCP surface uses.
 
 import { eq } from "drizzle-orm";
-import { dashboardGivenSpecs, runRestricted, type DashboardGivenSpec } from "@malloyyo/mcp-engine";
+import {
+  dashboardGivenSpecs,
+  runRestricted,
+  type DashboardGivenSpec,
+  type DashboardGivenSpecsResult,
+} from "@malloyyo/mcp-engine";
 import { db, malloyModels } from "@/db";
 import { findByDatasetRef, modelFileMap } from "@/lib/mcp-tools";
 import { runNamedMalloyFiles, withModelRuntime, fileUrl } from "@/lib/malloy";
 import { getDashboard, modelConfigJson, type DashboardDetail } from "./meta";
+import { hostGivensFor, isReservedGiven } from "@/lib/tenancy";
 import { imageHostsFromConfig } from "./image-hosts";
 import { rendersNoData } from "./about";
 
@@ -90,13 +96,17 @@ export function explainProblems(problems: Array<{ message: string }>): string {
     Malloy text (suggestion queries / ad-hoc panels). Falls back to `index.malloy`
     for a v1 manifest with no `entryFile`. */
 export async function runDashboard(
-  userId: string,
+  user: { id: string; email: string | null },
   datasetId: string,
   name: string,
   req: { query?: string; malloy?: string },
   givens: Record<string, unknown>,
   maxRows = 5000,
 ): Promise<DashboardRunResult> {
+  const userId = user.id;
+  // Who is asking, for a model that declared MALLOYYO_EMAIL. Both branches
+  // below take it; neither takes it from `givens` (src/lib/tenancy.ts).
+  const hostGivens = hostGivensFor(user);
   const found = await findByDatasetRef(userId, datasetId);
   if (!found) return { ok: false, error: "dataset not found" };
   if (found.ds.status !== "ready") return { ok: false, error: "dataset not ready" };
@@ -134,6 +144,7 @@ export async function runDashboard(
     const out = await withModelRuntime(files, cacheKey, (runtime) =>
       runRestricted(runtime as unknown as EngineRuntime, entry, malloyText, {
         givens: givens ?? {},
+        hostGivens,
         stableResult: true,
         rowLimit: maxRows,
       }),
@@ -149,6 +160,7 @@ export async function runDashboard(
   if (typeof runExpr !== "string") return { ok: false, error: "dashboard manifest has no query" };
   try {
     const res = await runNamedMalloyFiles(files, entryFile, runExpr, givens ?? {}, {
+      hostGivens,
       rowLimit: maxRows,
       cacheKey,
     });
@@ -169,6 +181,25 @@ export interface DashboardTileSpec {
 export type DashboardTilesResult =
   | { ok: true; tiles: DashboardTileSpec[]; union: DashboardGivenSpec[] }
   | { ok: false; error: string };
+
+/**
+ * A dashboard's givens, minus the ones this server fills.
+ *
+ * Wrapping the engine call rather than filtering at each use: these specs
+ * become the dashboard's CONTROLS, and a reader handed a text box labelled
+ * MALLOYYO_EMAIL would reasonably type another address into it — which the
+ * binder then drops, so the control would appear to do nothing. Hiding it is
+ * the honest rendering of a value the reader does not choose.
+ */
+async function visibleGivenSpecs(
+  rt: Parameters<typeof dashboardGivenSpecs>[0],
+  entry: URL,
+  query: string,
+): Promise<DashboardGivenSpecsResult> {
+  const specs = await dashboardGivenSpecs(rt, entry, query);
+  if (!specs.ok) return specs;
+  return { ok: true, givens: specs.givens.filter((g) => !isReservedGiven(g.name)) };
+}
 
 /** Per-tile specs + the union of givens for a COMPOSITE dashboard's independent
     grid: each tile carries the given NAMES it references (so the frame runs it
@@ -192,7 +223,7 @@ export async function dashboardTileSpecs(
     const byName = new Map<string, DashboardGivenSpec>();
     const out: DashboardTileSpec[] = [];
     for (const tile of tiles) {
-      const specs = await dashboardGivenSpecs(rt, entry, tile);
+      const specs = await visibleGivenSpecs(rt, entry, tile);
       const gvs = specs.ok ? specs.givens : [];
       for (const s of gvs) if (!byName.has(s.name)) byName.set(s.name, s);
       out.push({ run: tile, name: tileName(tile), givens: gvs.map((s) => s.name) });
@@ -288,7 +319,7 @@ export async function dashboardGivens(
       const rt = runtime as unknown as EngineRuntime;
       const byName = new Map<string, DashboardGivenSpec>();
       for (const tile of tiles) {
-        const specs = await dashboardGivenSpecs(rt, entry, tile);
+        const specs = await visibleGivenSpecs(rt, entry, tile);
         if (specs.ok) for (const s of specs.givens) if (!byName.has(s.name)) byName.set(s.name, s);
       }
       return { ok: true, givens: [...byName.values()] };
@@ -299,6 +330,6 @@ export async function dashboardGivens(
   const query = dash.manifest.query;
   if (typeof query !== "string") return { ok: false, error: "dashboard manifest has no query" };
   return withModelRuntime(files, cacheKey, (runtime) =>
-    dashboardGivenSpecs(runtime as unknown as EngineRuntime, entry, query),
+    visibleGivenSpecs(runtime as unknown as EngineRuntime, entry, query),
   );
 }

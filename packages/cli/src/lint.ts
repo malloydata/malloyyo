@@ -73,10 +73,15 @@ async function runLint(abs: string, runner: ModelRunner): Promise<LintReport> {
   const dashboards: DashboardLint[] = [];
 
   // index.malloy is the MCP/ltool surface — validate it compiles on its own,
-  // independent of whether any dashboard imports it.
+  // independent of whether any dashboard imports it. A `test_givens` entry that
+  // was silently ignored rides along with it: an author who wrote one meant it
+  // to do something, and a tenant-scoped dashboard that renders empty locally
+  // is otherwise indistinguishable from a broken one.
   if (runner.entryExists()) {
     const arts = await runner.artifacts();
-    if (!arts.ok) dashboards.push({ name: "index.malloy", errors: [arts.error], warnings: [] });
+    const warnings = [...runner.testGivensWarnings];
+    if (!arts.ok) dashboards.push({ name: "index.malloy", errors: [arts.error], warnings });
+    else if (warnings.length > 0) dashboards.push({ name: "index.malloy", errors: [], warnings });
   }
 
   const dir = join(abs, "dashboards");

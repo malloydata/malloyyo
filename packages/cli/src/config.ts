@@ -42,7 +42,7 @@ export interface SiteConfig {
  * nowhere to put project settings. That shape still works and still warns —
  * see parseMalloyyoConfig.
  */
-const KNOWN_KEYS = new Set(["analytics", "targets", "image_hosts"]);
+const KNOWN_KEYS = new Set(["analytics", "targets", "image_hosts", "test_givens"]);
 
 /** A target is an object with a string `url`. Only used to tell a legacy
     top-level target apart from a mistyped key, so the warning can say which. */

@@ -6,6 +6,7 @@
 // restricted path. Helpers never throw on user-input failure.
 
 import type { GivenValue, QueryMaterializer, Runtime } from '@malloydata/malloy';
+import { declaredGivenNames, resolveHostGivens, type HostGivens } from './host-givens';
 import { API, MalloyError } from '@malloydata/malloy';
 import { codeProblem, errorProblem, mapProblems } from './problems';
 import { jsonRows } from './rows';
@@ -27,6 +28,10 @@ export interface RunOptions {
       so `unknown`-valued). Coerced to Malloy's `GivenValue` at the compile seam
       below — the compiler is the validator, so callers don't pre-narrow. */
   givens?: Record<string, unknown>;
+  /** Givens the HOST supplies — a tenant identity, say. Applied AFTER `givens`
+      and only for names the model declares, and a caller key of the same name
+      is dropped rather than merged. See ./host-givens. */
+  hostGivens?: HostGivens;
   /** Attach the interfaces-format result (API.util.wrapResult) as
       `stable_result` — for host renderers, never sent over MCP. */
   stableResult?: boolean;
@@ -102,10 +107,12 @@ export async function run(
   let materializer;
   let modelQueries: { named: string[]; unnamed: number };
   let loadProblems: Problem[];
+  let declared: ReadonlySet<string>;
   try {
     materializer = runtime.loadModel(entry);
     const model = await materializer.getModel();
     modelQueries = { named: [...model.queries().named], unnamed: model.queries().unnamed };
+    declared = declaredGivenNames(model);
     loadProblems = mapProblems(model.problems);
   } catch (e) {
     if (e instanceof MalloyError) {
@@ -166,5 +173,6 @@ export async function run(
     query = materializer.loadFinalQuery();
   }
 
-  return executeMaterialized(query, opts, loadProblems, (p) => p, entry.href);
+  const givens = resolveHostGivens(opts.givens, opts.hostGivens, declared);
+  return executeMaterialized(query, { ...opts, givens }, loadProblems, (p) => p, entry.href);
 }

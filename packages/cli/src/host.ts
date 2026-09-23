@@ -31,6 +31,7 @@ import {
   type RunResult,
 } from "@malloyyo/mcp-engine";
 import { initConnections, withConnectionDiagnostics } from "./connections.js";
+import { testGivensFromConfig } from "./test-givens.js";
 
 export type ValidateResult = { ok: true } | { ok: false; error: string };
 
@@ -121,6 +122,9 @@ async function loadConfig(rootUrl: URL, reader: URLReader): Promise<MalloyConfig
 }
 
 export interface ModelRunner {
+  /** Anything unusable in `malloyyo.test_givens` (malloy-config.json), for
+      `lint` to report. Empty when the block is absent or entirely valid. */
+  testGivensWarnings: string[];
   /** Run a dashboard's run-expression (a top-level query name or a
       `<source> -> <view>` path) with the given filter values (the givens). */
   run(runExpr: string, givens: Record<string, unknown>): Promise<RunResult>;
@@ -206,6 +210,20 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
   let configPromise: Promise<MalloyConfig> | null = null;
   const getConfig = () => (configPromise ??= loadConfig(rootUrl, reader));
 
+  // Local stand-ins for the givens the SERVER fills — `malloyyo.test_givens`
+  // in malloy-config.json. Read once, here, because every compile and run in
+  // this package goes through the leases below: a tenant-scoped model then
+  // behaves the same in `dashboard dev`, `bundle`, `lint` and `mcp` as it will
+  // once published. See ./test-givens.ts for why the server must NOT read this.
+  const testGivens = (() => {
+    try {
+      return testGivensFromConfig(fs.readFileSync(path.join(abs, "malloy-config.json"), "utf8"));
+    } catch {
+      return { givens: {}, warnings: [] };
+    }
+  })();
+  const hostGivens = { values: testGivens.givens, reservedPrefix: "MALLOYYO_" };
+
   // Release connections to 'idle' only when no lease is in flight. 'idle'
   // frees sockets/file locks (so a long-lived host doesn't hold them, and the
   // process can exit) while PRESERVING the schema cache on the reused config;
@@ -264,6 +282,8 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
   return {
     root: abs,
     entryExists: () => fs.existsSync(path.join(abs, ENTRY)),
+    /** Anything unusable in `malloyyo.test_givens`, for `lint` to report. */
+    testGivensWarnings: testGivens.warnings,
     async dispose() {
       clearIdleTimer();
       if (!configPromise) return;
@@ -273,22 +293,22 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
     },
     run(runExpr, givens) {
       return lease((runtime, entry) =>
-        run(runtime, entry, { runExpr, givens, stableResult: true, rowLimit: 5000 }),
+        run(runtime, entry, { runExpr, givens, hostGivens, stableResult: true, rowLimit: 5000 }),
       );
     },
     runIn(entryFile, runExpr, givens) {
       return leaseIn(entryFile, (runtime, entry) =>
-        run(runtime, entry, { runExpr, givens, stableResult: true, rowLimit: 5000 }),
+        run(runtime, entry, { runExpr, givens, hostGivens, stableResult: true, rowLimit: 5000 }),
       );
     },
     runText(malloy, givens) {
       return lease((runtime, entry) =>
-        runRestricted(runtime, entry, malloy, { givens, stableResult: true, rowLimit: 5000 }),
+        runRestricted(runtime, entry, malloy, { givens, hostGivens, stableResult: true, rowLimit: 5000 }),
       );
     },
     runTextIn(entryFile, malloy, givens) {
       return leaseIn(entryFile, (runtime, entry) =>
-        runRestricted(runtime, entry, malloy, { givens, stableResult: true, rowLimit: 5000 }),
+        runRestricted(runtime, entry, malloy, { givens, hostGivens, stableResult: true, rowLimit: 5000 }),
       );
     },
     validateText(malloy) {
@@ -298,10 +318,12 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
       return leaseIn(entryFile, (runtime, entry) => validateRestrictedText(runtime, entry, malloy));
     },
     givensForQuery(runExpr) {
-      return lease((runtime, entry) => dashboardGivenSpecs(runtime, entry, runExpr));
+      return lease((runtime, entry) => dashboardGivenSpecs(runtime, entry, runExpr, { hostGivens }));
     },
     givensForQueryIn(entryFile, runExpr) {
-      return leaseIn(entryFile, (runtime, entry) => dashboardGivenSpecs(runtime, entry, runExpr));
+      return leaseIn(entryFile, (runtime, entry) =>
+        dashboardGivenSpecs(runtime, entry, runExpr, { hostGivens }),
+      );
     },
     artifacts() {
       return lease((runtime, entry) => artifactQueries(runtime, entry));
@@ -318,7 +340,7 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
         // tile that references it carries the authoritative spec.
         const byName = new Map<string, DashboardGivenSpec>();
         for (const tile of tiles) {
-          const specs = await dashboardGivenSpecs(runtime, entry, tile);
+          const specs = await dashboardGivenSpecs(runtime, entry, tile, { hostGivens });
           if (specs.ok) for (const s of specs.givens) if (!byName.has(s.name)) byName.set(s.name, s);
         }
         return { ok: true, givens: [...byName.values()] };
@@ -329,7 +351,7 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
         const byName = new Map<string, DashboardGivenSpec>();
         const out: TileSpec[] = [];
         for (const tile of tiles) {
-          const specs = await dashboardGivenSpecs(runtime, entry, tile);
+          const specs = await dashboardGivenSpecs(runtime, entry, tile, { hostGivens });
           const gvs = specs.ok ? specs.givens : [];
           for (const s of gvs) if (!byName.has(s.name)) byName.set(s.name, s);
           out.push({

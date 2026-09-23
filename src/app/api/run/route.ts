@@ -37,12 +37,12 @@ export async function POST(req: Request) {
   // exact model — unambiguous.
   if (save) {
     const cleanTitle = (title?.trim() || malloy.trim().slice(0, 80)).slice(0, 200);
-    const result = await saveWebQuery(user.id, source, malloy, cleanTitle, maxRows, dataset, opts);
+    const result = await saveWebQuery(user, source, malloy, cleanTitle, maxRows, dataset, opts);
     if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
     return NextResponse.json(result);
   }
 
-  const result = await runQueryForWeb(user.id, source, malloy, maxRows, dataset, opts);
+  const result = await runQueryForWeb(user, source, malloy, maxRows, dataset, opts);
   if (!result.ok) {
     return NextResponse.json({ error: result.error }, { status: 400 });
   }

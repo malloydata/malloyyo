@@ -11,6 +11,7 @@ import type { SourceInfo } from "./malloy";
 // /ltool/[slug] page — don't drag DuckDB into their serverless bundle and 500
 // with "libduckdb.so: cannot open shared object file".
 import { env } from "./env";
+import { hostGivensFor } from "./tenancy";
 import { parseSlug, instanceSlug } from "./slug";
 import { logger, serializeErr } from "./logger";
 import {
@@ -379,13 +380,17 @@ export type WebRunOpts = {
 // tracked, including re-runs and failures. Returns the full result plus the
 // minted share slug so the UI row is shareable/favoritable.
 export async function runQueryForWeb(
-  userId: string,
+  // The whole user, not just the id: a model that declared
+  // MALLOYYO_EMAIL binds their address, and it must come from the
+  // session rather than anything in the request (src/lib/tenancy.ts).
+  user: { id: string; email: string | null },
   source: string,
   malloyQuery: string,
   maxRows = 1000,
   datasetId?: string | null,
   opts: WebRunOpts = {},
 ): Promise<WebRunResult> {
+  const userId = user.id;
   // When the caller knows the dataset (an ltool replay carries the recorded
   // dataset_id), resolve by it — unambiguous. Else fall back to source name.
   //
@@ -401,7 +406,11 @@ export async function runQueryForWeb(
   const t0 = Date.now();
   try {
     const { runRestrictedMalloyFiles } = await import("./malloy"); // lazy — see import note above
-    const res = await runRestrictedMalloyFiles(files, "index.malloy", malloyQuery, { rowLimit: maxRows, cacheKey: model.id });
+    const res = await runRestrictedMalloyFiles(files, "index.malloy", malloyQuery, {
+      rowLimit: maxRows,
+      cacheKey: model.id,
+      hostGivens: hostGivensFor(user),
+    });
     const durationMs = Date.now() - t0;
     const capped = res.rows.slice(0, maxRows);
     const { slug } = await recordHistory({
@@ -440,7 +449,10 @@ export type WebSaveResult =
 // saved_queries so it survives history trimming and is shareable/favoritable.
 // Used when the user edits a loaded query and runs it (author_model = 'human').
 export async function saveWebQuery(
-  userId: string,
+  // The whole user, not just the id: a model that declared
+  // MALLOYYO_EMAIL binds their address, and it must come from the
+  // session rather than anything in the request (src/lib/tenancy.ts).
+  user: { id: string; email: string | null },
   source: string,
   malloyQuery: string,
   title: string,
@@ -448,6 +460,7 @@ export async function saveWebQuery(
   datasetId?: string | null,
   opts: WebRunOpts = {},
 ): Promise<WebSaveResult> {
+  const userId = user.id;
   // By ref, for the same reason as runQueryForWeb above.
   const found = datasetId ? await findByDatasetRef(userId, datasetId) : await findBySource(userId, source);
   if (!found) return { ok: false, error: `source '${source}' not found` };
@@ -458,7 +471,11 @@ export async function saveWebQuery(
   const t0 = Date.now();
   try {
     const { runRestrictedMalloyFiles } = await import("./malloy"); // lazy — see import note above
-    const res = await runRestrictedMalloyFiles(files, "index.malloy", malloyQuery, { rowLimit: maxRows, cacheKey: model.id });
+    const res = await runRestrictedMalloyFiles(files, "index.malloy", malloyQuery, {
+      rowLimit: maxRows,
+      cacheKey: model.id,
+      hostGivens: hostGivensFor(user),
+    });
     const durationMs = Date.now() - t0;
     const capped = res.rows.slice(0, maxRows);
     // Saving is the Run & save button and nothing else, so the entrypoint here

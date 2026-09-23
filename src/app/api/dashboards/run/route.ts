@@ -37,7 +37,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, error: "datasetId and name are required" }, { status: 400 });
   }
   const startedAt = Date.now();
-  const result = await runDashboard(user.id, datasetId, name, { query, malloy }, givens ?? {});
+  const result = await runDashboard(user, datasetId, name, { query, malloy }, givens ?? {});
   void captureTelemetry(
     {
       event: "query ran",

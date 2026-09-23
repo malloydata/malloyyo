@@ -27,6 +27,7 @@ import {
   HOST_ONLY,
   type BoundModel,
   type ExploreHost,
+  type HostGivens,
   type ModelEntry,
   type RunResult,
   type WithHostOnly,
@@ -37,6 +38,7 @@ import {
 type QueryRunResult = WithHostOnly<RunResult & { model_ref?: string }>;
 import { listDashboardsForModel } from "./dashboards";
 import { withModelRuntime } from "./malloy";
+import { hostGivensFor } from "./tenancy";
 import { isAdmin } from "./admin";
 import { logger, serializeErr } from "./logger";
 import {
@@ -147,24 +149,29 @@ async function findModelByRef(userId: string, ref: string) {
 async function leaseDataset<T>(
   model: { id: string; source: string },
   fn: (m: BoundModel) => Promise<T>,
+  hostGivens?: HostGivens,
 ): Promise<T> {
   const files = await modelFileMap(model);
   return withModelRuntime(files, model.id, (runtime, readSource) =>
-    fn({ runtime, entry: ENTRY, readSource }),
+    fn({ runtime, entry: ENTRY, readSource, hostGivens }),
   );
 }
 
 // The engine's ExploreHost: withModel resolves + leases a pooled Runtime; list
 // compiles each visible model and renders it through the engine's ONE catalog
 // projection (modelCatalogEntry) — no per-host copy of the listing shape.
-function makeExploreHost(userId: string, baseUrl: string): ExploreHost {
+function makeExploreHost(user: User, baseUrl: string): ExploreHost {
+  const userId = user.id;
   return {
     withModel: async (ref, fn) => {
       const found = await findModelByRef(userId, ref);
       // Same message for "absent" and "not visible" — a probe must not tell them
       // apart (the engine surfaces this thrown text to the agent).
       if (!found) throw new Error(`no model '${ref}' (unknown, or not visible to you)`);
-      return leaseDataset(found.model, fn);
+      // Who is asking, for a model that declared MALLOYYO_EMAIL. Attached to the
+      // LEASE rather than to the query, so no query path can forget it and no
+      // caller-supplied value can reach the binder (src/lib/tenancy.ts).
+      return leaseDataset(found.model, fn, hostGivensFor(user));
     },
     list: async () => {
       const entries: ModelEntry[] = [];
@@ -360,7 +367,7 @@ export function buildHostedExploreSurface(
   baseUrl: string,
   ctx: HostedSurfaceCtx = {},
 ): HostedSurface {
-  const surface = exploreSurface(makeExploreHost(user.id, baseUrl));
+  const surface = exploreSurface(makeExploreHost(user, baseUrl));
   const inApp = ctx.style === "inapp";
   const entrypoint = ctx.entrypoint ?? "mcp";
   const mintSlugs = ctx.mintSlugs ?? true;

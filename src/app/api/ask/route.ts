@@ -122,7 +122,7 @@ export async function POST(req: Request) {
   // The single execution. Recorded, slugged, shareable, and attributed to the
   // model that wrote it — everything a Run-button query gets.
   const result = await runQueryForWeb(
-    user.id,
+    user,
     source,
     asked.malloy,
     body.maxRows ?? 1000,

@@ -4,7 +4,14 @@
 import * as malloy from "@malloydata/malloy";
 import { API, type GivenValue } from "@malloydata/malloy";
 import { DuckDBConnection as MalloyDuckDBConnection } from "@malloydata/db-duckdb";
-import { jsonRows } from "@malloyyo/mcp-engine";
+import {
+  declaredGivenNames,
+  jsonRows,
+  missingHostGivensMessage,
+  resolveHostGivens,
+  type HostGivens,
+} from "@malloyyo/mcp-engine";
+import { reservedGivenError, unsupportedReservedGivens } from "./tenancy";
 import { hostname, networkInterfaces } from "node:os";
 import { randomBytes } from "node:crypto";
 import { env } from "./env";
@@ -175,6 +182,11 @@ export async function introspectModelWithReader(
   try {
     handle = await buildRuntimeWithReader(reader as malloy.URLReader, configJson);
     const compiled = await handle.runtime.getModel(fileUrl(entryPath));
+    // Same reserved-prefix rule as the CLI push path below. BOTH, because this
+    // is how most models actually arrive — a repo added by URL and refreshed
+    // from GitHub would otherwise sail past a rule `malloyyo publish` enforces.
+    const reserved = unsupportedReservedGivens(declaredGivenNames(compiled));
+    if (reserved.length > 0) return { ok: false, error: reservedGivenError(reserved) };
     // Only the model's public surface — exported sources. Unexported intermediates
     // (e.g. `_base`) stay private.
     const sources = compiled.exportedExplores.map((e) => ({
@@ -204,6 +216,11 @@ export async function introspectModelFiles(
   try {
     handle = await buildRuntime(files);
     const compiled = await handle.runtime.getModel(fileUrl(entryPath));
+    // The MALLOYYO_ prefix is this server's (src/lib/tenancy.ts). Refused at
+    // PUBLISH, where the author is standing right there, rather than left to
+    // surface as a given that quietly never gets filled.
+    const reserved = unsupportedReservedGivens(declaredGivenNames(compiled));
+    if (reserved.length > 0) return { ok: false, error: reservedGivenError(reserved) };
     // Public surface only (exported sources); unexported `_base`-style sources stay private.
     const sources = compiled.exportedExplores.map((e) => ({
       name: e.name,
@@ -647,6 +664,31 @@ export async function describeSourceFields(
 // Run user-authored query text against a file map (from DB-stored GitHub model
 // files) — the /ltool web editor's path.
 //
+/**
+ * The givens to actually bind: the caller's, with this server's own values
+ * (who is asking) applied last and only where the model declares them.
+ *
+ * Here rather than at each call site because these three run paths — the web
+ * query surface, dashboard tiles, and ad-hoc dashboard text — are the whole of
+ * what reaches Malloy outside the engine, and a path that forgot the merge
+ * would silently run a tenant-scoped model with no tenant. `Model.givens` is
+ * the model's own surface, so the check costs nothing beyond the materializer
+ * we already hold. See src/lib/tenancy.ts for what the values mean.
+ */
+async function bindGivens(
+  mm: ModelMat,
+  caller: Record<string, unknown> | undefined,
+  hostGivens: HostGivens | undefined,
+): Promise<Record<string, unknown> | undefined> {
+  if (!hostGivens) return caller;
+  const model = await mm.getModel();
+  const merged = resolveHostGivens(caller, hostGivens, declaredGivenNames(model));
+  // Refused, not defaulted — see resolveHostGivens. Thrown because these run
+  // paths report failure by throwing; every caller already catches.
+  if (!merged.ok) throw new Error(missingHostGivensMessage(merged.missing));
+  return merged.givens;
+}
+
 // Enforces core's restricted mode (`loadRestrictedQuery`): no import, no
 // `given:` declarations, no `connection.table/sql`, no raw-SQL forms, no `##!`
 // flags — rejected with 'restricted-construct-forbidden'. This is the same gate
@@ -662,16 +704,18 @@ export async function runRestrictedMalloyFiles(
   files: Map<string, string>,
   entryPath: string,
   query: string,
-  opts: { rowLimit?: number; cacheKey?: string } = {},
+  opts: { rowLimit?: number; cacheKey?: string; hostGivens?: HostGivens } = {},
 ): Promise<RunResult> {
   const t0 = Date.now();
   return withRuntime(files, opts.cacheKey, async (runtime) => {
     const tBuild = Date.now();
     const { mm, persist } = await acquireModel(runtime, opts.cacheKey, entryPath);
     const runner = mm.loadRestrictedQuery(query);
-    const sql = await runner.getSQL();
+    const givens = await bindGivens(mm, undefined, opts.hostGivens);
+    const compileOpts = givens ? { givens: givens as Record<string, GivenValue> } : undefined;
+    const sql = await runner.getSQL(compileOpts);
     const tCompile = Date.now();
-    const result = await runner.run({ rowLimit: opts.rowLimit ?? DEFAULT_ROW_LIMIT });
+    const result = await runner.run({ rowLimit: opts.rowLimit ?? DEFAULT_ROW_LIMIT, ...compileOpts });
     const tRun = Date.now();
     const rows = jsonRows(result);
     const stableResult = API.util.wrapResult(result);
@@ -703,15 +747,16 @@ export async function runNamedMalloyFiles(
   entryPath: string,
   runExpr: string,
   givens: Record<string, unknown>,
-  opts: { rowLimit?: number; cacheKey?: string } = {},
+  opts: { rowLimit?: number; cacheKey?: string; hostGivens?: HostGivens } = {},
 ): Promise<RunResult> {
   return withRuntime(files, opts.cacheKey, async (runtime) => {
     const { mm, persist } = await acquireModel(runtime, opts.cacheKey, entryPath);
     const runner = mm.loadQuery(`run: ${runExpr}`);
     // Values arrive as user JSON; the compiler validates them when binding.
+    const bound = await bindGivens(mm, givens, opts.hostGivens);
     const compileOpts =
-      givens && Object.keys(givens).length > 0
-        ? { givens: givens as Record<string, GivenValue> }
+      bound && Object.keys(bound).length > 0
+        ? { givens: bound as Record<string, GivenValue> }
         : undefined;
     const sql = await runner.getSQL(compileOpts);
     const result = await runner.run({ rowLimit: opts.rowLimit ?? DEFAULT_ROW_LIMIT, ...compileOpts });

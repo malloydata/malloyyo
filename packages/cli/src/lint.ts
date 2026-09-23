@@ -72,6 +72,15 @@ export async function lintDashboards(root: string): Promise<LintReport> {
 async function runLint(abs: string, runner: ModelRunner): Promise<LintReport> {
   const dashboards: DashboardLint[] = [];
 
+  // A `test_givens` entry that was silently ignored, reported FIRST and
+  // independent of index.malloy: an author who wrote one meant it to do
+  // something, a tenant-scoped dashboard that renders empty locally is
+  // otherwise indistinguishable from a broken one, and a repo whose dashboards
+  // import a peer .malloy has no index.malloy to hang the warning off.
+  if (runner.testGivensWarnings.length > 0) {
+    dashboards.push({ name: "malloy-config.json", errors: [], warnings: [...runner.testGivensWarnings] });
+  }
+
   // index.malloy is the MCP/ltool surface — validate it compiles on its own,
   // independent of whether any dashboard imports it.
   if (runner.entryExists()) {

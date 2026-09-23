@@ -15,6 +15,7 @@ import type { Runtime } from '@malloydata/malloy';
 import { compile } from '../walker';
 import { buildSourceDescribe } from '../project';
 import { runRestricted, validateRestricted } from '../restricted';
+import type { HostGivens } from '../host-givens';
 import { applyResultBudget } from './budget';
 import { DEFAULT_ROW_LIMIT } from '../run';
 import { assembleInstructions } from '../guidance';
@@ -55,6 +56,13 @@ export interface BoundModel {
   runtime: Runtime;
   entry: URL;
   readSource?: (href: string) => string | undefined;
+  /**
+   * Givens this HOST fills in — a tenant identity, say — which the caller may
+   * not choose. Supplied only for names the model declares, applied after the
+   * caller's values, and hidden from what `execute:false` reports as needed.
+   * See ../host-givens.
+   */
+  hostGivens?: HostGivens;
 }
 
 export interface ExploreHost {
@@ -129,10 +137,14 @@ async function executeQuery(
   const givens = argRecord(args, 'givens');
   const rowLimit = Math.max(1, Math.min(10_000, argOptNumber(args, 'max_rows') ?? DEFAULT_ROW_LIMIT));
   if (!execute) {
-    const v = await validateRestricted(m.runtime, m.entry, malloy);
+    const v = await validateRestricted(m.runtime, m.entry, malloy, { hostGivens: m.hostGivens });
     return { ...v, problems: v.problems.map(fix) };
   }
-  const full = await runRestricted(m.runtime, m.entry, malloy, { rowLimit, givens });
+  const full = await runRestricted(m.runtime, m.entry, malloy, {
+    rowLimit,
+    givens,
+    hostGivens: m.hostGivens,
+  });
   const budgeted = await applyResultBudget(full, result, { toolName: 'query', args });
   return { ...budgeted, problems: budgeted.problems.map(fix) };
 }

@@ -460,7 +460,7 @@ async function runExecutedQuery(
   // transcript is the text that executed — not a prettied stand-in for it.
   const malloy = formatMalloy(written);
   const res = await runQuery(
-    input.user.id,
+    input.user,
     input.source,
     malloy,
     RENDER_ROWS,

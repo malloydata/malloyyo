@@ -49,6 +49,10 @@ type Hosted = ReturnType<typeof buildHostedExploreSurface>;
 /** What the route resolves before the SDK sees the request. */
 interface RequestScope {
   userId: string;
+  /** The whole user, not just the id: a tenant-scoped model binds their email
+      (src/lib/tenancy.ts), and that must come from the credential, never the
+      request body. */
+  user: { id: string; email: string | null };
   hosted: Hosted;
   log: Log;
   /** The URL this client reached us at — what the CLI must use too. */
@@ -408,7 +412,7 @@ function registerDashboardApp(server: McpServer, scope: RequestScope, panel: Das
       _meta: appOnly,
     },
     logged(scope, RUN_TOOL, async (a: RunArgs) => {
-      const out = await runDashboard(userId, a.datasetId, a.name, { query: a.query, malloy: a.malloy }, a.givens ?? {});
+      const out = await runDashboard(scope.user, a.datasetId, a.name, { query: a.query, malloy: a.malloy }, a.givens ?? {});
       return {
         content: text(out.ok ? "ok" : `error: ${out.error}`),
         structuredContent: out as unknown as Json,
@@ -473,7 +477,13 @@ async function serve(req: Request): Promise<Response> {
     userAgent: req.headers.get("user-agent"),
     authorModel: req.headers.get("x-author-model"),
   });
-  const scope: RequestScope = { userId: auth.user.id, hosted, log, origin: originFromRequest(req) };
+  const scope: RequestScope = {
+    userId: auth.user.id,
+    user: auth.user,
+    hosted,
+    log,
+    origin: originFromRequest(req),
+  };
   const res = await handler.fetch(req, {
     authInfo: { token: raw, clientId: credentialLabel(auth.cred), scopes: ["mcp"], extra: { scope } },
   });

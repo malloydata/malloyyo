@@ -9,10 +9,17 @@
 
 import type { Runtime } from '@malloydata/malloy';
 import { MalloyError } from '@malloydata/malloy';
-import { errorProblem, hasError, mapProblems } from './problems';
+import { codeProblem, errorProblem, hasError, mapProblems } from './problems';
 import type { RunOptions } from './run';
 import { executeMaterialized } from './run';
-import { declaredGivenNames, resolveHostGivens, withoutHostGivens, type HostGivens } from './host-givens';
+import {
+  declaredGivenNames,
+  HOST_GIVEN_UNAVAILABLE,
+  missingHostGivensMessage,
+  resolveHostGivens,
+  withoutHostGivens,
+  type HostGivens,
+} from './host-givens';
 import { describeGiven } from './walker';
 import type { GivenInfo, Problem, QueryValidationResult, RunResult } from './types';
 
@@ -102,8 +109,17 @@ export async function runRestricted(
   }
   try {
     const q = materializer.loadRestrictedQuery(query);
-    const givens = resolveHostGivens(opts.givens, opts.hostGivens, declared);
-    return await executeMaterialized(q, { ...opts, givens }, loadProblems, (p) => p, entry.href);
+    const merged = resolveHostGivens(opts.givens, opts.hostGivens, declared);
+    if (!merged.ok) {
+      return {
+        ok: false,
+        problems: [
+          ...loadProblems,
+          codeProblem(HOST_GIVEN_UNAVAILABLE, missingHostGivensMessage(merged.missing), entry.href),
+        ],
+      };
+    }
+    return await executeMaterialized(q, { ...opts, givens: merged.givens }, loadProblems, (p) => p, entry.href);
   } catch (e) {
     if (e instanceof MalloyError) {
       return { ok: false, problems: [...loadProblems, ...mapProblems(e.problems)] };

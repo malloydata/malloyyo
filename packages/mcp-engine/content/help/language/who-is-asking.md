@@ -57,21 +57,36 @@ dashboard. Put a stand-in in `malloy-config.json`:
 }
 ```
 
-`malloyyo dashboard dev`, `malloyyo dashboard bundle`, `malloyyo lint` and the
-CLI's own MCP server all bind it the way the server binds the real one, so what
-you see locally is what a reader gets. Change the address to see another
-tenant's view.
+`malloyyo dashboard dev`, `malloyyo lint` and the CLI's own MCP server bind it
+the way the server binds the real one, so what you see locally is what a reader
+gets. Change the address to see another tenant's view.
 
 The block is **local only** — the server never reads it. It travels with the
 repo, so if it were honored a repo could name any address and read that
 person's rows.
 
+## Not `malloyyo dashboard bundle`
+
+A bundled site has no one asking, and cannot have: there is no server, the
+model source is inlined into the page, and DuckDB-WASM fetches the data in the
+reader's own browser. `test_givens` does not travel into it either — the
+bundler only introspects, and the reserved givens are filtered out of what it
+writes. So a tenant-scoped dashboard bundles to a page that shows nothing.
+
+Do not answer that by loosening the default. `MALLOYYO_EMAIL :: filter<string>
+is f'…'` with anything permissive publishes every row to every visitor, and the
+raw data is one fetch away regardless. **A model that filters by who is asking
+belongs on an instance, not in a static bundle.**
+
 ## Notes
 
-- Give it a default (`is ''`) and make sure the default is the SAFE answer.
-  An empty address matching no rows is right; a default that matches
-  everything is a model that shows everything to a caller the binder could not
-  identify.
+- Give it a default and make sure the default is the SAFE answer. Watch the
+  type: `:: string is ''` matches no rows, which is right, but
+  `:: filter<string> is f''` is an EMPTY FILTER, which matches EVERY row. The
+  server refuses to run a query when it cannot supply the value (an account
+  with no address, say) rather than let a default like that through — but the
+  default is still what a local `dashboard dev` run and any non-server path
+  will use, so write one that shows nothing.
 - Filtering belongs in the source (`extend { where: … }`), not in each query —
   that way it holds for every query anyone writes against it, including ones
   an agent composes later.

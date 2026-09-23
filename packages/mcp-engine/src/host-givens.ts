@@ -47,6 +47,11 @@ function isHostsToFill(name: string, host: HostGivens): boolean {
   );
 }
 
+export type HostGivensResult =
+  | { ok: true; givens: Record<string, unknown> | undefined }
+  /** Reserved names this model declares that the host cannot fill right now. */
+  | { ok: false; missing: string[] };
+
 /**
  * The givens to actually supply: the caller's, minus every reserved name,
  * plus the host's values for the names this model declares.
@@ -60,13 +65,23 @@ function isHostsToFill(name: string, host: HostGivens): boolean {
  * A caller's reserved-name key is dropped whether or not the model declares it:
  * the name is the host's to fill, and silently ignoring the caller is the
  * correct answer to a request that should never have carried it.
+ *
+ * FAILS CLOSED. A reserved name the model declares but the host cannot fill
+ * comes back as `missing`, and the caller refuses the query. Falling through to
+ * the declaration default looks safer than it is: the project's own guidance is
+ * to declare filters as `filter<T>`, and an EMPTY filter means "no filter" — so
+ * a tenant-scoped source whose identity went unsupplied would return every row
+ * rather than none. Verified against a real compile: `filter<string>` bound to
+ * an address returns that row, bound to '' returns all of them.
  */
 export function resolveHostGivens(
   caller: Record<string, unknown> | undefined,
   host: HostGivens | undefined,
   declared: ReadonlySet<string>,
-): Record<string, unknown> | undefined {
-  if (!host) return caller;
+): HostGivensResult {
+  if (!host) return { ok: true, givens: caller };
+  const missing = [...declared].filter((n) => isHostsToFill(n, host) && !(n in host.values)).sort();
+  if (missing.length > 0) return { ok: false, missing };
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(caller ?? {})) {
     if (isHostsToFill(k, host)) continue;
@@ -75,7 +90,25 @@ export function resolveHostGivens(
   for (const [k, v] of Object.entries(host.values)) {
     if (declared.has(k)) out[k] = v;
   }
-  return Object.keys(out).length > 0 ? out : undefined;
+  return { ok: true, givens: Object.keys(out).length > 0 ? out : undefined };
+}
+
+/**
+ * What to tell a caller whose query needs a host value that isn't available.
+ *
+ * Deliberately says nothing about HOW to supply it: on an instance the answer
+ * is "sign in with an address" and there is nothing the caller can do, while in
+ * the CLI it is `malloyyo.test_givens`. The host that knows which world it is
+ * in appends that (packages/cli/src/host.ts does).
+ */
+export const HOST_GIVEN_UNAVAILABLE = 'host-given-unavailable';
+
+export function missingHostGivensMessage(missing: string[]): string {
+  return (
+    `${missing.join(", ")}: filled by the host, not by the query, and no value is ` +
+    `available for this request. Refused rather than run on the declaration ` +
+    `default, which may not be restrictive.`
+  );
 }
 
 /** The names a model declares, as the binder sees them. */

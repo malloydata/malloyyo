@@ -6,7 +6,13 @@
 // restricted path. Helpers never throw on user-input failure.
 
 import type { GivenValue, QueryMaterializer, Runtime } from '@malloydata/malloy';
-import { declaredGivenNames, resolveHostGivens, type HostGivens } from './host-givens';
+import {
+  declaredGivenNames,
+  HOST_GIVEN_UNAVAILABLE,
+  missingHostGivensMessage,
+  resolveHostGivens,
+  type HostGivens,
+} from './host-givens';
 import { API, MalloyError } from '@malloydata/malloy';
 import { codeProblem, errorProblem, mapProblems } from './problems';
 import { jsonRows } from './rows';
@@ -173,6 +179,15 @@ export async function run(
     query = materializer.loadFinalQuery();
   }
 
-  const givens = resolveHostGivens(opts.givens, opts.hostGivens, declared);
-  return executeMaterialized(query, { ...opts, givens }, loadProblems, (p) => p, entry.href);
+  const merged = resolveHostGivens(opts.givens, opts.hostGivens, declared);
+  if (!merged.ok) {
+    return {
+      ok: false,
+      problems: [
+        ...loadProblems,
+        codeProblem(HOST_GIVEN_UNAVAILABLE, missingHostGivensMessage(merged.missing), entry.href),
+      ],
+    };
+  }
+  return executeMaterialized(query, { ...opts, givens: merged.givens }, loadProblems, (p) => p, entry.href);
 }

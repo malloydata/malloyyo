@@ -14,10 +14,14 @@ test("the identity comes from the user, and carries the reserved prefix", () => 
   assert.equal(h.reservedPrefix, "MALLOYYO_");
 });
 
-test("a user with no address binds empty rather than undefined", () => {
-  // The given is declared `:: string`, so a missing address must still be a
-  // string — and an empty one matches nothing, which is the safe direction.
-  assert.deepEqual(hostGivensFor({ email: null }).values, { MALLOYYO_EMAIL: "" });
+test("a user with no address supplies NOTHING, so the query is refused", () => {
+  // Not an empty string. users.email is nullable, and `filter<string>` bound to
+  // '' is an EMPTY filter — which matches every row. Supplying nothing makes
+  // resolveHostGivens refuse the query instead. Fail closed.
+  assert.deepEqual(hostGivensFor({ email: null }).values, {});
+  assert.equal(hostGivensFor({ email: "" }).values.MALLOYYO_EMAIL, undefined);
+  // The prefix still travels, so a caller cannot slip one in either.
+  assert.equal(hostGivensFor({ email: null }).reservedPrefix, "MALLOYYO_");
 });
 
 test("only MALLOYYO_EMAIL is supported today", () => {

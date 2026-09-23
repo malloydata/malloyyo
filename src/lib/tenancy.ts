@@ -52,13 +52,20 @@ export function isReservedGiven(name: string): boolean {
 /**
  * What this server fills in for a request made by `user`.
  *
- * Always returns the value, whether or not the model declares the given —
- * resolveHostGivens drops it for a model that doesn't, and passing it
- * unconditionally keeps the "who is asking" answer in one place.
+ * Supplied whether or not the model declares the given — resolveHostGivens
+ * drops it for a model that doesn't, and passing it unconditionally keeps the
+ * "who is asking" answer in one place.
+ *
+ * An account with NO address supplies nothing, which makes resolveHostGivens
+ * refuse any query against a model that declares the given. An empty string
+ * would be far worse than it looks: `users.email` is nullable, the project's
+ * own guidance is to declare filters as `filter<T>`, and an EMPTY filter means
+ * NO filter — so `where: owner ~ $MALLOYYO_EMAIL` would return every tenant's
+ * rows to the one caller we could not identify. Fail closed.
  */
 export function hostGivensFor(user: { email: string | null }): HostGivens {
   return {
-    values: { [TENANT_EMAIL_GIVEN]: user.email ?? "" },
+    values: user.email ? { [TENANT_EMAIL_GIVEN]: user.email } : {},
     reservedPrefix: RESERVED_GIVEN_PREFIX,
   };
 }

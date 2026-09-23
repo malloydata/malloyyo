@@ -28,6 +28,7 @@ import {
   type ArtifactsResult,
   type DashboardGivenSpec,
   type DashboardGivenSpecsResult,
+  HOST_GIVEN_UNAVAILABLE,
   type RunResult,
 } from "@malloyyo/mcp-engine";
 import { initConnections, withConnectionDiagnostics } from "./connections.js";
@@ -279,6 +280,33 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
   const lease = <T>(fn: (runtime: Runtime, entry: URL) => Promise<T>): Promise<T> =>
     leaseIn(ENTRY, fn);
 
+
+  /**
+   * A refused host-given, answered the way a LOCAL author can act on.
+   *
+   * The engine says only that no value was available — correctly, since on an
+   * instance the caller cannot do anything about it. Here they can: the whole
+   * point of test_givens is to stand in for the signed-in address, and without
+   * this the author gets a true sentence with no next step in it.
+   */
+  const withLocalHint = (r: RunResult): RunResult => {
+    if (r.ok) return r;
+    const hit = (r.problems ?? []).some((p) => p.code === HOST_GIVEN_UNAVAILABLE);
+    if (!hit) return r;
+    return {
+      ...r,
+      problems: (r.problems ?? []).map((p) =>
+        p.code === HOST_GIVEN_UNAVAILABLE
+          ? {
+              ...p,
+              message:
+                `${p.message} Locally, set it in malloy-config.json: ` +
+                `{ "malloyyo": { "test_givens": { "MALLOYYO_EMAIL": "you@example.com" } } }`,
+            }
+          : p,
+      ),
+    };
+  };
   return {
     root: abs,
     entryExists: () => fs.existsSync(path.join(abs, ENTRY)),
@@ -294,22 +322,22 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
     run(runExpr, givens) {
       return lease((runtime, entry) =>
         run(runtime, entry, { runExpr, givens, hostGivens, stableResult: true, rowLimit: 5000 }),
-      );
+      ).then(withLocalHint);
     },
     runIn(entryFile, runExpr, givens) {
       return leaseIn(entryFile, (runtime, entry) =>
         run(runtime, entry, { runExpr, givens, hostGivens, stableResult: true, rowLimit: 5000 }),
-      );
+      ).then(withLocalHint);
     },
     runText(malloy, givens) {
       return lease((runtime, entry) =>
         runRestricted(runtime, entry, malloy, { givens, hostGivens, stableResult: true, rowLimit: 5000 }),
-      );
+      ).then(withLocalHint);
     },
     runTextIn(entryFile, malloy, givens) {
       return leaseIn(entryFile, (runtime, entry) =>
         runRestricted(runtime, entry, malloy, { givens, hostGivens, stableResult: true, rowLimit: 5000 }),
-      );
+      ).then(withLocalHint);
     },
     validateText(malloy) {
       return lease((runtime, entry) => validateRestrictedText(runtime, entry, malloy));

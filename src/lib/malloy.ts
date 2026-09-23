@@ -4,7 +4,13 @@
 import * as malloy from "@malloydata/malloy";
 import { API, type GivenValue } from "@malloydata/malloy";
 import { DuckDBConnection as MalloyDuckDBConnection } from "@malloydata/db-duckdb";
-import { declaredGivenNames, jsonRows, resolveHostGivens, type HostGivens } from "@malloyyo/mcp-engine";
+import {
+  declaredGivenNames,
+  jsonRows,
+  missingHostGivensMessage,
+  resolveHostGivens,
+  type HostGivens,
+} from "@malloyyo/mcp-engine";
 import { reservedGivenError, unsupportedReservedGivens } from "./tenancy";
 import { hostname, networkInterfaces } from "node:os";
 import { randomBytes } from "node:crypto";
@@ -176,6 +182,11 @@ export async function introspectModelWithReader(
   try {
     handle = await buildRuntimeWithReader(reader as malloy.URLReader, configJson);
     const compiled = await handle.runtime.getModel(fileUrl(entryPath));
+    // Same reserved-prefix rule as the CLI push path below. BOTH, because this
+    // is how most models actually arrive — a repo added by URL and refreshed
+    // from GitHub would otherwise sail past a rule `malloyyo publish` enforces.
+    const reserved = unsupportedReservedGivens(declaredGivenNames(compiled));
+    if (reserved.length > 0) return { ok: false, error: reservedGivenError(reserved) };
     // Only the model's public surface — exported sources. Unexported intermediates
     // (e.g. `_base`) stay private.
     const sources = compiled.exportedExplores.map((e) => ({
@@ -671,7 +682,11 @@ async function bindGivens(
 ): Promise<Record<string, unknown> | undefined> {
   if (!hostGivens) return caller;
   const model = await mm.getModel();
-  return resolveHostGivens(caller, hostGivens, declaredGivenNames(model));
+  const merged = resolveHostGivens(caller, hostGivens, declaredGivenNames(model));
+  // Refused, not defaulted — see resolveHostGivens. Thrown because these run
+  // paths report failure by throwing; every caller already catches.
+  if (!merged.ok) throw new Error(missingHostGivensMessage(merged.missing));
+  return merged.givens;
 }
 
 // Enforces core's restricted mode (`loadRestrictedQuery`): no import, no

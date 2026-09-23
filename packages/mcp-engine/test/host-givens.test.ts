@@ -6,6 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  missingHostGivensMessage,
   resolveHostGivens,
   withoutHostGivens,
   dashboardGivenSpecs,
@@ -20,33 +21,52 @@ const FLIGHTS = fixtureUrl('flights.malloy');
 const HOST: HostGivens = { values: { MALLOYYO_EMAIL: 'a@b.com' }, reservedPrefix: 'MALLOYYO_' };
 const DECLARED = new Set(['MALLOYYO_EMAIL', 'REGION']);
 
+const ok = (r: ReturnType<typeof resolveHostGivens>) => (r.ok ? r.givens : `REFUSED:${r.missing}`);
+
 test('the host value is bound, and the caller cannot choose it', () => {
-  assert.deepEqual(resolveHostGivens({ REGION: 'east' }, HOST, DECLARED), {
+  assert.deepEqual(ok(resolveHostGivens({ REGION: 'east' }, HOST, DECLARED)), {
     REGION: 'east',
     MALLOYYO_EMAIL: 'a@b.com',
   });
   // The whole point: a caller asking to be someone else is dropped, not merged.
-  assert.deepEqual(resolveHostGivens({ MALLOYYO_EMAIL: 'c@d.com' }, HOST, DECLARED), {
+  assert.deepEqual(ok(resolveHostGivens({ MALLOYYO_EMAIL: 'c@d.com' }, HOST, DECLARED)), {
     MALLOYYO_EMAIL: 'a@b.com',
   });
 });
 
+test('a declared reserved given the host cannot fill REFUSES the query', () => {
+  // Fail closed. Falling through to the declaration default looks safer than it
+  // is: `filter<string> is f''` is an EMPTY filter, which matches EVERY row, so
+  // the one caller we could not identify would see every tenant's data.
+  const noAddress = { values: {}, reservedPrefix: 'MALLOYYO_' };
+  const r = resolveHostGivens({ REGION: 'east' }, noAddress, DECLARED);
+  assert.equal(r.ok, false);
+  assert.deepEqual(r.ok ? [] : r.missing, ['MALLOYYO_EMAIL']);
+  assert.match(missingHostGivensMessage(['MALLOYYO_EMAIL']), /refused/i);
+
+  // A model that declares nothing reserved is unaffected by the same host.
+  assert.deepEqual(ok(resolveHostGivens({ REGION: 'east' }, noAddress, new Set(['REGION']))), {
+    REGION: 'east',
+  });
+});
+
 test('a reserved name the host does not fill is still not the caller\'s to set', () => {
-  // Refused at publish, but a model from before that rule must not turn into a
-  // caller-settable field that reads as though the server vouched for it.
-  const declared = new Set(['MALLOYYO_ROLE']);
-  assert.equal(resolveHostGivens({ MALLOYYO_ROLE: 'admin' }, HOST, declared), undefined);
+  // Refused at publish on both paths, and refused at RUN too — never quietly
+  // run on a default that reads as though the server had vouched for it.
+  const r = resolveHostGivens({ MALLOYYO_ROLE: 'admin' }, HOST, new Set(['MALLOYYO_ROLE']));
+  assert.equal(r.ok, false);
+  assert.deepEqual(r.ok ? [] : r.missing, ['MALLOYYO_ROLE']);
 });
 
 test('a model that never declared it is left alone', () => {
   // Supplying it would be an error, not a no-op — so the declaration IS the
   // opt-in, and every other model runs exactly as before.
-  assert.deepEqual(resolveHostGivens({ REGION: 'east' }, HOST, new Set(['REGION'])), {
+  assert.deepEqual(ok(resolveHostGivens({ REGION: 'east' }, HOST, new Set(['REGION']))), {
     REGION: 'east',
   });
-  assert.equal(resolveHostGivens(undefined, HOST, new Set()), undefined);
+  assert.equal(ok(resolveHostGivens(undefined, HOST, new Set())), undefined);
   // No host at all (the CLI with no test_givens): the caller's map, untouched.
-  assert.deepEqual(resolveHostGivens({ X: 1 }, undefined, new Set()), { X: 1 });
+  assert.deepEqual(ok(resolveHostGivens({ X: 1 }, undefined, new Set())), { X: 1 });
 });
 
 test('introspection hides what the host fills', () => {
@@ -112,5 +132,15 @@ test('a dashboard draws no control for what the host fills', async () => {
     // Without a host (the CLI with no test_givens) nothing is hidden.
     const unfiltered = await dashboardGivenSpecs(rt, TENANT, 'mine');
     assert.deepEqual(unfiltered.ok ? unfiltered.givens.map((g) => g.name) : [], ['MALLOYYO_EMAIL']);
+  });
+});
+
+test('a run refuses rather than falling back to the default', async () => {
+  await withFixtureRuntime(async (rt) => {
+    const noAddress = { values: {}, reservedPrefix: 'MALLOYYO_' };
+    const r = await runRestricted(rt, TENANT, 'run: mine', { hostGivens: noAddress });
+    assert.equal(r.ok, false);
+    assert.equal(r.problems?.[0]?.code, 'host-given-unavailable');
+    assert.match(r.problems?.[0]?.message ?? '', /MALLOYYO_EMAIL/);
   });
 });

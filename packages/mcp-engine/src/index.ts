@@ -75,6 +75,8 @@ export { jsonRows } from './rows';
 export { validateRestricted, runRestricted } from './restricted';
 export {
   declaredGivenNames,
+  HOST_GIVEN_UNAVAILABLE,
+  missingHostGivensMessage,
   resolveHostGivens,
   withoutHostGivens,
   type HostGivens,

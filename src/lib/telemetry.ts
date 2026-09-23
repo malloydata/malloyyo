@@ -86,7 +86,13 @@ function productionClient(): TelemetryCaptureClient | null {
   return posthog;
 }
 
-export function telemetryConfiguration(source: NodeJS.ProcessEnv = process.env): TelemetryConfiguration {
+/** Env-shaped input. Deliberately NOT NodeJS.ProcessEnv: Next augments that
+    with a REQUIRED NODE_ENV, so `{}` — what a test naturally passes to ask
+    "what happens with nothing set?" — stops satisfying it. These functions read
+    a handful of string keys and should say so. `process.env` still assigns. */
+export type EnvLike = Readonly<Record<string, string | undefined>>;
+
+export function telemetryConfiguration(source: EnvLike = process.env): TelemetryConfiguration {
   const tenantId = source.MALLOYYO_TENANT_ID?.trim() ?? "";
   const hosted = tenantId !== "";
   return {

@@ -13,7 +13,7 @@
     "malloy-update": "node scripts/malloy-update.mjs",
     "preflight": "bash scripts/preflight.sh",
     "build": "npm run build -w packages/mcp-engine && node scripts/build-dashboard-vendor.mjs && next build",
-    "vercel-build": "tsx scripts/run-boot-migrations.ts && npm run build",
+    "vercel-build": "tsx scripts/vercel-build.ts",
     "start": "next start",
     "deploy": "bash scripts/deploy.sh",
     "lint": "eslint",

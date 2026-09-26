@@ -106,36 +106,47 @@ test("no already-applied journal file has been edited", () => {
 // whenever boot migrations were required and did not succeed (pinned
 // end-to-end, against the default-on production server, in
 // scripts/migrate-test.sh).
+/**
+ * `process.env`, writable.
+ *
+ * These tests set and clear NODE_ENV to exercise the production/development
+ * split, and Next augments NodeJS.ProcessEnv with a READ-ONLY NODE_ENV — a
+ * correct rule for application code (nothing should flip its own environment
+ * mid-run) and the wrong one for the test that pins how the app reads it. One
+ * cast, here, rather than a cast per line.
+ */
+const env = process.env as Record<string, string | undefined>;
+
 const savedFlag = process.env.RUN_MIGRATIONS_ON_BOOT;
 const savedNodeEnv = process.env.NODE_ENV;
 const savedVercel = process.env.VERCEL;
 afterEach(() => {
-  if (savedFlag === undefined) delete process.env.RUN_MIGRATIONS_ON_BOOT;
-  else process.env.RUN_MIGRATIONS_ON_BOOT = savedFlag;
-  if (savedNodeEnv === undefined) delete process.env.NODE_ENV;
-  else process.env.NODE_ENV = savedNodeEnv;
-  if (savedVercel === undefined) delete process.env.VERCEL;
-  else process.env.VERCEL = savedVercel;
+  if (savedFlag === undefined) delete env.RUN_MIGRATIONS_ON_BOOT;
+  else env.RUN_MIGRATIONS_ON_BOOT = savedFlag;
+  if (savedNodeEnv === undefined) delete env.NODE_ENV;
+  else env.NODE_ENV = savedNodeEnv;
+  if (savedVercel === undefined) delete env.VERCEL;
+  else env.VERCEL = savedVercel;
   delete globalThis.__malloyyoMigrationOutcome__;
 });
 
 test("bootMigrationsEnabled: on by default in production, off in development", () => {
-  delete process.env.RUN_MIGRATIONS_ON_BOOT;
-  process.env.NODE_ENV = "production";
+  delete env.RUN_MIGRATIONS_ON_BOOT;
+  env.NODE_ENV = "production";
   assert.equal(bootMigrationsEnabled(), true);
-  process.env.NODE_ENV = "development";
+  env.NODE_ENV = "development";
   assert.equal(bootMigrationsEnabled(), false);
-  delete process.env.NODE_ENV;
+  delete env.NODE_ENV;
   assert.equal(bootMigrationsEnabled(), false);
 });
 
 test("bootMigrationsEnabled: explicit setting always wins", () => {
-  process.env.NODE_ENV = "development";
-  process.env.RUN_MIGRATIONS_ON_BOOT = "1";
+  env.NODE_ENV = "development";
+  env.RUN_MIGRATIONS_ON_BOOT = "1";
   assert.equal(bootMigrationsEnabled(), true);
-  process.env.NODE_ENV = "production";
+  env.NODE_ENV = "production";
   for (const off of ["0", "false", "FALSE", " 0 "]) {
-    process.env.RUN_MIGRATIONS_ON_BOOT = off;
+    env.RUN_MIGRATIONS_ON_BOOT = off;
     assert.equal(bootMigrationsEnabled(), false, `expected ${JSON.stringify(off)} to disable`);
   }
 });
@@ -144,45 +155,45 @@ test("bootMigrationsEnabled: explicit setting always wins", () => {
 // reports "have not run" forever. On Vercel the BUILD applies the journal
 // (`vercel-build`), so boot must stand down without anyone having to set a flag.
 test("bootMigrationsEnabled: off on Vercel, where the build migrates instead", () => {
-  delete process.env.RUN_MIGRATIONS_ON_BOOT;
-  process.env.NODE_ENV = "production";
-  process.env.VERCEL = "1";
+  delete env.RUN_MIGRATIONS_ON_BOOT;
+  env.NODE_ENV = "production";
+  env.VERCEL = "1";
   assert.equal(bootMigrationsEnabled(), false);
 
   // …and the readiness gate follows, so a correctly-migrated instance is ready.
   assert.equal(migrationGateError(), null);
 
   // An operator who really wants boot migrations on Vercel can still say so.
-  process.env.RUN_MIGRATIONS_ON_BOOT = "1";
+  env.RUN_MIGRATIONS_ON_BOOT = "1";
   assert.equal(bootMigrationsEnabled(), true);
 
   // Off Vercel, production is unchanged: still on by default.
-  delete process.env.RUN_MIGRATIONS_ON_BOOT;
-  delete process.env.VERCEL;
+  delete env.RUN_MIGRATIONS_ON_BOOT;
+  delete env.VERCEL;
   assert.equal(bootMigrationsEnabled(), true);
 });
 
 test("migrationGateError: instances not running boot migrations are never gated", () => {
-  process.env.NODE_ENV = "production";
-  process.env.RUN_MIGRATIONS_ON_BOOT = "0";
+  env.NODE_ENV = "production";
+  env.RUN_MIGRATIONS_ON_BOOT = "0";
   recordMigrationOutcome({ ok: false, error: "boom" });
   assert.equal(migrationGateError(), null);
 });
 
 test("migrationGateError: fails closed when migrations have not run (production default)", () => {
-  process.env.NODE_ENV = "production";
-  delete process.env.RUN_MIGRATIONS_ON_BOOT;
+  env.NODE_ENV = "production";
+  delete env.RUN_MIGRATIONS_ON_BOOT;
   assert.match(migrationGateError() ?? "", /not run/);
 });
 
 test("migrationGateError: reports a failed migration", () => {
-  process.env.RUN_MIGRATIONS_ON_BOOT = "1";
+  env.RUN_MIGRATIONS_ON_BOOT = "1";
   recordMigrationOutcome({ ok: false, error: "relation borked" });
   assert.equal(migrationGateError(), "relation borked");
 });
 
 test("migrationGateError: clear after a successful run", () => {
-  process.env.RUN_MIGRATIONS_ON_BOOT = "1";
+  env.RUN_MIGRATIONS_ON_BOOT = "1";
   recordMigrationOutcome({ ok: true });
   assert.equal(migrationGateError(), null);
 });

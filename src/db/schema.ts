@@ -151,6 +151,17 @@ export const datasets = pgTable(
     githubRepo: text("github_repo"),
     githubBranch: text("github_branch"),
     githubUseToken: boolean("github_use_token").notNull().default(true),
+    /**
+     * The `MALLOYYO_*` givens this dataset's model must declare, and which the
+     * server supplies on every query against it (src/lib/tenancy.ts).
+     *
+     * DERIVED, then sticky: the first publish whose model declares one records
+     * it here, and a later publish that drops it is REFUSED. A commit can add
+     * tenant scoping to a dataset and can never take it away — removing a
+     * requirement is a deliberate act against this column, not a side effect of
+     * a push. Empty (the default) means an ordinary, unscoped dataset.
+     */
+    requiredGivens: text("required_givens").array().notNull().default(sql`'{}'::text[]`),
     // Last malloyyo-CLI publish attempt (success OR failure). Failures are recorded here
     // for visibility but never become a servable model version — see the transactional
     // publish design (docs/model-publishing-design.md §4.4). lastPublishError is null on success.

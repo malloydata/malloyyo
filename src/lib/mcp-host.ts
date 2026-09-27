@@ -27,7 +27,6 @@ import {
   HOST_ONLY,
   type BoundModel,
   type ExploreHost,
-  type HostGivens,
   type ModelEntry,
   type RunResult,
   type WithHostOnly,
@@ -38,7 +37,7 @@ import {
 type QueryRunResult = WithHostOnly<RunResult & { model_ref?: string }>;
 import { listDashboardsForModel } from "./dashboards";
 import { withModelRuntime } from "./malloy";
-import { hostGivensFor } from "./tenancy";
+import { leaseScope } from "./tenancy";
 import { isAdmin } from "./admin";
 import { logger, serializeErr } from "./logger";
 import {
@@ -122,12 +121,14 @@ function dashboardUrl(baseUrl: string, modelRef: string, name: string): string {
   return `${base}/datasets/${encodeURIComponent(modelRef)}/dashboard/${encodeURIComponent(name)}`;
 }
 
-type DatasetRow = { id: string; name: string };
+type DatasetRow = { id: string; name: string; requiredGivens: string[] };
 
 // Datasets this user may query — via the shared visibility predicate.
 async function visibleDatasets(userId: string): Promise<DatasetRow[]> {
   return db
-    .select({ id: datasets.id, name: datasets.name })
+    // requiredGivens rides along: every lease needs it, and a second lookup per
+    // query to fetch one column would be a query per query.
+    .select({ id: datasets.id, name: datasets.name, requiredGivens: datasets.requiredGivens })
     .from(datasets)
     .where(visibleDatasetWhere(userId))
     .orderBy(desc(datasets.createdAt));
@@ -149,11 +150,19 @@ async function findModelByRef(userId: string, ref: string) {
 async function leaseDataset<T>(
   model: { id: string; source: string },
   fn: (m: BoundModel) => Promise<T>,
-  hostGivens?: HostGivens,
+  scoped?: { required: readonly string[]; user: { email: string | null } },
 ): Promise<T> {
   const files = await modelFileMap(model);
-  return withModelRuntime(files, model.id, (runtime, readSource) =>
-    fn({ runtime, entry: ENTRY, readSource, hostGivens }),
+  // The identity rides on the RUNTIME (core locks it there), and the names the
+  // query must reference ride on the BoundModel. Both come from the dataset,
+  // never from the request. See src/lib/tenancy.ts.
+  const scope = scoped ? leaseScope(scoped.required, scoped.user) : undefined;
+  return withModelRuntime(
+    files,
+    model.id,
+    (runtime, readSource) =>
+      fn({ runtime, entry: ENTRY, readSource, requireGivens: scoped?.required }),
+    scope,
   );
 }
 
@@ -168,10 +177,12 @@ function makeExploreHost(user: User, baseUrl: string): ExploreHost {
       // Same message for "absent" and "not visible" — a probe must not tell them
       // apart (the engine surfaces this thrown text to the agent).
       if (!found) throw new Error(`no model '${ref}' (unknown, or not visible to you)`);
-      // Who is asking, for a model that declared MALLOYYO_EMAIL. Attached to the
-      // LEASE rather than to the query, so no query path can forget it and no
-      // caller-supplied value can reach the binder (src/lib/tenancy.ts).
-      return leaseDataset(found.model, fn, hostGivensFor(user));
+      const required = found.ds.requiredGivens ?? [];
+      return leaseDataset(
+        found.model,
+        fn,
+        required.length > 0 ? { required, user } : undefined,
+      );
     },
     list: async () => {
       const entries: ModelEntry[] = [];

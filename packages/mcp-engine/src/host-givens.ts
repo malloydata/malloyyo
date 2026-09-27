@@ -2,134 +2,64 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * Givens the HOST supplies, which a caller may not choose.
+ * Givens the HOST supplies, and the gate that keeps a query from quietly
+ * ignoring them.
  *
- * A multi-tenant host wants a model to be able to write `$MALLOYYO_EMAIL` and
- * have it mean "whoever is asking" — never "whoever the request said". Two
- * facts about Malloy's own binder shape this (both measured, not assumed):
+ * The SUPPLY is core's job, not ours. A host puts its values on the Runtime
+ * (`new Runtime({ givens })`) and names them in `config.finalizeGivens`; core
+ * then refuses a per-query override, refuses to run when a finalized name has
+ * no value, and hides the name from `Model.givens` so no UI offers to edit it.
+ * This module used to reimplement all three. It does not any more.
  *
- *   - Per-query supply OVERLAYS the runtime layer, so a caller-supplied value
- *     wins. Supplying the identity at the runtime level is therefore not
- *     enough on its own; the caller's key has to go.
- *   - Supplying a given the MODEL DOES NOT DECLARE is an error
- *     (`unknown given 'X'. Model surfaces [...]`), not a no-op. So the host's
- *     value can only be attached when the model asked for it — which is also
- *     exactly the opt-in we want: a model joins the scheme by declaring the
- *     given, and every other model is untouched.
+ * What core cannot know is whether a query that *could* ignore the value
+ * actually does. A model author can keep `given: MALLOYYO_EMAIL` and delete the
+ * `where:` that used it — or extract a new source from a filtered one and leave
+ * the filter behind — and every declaration-shaped check still passes while the
+ * rows stop being scoped. That is the accident this file exists for.
  *
- * Malloy ships a stronger primitive for this, `config.finalizeGivens`: it makes
- * a per-query override THROW and hides the name from introspection. It lives on
- * the Runtime, though, and a host that pools one runtime per model across users
- * (as the hosted app does) would have to fragment that pool per user to use it.
- * Until that trade is worth making, the host enforces the same invariant here,
- * which is why this module is the one place the merge happens.
+ * `PreparedQuery.givens` reports what a query REFERENCES, not what the model
+ * declares, so the gate is a set test. It is cheap and it is honest about its
+ * limits: a query that mentions the given without filtering on it passes, and
+ * so does one whose filter has been widened. Only running the same query under
+ * two identities distinguishes those, which belongs at publish, not here.
  */
 
-import type { GivenValue } from '@malloydata/malloy';
+/** Names a query must reference, or the run is refused. */
+export type RequiredGivens = readonly string[];
 
-export interface HostGivens {
-  /** Name → value. Bound only for the names a model declares. */
-  values: Record<string, GivenValue>;
-  /**
-   * Names under this prefix belong to the host, whether or not it fills them.
-   * A caller's value for one is dropped rather than bound, so a model that
-   * declares a reserved name the host does NOT fill falls back to its
-   * declaration default instead of becoming a caller-settable field that looks
-   * like the host vouches for it.
-   */
-  reservedPrefix?: string;
+/**
+ * Which required names this query never mentions.
+ *
+ * Empty means the gate passes. Note the direction: a query is refused for what
+ * it FAILS to reference, so a query over an unfiltered source stands out while
+ * an ordinary query over a source whose `where:` names the given passes without
+ * mentioning it anywhere — the filter rides on the source, and the reference
+ * comes with it.
+ */
+export function unreferencedGivens(
+  required: RequiredGivens,
+  referenced: Iterable<string>,
+): string[] {
+  if (required.length === 0) return [];
+  const seen = new Set(referenced);
+  return required.filter((name) => !seen.has(name)).sort();
 }
 
-function isHostsToFill(name: string, host: HostGivens): boolean {
+/** What to tell a caller whose query skipped one. */
+export function unreferencedGivensMessage(missing: string[]): string {
   return (
-    name in host.values ||
-    (host.reservedPrefix !== undefined && name.startsWith(host.reservedPrefix))
+    `${missing.join(', ')}: this data is scoped by ${missing.length > 1 ? 'these givens' : 'this given'}, ` +
+    `and the query never references ${missing.length > 1 ? 'them' : 'it'}. A query here must run against a ` +
+    `source that filters on ${missing.length > 1 ? 'them' : 'it'} — put the filter on the source ` +
+    `(\`source: x is … extend { where: owner = $${missing[0]} }\`) so every query over it carries the scope.`
   );
 }
 
-export type HostGivensResult =
-  | { ok: true; givens: Record<string, unknown> | undefined }
-  /** Reserved names this model declares that the host cannot fill right now. */
-  | { ok: false; missing: string[] };
-
-/**
- * The givens to actually supply: the caller's, minus every reserved name,
- * plus the host's values for the names this model declares.
- *
- * `declared` is the model's own surface (`Model.givens`). A host value for a
- * name outside it is dropped rather than passed through — supplying it would
- * fail the query with "unknown given", and a model that never asked to be
- * tenant-scoped should not start erroring because the host has an identity to
- * offer.
- *
- * A caller's reserved-name key is dropped whether or not the model declares it:
- * the name is the host's to fill, and silently ignoring the caller is the
- * correct answer to a request that should never have carried it.
- *
- * FAILS CLOSED. A reserved name the model declares but the host cannot fill
- * comes back as `missing`, and the caller refuses the query. Falling through to
- * the declaration default looks safer than it is: the project's own guidance is
- * to declare filters as `filter<T>`, and an EMPTY filter means "no filter" — so
- * a tenant-scoped source whose identity went unsupplied would return every row
- * rather than none. Verified against a real compile: `filter<string>` bound to
- * an address returns that row, bound to '' returns all of them.
- */
-export function resolveHostGivens(
-  caller: Record<string, unknown> | undefined,
-  host: HostGivens | undefined,
-  declared: ReadonlySet<string>,
-): HostGivensResult {
-  if (!host) return { ok: true, givens: caller };
-  const missing = [...declared].filter((n) => isHostsToFill(n, host) && !(n in host.values)).sort();
-  if (missing.length > 0) return { ok: false, missing };
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(caller ?? {})) {
-    if (isHostsToFill(k, host)) continue;
-    out[k] = v;
-  }
-  for (const [k, v] of Object.entries(host.values)) {
-    if (declared.has(k)) out[k] = v;
-  }
-  return { ok: true, givens: Object.keys(out).length > 0 ? out : undefined };
-}
-
-/**
- * What to tell a caller whose query needs a host value that isn't available.
- *
- * Deliberately says nothing about HOW to supply it: on an instance the answer
- * is "sign in with an address" and there is nothing the caller can do, while in
- * the CLI it is `malloyyo.test_givens`. The host that knows which world it is
- * in appends that (packages/cli/src/host.ts does).
- */
-export const HOST_GIVEN_UNAVAILABLE = 'host-given-unavailable';
-
-export function missingHostGivensMessage(missing: string[]): string {
-  return (
-    `${missing.join(", ")}: filled by the host, not by the query, and no value is ` +
-    `available for this request. Refused rather than run on the declaration ` +
-    `default, which may not be restrictive.`
-  );
-}
-
-/** The names a model declares, as the binder sees them. */
+/** The names a model declares, as the binder sees them. Used at publish time to
+    learn what a dataset requires; a serving runtime cannot see them, because
+    `finalizeGivens` hides finalized names from `Model.givens` by design. */
 export function declaredGivenNames(model: {
   givens?: ReadonlyMap<string, unknown>;
 }): ReadonlySet<string> {
   return new Set(model.givens?.keys() ?? []);
-}
-
-/**
- * Introspection minus the host's names.
- *
- * `query(execute:false)` reports the givens a query needs so an agent can
- * supply them, and a dashboard renders a control for each. Neither should
- * happen for a name the host fills: the agent would waste a turn on a value
- * that gets dropped, and the reader would be handed an identity box to type in.
- */
-export function withoutHostGivens<T extends { name: string }>(
-  specs: readonly T[],
-  host: HostGivens | undefined,
-): T[] {
-  if (!host) return [...specs];
-  return specs.filter((s) => !isHostsToFill(s.name, host));
 }

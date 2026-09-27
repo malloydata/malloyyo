@@ -7,11 +7,9 @@ import { DuckDBConnection as MalloyDuckDBConnection } from "@malloydata/db-duckd
 import {
   declaredGivenNames,
   jsonRows,
-  missingHostGivensMessage,
-  resolveHostGivens,
-  type HostGivens,
+  unreferencedGivens,
+  unreferencedGivensMessage,
 } from "@malloyyo/mcp-engine";
-import { reservedGivenError, unsupportedReservedGivens } from "./tenancy";
 import { hostname, networkInterfaces } from "node:os";
 import { randomBytes } from "node:crypto";
 import { env } from "./env";
@@ -176,17 +174,12 @@ export async function introspectModelWithReader(
   reader: malloy.URLReader | GitHubURLReader,
   entryPath: string,
   configJson?: string,
-): Promise<{ ok: true; sources: SourceInfo[] } | { ok: false; error: string }> {
+): Promise<{ ok: true; sources: SourceInfo[]; declaredGivens: string[] } | { ok: false; error: string }> {
   logger.debug("introspectModel start", { entryPath, hasConfig: !!configJson });
-  let handle: RuntimeHandle | undefined;
+  let handle: RuntimeParts | undefined;
   try {
-    handle = await buildRuntimeWithReader(reader as malloy.URLReader, configJson);
-    const compiled = await handle.runtime.getModel(fileUrl(entryPath));
-    // Same reserved-prefix rule as the CLI push path below. BOTH, because this
-    // is how most models actually arrive — a repo added by URL and refreshed
-    // from GitHub would otherwise sail past a rule `malloyyo publish` enforces.
-    const reserved = unsupportedReservedGivens(declaredGivenNames(compiled));
-    if (reserved.length > 0) return { ok: false, error: reservedGivenError(reserved) };
+    handle = await buildPartsWithReader(reader as malloy.URLReader, configJson, []);
+    const compiled = await runtimeFrom(handle).getModel(fileUrl(entryPath));
     // Only the model's public surface — exported sources. Unexported intermediates
     // (e.g. `_base`) stay private.
     const sources = compiled.exportedExplores.map((e) => ({
@@ -194,7 +187,7 @@ export async function introspectModelWithReader(
       description: e.annotations.forRoute('"')[0]?.content.trim() ?? null,
     }));
     logger.debug("introspectModel ok", { entryPath, sourceCount: sources.length, sources: sources.map((s) => s.name) });
-    return { ok: true, sources };
+    return { ok: true, sources, declaredGivens: [...declaredGivenNames(compiled)] };
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     logger.error("introspectModel failed", { entryPath, hasConfig: !!configJson, error });
@@ -210,24 +203,22 @@ export async function introspectModelWithReader(
 export async function introspectModelFiles(
   files: Map<string, string>,
   entryPath: string,
-): Promise<{ ok: true; sources: SourceInfo[] } | { ok: false; error: string }> {
+): Promise<{ ok: true; sources: SourceInfo[]; declaredGivens: string[] } | { ok: false; error: string }> {
   logger.debug("introspectModelFiles start", { entryPath, fileCount: files.size });
-  let handle: RuntimeHandle | undefined;
+  let handle: RuntimeParts | undefined;
   try {
-    handle = await buildRuntime(files);
-    const compiled = await handle.runtime.getModel(fileUrl(entryPath));
-    // The MALLOYYO_ prefix is this server's (src/lib/tenancy.ts). Refused at
-    // PUBLISH, where the author is standing right there, rather than left to
-    // surface as a given that quietly never gets filled.
-    const reserved = unsupportedReservedGivens(declaredGivenNames(compiled));
-    if (reserved.length > 0) return { ok: false, error: reservedGivenError(reserved) };
+    handle = await buildParts(files);
+    const compiled = await runtimeFrom(handle).getModel(fileUrl(entryPath));
     // Public surface only (exported sources); unexported `_base`-style sources stay private.
     const sources = compiled.exportedExplores.map((e) => ({
       name: e.name,
       description: e.annotations.forRoute('"')[0]?.content.trim() ?? null,
     }));
     logger.debug("introspectModelFiles ok", { entryPath, sourceCount: sources.length });
-    return { ok: true, sources };
+    // What the model DECLARES, for the dataset's requirement (src/lib/tenancy.ts).
+    // Reported rather than judged: the rule needs the dataset's current value,
+    // which this function has no business knowing.
+    return { ok: true, sources, declaredGivens: [...declaredGivenNames(compiled)] };
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     logger.error("introspectModelFiles failed", { entryPath, fileCount: files.size, error });
@@ -307,31 +298,106 @@ function splitFiles(files: Map<string, string>): {
   return { urlMap, configJson };
 }
 
-type RuntimeHandle = {
-  runtime: malloy.Runtime | malloy.SingleConnectionRuntime;
+
+
+/**
+ * The DuckDB world a model gets when it ships no malloy-config.json, expressed
+ * as a config rather than as a hand-built connection.
+ *
+ * Everything here reproduces what `makeConnection()` used to build directly:
+ * external access (models read https:// parquet), a /tmp spill and extension
+ * directory (on Vercel the working dir is READ-ONLY, and DuckDB otherwise dies
+ * with "Failed to create directory .tmp"), and MotherDuck when a token is set.
+ *
+ * It is a config because `finalizeGivens` — the lock that stops a caller
+ * choosing their own identity — lives on MalloyConfig, and a
+ * SingleConnectionRuntime takes no config at all. The CLI already falls back
+ * this way (packages/cli/src/host.ts), so this converges the two.
+ */
+function fallbackConfigJson(): string {
+  const token = env.MOTHERDUCK_TOKEN;
+  return JSON.stringify({
+    connections: {
+      duckdb: {
+        is: "duckdb",
+        enableExternalAccess: true,
+        setupSQL: "SET home_directory='/tmp'; SET temp_directory='/tmp';",
+        ...(token ? { databasePath: "md:", motherDuckToken: token } : {}),
+      },
+    },
+  });
+}
+
+/**
+ * Add the names this server FILLS to the config's finalized set.
+ *
+ * Server-side, into the JSON, before MalloyConfig sees it — never the model
+ * author's to write, and never theirs to remove. Finalizing makes core refuse a
+ * per-query override of these names and refuse to run when one has no value.
+ * See src/lib/tenancy.ts.
+ */
+function withFinalizedGivens(configJson: string, finalize: readonly string[]): string {
+  if (finalize.length === 0) return configJson;
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(configJson) as Record<string, unknown>;
+  } catch {
+    // Malformed config: the model won't load either, and the compiler says so
+    // far better than we would. Hand it back untouched.
+    return configJson;
+  }
+  const existing = Array.isArray(parsed.finalizeGivens) ? (parsed.finalizeGivens as string[]) : [];
+  parsed.finalizeGivens = [...new Set([...existing, ...finalize])];
+  return JSON.stringify(parsed);
+}
+
+/**
+ * What a pool entry holds: the EXPENSIVE, shareable parts.
+ *
+ * Not a Runtime. A Runtime is a givens map, a finalized-name set and a pointer
+ * to the config — a thousand of them cost a millisecond — while the config owns
+ * the connections. Pooling the config and building the Runtime per lease is
+ * what lets each request carry its own identity without a connection per user.
+ */
+type RuntimeParts = {
+  config: malloy.MalloyConfig;
+  urlReader: malloy.URLReader;
+  cacheManager?: malloy.CacheManager;
   cleanup: () => Promise<void>;
 };
 
-// Build a Runtime backed by a pre-supplied URLReader (e.g. GitHubURLReader).
-// configJson, if provided, activates the MalloyConfig path; otherwise falls back to DuckDB.
-// cacheManager, when shared across a pool's entries, gives every connection the
-// same compiled-model cache (a warm hit skips parse/translate/schema).
-async function buildRuntimeWithReader(
+async function buildPartsWithReader(
   reader: malloy.URLReader,
-  configJson?: string,
+  configJson: string | undefined,
+  finalize: readonly string[],
   cacheManager?: malloy.CacheManager,
-): Promise<RuntimeHandle> {
-  if (configJson) {
-    await ensureConnectionTypes();
-    const config = new malloy.MalloyConfig(configJson, {
-      overlays: malloy.defaultConfigOverlays(),
-    });
-    const runtime = new malloy.Runtime({ config, urlReader: reader, cacheManager });
-    return { runtime, cleanup: () => runtime.shutdown("close") };
-  }
-  const conn = makeConnection();
-  const runtime = new malloy.SingleConnectionRuntime({ connection: conn, urlReader: reader, cacheManager });
-  return { runtime, cleanup: () => conn.close() };
+): Promise<RuntimeParts> {
+  await ensureConnectionTypes();
+  const config = new malloy.MalloyConfig(
+    withFinalizedGivens(configJson ?? fallbackConfigJson(), finalize),
+    { overlays: malloy.defaultConfigOverlays() },
+  );
+  return { config, urlReader: reader, cacheManager, cleanup: () => config.shutdown("close") };
+}
+
+/**
+ * Who a lease is for. `givens` are the values this server supplies (the asker's
+ * identity); `finalize` are the names core should lock against per-query
+ * override. Both come from the dataset, never from the request body.
+ */
+export type GivenScope = {
+  givens?: Record<string, malloy.GivenValue>;
+  finalize?: readonly string[];
+};
+
+/** The per-request Runtime: thin, and the only thing that carries identity. */
+function runtimeFrom(parts: RuntimeParts, givens?: Record<string, malloy.GivenValue>): malloy.Runtime {
+  return new malloy.Runtime({
+    config: parts.config,
+    urlReader: parts.urlReader,
+    ...(parts.cacheManager ? { cacheManager: parts.cacheManager } : {}),
+    ...(givens && Object.keys(givens).length > 0 ? { givens } : {}),
+  } as ConstructorParameters<typeof malloy.Runtime>[0]);
 }
 
 /** Run `fn` against a fresh Runtime backed by an on-demand `reader` (e.g. a
@@ -343,11 +409,11 @@ export async function withReaderRuntime<T>(
   configJson: string | undefined,
   fn: (runtime: malloy.Runtime) => Promise<T>,
 ): Promise<T> {
-  const handle = await buildRuntimeWithReader(reader as malloy.URLReader, configJson);
+  const parts = await buildPartsWithReader(reader as malloy.URLReader, configJson, []);
   try {
-    return await fn(handle.runtime as malloy.Runtime);
+    return await fn(runtimeFrom(parts));
   } finally {
-    await handle.cleanup();
+    await parts.cleanup();
   }
 }
 
@@ -355,10 +421,12 @@ export async function withReaderRuntime<T>(
 // MalloyConfig (BigQuery, Postgres, Snowflake, Trino, MySQL, Databricks, DuckDB).
 // Falls back to a MotherDuck DuckDB SingleConnectionRuntime when no config is present.
 // Used only by the cold paths (no cacheKey) — pooled callers go through poolFor().
-async function buildRuntime(files: Map<string, string>): Promise<RuntimeHandle> {
+async function buildParts(
+  files: Map<string, string>,
+  finalize: readonly string[] = [],
+): Promise<RuntimeParts> {
   const { urlMap, configJson } = splitFiles(files);
-  const reader = new malloy.InMemoryURLReader(urlMap);
-  return await buildRuntimeWithReader(reader, configJson);
+  return await buildPartsWithReader(new malloy.InMemoryURLReader(urlMap), configJson, finalize);
 }
 
 // ── Connection pooling ──────────────────────────────────────────────────────
@@ -379,17 +447,17 @@ const MAX_POOLS = 16; // distinct model versions kept warm
 const DEFAULT_POOL_SIZE = 5; // connections per model version
 
 class RuntimePool {
-  private idle: RuntimeHandle[] = [];
+  private idle: RuntimeParts[] = [];
   private size = 0; // built entries (idle + currently leased)
-  private waiters: Array<(e: RuntimeHandle) => void> = [];
+  private waiters: Array<(e: RuntimeParts) => void> = [];
   private draining = false;
 
   constructor(
-    private readonly factory: () => Promise<RuntimeHandle>,
+    private readonly factory: () => Promise<RuntimeParts>,
     private readonly max: number,
   ) {}
 
-  async acquire(): Promise<RuntimeHandle> {
+  async acquire(): Promise<RuntimeParts> {
     const reused = this.idle.pop();
     if (reused) return reused;
     if (this.size < this.max) {
@@ -402,10 +470,10 @@ class RuntimePool {
       }
     }
     // Pool saturated — wait for a release.
-    return new Promise<RuntimeHandle>((resolve) => this.waiters.push(resolve));
+    return new Promise<RuntimeParts>((resolve) => this.waiters.push(resolve));
   }
 
-  release(entry: RuntimeHandle): void {
+  release(entry: RuntimeParts): void {
     if (this.draining) {
       this.size--;
       void entry.cleanup().catch(() => {});
@@ -442,7 +510,7 @@ function poolSizeFromConfig(configJson: string | undefined): number {
   return DEFAULT_POOL_SIZE;
 }
 
-function poolFor(cacheKey: string, files: Map<string, string>): RuntimePool {
+function poolFor(cacheKey: string, files: Map<string, string>, finalize: readonly string[]): RuntimePool {
   const existing = pools.get(cacheKey);
   if (existing) {
     // LRU bump: re-insert as most recently used.
@@ -454,7 +522,7 @@ function poolFor(cacheKey: string, files: Map<string, string>): RuntimePool {
   // One CacheManager shared by every connection in this pool.
   const cacheManager = new malloy.CacheManager(new malloy.InMemoryModelCache());
   const factory = () =>
-    buildRuntimeWithReader(new malloy.InMemoryURLReader(new Map(urlMap)), configJson, cacheManager);
+    buildPartsWithReader(new malloy.InMemoryURLReader(new Map(urlMap)), configJson, finalize, cacheManager);
   const pool = new RuntimePool(factory, poolSizeFromConfig(configJson));
   pools.set(cacheKey, pool);
   if (pools.size > MAX_POOLS) {
@@ -476,22 +544,27 @@ function poolFor(cacheKey: string, files: Map<string, string>): RuntimePool {
 async function withRuntime<T>(
   files: Map<string, string>,
   cacheKey: string | undefined,
-  fn: (runtime: RuntimeHandle["runtime"]) => Promise<T>,
+  fn: (runtime: malloy.Runtime) => Promise<T>,
+  scope: GivenScope = {},
 ): Promise<T> {
+  const finalize = scope.finalize ?? [];
   if (cacheKey) {
-    const pool = poolFor(cacheKey, files);
+    // The finalized set rides in the pool key: it is baked into the MalloyConfig
+    // the pool holds, so a dataset whose requirements changed must not be served
+    // from entries built under the old set.
+    const pool = poolFor(finalize.length ? `${cacheKey}|${finalize.join(",")}` : cacheKey, files, finalize);
     const entry = await pool.acquire();
     try {
-      return await fn(entry.runtime);
+      return await fn(runtimeFrom(entry, scope.givens));
     } finally {
       pool.release(entry);
     }
   }
-  const { runtime, cleanup } = await buildRuntime(files);
+  const parts = await buildParts(files, finalize);
   try {
-    return await fn(runtime);
+    return await fn(runtimeFrom(parts, scope.givens));
   } finally {
-    await cleanup();
+    await parts.cleanup();
   }
 }
 
@@ -506,6 +579,7 @@ export async function withModelRuntime<T>(
   files: Map<string, string>,
   cacheKey: string | undefined,
   fn: (runtime: malloy.Runtime, readSource: (href: string) => string | undefined) => Promise<T>,
+  scope?: GivenScope,
 ): Promise<T> {
   const { urlMap } = splitFiles(files);
   const readSource = (href: string): string | undefined => urlMap.get(href);
@@ -513,9 +587,11 @@ export async function withModelRuntime<T>(
   return withRuntime(files, cacheKey, async (runtime) => {
     // The mcp-engine calls runtime.loadModel(ENTRY) itself, so we can't route it
     // through acquireModel. Instead: when a durable ModelDef exists, override
-    // loadModel(ENTRY) on this leased runtime so the engine rehydrates (no schema
-    // fetch) instead of compiling. Restored on release so the pooled runtime isn't
-    // contaminated. On a cold miss, write-through after the engine has compiled.
+    // loadModel(ENTRY) on this runtime so the engine rehydrates (no schema fetch)
+    // instead of compiling. On a cold miss, write-through after the engine has
+    // compiled. The runtime is built per lease now — the pool holds the config,
+    // not this object — so there is nothing shared left to contaminate, and the
+    // shadow dies with the request.
     let rehydrated = false;
     const rt = runtime as malloy.Runtime;
     if (MODEL_DEF_CACHE && cacheKey) {
@@ -530,7 +606,7 @@ export async function withModelRuntime<T>(
         });
       }
     }
-    try {
+    {
       const result = await fn(rt, readSource);
       // Cold miss: the engine compiled into the pool cache; extract + persist
       // (awaited — a background write would be killed by Vercel's post-response
@@ -539,10 +615,8 @@ export async function withModelRuntime<T>(
         await persistModelDef(cacheKey, () => rt.getModel(entry));
       }
       return result;
-    } finally {
-      if (rehydrated) delete (rt as unknown as Record<string, unknown>).loadModel; // restore prototype method
     }
-  });
+  }, scope);
 }
 
 // ── Durable compiled-ModelDef cache ──────────────────────────────────────────
@@ -665,28 +739,24 @@ export async function describeSourceFields(
 // files) — the /ltool web editor's path.
 //
 /**
- * The givens to actually bind: the caller's, with this server's own values
- * (who is asking) applied last and only where the model declares them.
+ * Refuse a query that never references the givens scoping this data.
  *
- * Here rather than at each call site because these three run paths — the web
- * query surface, dashboard tiles, and ad-hoc dashboard text — are the whole of
- * what reaches Malloy outside the engine, and a path that forgot the merge
- * would silently run a tenant-scoped model with no tenant. `Model.givens` is
- * the model's own surface, so the check costs nothing beyond the materializer
- * we already hold. See src/lib/tenancy.ts for what the values mean.
+ * The same gate the engine applies inside `executeMaterialized`, repeated here
+ * because these two paths compile and run a query themselves — for the ModelDef
+ * cache — rather than going through the engine. A path that skipped it would
+ * serve unscoped rows while looking exactly like one that didn't, which is the
+ * whole failure mode this feature exists to prevent. See ./tenancy.ts.
  */
-async function bindGivens(
-  mm: ModelMat,
-  caller: Record<string, unknown> | undefined,
-  hostGivens: HostGivens | undefined,
-): Promise<Record<string, unknown> | undefined> {
-  if (!hostGivens) return caller;
-  const model = await mm.getModel();
-  const merged = resolveHostGivens(caller, hostGivens, declaredGivenNames(model));
-  // Refused, not defaulted — see resolveHostGivens. Thrown because these run
-  // paths report failure by throwing; every caller already catches.
-  if (!merged.ok) throw new Error(missingHostGivensMessage(merged.missing));
-  return merged.givens;
+async function gateOnUsage(
+  runner: { getPreparedQuery(): Promise<unknown> },
+  requireGivens: readonly string[] | undefined,
+): Promise<void> {
+  if (!requireGivens || requireGivens.length === 0) return;
+  // No try/catch: a failure to prepare is a failure to run, and the caller
+  // reports it. Swallowing it here would open the gate on the way past.
+  const pq = (await runner.getPreparedQuery()) as { givens: ReadonlyMap<string, unknown> };
+  const missing = unreferencedGivens(requireGivens, pq.givens.keys());
+  if (missing.length > 0) throw new Error(unreferencedGivensMessage(missing));
 }
 
 // Enforces core's restricted mode (`loadRestrictedQuery`): no import, no
@@ -704,18 +774,22 @@ export async function runRestrictedMalloyFiles(
   files: Map<string, string>,
   entryPath: string,
   query: string,
-  opts: { rowLimit?: number; cacheKey?: string; hostGivens?: HostGivens } = {},
+  opts: {
+    rowLimit?: number;
+    cacheKey?: string;
+    scope?: GivenScope;
+    requireGivens?: readonly string[];
+  } = {},
 ): Promise<RunResult> {
   const t0 = Date.now();
   return withRuntime(files, opts.cacheKey, async (runtime) => {
     const tBuild = Date.now();
     const { mm, persist } = await acquireModel(runtime, opts.cacheKey, entryPath);
     const runner = mm.loadRestrictedQuery(query);
-    const givens = await bindGivens(mm, undefined, opts.hostGivens);
-    const compileOpts = givens ? { givens: givens as Record<string, GivenValue> } : undefined;
-    const sql = await runner.getSQL(compileOpts);
+    await gateOnUsage(runner, opts.requireGivens);
+    const sql = await runner.getSQL();
     const tCompile = Date.now();
-    const result = await runner.run({ rowLimit: opts.rowLimit ?? DEFAULT_ROW_LIMIT, ...compileOpts });
+    const result = await runner.run({ rowLimit: opts.rowLimit ?? DEFAULT_ROW_LIMIT });
     const tRun = Date.now();
     const rows = jsonRows(result);
     const stableResult = API.util.wrapResult(result);
@@ -733,7 +807,7 @@ export async function runRestrictedMalloyFiles(
       ip: INSTANCE_IP,
     });
     return { sql, rows, rowCount: rows.length, stableResult };
-  });
+  }, opts.scope);
 }
 
 // Run a dashboard's run-expression with given values. `runExpr` is a top-level
@@ -747,16 +821,23 @@ export async function runNamedMalloyFiles(
   entryPath: string,
   runExpr: string,
   givens: Record<string, unknown>,
-  opts: { rowLimit?: number; cacheKey?: string; hostGivens?: HostGivens } = {},
+  opts: {
+    rowLimit?: number;
+    cacheKey?: string;
+    scope?: GivenScope;
+    requireGivens?: readonly string[];
+  } = {},
 ): Promise<RunResult> {
   return withRuntime(files, opts.cacheKey, async (runtime) => {
     const { mm, persist } = await acquireModel(runtime, opts.cacheKey, entryPath);
     const runner = mm.loadQuery(`run: ${runExpr}`);
-    // Values arrive as user JSON; the compiler validates them when binding.
-    const bound = await bindGivens(mm, givens, opts.hostGivens);
+    await gateOnUsage(runner, opts.requireGivens);
+    // Values arrive as user JSON; the compiler validates them when binding. The
+    // server's own values are NOT here — they ride on the runtime, where a
+    // caller cannot reach them.
     const compileOpts =
-      bound && Object.keys(bound).length > 0
-        ? { givens: bound as Record<string, GivenValue> }
+      givens && Object.keys(givens).length > 0
+        ? { givens: givens as Record<string, GivenValue> }
         : undefined;
     const sql = await runner.getSQL(compileOpts);
     const result = await runner.run({ rowLimit: opts.rowLimit ?? DEFAULT_ROW_LIMIT, ...compileOpts });
@@ -764,7 +845,7 @@ export async function runNamedMalloyFiles(
     const stableResult = API.util.wrapResult(result);
     if (persist && opts.cacheKey) await persistModelDef(opts.cacheKey, () => mm.getModel());
     return { sql, rows, rowCount: rows.length, stableResult };
-  });
+  }, opts.scope);
 }
 
 // Compile using a file map — returns SQL + source names.

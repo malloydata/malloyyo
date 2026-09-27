@@ -11,7 +11,7 @@ import type { SourceInfo } from "./malloy";
 // /ltool/[slug] page — don't drag DuckDB into their serverless bundle and 500
 // with "libduckdb.so: cannot open shared object file".
 import { env } from "./env";
-import { hostGivensFor } from "./tenancy";
+import { leaseScope } from "./tenancy";
 import { parseSlug, instanceSlug } from "./slug";
 import { logger, serializeErr } from "./logger";
 import {
@@ -409,7 +409,10 @@ export async function runQueryForWeb(
     const res = await runRestrictedMalloyFiles(files, "index.malloy", malloyQuery, {
       rowLimit: maxRows,
       cacheKey: model.id,
-      hostGivens: hostGivensFor(user),
+      // Identity on the runtime, and the names this query must reference.
+      // Both from the dataset (src/lib/tenancy.ts) — never from the request.
+      scope: leaseScope(ds.requiredGivens, user),
+      requireGivens: ds.requiredGivens,
     });
     const durationMs = Date.now() - t0;
     const capped = res.rows.slice(0, maxRows);
@@ -474,7 +477,10 @@ export async function saveWebQuery(
     const res = await runRestrictedMalloyFiles(files, "index.malloy", malloyQuery, {
       rowLimit: maxRows,
       cacheKey: model.id,
-      hostGivens: hostGivensFor(user),
+      // Identity on the runtime, and the names this query must reference.
+      // Both from the dataset (src/lib/tenancy.ts) — never from the request.
+      scope: leaseScope(ds.requiredGivens, user),
+      requireGivens: ds.requiredGivens,
     });
     const durationMs = Date.now() - t0;
     const capped = res.rows.slice(0, maxRows);

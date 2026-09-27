@@ -1,41 +1,80 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  hostGivensFor,
+  leaseScope,
   isReservedGiven,
+  requirementForPublish,
   reservedGivenError,
   unsupportedReservedGivens,
 } from "./tenancy";
 
-test("the identity comes from the user, and carries the reserved prefix", () => {
-  const h = hostGivensFor({ email: "a@b.com" });
-  assert.deepEqual(h.values, { MALLOYYO_EMAIL: "a@b.com" });
-  // The prefix is what stops a caller setting any other MALLOYYO_* given.
-  assert.equal(h.reservedPrefix, "MALLOYYO_");
+// The rules that keep a scoped dataset from quietly becoming unscoped. The
+// supply itself is core's (finalizeGivens); what is pinned here is the policy
+// around it — see docs/multi-tenant-givens.md.
+
+test("declaring the given is what scopes a dataset", () => {
+  const r = requirementForPublish([], ["MALLOYYO_EMAIL", "REGION"]);
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.ok && r.required, ["MALLOYYO_EMAIL"], "ordinary givens are not requirements");
+  assert.deepEqual(r.ok && r.added, ["MALLOYYO_EMAIL"], "and it is newly recorded");
 });
 
-test("a user with no address supplies NOTHING, so the query is refused", () => {
-  // Not an empty string. users.email is nullable, and `filter<string>` bound to
-  // '' is an EMPTY filter — which matches every row. Supplying nothing makes
-  // resolveHostGivens refuse the query instead. Fail closed.
-  assert.deepEqual(hostGivensFor({ email: null }).values, {});
-  assert.equal(hostGivensFor({ email: "" }).values.MALLOYYO_EMAIL, undefined);
-  // The prefix still travels, so a caller cannot slip one in either.
-  assert.equal(hostGivensFor({ email: null }).reservedPrefix, "MALLOYYO_");
+test("a publish that drops a recorded requirement is REFUSED", () => {
+  // The accident this whole feature exists for: the model stops declaring it,
+  // and without this rule the next publish serves every row to every user.
+  const r = requirementForPublish(["MALLOYYO_EMAIL"], ["REGION"]);
+  assert.equal(r.ok, false);
+  assert.match(r.ok ? "" : r.error, /no longer declares it/);
+  assert.match(r.ok ? "" : r.error, /every row to every user/);
 });
 
-test("only MALLOYYO_EMAIL is supported today", () => {
+test("a requirement is sticky across an ordinary publish", () => {
+  const r = requirementForPublish(["MALLOYYO_EMAIL"], ["MALLOYYO_EMAIL"]);
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.ok && r.required, ["MALLOYYO_EMAIL"]);
+  assert.deepEqual(r.ok && r.added, [], "nothing new to record");
+});
+
+test("an unscoped dataset stays unscoped, and costs nothing", () => {
+  const r = requirementForPublish([], ["REGION", "STATE"]);
+  assert.equal(r.ok, true);
+  assert.deepEqual(r.ok && r.required, []);
+});
+
+test("only the givens this server fills may use the reserved prefix", () => {
   assert.deepEqual(unsupportedReservedGivens(["MALLOYYO_EMAIL", "REGION"]), []);
   assert.deepEqual(unsupportedReservedGivens(["MALLOYYO_ROLE", "MALLOYYO_ORG"]), [
     "MALLOYYO_ORG",
     "MALLOYYO_ROLE",
   ]);
+  const r = requirementForPublish([], ["MALLOYYO_ROLE"]);
+  assert.equal(r.ok, false, "refused at publish, where the author is standing there");
   assert.match(reservedGivenError(["MALLOYYO_ROLE"]), /reserved/);
 });
 
 test("the prefix test is exact", () => {
   assert.equal(isReservedGiven("MALLOYYO_EMAIL"), true);
-  assert.equal(isReservedGiven("MALLOYYO_"), true);
   assert.equal(isReservedGiven("malloyyo_email"), false, "givens are case-sensitive");
   assert.equal(isReservedGiven("MY_MALLOYYO_EMAIL"), false);
+});
+
+test("a lease carries the address, and finalizes every required name", () => {
+  const s = leaseScope(["MALLOYYO_EMAIL"], { email: "a@b.com" });
+  assert.deepEqual(s.givens, { MALLOYYO_EMAIL: "a@b.com" });
+  assert.deepEqual(s.finalize, ["MALLOYYO_EMAIL"], "core locks these against per-query override");
+});
+
+test("no address supplies NOTHING, so core refuses the query", () => {
+  // Not an empty string. users.email is nullable, and `filter<string>` bound to
+  // '' is an EMPTY filter — which matches every row. Supplying nothing leaves
+  // the finalized given with no value, and core refuses to run. Fail closed.
+  const s = leaseScope(["MALLOYYO_EMAIL"], { email: null });
+  assert.deepEqual(s.givens, {});
+  assert.deepEqual(s.finalize, ["MALLOYYO_EMAIL"], "still finalized — the lock does not depend on the value");
+});
+
+test("an unscoped dataset attaches nothing at all", () => {
+  const s = leaseScope([], { email: "a@b.com" });
+  assert.deepEqual(s.givens, {});
+  assert.deepEqual(s.finalize, []);
 });

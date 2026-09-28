@@ -48,6 +48,11 @@ export interface ModelStatus {
   ok: boolean;
   version?: number;
   sources?: Array<{ name: string; description?: string | null }>;
+  /** The MALLOYYO_* givens this dataset is scoped by, after this publish. */
+  requiredGivens?: string[];
+  /** Of those, the ones THIS publish added — printed, because the requirement
+      is sticky and a silent auto-mark cannot be undone by publishing again. */
+  scopedNow?: string[];
   compiledAt?: string | null;
   compileError?: string | null;
   git?: GitInfo;

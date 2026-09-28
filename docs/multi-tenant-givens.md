@@ -114,6 +114,28 @@ the app filters the CONTROLS itself (`visibleGivenSpecs`). The docs say both are
 filtered; measured, only the first is. If that is a bug and gets fixed, the gate
 sees `[]` and refuses every query on a scoped dataset: dark, not open.
 
+## A declaration can arrive by import
+
+A dataset is scoped because its model DECLARES the given — and a declaration
+travels through a non-selective import:
+
+```
+import "../../lib/orders.malloy"            → declares ["MALLOYYO_EMAIL"]
+import { orders } from "../../lib/…"        → declares []
+```
+
+So a shared library that declares the given scopes every dataset that imports
+it whole, including one whose author never intended tenancy. Because the
+requirement is sticky, that is not something they can publish their way out of.
+
+Two consequences worth knowing before it surprises someone:
+
+- publish PRINTS it — `scoped by MALLOYYO_EMAIL`, and a louder line the first
+  time a publish adds one;
+- the escape is a selective import, which surfaces the source without the
+  given. Declaring reserved givens in the dataset's own entry file, rather than
+  in a shared lib, keeps the decision where the dataset is defined.
+
 ## What this catches, and what it does not
 
 Caught:

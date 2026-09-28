@@ -47,7 +47,23 @@
 
 import type { GivenValue } from "@malloydata/malloy";
 
-/** The prefix this server owns. A model may not declare anything else under it. */
+/**
+ * The prefix this server owns. A model may not declare anything else under it,
+ * and the rule is not tidiness — it is the one thing keeping this mechanism
+ * monotonic.
+ *
+ * A supplied given may only NARROW. `$MALLOYYO_EMAIL` appears in an equality
+ * filter: no value means no rows, a wrong value means one tenant's rows. Every
+ * safety property here assumes that shape — the usage gate checks the given is
+ * referenced, and "no value → refuse" is only safe for something that narrows.
+ *
+ * Authority WIDENS. `where: owner = $MALLOYYO_EMAIL or $MALLOYYO_ROLE = 'admin'`
+ * references the given — so it passes the gate — while switching the scoping off
+ * for whoever matches. It is exactly the widened filter nothing mechanical
+ * catches, offered as the ergonomic default. So roles do not become givens: who
+ * may open a dataset is a grant on the dataset, and what they see inside it is
+ * this. Neither layer can undo the other, and that is the point.
+ */
 export const RESERVED_GIVEN_PREFIX = "MALLOYYO_";
 
 /** The one reserved given that exists. The set is deliberately a list: the

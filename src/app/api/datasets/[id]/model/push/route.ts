@@ -390,6 +390,14 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       ok: true,
       version: created.model.version,
       sources: result.sources,
+      // Reported, not just recorded. A dataset becomes scoped by DECLARING the
+      // given, and a declaration can arrive from a shared import the author
+      // never read — `import "../../lib/x.malloy"` surfaces that file's givens,
+      // where `import { thing } from …` does not. Since the requirement is
+      // sticky, a silent auto-mark is one an author cannot publish their way
+      // out of, so say it on the line where it happens.
+      ...(requirement.required.length > 0 ? { requiredGivens: requirement.required } : {}),
+      ...(requirement.added.length > 0 ? { scopedNow: requirement.added } : {}),
       compiledAt: created.model.compiledAt,
       git,
       ...(ds ? {} : { created: true, dataset: created.dataset.name, datasetId: created.dataset.id }),

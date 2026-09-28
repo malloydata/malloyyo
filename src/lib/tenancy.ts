@@ -10,6 +10,7 @@
  *   ##! experimental { givens }
  *   given:
  *     MALLOYYO_EMAIL :: string is ''
+ *     MALLOYYO_ROLES :: string[] is []
  *
  *   source: orders is ... extend { where: owner_email = $MALLOYYO_EMAIL }
  *
@@ -69,9 +70,10 @@ export const RESERVED_GIVEN_PREFIX = "MALLOYYO_";
 /** The one reserved given that exists. The set is deliberately a list: the
     dataset column, the publish check and the lease all take collections, so a
     second one is a value change rather than a code change. */
-export const SUPPLIED_GIVENS = [`${RESERVED_GIVEN_PREFIX}EMAIL`] as const;
+export const TENANT_EMAIL_GIVEN = `${RESERVED_GIVEN_PREFIX}EMAIL`;
+export const TENANT_ROLES_GIVEN = `${RESERVED_GIVEN_PREFIX}ROLES`;
 
-export const TENANT_EMAIL_GIVEN = SUPPLIED_GIVENS[0];
+export const SUPPLIED_GIVENS = [TENANT_EMAIL_GIVEN, TENANT_ROLES_GIVEN] as const;
 
 export function isReservedGiven(name: string): boolean {
   return name.startsWith(RESERVED_GIVEN_PREFIX);
@@ -152,11 +154,15 @@ export function requirementForPublish(
  */
 export function leaseScope(
   required: readonly string[],
-  user: { email: string | null },
+  user: { email: string | null; roles: string[] },
 ): { givens: Record<string, GivenValue>; finalize: readonly string[] } {
   const givens: Record<string, GivenValue> = {};
   for (const name of required) {
+    // An address can be absent (users.email is nullable); a role list cannot —
+    // everyone holds at least MALLOYYO_USER — so only the address has a
+    // "supply nothing and let core refuse" branch.
     if (name === TENANT_EMAIL_GIVEN && user.email) givens[name] = user.email;
+    if (name === TENANT_ROLES_GIVEN) givens[name] = user.roles as unknown as GivenValue;
   }
   return { givens, finalize: required };
 }

@@ -31,6 +31,18 @@ import type { GivenValue } from "@malloydata/malloy";
 
 const RESERVED_PREFIX = "MALLOYYO_";
 
+/**
+ * Server givens whose Malloy type is a list, so a single environment variable
+ * has to become one.
+ *
+ *   MALLOYYO_ROLES=finance,sales   →   ['finance', 'sales']
+ *
+ * Named rather than inferred: the environment only carries strings, and
+ * guessing from the presence of a comma would make a one-role value with a
+ * comma in it silently become two.
+ */
+const LIST_GIVENS = new Set([`${RESERVED_PREFIX}ROLES`]);
+
 export interface ServerGivens {
   /** Values found in the environment, for the names the model declares. */
   givens: Record<string, GivenValue>;
@@ -57,8 +69,13 @@ export function readServerGivens(
   const out: ServerGivens = { givens: {}, missing: [] };
   for (const name of serverFilledNames(declared)) {
     const value = env[name]?.trim();
-    if (value) out.givens[name] = value;
-    else out.missing.push(name);
+    if (!value) {
+      out.missing.push(name);
+      continue;
+    }
+    out.givens[name] = LIST_GIVENS.has(name)
+      ? (value.split(",").map((v) => v.trim()).filter(Boolean) as unknown as GivenValue)
+      : value;
   }
   return out;
 }
@@ -66,7 +83,13 @@ export function readServerGivens(
 /** What to tell an author who has not set one. */
 export function missingServerGivensMessage(missing: string[]): string {
   const example = missing
-    .map((n) => `${n}=${n.endsWith("_EMAIL") ? "you@example.com" : "…"}`)
+    .map((n) =>
+      n.endsWith("_EMAIL")
+        ? `${n}=you@example.com`
+        : LIST_GIVENS.has(n)
+          ? `${n}=finance,sales`
+          : `${n}=…`,
+    )
     .join(" ");
   return (
     `${missing.join(", ")}: filled by a Malloyyo server from whoever is signed in, ` +

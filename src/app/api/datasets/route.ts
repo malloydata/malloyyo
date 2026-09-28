@@ -7,6 +7,7 @@ import { eq, desc, ne, and } from "drizzle-orm";
 import { db, datasets, users } from "@/db";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
+import { canAuthor } from "@/lib/roles";
 import { nameToSlug } from "@/lib/slug";
 import { parseGitHubRepo } from "@/lib/github";
 import { refreshGitHubModel } from "@/lib/github-refresh";
@@ -28,7 +29,11 @@ export async function POST(req: Request) {
     if (err instanceof UnauthorizedError) return NextResponse.json({ error: "sign in required" }, { status: 401 });
     throw err;
   }
-  if (!isAdmin(user)) return NextResponse.json({ error: "admin required" }, { status: 403 });
+  // MALLOYYO_DEVELOPER is the grant for someone who should ship models without
+  // also administering people; admins hold it implicitly (src/lib/roles.ts).
+  if (!canAuthor(user)) {
+    return NextResponse.json({ error: "MALLOYYO_DEVELOPER or MALLOYYO_ADMIN required" }, { status: 403 });
+  }
 
   let raw: unknown;
   try { raw = await req.json(); } catch {

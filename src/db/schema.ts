@@ -66,6 +66,14 @@ export const users = pgTable("users", {
   // findOrCreateExternalUser for an integration's.
   status: userStatus("status").notNull().default("pending"),
   role: userRole("role").notNull().default("member"),
+  /**
+   * Every role this person holds — built-in and your own, in one list.
+   *
+   * Supersedes the single `role` column above, which stays for now because
+   * older rows carry their authority there and `isAdmin()` still reads it. New
+   * grants land here; see src/lib/roles.ts.
+   */
+  roles: text("roles").array().notNull().default(sql`'{}'::text[]`),
   // The stable subject identifier from an external identity provider, for deployments
   // whose sign-in is provided by one rather than by the OAuth providers above. Null
   // everywhere else, and nothing about the default NextAuth path reads it.
@@ -137,6 +145,33 @@ export const authenticators = pgTable(
   (t) => [primaryKey({ columns: [t.userId, t.credentialID] })],
 );
 
+/**
+ * The roles this instance knows about.
+ *
+ * A catalog rather than free text on each user, so the admin UI can offer a
+ * list, a typo cannot silently create a role nobody holds, and a role can be
+ * described ("who should have this?") where it is defined.
+ *
+ * Two namespaces share the table. BUILT-IN roles (`MALLOYYO_*`) say what a
+ * person may DO on this instance and cannot be created or deleted. Everything
+ * else is yours — `finance`, `sales` — and says which datasets a person may
+ * OPEN. The split is the whole access model: capability from the instance,
+ * reach from you.
+ */
+export const roles = pgTable("roles", {
+  /** Lowercase for yours; `MALLOYYO_*` for the built-ins. The primary key,
+      because a role IS its name everywhere else — on a user, on a dataset, and
+      in `$MALLOYYO_ROLES` inside a model. */
+  name: text("name").primaryKey(),
+  description: text("description"),
+  /** Built-ins are seeded and undeletable; the UI hides their delete button and
+      the route refuses anyway. */
+  builtin: boolean("builtin").notNull().default(false),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .default(sql`now()`),
+});
+
 export const datasets = pgTable(
   "datasets",
   {
@@ -162,6 +197,15 @@ export const datasets = pgTable(
      * a push. Empty (the default) means an ordinary, unscoped dataset.
      */
     requiredGivens: text("required_givens").array().notNull().default(sql`'{}'::text[]`),
+    /**
+     * The roles that may OPEN this dataset. Hold one of them and you may query
+     * its sources and read its dashboards; hold none and it is not in your
+     * answer at all — not listed, not queryable.
+     *
+     * Empty is not "everyone": it means nobody but the owner (and anyone, if
+     * `isPublic`). Access only ever widens by someone granting it.
+     */
+    roles: text("roles").array().notNull().default(sql`'{}'::text[]`),
     // Last malloyyo-CLI publish attempt (success OR failure). Failures are recorded here
     // for visibility but never become a servable model version — see the transactional
     // publish design (docs/model-publishing-design.md §4.4). lastPublishError is null on success.
@@ -528,6 +572,12 @@ export const instanceSettings = pgTable("instance_settings", {
   // the EMAIL_ALLOW_LIST era, where seeding records the equivalent policy
   // explicitly (src/lib/access-upgrade.ts).
   accessPolicy: text("access_policy"),
+  /**
+   * The roles a person is given when they are first admitted. Null means the
+   * safe default — `MALLOYYO_USER` alone, so a new arrival can sign in and sees
+   * nothing until someone grants them a dataset-bearing role deliberately.
+   */
+  defaultRoles: text("default_roles").array(),
   updatedAt: timestamp("updated_at", { withTimezone: true })
     .notNull()
     .default(sql`now()`),

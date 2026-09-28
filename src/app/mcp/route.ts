@@ -52,7 +52,7 @@ interface RequestScope {
   /** The whole user, not just the id: a tenant-scoped model binds their email
       (src/lib/tenancy.ts), and that must come from the credential, never the
       request body. */
-  user: { id: string; email: string | null };
+  user: { id: string; email: string | null; roles: string[] };
   hosted: Hosted;
   log: Log;
   /** The URL this client reached us at — what the CLI must use too. */

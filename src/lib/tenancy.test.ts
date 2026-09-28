@@ -59,7 +59,7 @@ test("the prefix test is exact", () => {
 });
 
 test("a lease carries the address, and finalizes every required name", () => {
-  const s = leaseScope(["MALLOYYO_EMAIL"], { email: "a@b.com" });
+  const s = leaseScope(["MALLOYYO_EMAIL"], { email: "a@b.com", roles: ["MALLOYYO_USER"] });
   assert.deepEqual(s.givens, { MALLOYYO_EMAIL: "a@b.com" });
   assert.deepEqual(s.finalize, ["MALLOYYO_EMAIL"], "core locks these against per-query override");
 });
@@ -68,13 +68,24 @@ test("no address supplies NOTHING, so core refuses the query", () => {
   // Not an empty string. users.email is nullable, and `filter<string>` bound to
   // '' is an EMPTY filter — which matches every row. Supplying nothing leaves
   // the finalized given with no value, and core refuses to run. Fail closed.
-  const s = leaseScope(["MALLOYYO_EMAIL"], { email: null });
+  const s = leaseScope(["MALLOYYO_EMAIL"], { email: null, roles: ["MALLOYYO_USER"] });
   assert.deepEqual(s.givens, {});
   assert.deepEqual(s.finalize, ["MALLOYYO_EMAIL"], "still finalized — the lock does not depend on the value");
 });
 
 test("an unscoped dataset attaches nothing at all", () => {
-  const s = leaseScope([], { email: "a@b.com" });
+  const s = leaseScope([], { email: "a@b.com", roles: ["MALLOYYO_USER"] });
   assert.deepEqual(s.givens, {});
   assert.deepEqual(s.finalize, []);
+});
+
+test("a dataset scoped by roles gets the whole list", () => {
+  const s = leaseScope(["MALLOYYO_ROLES"], { email: "a@b.com", roles: ["MALLOYYO_USER", "finance"] });
+  assert.deepEqual(s.givens, { MALLOYYO_ROLES: ["MALLOYYO_USER", "finance"] });
+  assert.deepEqual(s.finalize, ["MALLOYYO_ROLES"], "locked, like the address");
+});
+
+test("both, when a model declares both", () => {
+  const s = leaseScope(["MALLOYYO_EMAIL", "MALLOYYO_ROLES"], { email: "a@b.com", roles: ["finance"] });
+  assert.deepEqual(s.givens, { MALLOYYO_EMAIL: "a@b.com", MALLOYYO_ROLES: ["finance"] });
 });

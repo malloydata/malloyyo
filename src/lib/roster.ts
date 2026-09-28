@@ -18,6 +18,7 @@
 
 import { and, eq, isNull } from "drizzle-orm";
 import { db, invitations, users, type Invitation, type User, type UserRole } from "@/db";
+import { defaultRoles, MALLOYYO_ADMIN } from "./roles";
 import { logger } from "./logger";
 
 export class RosterError extends Error {
@@ -43,11 +44,16 @@ export async function applyUserAction(actor: User, targetId: string, action: Use
     throw new RosterError("you cannot revoke your own access or role");
   }
 
-  const set: Partial<Pick<User, "status" | "role" | "isAdmin">> = {};
+  const set: Partial<Pick<User, "status" | "role" | "isAdmin" | "roles">> = {};
   switch (action) {
     case "approve":
       if (target.status !== "pending") throw new RosterError("only a pending user can be approved");
       set.status = "active";
+      // Approval is the moment someone becomes a member, so it is where the
+      // instance default lands — someone in the queue holds nothing. Only if
+      // they hold nothing already: re-approving must not reset roles an admin
+      // granted while the row sat in the queue.
+      if ((target.roles ?? []).length === 0) set.roles = await defaultRoles();
       break;
     case "deny":
       if (target.status !== "pending") throw new RosterError("only a pending user can be denied");
@@ -65,11 +71,15 @@ export async function applyUserAction(actor: User, targetId: string, action: Use
       if (target.role !== "member") throw new RosterError("already an admin");
       set.role = "admin";
       set.isAdmin = true;
+      set.roles = [...new Set([...(target.roles ?? []), MALLOYYO_ADMIN])];
       break;
     case "demote":
       if (target.role !== "admin") throw new RosterError("not an admin");
       set.role = "member";
       set.isAdmin = false;
+      // Only the capability goes. Dataset-bearing roles are a separate grant and
+      // demoting someone from admin is not a decision about what data they read.
+      set.roles = (target.roles ?? []).filter((r) => r !== MALLOYYO_ADMIN);
       break;
   }
 

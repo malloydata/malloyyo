@@ -38,6 +38,7 @@ type QueryRunResult = WithHostOnly<RunResult & { model_ref?: string }>;
 import { listDashboardsForModel } from "./dashboards";
 import { withModelRuntime } from "./malloy";
 import { leaseScope } from "./tenancy";
+import { rolesOf } from "./roles";
 import { isAdmin } from "./admin";
 import { logger, serializeErr } from "./logger";
 import {
@@ -150,7 +151,7 @@ async function findModelByRef(userId: string, ref: string) {
 async function leaseDataset<T>(
   model: { id: string; source: string },
   fn: (m: BoundModel) => Promise<T>,
-  scoped?: { required: readonly string[]; user: { email: string | null } },
+  scoped?: { required: readonly string[]; user: { email: string | null; roles: string[] } },
 ): Promise<T> {
   const files = await modelFileMap(model);
   // The identity rides on the RUNTIME (core locks it there), and the names the
@@ -181,7 +182,7 @@ function makeExploreHost(user: User, baseUrl: string): ExploreHost {
       return leaseDataset(
         found.model,
         fn,
-        required.length > 0 ? { required, user } : undefined,
+        required.length > 0 ? { required, user: { email: user.email, roles: rolesOf(user) } } : undefined,
       );
     },
     list: async () => {

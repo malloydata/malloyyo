@@ -73,10 +73,19 @@ async function run(
   }
 }
 
-test('the pure gate: refused for what a query FAILS to reference', () => {
+test('the pure gate: refused only when a query references NONE of them', () => {
   assert.deepEqual(unreferencedGivens(REQUIRED, ['MALLOYYO_EMAIL', 'REGION']), []);
   assert.deepEqual(unreferencedGivens(REQUIRED, ['REGION']), ['MALLOYYO_EMAIL']);
   assert.deepEqual(unreferencedGivens([], ['whatever']), [], 'no requirement, no gate');
+
+  // ANY, not all: a model scoped on two axes may filter one source by the
+  // address and another by the roles, and every query need only be scoped by
+  // something. Requiring both everywhere would make declaring two unusable.
+  const both = ['MALLOYYO_EMAIL', 'MALLOYYO_ROLES'];
+  assert.deepEqual(unreferencedGivens(both, ['MALLOYYO_EMAIL']), [], 'scoped by the address alone');
+  assert.deepEqual(unreferencedGivens(both, ['MALLOYYO_ROLES']), [], 'scoped by the roles alone');
+  assert.deepEqual(unreferencedGivens(both, ['REGION']), both, 'scoped by neither is refused');
+
   assert.match(unreferencedGivensMessage(['MALLOYYO_EMAIL']), /scoped by this given/);
 });
 
@@ -111,7 +120,7 @@ test('the declaration removed → the dataset goes dark, not open', async () => 
   // model that drops the declaration cannot serve.
   const gated = await run(NO_DECL, { email: 'a@b.com' });
   assert.equal(gated.ok, false);
-  assert.match(gated.ok ? '' : gated.why, /never references it/);
+  assert.match(gated.ok ? '' : gated.why, /references it nowhere/);
 
   const ungated = await run(NO_DECL, { email: 'a@b.com', gate: false });
   assert.equal(ungated.ok, false, 'core refuses on its own, gate or no gate');
@@ -127,7 +136,7 @@ test('the FILTER removed → refused by the gate, though everything else passes'
 
   const gated = await run(UNSCOPED, { email: 'a@b.com' });
   assert.equal(gated.ok, false, 'the gate catches it');
-  assert.match(gated.ok ? '' : gated.why, /never references it/);
+  assert.match(gated.ok ? '' : gated.why, /references it nowhere/);
 });
 
 test('a source-level filter carries the reference to every query over it', async () => {

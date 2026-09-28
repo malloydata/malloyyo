@@ -28,13 +28,18 @@
 export type RequiredGivens = readonly string[];
 
 /**
- * Which required names this query never mentions.
+ * The required names, when a query references NONE of them. Empty means pass.
  *
- * Empty means the gate passes. Note the direction: a query is refused for what
- * it FAILS to reference, so a query over an unfiltered source stands out while
- * an ordinary query over a source whose `where:` names the given passes without
- * mentioning it anywhere — the filter rides on the source, and the reference
- * comes with it.
+ * ANY, not all. A model may be scoped on more than one axis — one source by the
+ * asker's address, another by the roles they hold — and demanding every name in
+ * every query would make declaring two of them unusable. What the gate is for
+ * is catching a query that is scoped by nothing at all, and one reference is
+ * enough to say it is not.
+ *
+ * Note the direction: a query is refused for what it FAILS to reference, so a
+ * query over an unfiltered source stands out while an ordinary query over a
+ * filtered one passes without mentioning anything — the `where:` rides on the
+ * source, and the reference comes with it.
  */
 export function unreferencedGivens(
   required: RequiredGivens,
@@ -42,15 +47,17 @@ export function unreferencedGivens(
 ): string[] {
   if (required.length === 0) return [];
   const seen = new Set(referenced);
-  return required.filter((name) => !seen.has(name)).sort();
+  if (required.some((name) => seen.has(name))) return [];
+  return [...required].sort();
 }
 
 /** What to tell a caller whose query skipped one. */
 export function unreferencedGivensMessage(missing: string[]): string {
+  const many = missing.length > 1;
   return (
-    `${missing.join(', ')}: this data is scoped by ${missing.length > 1 ? 'these givens' : 'this given'}, ` +
-    `and the query never references ${missing.length > 1 ? 'them' : 'it'}. A query here must run against a ` +
-    `source that filters on ${missing.length > 1 ? 'them' : 'it'} — put the filter on the source ` +
+    `${missing.join(', ')}: this data is scoped by ${many ? 'these givens' : 'this given'}, and the ` +
+    `query references ${many ? 'none of them' : 'it nowhere'}. A query here must run against a source ` +
+    `that filters on ${many ? 'one of them' : 'it'} — put the filter on the source ` +
     `(\`source: x is … extend { where: owner = $${missing[0]} }\`) so every query over it carries the scope.`
   );
 }

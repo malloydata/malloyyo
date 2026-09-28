@@ -7,11 +7,9 @@
 
 import type { GivenValue, QueryMaterializer, Runtime } from '@malloydata/malloy';
 import {
-  declaredGivenNames,
-  HOST_GIVEN_UNAVAILABLE,
-  missingHostGivensMessage,
-  resolveHostGivens,
-  type HostGivens,
+  unreferencedGivens,
+  unreferencedGivensMessage,
+  type RequiredGivens,
 } from './host-givens';
 import { API, MalloyError } from '@malloydata/malloy';
 import { codeProblem, errorProblem, mapProblems } from './problems';
@@ -34,10 +32,11 @@ export interface RunOptions {
       so `unknown`-valued). Coerced to Malloy's `GivenValue` at the compile seam
       below — the compiler is the validator, so callers don't pre-narrow. */
   givens?: Record<string, unknown>;
-  /** Givens the HOST supplies — a tenant identity, say. Applied AFTER `givens`
-      and only for names the model declares, and a caller key of the same name
-      is dropped rather than merged. See ./host-givens. */
-  hostGivens?: HostGivens;
+  /** Names this query MUST reference, or the run is refused. A host scoping
+      data by a given uses this so a query over an unfiltered source cannot
+      quietly return everything. The VALUES come from the Runtime, not here —
+      see ./host-givens. */
+  requireGivens?: RequiredGivens;
   /** Attach the interfaces-format result (API.util.wrapResult) as
       `stable_result` — for host renderers, never sent over MCP. */
   stableResult?: boolean;
@@ -45,7 +44,7 @@ export interface RunOptions {
   retry?: <T>(op: () => Promise<T>) => Promise<T>;
 }
 
-type ExecOptions = Pick<RunOptions, 'rowLimit' | 'givens' | 'stableResult' | 'retry'>;
+type ExecOptions = Pick<RunOptions, 'rowLimit' | 'givens' | 'requireGivens' | 'stableResult' | 'retry'>;
 
 /**
  * Run a materialized query and shape the uniform RunResult. Shared by the
@@ -60,6 +59,35 @@ export async function executeMaterialized(
 ): Promise<RunResult> {
   const rowLimit = opts.rowLimit ?? DEFAULT_ROW_LIMIT;
   const retry = opts.retry ?? (<T>(op: () => Promise<T>) => op());
+  // Scoped data: refuse a query that never references the given that scopes it.
+  // Here rather than at the call sites because every run — open, restricted,
+  // named, ad-hoc — passes through this function, and a path that skipped the
+  // gate would serve unscoped rows while looking exactly like one that didn't.
+  if (opts.requireGivens && opts.requireGivens.length > 0) {
+    try {
+      const pq = (await query.getPreparedQuery()) as unknown as {
+        givens: ReadonlyMap<string, unknown>;
+      };
+      const missing = unreferencedGivens(opts.requireGivens, pq.givens.keys());
+      if (missing.length > 0) {
+        return {
+          ok: false,
+          problems: [
+            ...loadProblems,
+            codeProblem('given-not-referenced', unreferencedGivensMessage(missing), uri),
+          ],
+        };
+      }
+    } catch (e) {
+      // Could not tell — refuse. A gate that opens when it cannot see is not a
+      // gate, and every reason getPreparedQuery throws here is also a reason
+      // the query itself is about to fail.
+      return {
+        ok: false,
+        problems: [...loadProblems, errorProblem(e, uri)],
+      };
+    }
+  }
   // The one wire→Malloy coercion for givens: values are user JSON, validated by
   // the compiler when it binds them (a bad value surfaces as a compile problem).
   const compileOpts = opts.givens
@@ -113,12 +141,10 @@ export async function run(
   let materializer;
   let modelQueries: { named: string[]; unnamed: number };
   let loadProblems: Problem[];
-  let declared: ReadonlySet<string>;
   try {
     materializer = runtime.loadModel(entry);
     const model = await materializer.getModel();
     modelQueries = { named: [...model.queries().named], unnamed: model.queries().unnamed };
-    declared = declaredGivenNames(model);
     loadProblems = mapProblems(model.problems);
   } catch (e) {
     if (e instanceof MalloyError) {
@@ -179,15 +205,5 @@ export async function run(
     query = materializer.loadFinalQuery();
   }
 
-  const merged = resolveHostGivens(opts.givens, opts.hostGivens, declared);
-  if (!merged.ok) {
-    return {
-      ok: false,
-      problems: [
-        ...loadProblems,
-        codeProblem(HOST_GIVEN_UNAVAILABLE, missingHostGivensMessage(merged.missing), entry.href),
-      ],
-    };
-  }
-  return executeMaterialized(query, { ...opts, givens: merged.givens }, loadProblems, (p) => p, entry.href);
+  return executeMaterialized(query, opts, loadProblems, (p) => p, entry.href);
 }

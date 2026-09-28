@@ -19,6 +19,7 @@ import {
   artifactQueries,
   collectDrillTargets,
   dashboardGivenSpecs,
+  declaredGivenNames,
   modelArtifact,
   prepareSource,
   run,
@@ -28,11 +29,14 @@ import {
   type ArtifactsResult,
   type DashboardGivenSpec,
   type DashboardGivenSpecsResult,
-  HOST_GIVEN_UNAVAILABLE,
   type RunResult,
 } from "@malloyyo/mcp-engine";
 import { initConnections, withConnectionDiagnostics } from "./connections.js";
-import { testGivensFromConfig } from "./test-givens.js";
+import {
+  missingServerGivensMessage,
+  readServerGivens,
+  serverFilledNames,
+} from "./server-givens.js";
 
 export type ValidateResult = { ok: true } | { ok: false; error: string };
 
@@ -123,9 +127,6 @@ async function loadConfig(rootUrl: URL, reader: URLReader): Promise<MalloyConfig
 }
 
 export interface ModelRunner {
-  /** Anything unusable in `malloyyo.test_givens` (malloy-config.json), for
-      `lint` to report. Empty when the block is absent or entirely valid. */
-  testGivensWarnings: string[];
   /** Run a dashboard's run-expression (a top-level query name or a
       `<source> -> <view>` path) with the given filter values (the givens). */
   run(runExpr: string, givens: Record<string, unknown>): Promise<RunResult>;
@@ -211,19 +212,47 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
   let configPromise: Promise<MalloyConfig> | null = null;
   const getConfig = () => (configPromise ??= loadConfig(rootUrl, reader));
 
-  // Local stand-ins for the givens the SERVER fills — `malloyyo.test_givens`
-  // in malloy-config.json. Read once, here, because every compile and run in
-  // this package goes through the leases below: a tenant-scoped model then
-  // behaves the same in `dashboard dev`, `bundle`, `lint` and `mcp` as it will
-  // once published. See ./test-givens.ts for why the server must NOT read this.
-  const testGivens = (() => {
-    try {
-      return testGivensFromConfig(fs.readFileSync(path.join(abs, "malloy-config.json"), "utf8"));
-    } catch {
-      return { givens: {}, warnings: [] };
-    }
-  })();
-  const hostGivens = { values: testGivens.givens, reservedPrefix: "MALLOYYO_" };
+  // Local stand-ins for the givens a Malloyyo server fills — read from the
+  // ENVIRONMENT, per model, on first use. Lazy because it needs the model's
+  // declarations, which needs a compile; cached because every lease wants it.
+  //
+  // A missing variable throws rather than defaulting: a tenant-scoped dashboard
+  // that renders empty is indistinguishable from a broken one, and the whole
+  // point of running locally is to see what a reader will see.
+  let scopePromise: Promise<{
+    givens: Record<string, GivenValue>;
+    finalize: string[];
+    missing: string[];
+  }> | null = null;
+  const givenScope = () =>
+    (scopePromise ??= (async () => {
+      // No entry, or an entry that won't compile: nothing to read declarations
+      // from. Both are ordinary here — a repo can be landing-page-only, and a
+      // broken model is the normal state mid-edit — and in both cases the run
+      // that follows reports the real problem far better than a scope error
+      // would. Locally that is a fair trade: the author is the only reader.
+      if (!fs.existsSync(path.join(abs, ENTRY))) return { givens: {}, finalize: [], missing: [] };
+      const config = await getConfig();
+      const { reader: prepared, entry } = prepareSource(reader, { url: path.join(abs, ENTRY) });
+      let model;
+      try {
+        model = await new Runtime({ config, urlReader: prepared }).loadModel(entry).getModel();
+      } catch {
+        return { givens: {}, finalize: [], missing: [] };
+      }
+      const declared = serverFilledNames(declaredGivenNames(model));
+      if (declared.length === 0) return { givens: {}, finalize: [], missing: [] };
+      // Reported, not thrown: `lint`, artifact discovery and the dashboard
+      // bundler all compile without ever running a query, and none of them
+      // needs to know who is asking. Only the run paths below refuse.
+      const found = readServerGivens(declared);
+      // NOT finalized locally: `finalizeGivens` lives in the config file, and the
+      // config here is the author's own. So a `?MALLOYYO_EMAIL=` in the dev URL
+      // still overrides — which is the right local affordance (look at the page
+      // as someone else) and exactly what a published instance forbids. The
+      // thing that must match production is the GATE below, and it does.
+      return { givens: found.givens, finalize: declared, missing: found.missing };
+    })());
 
   // Release connections to 'idle' only when no lease is in flight. 'idle'
   // frees sockets/file locks (so a long-lived host doesn't hold them, and the
@@ -265,7 +294,12 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
   ): Promise<T> {
     const config = await getConfig();
     const { reader: prepared, entry } = prepareSource(reader, { url: path.join(abs, entryFile) });
-    const runtime = new Runtime({ config, urlReader: prepared });
+    const { givens: scoped } = await givenScope();
+    const runtime = new Runtime({
+      config,
+      urlReader: prepared,
+      ...(Object.keys(scoped).length > 0 ? { givens: scoped } : {}),
+    } as ConstructorParameters<typeof Runtime>[0]);
     inFlight++;
     clearIdleTimer();
     try {
@@ -280,38 +314,20 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
   const lease = <T>(fn: (runtime: Runtime, entry: URL) => Promise<T>): Promise<T> =>
     leaseIn(ENTRY, fn);
 
-
-  /**
-   * A refused host-given, answered the way a LOCAL author can act on.
-   *
-   * The engine says only that no value was available — correctly, since on an
-   * instance the caller cannot do anything about it. Here they can: the whole
-   * point of test_givens is to stand in for the signed-in address, and without
-   * this the author gets a true sentence with no next step in it.
-   */
-  const withLocalHint = (r: RunResult): RunResult => {
-    if (r.ok) return r;
-    const hit = (r.problems ?? []).some((p) => p.code === HOST_GIVEN_UNAVAILABLE);
-    if (!hit) return r;
-    return {
-      ...r,
-      problems: (r.problems ?? []).map((p) =>
-        p.code === HOST_GIVEN_UNAVAILABLE
-          ? {
-              ...p,
-              message:
-                `${p.message} Locally, set it in malloy-config.json: ` +
-                `{ "malloyyo": { "test_givens": { "MALLOYYO_EMAIL": "you@example.com" } } }`,
-            }
-          : p,
-      ),
-    };
+  /** The scope, for a path that is about to RUN something. Refuses when a
+      declared server given has no local stand-in — a tenant-scoped page that
+      renders empty is indistinguishable from a broken one. */
+  const runnableScope = async () => {
+    const scope = await givenScope();
+    if (scope.missing.length > 0) throw new Error(missingServerGivensMessage(scope.missing));
+    return scope;
   };
+
+
+
   return {
     root: abs,
     entryExists: () => fs.existsSync(path.join(abs, ENTRY)),
-    /** Anything unusable in `malloyyo.test_givens`, for `lint` to report. */
-    testGivensWarnings: testGivens.warnings,
     async dispose() {
       clearIdleTimer();
       if (!configPromise) return;
@@ -319,25 +335,29 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
       configPromise = null;
       if (config) await config.shutdown("close").catch(() => {});
     },
-    run(runExpr, givens) {
+    async run(runExpr, givens) {
+      const { finalize } = await runnableScope();
       return lease((runtime, entry) =>
-        run(runtime, entry, { runExpr, givens, hostGivens, stableResult: true, rowLimit: 5000 }),
-      ).then(withLocalHint);
+        run(runtime, entry, { runExpr, givens, requireGivens: finalize, stableResult: true, rowLimit: 5000 }),
+      );
     },
-    runIn(entryFile, runExpr, givens) {
+    async runIn(entryFile, runExpr, givens) {
+      const { finalize } = await runnableScope();
       return leaseIn(entryFile, (runtime, entry) =>
-        run(runtime, entry, { runExpr, givens, hostGivens, stableResult: true, rowLimit: 5000 }),
-      ).then(withLocalHint);
+        run(runtime, entry, { runExpr, givens, requireGivens: finalize, stableResult: true, rowLimit: 5000 }),
+      );
     },
-    runText(malloy, givens) {
+    async runText(malloy, givens) {
+      const { finalize } = await runnableScope();
       return lease((runtime, entry) =>
-        runRestricted(runtime, entry, malloy, { givens, hostGivens, stableResult: true, rowLimit: 5000 }),
-      ).then(withLocalHint);
+        runRestricted(runtime, entry, malloy, { givens, requireGivens: finalize, stableResult: true, rowLimit: 5000 }),
+      );
     },
-    runTextIn(entryFile, malloy, givens) {
+    async runTextIn(entryFile, malloy, givens) {
+      const { finalize } = await runnableScope();
       return leaseIn(entryFile, (runtime, entry) =>
-        runRestricted(runtime, entry, malloy, { givens, hostGivens, stableResult: true, rowLimit: 5000 }),
-      ).then(withLocalHint);
+        runRestricted(runtime, entry, malloy, { givens, requireGivens: finalize, stableResult: true, rowLimit: 5000 }),
+      );
     },
     validateText(malloy) {
       return lease((runtime, entry) => validateRestrictedText(runtime, entry, malloy));
@@ -346,12 +366,10 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
       return leaseIn(entryFile, (runtime, entry) => validateRestrictedText(runtime, entry, malloy));
     },
     givensForQuery(runExpr) {
-      return lease((runtime, entry) => dashboardGivenSpecs(runtime, entry, runExpr, { hostGivens }));
+      return lease((runtime, entry) => dashboardGivenSpecs(runtime, entry, runExpr));
     },
     givensForQueryIn(entryFile, runExpr) {
-      return leaseIn(entryFile, (runtime, entry) =>
-        dashboardGivenSpecs(runtime, entry, runExpr, { hostGivens }),
-      );
+      return leaseIn(entryFile, (runtime, entry) => dashboardGivenSpecs(runtime, entry, runExpr));
     },
     artifacts() {
       return lease((runtime, entry) => artifactQueries(runtime, entry));
@@ -368,7 +386,7 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
         // tile that references it carries the authoritative spec.
         const byName = new Map<string, DashboardGivenSpec>();
         for (const tile of tiles) {
-          const specs = await dashboardGivenSpecs(runtime, entry, tile, { hostGivens });
+          const specs = await dashboardGivenSpecs(runtime, entry, tile);
           if (specs.ok) for (const s of specs.givens) if (!byName.has(s.name)) byName.set(s.name, s);
         }
         return { ok: true, givens: [...byName.values()] };
@@ -379,7 +397,7 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
         const byName = new Map<string, DashboardGivenSpec>();
         const out: TileSpec[] = [];
         for (const tile of tiles) {
-          const specs = await dashboardGivenSpecs(runtime, entry, tile, { hostGivens });
+          const specs = await dashboardGivenSpecs(runtime, entry, tile);
           const gvs = specs.ok ? specs.givens : [];
           for (const s of gvs) if (!byName.has(s.name)) byName.set(s.name, s);
           out.push({

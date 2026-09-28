@@ -8,6 +8,7 @@ import { credentialLabel, requireBearer } from "@/lib/bearer-auth";
 import { isAdmin } from "@/lib/admin";
 import { resolveDatasetByRef } from "@/lib/mcp-tools";
 import { introspectModelFiles } from "@/lib/malloy";
+import { requirementForPublish } from "@/lib/tenancy";
 import { nameToSlug } from "@/lib/slug";
 import { logger, serializeErr } from "@/lib/logger";
 import { captureTelemetry } from "@/lib/telemetry";
@@ -240,8 +241,29 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     });
   }
 
+  // What this dataset is scoped by, after this publish. Refuses a model that
+  // drops a requirement the dataset already records — publishing it would
+  // return every row to every user (src/lib/tenancy.ts). Decided here, before
+  // the dry-run answer and before any write, so a refusal leaves nothing behind.
+  const requirement = requirementForPublish(ds?.requiredGivens ?? [], result.declaredGivens);
+  if (!requirement.ok) {
+    logger.info("model push refused", {
+      datasetId: ds?.id,
+      credential: credentialLabel(auth.cred),
+      error: requirement.error,
+    });
+    return json(400, { ok: false, kind: "compile" as FailureKind, error: requirement.error });
+  }
+
   if (dryRun) {
-    return json(200, { ok: true, dryRun: true, sources: result.sources, git, ...(ds ? {} : { wouldCreate: true }) });
+    return json(200, {
+      ok: true,
+      dryRun: true,
+      sources: result.sources,
+      git,
+      ...(requirement.required.length > 0 ? { requiredGivens: requirement.required } : {}),
+      ...(ds ? {} : { wouldCreate: true }),
+    });
   }
 
   try {
@@ -261,9 +283,21 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
               isPublic: false,
               status: "ready",
               readyAt: new Date(),
+              requiredGivens: requirement.required,
             })
             .returning()
         )[0];
+
+      // A model that newly declares a reserved given makes its dataset scoped,
+      // from this version on. Same transaction as the version itself: a dataset
+      // that is scoped by a model it does not serve, or vice versa, is exactly
+      // the inconsistency this feature cannot afford.
+      if (requirement.added.length > 0) {
+        await tx
+          .update(datasets)
+          .set({ requiredGivens: requirement.required })
+          .where(eq(datasets.id, target.id));
+      }
 
       const [latest] = await tx
         .select({ version: malloyModels.version })
@@ -356,6 +390,14 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       ok: true,
       version: created.model.version,
       sources: result.sources,
+      // Reported, not just recorded. A dataset becomes scoped by DECLARING the
+      // given, and a declaration can arrive from a shared import the author
+      // never read — `import "../../lib/x.malloy"` surfaces that file's givens,
+      // where `import { thing } from …` does not. Since the requirement is
+      // sticky, a silent auto-mark is one an author cannot publish their way
+      // out of, so say it on the line where it happens.
+      ...(requirement.required.length > 0 ? { requiredGivens: requirement.required } : {}),
+      ...(requirement.added.length > 0 ? { scopedNow: requirement.added } : {}),
       compiledAt: created.model.compiledAt,
       git,
       ...(ds ? {} : { created: true, dataset: created.dataset.name, datasetId: created.dataset.id }),

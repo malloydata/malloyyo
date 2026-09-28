@@ -1,0 +1,1 @@
+ALTER TABLE "datasets" ADD COLUMN "required_givens" text[] DEFAULT '{}'::text[] NOT NULL;

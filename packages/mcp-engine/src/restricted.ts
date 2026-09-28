@@ -9,17 +9,9 @@
 
 import type { Runtime } from '@malloydata/malloy';
 import { MalloyError } from '@malloydata/malloy';
-import { codeProblem, errorProblem, hasError, mapProblems } from './problems';
+import { errorProblem, hasError, mapProblems } from './problems';
 import type { RunOptions } from './run';
 import { executeMaterialized } from './run';
-import {
-  declaredGivenNames,
-  HOST_GIVEN_UNAVAILABLE,
-  missingHostGivensMessage,
-  resolveHostGivens,
-  withoutHostGivens,
-  type HostGivens,
-} from './host-givens';
 import { describeGiven } from './walker';
 import type { GivenInfo, Problem, QueryValidationResult, RunResult } from './types';
 
@@ -49,7 +41,6 @@ export async function validateRestricted(
   runtime: Runtime,
   entry: URL,
   query: string,
-  opts: { hostGivens?: HostGivens } = {},
 ): Promise<QueryValidationResult> {
   let loadProblems: Problem[];
   let materializer;
@@ -72,10 +63,10 @@ export async function validateRestricted(
       // execute:false returns the generated SQL (compile without running) plus
       // the givens the query references — the confirmatory-inspect channel.
       try { out.sql = (await q.getSQL()).trim(); } catch { /* keep sql absent on a late compile error */ }
-      // Minus the host's own names: an agent told to supply the tenant
-      // identity would spend a turn on a value that then gets dropped.
-      const givens = withoutHostGivens(await queryGivens(q) ?? [], opts.hostGivens);
-      if (givens.length > 0) out.givens = givens;
+      // Names the host finalized are already absent here — core hides them, so
+      // an agent is never asked for a value it is not allowed to supply.
+      const givens = await queryGivens(q);
+      if (givens) out.givens = givens;
     }
     return out;
   } catch (e) {
@@ -91,15 +82,13 @@ export async function runRestricted(
   runtime: Runtime,
   entry: URL,
   query: string,
-  opts: Pick<RunOptions, 'rowLimit' | 'givens' | 'hostGivens' | 'stableResult' | 'retry'> = {},
+  opts: Pick<RunOptions, 'rowLimit' | 'givens' | 'requireGivens' | 'stableResult' | 'retry'> = {},
 ): Promise<RunResult> {
   let loadProblems: Problem[];
   let materializer;
-  let declared: ReadonlySet<string>;
   try {
     materializer = runtime.loadModel(entry);
     const model = await materializer.getModel();
-    declared = declaredGivenNames(model);
     loadProblems = mapProblems(model.problems);
   } catch (e) {
     if (e instanceof MalloyError) {
@@ -109,17 +98,7 @@ export async function runRestricted(
   }
   try {
     const q = materializer.loadRestrictedQuery(query);
-    const merged = resolveHostGivens(opts.givens, opts.hostGivens, declared);
-    if (!merged.ok) {
-      return {
-        ok: false,
-        problems: [
-          ...loadProblems,
-          codeProblem(HOST_GIVEN_UNAVAILABLE, missingHostGivensMessage(merged.missing), entry.href),
-        ],
-      };
-    }
-    return await executeMaterialized(q, { ...opts, givens: merged.givens }, loadProblems, (p) => p, entry.href);
+    return await executeMaterialized(q, opts, loadProblems, (p) => p, entry.href);
   } catch (e) {
     if (e instanceof MalloyError) {
       return { ok: false, problems: [...loadProblems, ...mapProblems(e.problems)] };

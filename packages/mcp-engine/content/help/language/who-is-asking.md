@@ -45,33 +45,31 @@ as though it did. Name your own givens anything else.
 
 ## Running it locally
 
-Locally there is no one asking, so the declaration default applies and a
-tenant-scoped query comes back empty — which looks exactly like a broken
-dashboard. Put a stand-in in `malloy-config.json`:
+Locally there is no one asking, so a tenant-scoped query would come back
+empty — which looks exactly like a broken dashboard. Set the address in the
+environment instead:
 
-```json
-{
-  "malloyyo": {
-    "test_givens": { "MALLOYYO_EMAIL": "you@example.com" }
-  }
-}
+```bash
+MALLOYYO_EMAIL=you@example.com malloyyo dashboard dev
 ```
 
-`malloyyo dashboard dev`, `malloyyo lint` and the CLI's own MCP server bind it
-the way the server binds the real one, so what you see locally is what a reader
-gets. Change the address to see another tenant's view.
+`malloyyo lint` needs nothing: it compiles, it does not run. Anything that
+actually runs a query refuses without a value and names the variable, rather
+than showing you an empty page to debug. Change the address to see another
+tenant's view.
 
-The block is **local only** — the server never reads it. It travels with the
-repo, so if it were honored a repo could name any address and read that
-person's rows.
+Nothing about the identity is committed. On a server the value comes from
+whoever is signed in; the environment is only the local stand-in, because a
+server's environment is ONE value for every request and would hand every user
+the same tenant.
 
 ## Not `malloyyo dashboard bundle`
 
 A bundled site has no one asking, and cannot have: there is no server, the
 model source is inlined into the page, and DuckDB-WASM fetches the data in the
-reader's own browser. `test_givens` does not travel into it either — the
-bundler only introspects, and the reserved givens are filtered out of what it
-writes. So a tenant-scoped dashboard bundles to a page that shows nothing.
+reader's own browser. Nothing supplies the identity there — the bundler only
+introspects, and no environment travels into a static page. So a tenant-scoped
+dashboard bundles to a page that shows nothing.
 
 Do not answer that by loosening the default. `MALLOYYO_EMAIL :: filter<string>
 is f'…'` with anything permissive publishes every row to every visitor, and the

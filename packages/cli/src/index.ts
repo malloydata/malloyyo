@@ -223,8 +223,18 @@ async function publish(
   }
   console.log(
     `✓ published version ${out.version} — ${out.sources?.length ?? 0} source(s)` +
-      (dashboards.length ? `, ${dashboards.length} dashboard(s)` : ""),
+      (dashboards.length ? `, ${dashboards.length} dashboard(s)` : "") +
+      (out.requiredGivens?.length ? `, scoped by ${out.requiredGivens.join(", ")}` : ""),
   );
+  if (out.scopedNow?.length) {
+    // Sticky: only an admin can clear it. If this is a surprise, the likely
+    // cause is a non-selective `import` of a file that declares the given —
+    // `import { thing } from "…"` surfaces the source without the given.
+    console.log(
+      `  ↳ this publish SCOPED the dataset by ${out.scopedNow.join(", ")}. Every query must now ` +
+        `filter on ${out.scopedNow.length > 1 ? "them" : "it"}, and only an admin can undo this.`,
+    );
+  }
 }
 
 async function status(target: string | undefined, opts: { token?: string }): Promise<void> {

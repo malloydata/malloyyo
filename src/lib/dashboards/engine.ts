@@ -26,7 +26,7 @@ import { db, malloyModels } from "@/db";
 import { findByDatasetRef, modelFileMap } from "@/lib/mcp-tools";
 import { runNamedMalloyFiles, withModelRuntime, fileUrl } from "@/lib/malloy";
 import { getDashboard, modelConfigJson, type DashboardDetail } from "./meta";
-import { hostGivensFor, isReservedGiven } from "@/lib/tenancy";
+import { isReservedGiven, leaseScope } from "@/lib/tenancy";
 import { imageHostsFromConfig } from "./image-hosts";
 import { rendersNoData } from "./about";
 
@@ -104,12 +104,14 @@ export async function runDashboard(
   maxRows = 5000,
 ): Promise<DashboardRunResult> {
   const userId = user.id;
-  // Who is asking, for a model that declared MALLOYYO_EMAIL. Both branches
-  // below take it; neither takes it from `givens` (src/lib/tenancy.ts).
-  const hostGivens = hostGivensFor(user);
   const found = await findByDatasetRef(userId, datasetId);
   if (!found) return { ok: false, error: "dataset not found" };
   if (found.ds.status !== "ready") return { ok: false, error: "dataset not ready" };
+  // What this dataset is scoped by: the values go on the runtime (where a
+  // caller cannot reach them) and the names gate what a query must reference.
+  // Both branches below take both; neither reads them from `givens`.
+  const required = found.ds.requiredGivens ?? [];
+  const scope = leaseScope(required, user);
   const a = await getDashboard(userId, datasetId, name);
   if (!a) return { ok: false, error: `dashboard '${name}' not found` };
   const { files, cacheKey } = await dashboardFiles(a);
@@ -141,13 +143,17 @@ export async function runDashboard(
     // the app/engine duplicate @malloydata/malloy installs (same seam as
     // mcp-host.ts) — one runtime object, two identical declaration trees.
     type EngineRuntime = Parameters<typeof runRestricted>[0];
-    const out = await withModelRuntime(files, cacheKey, (runtime) =>
-      runRestricted(runtime as unknown as EngineRuntime, entry, malloyText, {
-        givens: givens ?? {},
-        hostGivens,
-        stableResult: true,
-        rowLimit: maxRows,
-      }),
+    const out = await withModelRuntime(
+      files,
+      cacheKey,
+      (runtime) =>
+        runRestricted(runtime as unknown as EngineRuntime, entry, malloyText, {
+          givens: givens ?? {},
+          requireGivens: required,
+          stableResult: true,
+          rowLimit: maxRows,
+        }),
+      scope,
     );
     if (!out.ok) return { ok: false, error: explainProblems(out.problems ?? []) };
     return { ok: true, stableResult: out.stable_result, rows: out.rows, rowCount: out.row_count ?? 0 };
@@ -160,7 +166,8 @@ export async function runDashboard(
   if (typeof runExpr !== "string") return { ok: false, error: "dashboard manifest has no query" };
   try {
     const res = await runNamedMalloyFiles(files, entryFile, runExpr, givens ?? {}, {
-      hostGivens,
+      scope,
+      requireGivens: required,
       rowLimit: maxRows,
       cacheKey,
     });
@@ -187,9 +194,15 @@ export type DashboardTilesResult =
  *
  * Wrapping the engine call rather than filtering at each use: these specs
  * become the dashboard's CONTROLS, and a reader handed a text box labelled
- * MALLOYYO_EMAIL would reasonably type another address into it — which the
- * binder then drops, so the control would appear to do nothing. Hiding it is
- * the honest rendering of a value the reader does not choose.
+ * MALLOYYO_EMAIL would reasonably type another address into it — which core
+ * then refuses, so the control would appear to do nothing. Hiding it is the
+ * honest rendering of a value the reader does not choose.
+ *
+ * Core hides finalized names from `Model.givens` but NOT from
+ * `PreparedQuery.givens`, which is what these specs come from — and that is
+ * fortunate rather than annoying: the usage gate needs the name to still be
+ * visible there to tell whether a query references it. So the UI filter is
+ * ours, deliberately, and only here.
  */
 async function visibleGivenSpecs(
   rt: Parameters<typeof dashboardGivenSpecs>[0],

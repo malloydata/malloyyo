@@ -8,13 +8,12 @@ CREATE TABLE "roles" (
 ALTER TABLE "datasets" ADD COLUMN "roles" text[] DEFAULT '{}'::text[] NOT NULL;--> statement-breakpoint
 ALTER TABLE "instance_settings" ADD COLUMN "default_roles" text[];--> statement-breakpoint
 ALTER TABLE "users" ADD COLUMN "roles" text[] DEFAULT '{}'::text[] NOT NULL;--> statement-breakpoint
--- The three built-in roles. Capability on this instance, not reach into data:
+-- The built-in roles. Capability on this instance, not reach into data:
 -- a dataset is opened by the roles it lists, and it may list these like any
 -- other. Seeded here so the admin UI has something to show on a fresh install.
 INSERT INTO "roles" ("name", "description", "builtin") VALUES
   ('MALLOYYO_USER', 'Sign in, query the datasets your roles allow, save and share queries, build draft dashboards.', true),
-  ('MALLOYYO_DEVELOPER', 'Everything a user may do, plus create datasets and publish models.', true),
-  ('MALLOYYO_ADMIN', 'Everything a developer may do, plus manage people, roles and instance settings.', true)
+  ('MALLOYYO_ADMIN', 'Everything a user may do, plus create datasets, publish models, and manage people, roles and instance settings.', true)
 ON CONFLICT ("name") DO NOTHING;
 --> statement-breakpoint
 -- Carry existing authority forward. Admins keep administering; everyone else

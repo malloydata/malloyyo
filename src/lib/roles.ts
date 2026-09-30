@@ -27,23 +27,25 @@ import { datasets, db, instanceSettings, users } from "@/db";
 import { env } from "./env";
 
 export const MALLOYYO_USER = "MALLOYYO_USER";
-export const MALLOYYO_DEVELOPER = "MALLOYYO_DEVELOPER";
 export const MALLOYYO_ADMIN = "MALLOYYO_ADMIN";
 
-export const BUILTIN_ROLES = [MALLOYYO_USER, MALLOYYO_DEVELOPER, MALLOYYO_ADMIN] as const;
+export const BUILTIN_ROLES = [MALLOYYO_USER, MALLOYYO_ADMIN] as const;
 
 /**
  * Built-ins that must never be handed out by a default.
  *
  * `MALLOYYO_USER` is a fine admission default — it is the right to sign in and
- * nothing more. These two are not, and the failure is not subtle: on an `open`
- * instance, `default_roles` is applied to every new row at first sign-in
- * (src/lib/admission.ts), so `MALLOYYO_ADMIN` here makes anyone who signs in an
- * instance admin, and `MALLOYYO_DEVELOPER` lets them point a dataset at a repo
- * whose config reads this server's environment. A misconfiguration must fail
- * closed; ticking one box should not be able to fail this wide open.
+ * nothing more. `MALLOYYO_ADMIN` is not, and the failure is not subtle: on an
+ * `open` instance, `default_roles` is applied to every new row at first sign-in
+ * (src/lib/admission.ts), so one ticked box makes anyone who signs in an
+ * instance admin. A misconfiguration must fail closed; a checkbox should not be
+ * able to fail this wide open.
+ *
+ * A list rather than a constant because the set grows the moment a second
+ * capability role exists — and the one just removed, MALLOYYO_DEVELOPER, was
+ * exactly such a role.
  */
-export const NEVER_A_DEFAULT: readonly string[] = [MALLOYYO_DEVELOPER, MALLOYYO_ADMIN];
+export const NEVER_A_DEFAULT: readonly string[] = [MALLOYYO_ADMIN];
 
 /** Admin because the deployment's env says so, not because a row says so — so
     no write to `users` can revoke it, and a UI that pretends otherwise lies. */
@@ -112,12 +114,23 @@ export function hasRole(user: RoleBearing, role: string): boolean {
   return rolesOf(user).includes(role);
 }
 
-/** May create datasets and publish models. Admins can too — the built-ins
-    nest — but a developer is the grant you give someone who should ship models
-    without also administering people. */
+/**
+ * May create datasets and publish models — admins only.
+ *
+ * There WAS a MALLOYYO_DEVELOPER here, for someone who should ship models
+ * without administering people. It was removed because it could not mean that:
+ * a dataset names a repo, that repo's model is compiled by this server, and a
+ * model can define `duckdb.sql(...)` sources and a `malloy-config.json` whose
+ * connection secrets are `{"env": …}` refs resolved against the server's own
+ * environment. Restricted mode gates the QUERY text a caller sends, not the
+ * MODEL text a repo ships. So the role would have read AUTH_SECRET and the
+ * metadata database while the admin page described it as strictly lesser.
+ *
+ * A capability whose name understates its reach is worse than no capability.
+ * The role comes back when compiling a repo's model is contained, not before.
+ */
 export function canAuthor(user: RoleBearing): boolean {
-  const held = rolesOf(user);
-  return held.includes(MALLOYYO_DEVELOPER) || held.includes(MALLOYYO_ADMIN);
+  return rolesOf(user).includes(MALLOYYO_ADMIN);
 }
 
 /**

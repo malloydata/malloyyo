@@ -67,7 +67,7 @@ export default async function AdminRolesPage() {
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 max-w-2xl">
             A role decides which datasets someone may open. Everything a dataset publishes, a
             holder gets — so if two groups need different sources, that is two datasets. The
-            three <code className="text-[11px]">MALLOYYO_</code> roles are built in and say what
+            two <code className="text-[11px]">MALLOYYO_</code> roles are built in and say what
             someone may <em>do</em> here; the rest are yours, and are best named after groups of
             people.
           </p>
@@ -205,9 +205,8 @@ export default async function AdminRolesPage() {
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 max-w-2xl">
             Granted when someone is first admitted. Keep this narrow — with no
             dataset-bearing role here, a new person can sign in and sees nothing until someone
-            grants them one deliberately. <code className="text-[11px]">MALLOYYO_DEVELOPER</code>{" "}
-            and <code className="text-[11px]">MALLOYYO_ADMIN</code> are not offered: on an open
-            instance this list is applied to everyone who signs in.
+            grants them one deliberately. <code className="text-[11px]">MALLOYYO_ADMIN</code> is
+            not offered: on an open instance this list is applied to everyone who signs in.
           </p>
         </div>
         <DefaultRoles

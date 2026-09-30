@@ -29,10 +29,10 @@ export async function POST(req: Request) {
     if (err instanceof UnauthorizedError) return NextResponse.json({ error: "sign in required" }, { status: 401 });
     throw err;
   }
-  // MALLOYYO_DEVELOPER is the grant for someone who should ship models without
-  // also administering people; admins hold it implicitly (src/lib/roles.ts).
+  // Admin only. Creating a dataset means naming a repo this server will compile,
+  // and a model can reach the server's environment — see canAuthor.
   if (!canAuthor(user)) {
-    return NextResponse.json({ error: "MALLOYYO_DEVELOPER or MALLOYYO_ADMIN required" }, { status: 403 });
+    return NextResponse.json({ error: "MALLOYYO_ADMIN required" }, { status: 403 });
   }
 
   let raw: unknown;

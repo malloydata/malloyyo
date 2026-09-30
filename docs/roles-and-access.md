@@ -26,8 +26,14 @@ Everyone has a **list** of roles, not one.
 | role | what it permits |
 |---|---|
 | `MALLOYYO_USER` | sign in, query the datasets your roles allow, save and share queries, build draft dashboards |
-| `MALLOYYO_DEVELOPER` | everything above, plus publish models and create datasets |
-| `MALLOYYO_ADMIN` | everything above, plus manage people, roles and instance settings |
+| `MALLOYYO_ADMIN` | everything above, plus create datasets, publish models, and manage people, roles and instance settings |
+
+Two, not three. There was a `MALLOYYO_DEVELOPER` for someone who should ship
+models without administering people, and it could not mean that: a dataset names
+a repo this server compiles, and a model can define `duckdb.sql(...)` sources and
+a `malloy-config.json` whose connection secrets resolve against the server's own
+environment. Publishing is therefore as reaching as administering, whatever the
+role is called. It comes back when compiling a repo's model is contained.
 
 **Your own roles** say which datasets you may *open* — `finance`, `operations`,
 `sales`, whatever matches how your organisation is actually divided. Name them
@@ -37,7 +43,7 @@ A person typically holds one built-in role and one or more of your own:
 
 ```
 alice@example.com    MALLOYYO_USER, finance
-bob@example.com      MALLOYYO_DEVELOPER, finance, operations
+bob@example.com      MALLOYYO_USER, finance, operations
 carol@example.com    MALLOYYO_ADMIN, finance, operations, sales
 ```
 
@@ -46,10 +52,10 @@ configures. On an open instance keep it narrow — `MALLOYYO_USER` and nothing
 else is a reasonable default, so a new arrival can sign in and see nothing
 until someone grants them a role deliberately.
 
-`MALLOYYO_DEVELOPER` and `MALLOYYO_ADMIN` cannot be admission defaults, and the
-server refuses them rather than hiding them: on an instance that admits anyone
-who signs in, that list is applied to every arrival, so one ticked box would
-hand the capability to whoever finds the URL.
+`MALLOYYO_ADMIN` cannot be an admission default, and the server refuses it
+rather than hiding it: on an instance that admits anyone who signs in, that list
+is applied to every arrival, so one ticked box would hand the instance to
+whoever finds the URL.
 
 Roles may eventually be read from your identity provider instead of being
 managed here, so that a group membership revoked upstream takes effect on the

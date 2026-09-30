@@ -8,7 +8,6 @@ import { datasets, db } from "@/db";
 import {
   BUILTIN_ROLES,
   MALLOYYO_ADMIN,
-  MALLOYYO_DEVELOPER,
   MALLOYYO_USER,
   NEVER_A_DEFAULT,
   canAuthor,
@@ -72,20 +71,23 @@ test("rolesOf: holding nothing means holding NOTHING", () => {
   assert.deepEqual(rolesOf({}), []);
 });
 
-test("canAuthor: developer or admin, nobody else", () => {
-  assert.ok(canAuthor({ roles: [MALLOYYO_DEVELOPER] }));
+test("canAuthor: admins, and nobody else", () => {
+  // There was a MALLOYYO_DEVELOPER here. It is gone: creating a dataset names a
+  // repo this server compiles, and a model can reach the server's environment,
+  // so the role could not mean what its description said. See canAuthor.
   assert.ok(canAuthor({ roles: [MALLOYYO_ADMIN] }));
   assert.ok(canAuthor({ role: "admin" }), "a legacy admin can still author");
   assert.ok(!canAuthor({ roles: [MALLOYYO_USER] }));
   assert.ok(!canAuthor({ roles: ["finance"] }));
+  assert.ok(!canAuthor({ roles: ["MALLOYYO_DEVELOPER"] }), "the removed role grants nothing");
   assert.ok(!canAuthor({}));
 });
 
 test("the privileged built-ins are never an admission default", () => {
   // On an `open` instance default_roles is applied to everyone who signs in, so
-  // either of these here grants it to the internet. MALLOYYO_USER is fine: it is
-  // the right to sign in and nothing else.
-  assert.deepEqual([...NEVER_A_DEFAULT].sort(), [MALLOYYO_ADMIN, MALLOYYO_DEVELOPER].sort());
+  // this one here grants admin to the internet. MALLOYYO_USER is fine: it is the
+  // right to sign in and nothing else.
+  assert.deepEqual([...NEVER_A_DEFAULT], [MALLOYYO_ADMIN]);
   assert.ok(!NEVER_A_DEFAULT.includes(MALLOYYO_USER));
 });
 

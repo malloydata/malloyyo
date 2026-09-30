@@ -90,6 +90,9 @@ type RepoContext = {
   malloyConfig?: string;
   devcontainer?: string;
   sha: string | null;
+  /** What produced this model version, for `malloy_models.generated_by` — a
+      GitHub pull says so, and a `malloyyo publish` says that instead. */
+  origin: string;
   /**
    * Every path in the repo, from one request.
    *
@@ -175,7 +178,43 @@ export async function repoContext(
 
   const sha = await fetchGitHubCommitSha(owner, repo, branch, { useToken });
   const tree = archive ? null : await listGitHubTree(owner, repo, branch, { useToken });
-  return { owner, repo, branch, useToken, slug, malloyConfig, devcontainer, sha, tree, archive };
+  return {
+    owner,
+    repo,
+    branch,
+    useToken,
+    slug,
+    malloyConfig,
+    devcontainer,
+    sha,
+    tree,
+    archive,
+    origin: `github:${slug}@${branch}`,
+  };
+}
+
+/**
+ * A context over an archive that did NOT come from GitHub — `malloyyo publish`
+ * sends the same shape, so the compile path below is identical and there is no
+ * second ingestion to keep in step.
+ */
+export function contextFromArchive(
+  files: Map<string, string>,
+  opts: { slug: string; branch: string; sha: string | null; origin: string; useToken?: boolean },
+): RepoContext {
+  return {
+    owner: "",
+    repo: "",
+    branch: opts.branch,
+    useToken: opts.useToken ?? false,
+    slug: opts.slug,
+    malloyConfig: files.get("malloy-config.json"),
+    devcontainer: files.get(DEVCONTAINER_PATH),
+    sha: opts.sha,
+    tree: null,
+    archive: files,
+    origin: opts.origin,
+  };
 }
 
 /**
@@ -360,7 +399,7 @@ async function writeCompiled(
       datasetId: ds.id,
       version: (latest?.version ?? 0) + 1,
       source: compiled.indexContent,
-      generatedBy: `github:${ctx.slug}@${ctx.branch}`,
+      generatedBy: ctx.origin,
       compiledAt: new Date(),
       sources: compiled.sources,
       // The same commit on every dataset in the repo. Before this, a
@@ -410,6 +449,41 @@ export type RepoRefreshResult = {
 };
 
 /**
+ * Compile every dataset, then write them all in ONE transaction — or write none.
+ *
+ * The heart of "the repo is the unit of publish", and shared by both ways a repo
+ * arrives: a GitHub refresh and a `malloyyo publish`. A repo that half-lands is
+ * the failure this prevents; the datasets that landed look healthy, and the one
+ * that did not is the one nobody checks.
+ */
+export async function compileAndWrite(
+  targets: Array<Pick<Dataset, "id" | "name" | "repoDir" | "requiredGivens">>,
+  ctx: RepoContext,
+  opts: { creating?: boolean } = {},
+): Promise<{
+  refreshed: { id: string; name: string; version: number }[];
+  failed: { id: string; name: string; error: string }[];
+}> {
+  const compiled: { ds: (typeof targets)[number]; c: Compiled }[] = [];
+  const failed: { id: string; name: string; error: string }[] = [];
+  for (const ds of targets) {
+    const r = await compileDataset(ds, ctx, opts);
+    if (r.ok) compiled.push({ ds, c: r.compiled });
+    else failed.push({ id: ds.id, name: ds.name, error: r.error });
+  }
+  if (failed.length > 0) return { refreshed: [], failed };
+
+  const refreshed: { id: string; name: string; version: number }[] = [];
+  await db.transaction(async (tx) => {
+    for (const { ds, c } of compiled) {
+      const written = await writeCompiled(tx, ds, c, ctx);
+      refreshed.push({ id: ds.id, name: ds.name, version: written.version });
+    }
+  });
+  return { refreshed, failed };
+}
+
+/**
  * Refresh every dataset a repo publishes, as one unit.
  *
  * Compile them all; only if every one compiled, write them all in one
@@ -456,14 +530,7 @@ export async function refreshRepo(
     .filter(([dir]) => !covered.has(dir))
     .map(([dir, name]) => ({ name, dir: dir ?? "" }));
 
-  const compiled: { ds: (typeof rows)[number]; c: Compiled }[] = [];
-  const failed: RepoRefreshResult["failed"] = [];
-  for (const ds of targets) {
-    const r = await compileDataset(ds, ctx);
-    if (r.ok) compiled.push({ ds, c: r.compiled });
-    else failed.push({ id: ds.id, name: ds.name, error: r.error });
-  }
-
+  const { refreshed, failed } = await compileAndWrite(targets, ctx);
   if (failed.length > 0) {
     // Loud, because nothing else will be: a trigger-driven refusal has no exit
     // code and no reader. Every dataset keeps serving what it already had.
@@ -476,14 +543,6 @@ export async function refreshRepo(
     });
     return { refreshed: [], failed, unpublished, unclaimed, sha: ctx.sha };
   }
-
-  const refreshed: RepoRefreshResult["refreshed"] = [];
-  await db.transaction(async (tx) => {
-    for (const { ds, c } of compiled) {
-      const written = await writeCompiled(tx, ds, c, ctx);
-      refreshed.push({ id: ds.id, name: ds.name, version: written.version });
-    }
-  });
 
   logger.info("repo refreshed", {
     repo: repoSlug,

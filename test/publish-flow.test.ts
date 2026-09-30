@@ -42,6 +42,7 @@ import {
 import { createApiToken } from "@/lib/api-tokens";
 import { POST as pushRoute } from "@/app/api/datasets/[id]/model/push/route";
 import { GET as statusRoute } from "@/app/api/datasets/[id]/model/status/route";
+import { POST as repoPushRoute } from "@/app/api/repos/push/route";
 import { GET as draftListRoute, POST as draftSaveRoute } from "@/app/api/datasets/[id]/drafts/route";
 import { GET as draftGetRoute, POST as draftPromoteRoute } from "@/app/api/datasets/[id]/drafts/[slug]/route";
 import { GET as whoamiRoute } from "@/app/api/cli/whoami/route";
@@ -82,6 +83,9 @@ const ROUTES: Array<{ method: string; pattern: RegExp; handler: Handler; params?
     handler: draftPromoteRoute,
     params: ["id", "slug"],
   },
+  // The repo IS the unit of publish, so it has a route of its own: one archive,
+  // every dataset in it, one transaction.
+  { method: "POST", pattern: /^\/api\/repos\/push$/, handler: repoPushRoute, params: [] },
   { method: "GET", pattern: /^\/api\/cli\/(whoami)$/, handler: whoamiRoute },
 ];
 
@@ -1061,4 +1065,100 @@ test("a reserved given this server does not fill is refused at publish", async (
   assert.notEqual(r.code, 0);
   assert.match(`${r.stdout}${r.stderr}`, /reserved/);
   assert.equal((await datasetRows(name)).length, 0, "a refused publish creates no dataset");
+});
+
+// ── The repo is the unit of publish ─────────────────────────────────────────
+//
+// `malloyyo publish --repo` packs the whole repo and sends it as one archive —
+// the same shape GitHub hands the server for a repo it pulls — and every dataset
+// in it lands together or none does.
+
+const REPO_SLUG = `lloydtabb/repo_flow_${RUN}`;
+
+/** A repo with a `datasets/` directory: one directory per dataset. */
+function makeRepo(names: string[], opts: { broken?: string } = {}): string {
+  const dir = mkdtempSync(join(tmpdir(), "malloyyo-repo-"));
+  projects.push(dir);
+  writeFileSync(
+    join(dir, "malloy-config.json"),
+    JSON.stringify(
+      { connections: { duckdb: { is: "duckdb" } }, malloyyo: { targets: { test: { url: serverUrl } } } },
+      null,
+      2,
+    ),
+  );
+  for (const name of names) {
+    const d = join(dir, "datasets", name);
+    mkdirSync(d, { recursive: true });
+    writeFileSync(
+      join(d, "index.malloy"),
+      name === opts.broken ? "source: oops is no_such_source extend { }" : MODEL,
+    );
+  }
+  return dir;
+}
+
+test("a repo publishes every dataset it holds, in one request", async () => {
+  const names = [`rf_a_${RUN}`, `rf_b_${RUN}`];
+  const dir = makeRepo(names);
+  const r = await runCli(
+    ["publish", "-i", serverUrl, "--repo", REPO_SLUG, "--create-datasets", "--token", token],
+    dir,
+  );
+  assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`);
+
+  for (const name of names) {
+    const [ds] = await datasetRows(name);
+    assert.ok(ds, `${name} was created`);
+    assert.equal(ds.githubRepo, REPO_SLUG, "…and belongs to the repo that published it");
+    assert.equal(ds.repoDir, `datasets/${name}`, "…at its own directory");
+    assert.equal((await models(ds.id)).length, 1);
+  }
+});
+
+test("a repo with a broken dataset publishes NOTHING", async () => {
+  // The property atomicity exists for. The datasets that would have landed look
+  // healthy, and the one that did not is the one nobody checks.
+  const names = [`rf_c_${RUN}`, `rf_d_${RUN}`];
+  const good = makeRepo(names);
+  assert.equal(
+    (await runCli(
+      ["publish", "-i", serverUrl, "--repo", REPO_SLUG, "--create-datasets", "--token", token],
+      good,
+    )).code,
+    0,
+  );
+  const before = await Promise.all(names.map(async (n) => (await models((await datasetRows(n))[0].id)).length));
+
+  const broken = makeRepo(names, { broken: names[1] });
+  const r = await runCli(
+    ["publish", "-i", serverUrl, "--repo", REPO_SLUG, "--token", token, "--skip-lint"],
+    broken,
+  );
+  assert.notEqual(r.code, 0, "the publish must fail");
+
+  const after = await Promise.all(names.map(async (n) => (await models((await datasetRows(n))[0].id)).length));
+  assert.deepEqual(after, before, "no dataset gained a version — not even the one that compiled");
+});
+
+test("a dataset the instance does not have is refused until --create-datasets", async () => {
+  const dir = makeRepo([`rf_e_${RUN}`]);
+  const r = await runCli(["publish", "-i", serverUrl, "--repo", REPO_SLUG, "--token", token], dir);
+  assert.notEqual(r.code, 0);
+  assert.match(`${r.stdout}${r.stderr}`, /not on this instance yet/);
+  assert.equal((await datasetRows(`rf_e_${RUN}`)).length, 0, "and nothing was created");
+});
+
+test("--dataset and --repo each refuse the layout they cannot address", async () => {
+  // Backward compatibility is the requirement: --dataset still means one dataset,
+  // and says so plainly when the repo holds several.
+  const multi = makeRepo([`rf_f_${RUN}`, `rf_g_${RUN}`]);
+  const a = await runCli(["publish", "-i", serverUrl, "--dataset", "whatever", "--token", token], multi);
+  assert.notEqual(a.code, 0);
+  assert.match(`${a.stdout}${a.stderr}`, /--dataset cannot say which/);
+
+  const single = makeProject(`rf_h_${RUN}`);
+  const b = await runCli(["publish", "-i", serverUrl, "--repo", REPO_SLUG, "--token", token], single);
+  assert.notEqual(b.code, 0);
+  assert.match(`${b.stdout}${b.stderr}`, /--repo has nothing to name/);
 });

@@ -164,3 +164,43 @@ export function gitInfo(dir: string): GitInfo {
     return {};
   }
 }
+
+/**
+ * Every file in the repo the server could need, repo-relative.
+ *
+ * `gatherDirectory` answers this for ONE dataset and returns only `.malloy`,
+ * because the old wire format carried dashboards separately. A repo archive
+ * carries the repo, so the components come along in it — and the server keeps
+ * each dataset's own transitive closure out of what it is sent, so sending a
+ * little more than one dataset needs costs nothing.
+ *
+ * Still not everything: a model repo may hold committed data or built docs, and
+ * those are neither compiled nor stored. Same extensions the server's extractor
+ * keeps, so what is packed is what would survive the trip anyway.
+ */
+export function gatherRepoFiles(dir: string): Map<string, string> {
+  const KEEP = new Set([".malloy", ".json", ".jsx", ".tsx", ".ts", ".js", ".md"]);
+  const out = new Map<string, string>();
+
+  const walk = (cur: string): void => {
+    for (const entry of readdirSync(cur)) {
+      if (entry.startsWith(".") || SKIP_DIRS.has(entry)) continue;
+      const full = join(cur, entry);
+      if (statSync(full).isDirectory()) {
+        walk(full);
+        continue;
+      }
+      const dot = entry.lastIndexOf(".");
+      if (dot === -1 || !KEEP.has(entry.slice(dot).toLowerCase())) continue;
+      out.set(relative(dir, full).split(sep).join("/"), readFileSync(full, "utf8"));
+    }
+  };
+  walk(dir);
+
+  // Explicit, because walk() skips every dotted entry — see DEVCONTAINER_PATH.
+  const devcontainer = join(dir, ...DEVCONTAINER_PATH.split("/"));
+  if (existsSync(devcontainer)) {
+    out.set(DEVCONTAINER_PATH, readFileSync(devcontainer, "utf8"));
+  }
+  return out;
+}

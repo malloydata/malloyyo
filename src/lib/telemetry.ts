@@ -18,7 +18,14 @@ const POSTHOG_PROJECT_TOKEN = "phc_BAR8UTgMWRi3gbpqgcQDYyngn5joRKGifU9GWJV9KA6R"
 
 export type QueryEntrypoint = "mcp" | "ltool" | "dashboard" | "ask" | "chat";
 export type TelemetryOutcome = "success" | "error";
-export type ModelPublishMethod = "github_create" | "github_refresh" | "github_webhook" | "cli_push";
+export type ModelPublishMethod =
+  | "github_create"
+  | "github_refresh"
+  | "github_webhook"
+  | "cli_push"
+  /** A whole repo published at once — `malloyyo publish --repo`, several
+      datasets in one transaction. Distinct from `cli_push`, which is one. */
+  | "cli_repo_push";
 export type McpToolName = "list_sources" | "describe_source" | "open_share_link" | "yo_help" | "other";
 
 export type TelemetryEvent =

@@ -74,6 +74,14 @@ export { run, executeMaterialized, DEFAULT_ROW_LIMIT, type RunOptions } from './
 export { jsonRows } from './rows';
 export { validateRestricted, runRestricted } from './restricted';
 export {
+  ArchiveURLReader,
+  archiveDir,
+  archiveEntries,
+  buildTarGz,
+  extractTarGz,
+  type Tarball,
+} from './tarball';
+export {
   DATASETS_DIR,
   ENTRY_FILE,
   layoutFromListing,

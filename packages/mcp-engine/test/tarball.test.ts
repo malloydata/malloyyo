@@ -1,11 +1,10 @@
 // Copyright (c) The Malloy Foundation
 // SPDX-License-Identifier: MIT
 
-import "./unit-test-env";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { gzipSync } from "node:zlib";
-import { archiveDir, archiveEntries, ArchiveURLReader, extractTarGz } from "./tarball";
+import { archiveDir, archiveEntries, ArchiveURLReader, buildTarGz, extractTarGz } from '../src/tarball';
 
 // The repo arrives as ONE archive — from GitHub, and (soon) from the CLI. The
 // parser is hand-written rather than a dependency, so the formats GitHub
@@ -190,4 +189,49 @@ test("a corrupt archive is an error, not a silently empty repo", () => {
   // "No files" and "could not read" must not look the same: one publishes
   // nothing, the other should refuse.
   assert.throws(() => extractTarGz(Buffer.from("not a gzip at all")), /not a gzipped archive/);
+});
+
+// ── Round trip ──────────────────────────────────────────────────────────────
+
+test("what the CLI packs is what the server extracts", () => {
+  // The equivalence the whole arrangement rests on. `malloyyo publish` builds an
+  // archive and the server unpacks it; if these two ever drift, a repo publishes
+  // differently depending on which way it arrived — which is precisely what
+  // having one format is meant to prevent.
+  const repo = new Map([
+    ["malloy-config.json", '{"connections":{"duckdb":{"is":"duckdb"}}}'],
+    ["datasets/babynames/index.malloy", "import { baby_names } from 'baby_names.malloy'"],
+    ["datasets/babynames/baby_names.malloy", "source: baby_names is duckdb.table('x.parquet')"],
+    ["datasets/babynames/dashboards/name_explorer.malloy", "run: baby_names -> { select: * }"],
+    ["datasets/multi_tenant/index.malloy", "given:\n  MALLOYYO_EMAIL :: string is ''"],
+  ]);
+  const out = extractTarGz(buildTarGz(repo));
+  assert.deepEqual([...out.files.keys()].sort(), [...repo.keys()].sort());
+  for (const [path, content] of repo) {
+    assert.equal(out.files.get(path), content, `${path} survived the round trip`);
+  }
+  assert.deepEqual(out.skipped, []);
+});
+
+test("round trip: a path too long for the 100-byte name field", () => {
+  // ustar splits at a slash into name + prefix. A real dataset path —
+  // datasets/<name>/dashboards/<name>.malloy — passes 100 bytes easily once the
+  // names are words rather than letters.
+  const long =
+    "datasets/customer_reports_by_organization/dashboards/quarterly_revenue_by_segment_and_region_detail.malloy";
+  assert.ok(long.length > 100, "the fixture is actually long enough to matter");
+  const out = extractTarGz(buildTarGz(new Map([[long, "run: x -> { select: * }"], ["index.malloy", "a"]])));
+  assert.equal(out.files.get(long), "run: x -> { select: * }");
+});
+
+test("an archive the CLI builds needs no wrapper directory, and the reader agrees", () => {
+  // GitHub wraps; the CLI does not. Both have to arrive repo-relative.
+  const out = extractTarGz(buildTarGz(new Map([["index.malloy", "a"], ["dashboards/x.malloy", "b"]])));
+  assert.deepEqual([...out.files.keys()].sort(), ["dashboards/x.malloy", "index.malloy"]);
+});
+
+test("a path that cannot fit any tar header is refused, not truncated", () => {
+  // Silently shortening a path would publish a file under the wrong name.
+  const absurd = "datasets/" + "x".repeat(200) + "/" + "y".repeat(120) + ".malloy";
+  assert.throws(() => buildTarGz(new Map([[absurd, "a"]])), /path too long for a tar header/);
 });

@@ -50,10 +50,12 @@ export async function applyUserAction(actor: User, targetId: string, action: Use
       if (target.status !== "pending") throw new RosterError("only a pending user can be approved");
       set.status = "active";
       // Approval is the moment someone becomes a member, so it is where the
-      // instance default lands — someone in the queue holds nothing. Only if
-      // they hold nothing already: re-approving must not reset roles an admin
-      // granted while the row sat in the queue.
-      if ((target.roles ?? []).length === 0) set.roles = await defaultRoles();
+      // instance default lands. A UNION rather than "only if they hold nothing":
+      // an upgraded instance's backfill gave every pre-existing row
+      // `MALLOYYO_USER`, including rows still in the queue, so a cardinality test
+      // would see "already has roles" and admit them with no dataset-bearing role
+      // — silently, and only on the instances hardest to notice it on.
+      set.roles = [...new Set([...(target.roles ?? []), ...(await defaultRoles())])];
       break;
     case "deny":
       if (target.status !== "pending") throw new RosterError("only a pending user can be denied");
@@ -108,9 +110,22 @@ export async function createInvitation(actor: User, rawEmail: string, role: User
   if (existing) {
     switch (existing.status) {
       case "pending": {
+        // Roles too, and for the same reason `applyUserAction('approve')` does
+        // it: admission is where the instance default lands. Setting only the
+        // legacy columns left the row with `roles = '{}'`, which the SQL access
+        // predicate reads as holding nothing while the admin page listed them as
+        // holding the default — a grant the UI asserted and every query denied.
+        const granted =
+          (existing.roles ?? []).length > 0 ? existing.roles! : await defaultRoles();
         const [approved] = await db
           .update(users)
-          .set({ status: "active", role: existing.role === "owner" ? existing.role : role, isAdmin: role === "admin" })
+          .set({
+            status: "active",
+            role: existing.role === "owner" ? existing.role : role,
+            isAdmin: role === "admin",
+            roles:
+              role === "admin" ? [...new Set([...granted, MALLOYYO_ADMIN])] : granted,
+          })
           .where(eq(users.id, existing.id))
           .returning();
         logger.info("invitation approved a waiting user", { userId: existing.id, actorId: actor.id });

@@ -20,7 +20,14 @@ ON CONFLICT ("name") DO NOTHING;
 -- Carry existing authority forward. Admins keep administering; everyone else
 -- becomes an ordinary user. Nobody gains reach into data here: dataset access
 -- is granted separately, and datasets.roles starts empty for every row.
+--
+-- NOT the pending queue. Someone waiting to be let in holds nothing, and
+-- approval is what grants the instance default — give them a role here and
+-- approval has nothing left to decide, so they are admitted with no
+-- dataset-bearing role on exactly the instances that had a queue at upgrade
+-- time. Disabled rows are left alone for the same reason: re-enabling should not
+-- silently inherit a default nobody chose for them.
 UPDATE "users" SET "roles" =
   CASE WHEN "role" IN ('owner', 'admin') OR "is_admin" THEN ARRAY['MALLOYYO_USER','MALLOYYO_ADMIN']
        ELSE ARRAY['MALLOYYO_USER'] END
-WHERE cardinality("roles") = 0;
+WHERE cardinality("roles") = 0 AND "status" = 'active';

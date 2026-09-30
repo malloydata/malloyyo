@@ -10,7 +10,7 @@
 import { asc, desc, eq } from "drizzle-orm";
 import { db, datasets, givens as givensTable, roles as rolesTable, users } from "@/db";
 import { requireAdminPage } from "@/lib/admin";
-import { defaultRoles, isBuiltinRole, rolesOf } from "@/lib/roles";
+import { defaultRoles, isBuiltinRole, NEVER_A_DEFAULT, rolesOf } from "@/lib/roles";
 import {
   DatasetGivens,
   DefaultRoles,
@@ -56,6 +56,8 @@ export default async function AdminRolesPage() {
   const allDatasets = dsRows.map((d) => ({ id: d.id, name: d.name }));
   const members = people.filter((u) => u.status !== "pending");
   const holders = (role: string) => members.filter((u) => rolesOf(u).includes(role)).length;
+  const grantedFor = (role: string) =>
+    dsRows.filter((d) => (d.roles ?? []).includes(role)).map((d) => d.id);
 
   return (
     <div className="flex flex-col gap-8">
@@ -96,9 +98,10 @@ export default async function AdminRolesPage() {
                   </td>
                   <td className={TD}>
                     <RoleDatasets
+                      key={grantedFor(role.name).join(",")}
                       name={role.name}
                       all={allDatasets}
-                      granted={dsRows.filter((d) => (d.roles ?? []).includes(role.name)).map((d) => d.id)}
+                      granted={grantedFor(role.name)}
                     />
                   </td>
                   <td className={`${TD} text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap`}>
@@ -145,7 +148,12 @@ export default async function AdminRolesPage() {
                     )}
                   </td>
                   <td className={TD}>
-                    <UserRoles userId={u.id} all={allRoleNames} held={rolesOf(u)} />
+                    <UserRoles
+                      key={rolesOf(u).join(",")}
+                      userId={u.id}
+                      all={allRoleNames}
+                      held={rolesOf(u)}
+                    />
                   </td>
                 </tr>
               ))}
@@ -178,6 +186,7 @@ export default async function AdminRolesPage() {
                   <td className={TD}>{d.name}</td>
                   <td className={TD}>
                     <DatasetGivens
+                      key={(d.requiredGivens ?? []).join(",")}
                       datasetId={d.id}
                       all={givenCatalog.map((g) => ({ name: g.name, description: g.description }))}
                       required={d.requiredGivens ?? []}
@@ -196,10 +205,16 @@ export default async function AdminRolesPage() {
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 max-w-2xl">
             Granted when someone is first admitted. Keep this narrow — with no
             dataset-bearing role here, a new person can sign in and sees nothing until someone
-            grants them one deliberately.
+            grants them one deliberately. <code className="text-[11px]">MALLOYYO_DEVELOPER</code>{" "}
+            and <code className="text-[11px]">MALLOYYO_ADMIN</code> are not offered: on an open
+            instance this list is applied to everyone who signs in.
           </p>
         </div>
-        <DefaultRoles all={allRoleNames} current={fallback} />
+        <DefaultRoles
+          key={fallback.join(",")}
+          all={allRoleNames.filter((r) => !NEVER_A_DEFAULT.includes(r))}
+          current={fallback}
+        />
       </section>
     </div>
   );

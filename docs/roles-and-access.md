@@ -1,8 +1,9 @@
 # Roles and access
 
-> **Status: design.** This describes how roles are meant to work. Row scoping
-> (`$MALLOYYO_EMAIL`) ships today; roles, `$MALLOYYO_ROLES` and multi-dataset
-> repos do not yet.
+> **Status: roles ship.** The role catalog, dataset grants, `$MALLOYYO_ROLES`
+> and row scoping all work today, managed at **Admin → Roles**. Multi-dataset
+> repos (the `datasets/` layout below) do NOT yet — that section describes
+> where this is going.
 
 Two questions decide what anyone sees, and they are answered in different
 places:
@@ -44,6 +45,11 @@ New people get a **default set** when they first sign in, which an admin
 configures. On an open instance keep it narrow — `MALLOYYO_USER` and nothing
 else is a reasonable default, so a new arrival can sign in and see nothing
 until someone grants them a role deliberately.
+
+`MALLOYYO_DEVELOPER` and `MALLOYYO_ADMIN` cannot be admission defaults, and the
+server refuses them rather than hiding them: on an instance that admits anyone
+who signs in, that list is applied to every arrival, so one ticked box would
+hand the capability to whoever finds the URL.
 
 Roles may eventually be read from your identity provider instead of being
 managed here, so that a group membership revoked upstream takes effect on the

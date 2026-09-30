@@ -32,6 +32,25 @@ export const MALLOYYO_ADMIN = "MALLOYYO_ADMIN";
 
 export const BUILTIN_ROLES = [MALLOYYO_USER, MALLOYYO_DEVELOPER, MALLOYYO_ADMIN] as const;
 
+/**
+ * Built-ins that must never be handed out by a default.
+ *
+ * `MALLOYYO_USER` is a fine admission default — it is the right to sign in and
+ * nothing more. These two are not, and the failure is not subtle: on an `open`
+ * instance, `default_roles` is applied to every new row at first sign-in
+ * (src/lib/admission.ts), so `MALLOYYO_ADMIN` here makes anyone who signs in an
+ * instance admin, and `MALLOYYO_DEVELOPER` lets them point a dataset at a repo
+ * whose config reads this server's environment. A misconfiguration must fail
+ * closed; ticking one box should not be able to fail this wide open.
+ */
+export const NEVER_A_DEFAULT: readonly string[] = [MALLOYYO_DEVELOPER, MALLOYYO_ADMIN];
+
+/** Admin because the deployment's env says so, not because a row says so — so
+    no write to `users` can revoke it, and a UI that pretends otherwise lies. */
+export function isEnvAdmin(email: string | null | undefined): boolean {
+  return !!email && env.APP_ADMIN_EMAILS.includes(email.toLowerCase());
+}
+
 /** What a new arrival gets when the instance has not said otherwise: able to
     sign in, and holding nothing that opens a dataset. Access is then a
     deliberate grant rather than something a default handed out. */
@@ -85,8 +104,7 @@ export type RoleBearing = {
 export function rolesOf(user: RoleBearing): string[] {
   const held = new Set(user.roles ?? []);
   if (user.role === "owner" || user.role === "admin" || user.isAdmin) held.add(MALLOYYO_ADMIN);
-  if (user.email && env.APP_ADMIN_EMAILS.includes(user.email.toLowerCase())) held.add(MALLOYYO_ADMIN);
-  if (held.size === 0) held.add(MALLOYYO_USER);
+  if (isEnvAdmin(user.email)) held.add(MALLOYYO_ADMIN);
   return [...held];
 }
 

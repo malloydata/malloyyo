@@ -7,7 +7,7 @@ import { eq, desc, ne, and } from "drizzle-orm";
 import { db, datasets, users } from "@/db";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
-import { canAuthor } from "@/lib/roles";
+import { canAuthor, datasetVisibleWhere } from "@/lib/roles";
 import { nameToSlug } from "@/lib/slug";
 import { parseGitHubRepo } from "@/lib/github";
 import { refreshGitHubModel } from "@/lib/github-refresh";
@@ -174,9 +174,11 @@ export async function GET() {
     return NextResponse.json(rows);
   }
 
+  // Owned, public, or opened by one of their roles — the same predicate the run
+  // paths use, so a dataset someone can query is a dataset they can see listed.
   const rows = await db
     .select({ id: datasets.id, name: datasets.name, status: datasets.status,
       createdAt: datasets.createdAt, readyAt: datasets.readyAt, isPublic: datasets.isPublic })
-    .from(datasets).where(and(eq(datasets.isPublic, true), ne(datasets.status, "failed"))).orderBy(desc(datasets.createdAt)).limit(50);
+    .from(datasets).where(datasetVisibleWhere(user.id)).orderBy(desc(datasets.createdAt)).limit(50);
   return NextResponse.json(rows);
 }

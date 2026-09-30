@@ -32,6 +32,7 @@ function makeUser(overrides: Partial<User> = {}): User {
     isAdmin: false,
     status: "active",
     role: "member",
+  roles: [],
     externalAccountId: null,
     createdAt: new Date("2026-01-01T00:00:00Z"),
     ...overrides,

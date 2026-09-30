@@ -14,6 +14,7 @@
 import { and, eq, isNull, ne, sql } from "drizzle-orm";
 import { db, invitations, users } from "@/db";
 import { getAccessPolicy } from "./access-policy";
+import { defaultRoles, MALLOYYO_ADMIN, MALLOYYO_USER } from "./roles";
 import { logger } from "./logger";
 
 /**
@@ -42,7 +43,7 @@ export async function admitNewUser(userId: string, email: string | null | undefi
   if (Number(existing.owners) === 0 && Number(existing.otherActive) === 0) {
     await db
       .update(users)
-      .set({ status: "active", role: "owner", isAdmin: true })
+      .set({ status: "active", role: "owner", isAdmin: true, roles: [MALLOYYO_USER, MALLOYYO_ADMIN] })
       .where(eq(users.id, userId));
     logger.info("first sign-in became the instance owner", { userId });
     return;
@@ -65,6 +66,13 @@ export async function admitNewUser(userId: string, email: string | null | undefi
           // An invitation may carry admin; it never mints an owner.
           role: invitation.role === "owner" ? "admin" : invitation.role,
           isAdmin: invitation.role !== "member",
+          // An invitation carrying admin grants the admin role too; everyone
+          // else starts on the instance default (src/lib/roles.ts), which opens
+          // no dataset until someone grants one deliberately.
+          roles:
+            invitation.role === "member"
+              ? await defaultRoles()
+              : [...new Set([...(await defaultRoles()), MALLOYYO_ADMIN])],
         })
         .where(and(eq(users.id, userId), ne(users.status, "disabled")));
       logger.info("invitation consumed on first sign-in", { userId });
@@ -76,11 +84,12 @@ export async function admitNewUser(userId: string, email: string | null | undefi
   if (policy === "open") {
     await db
       .update(users)
-      .set({ status: "active" })
+      .set({ status: "active", roles: await defaultRoles() })
       .where(and(eq(users.id, userId), ne(users.status, "disabled")));
     return;
   }
   // `invite` with no invitation: the schema default already says `pending`;
-  // leave the row for the approval queue.
+  // leave the row for the approval queue. Roles are granted on approval, not
+  // here — someone waiting to be let in holds nothing.
   logger.info("new user awaiting approval", { userId });
 }

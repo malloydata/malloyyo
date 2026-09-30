@@ -18,6 +18,7 @@
 
 import { and, eq, isNull } from "drizzle-orm";
 import { db, invitations, users, type Invitation, type User, type UserRole } from "@/db";
+import { defaultRoles, MALLOYYO_ADMIN } from "./roles";
 import { logger } from "./logger";
 
 export class RosterError extends Error {
@@ -43,11 +44,18 @@ export async function applyUserAction(actor: User, targetId: string, action: Use
     throw new RosterError("you cannot revoke your own access or role");
   }
 
-  const set: Partial<Pick<User, "status" | "role" | "isAdmin">> = {};
+  const set: Partial<Pick<User, "status" | "role" | "isAdmin" | "roles">> = {};
   switch (action) {
     case "approve":
       if (target.status !== "pending") throw new RosterError("only a pending user can be approved");
       set.status = "active";
+      // Approval is the moment someone becomes a member, so it is where the
+      // instance default lands. A UNION rather than "only if they hold nothing":
+      // an upgraded instance's backfill gave every pre-existing row
+      // `MALLOYYO_USER`, including rows still in the queue, so a cardinality test
+      // would see "already has roles" and admit them with no dataset-bearing role
+      // — silently, and only on the instances hardest to notice it on.
+      set.roles = [...new Set([...(target.roles ?? []), ...(await defaultRoles())])];
       break;
     case "deny":
       if (target.status !== "pending") throw new RosterError("only a pending user can be denied");
@@ -65,11 +73,15 @@ export async function applyUserAction(actor: User, targetId: string, action: Use
       if (target.role !== "member") throw new RosterError("already an admin");
       set.role = "admin";
       set.isAdmin = true;
+      set.roles = [...new Set([...(target.roles ?? []), MALLOYYO_ADMIN])];
       break;
     case "demote":
       if (target.role !== "admin") throw new RosterError("not an admin");
       set.role = "member";
       set.isAdmin = false;
+      // Only the capability goes. Dataset-bearing roles are a separate grant and
+      // demoting someone from admin is not a decision about what data they read.
+      set.roles = (target.roles ?? []).filter((r) => r !== MALLOYYO_ADMIN);
       break;
   }
 
@@ -98,9 +110,22 @@ export async function createInvitation(actor: User, rawEmail: string, role: User
   if (existing) {
     switch (existing.status) {
       case "pending": {
+        // Roles too, and for the same reason `applyUserAction('approve')` does
+        // it: admission is where the instance default lands. Setting only the
+        // legacy columns left the row with `roles = '{}'`, which the SQL access
+        // predicate reads as holding nothing while the admin page listed them as
+        // holding the default — a grant the UI asserted and every query denied.
+        const granted =
+          (existing.roles ?? []).length > 0 ? existing.roles! : await defaultRoles();
         const [approved] = await db
           .update(users)
-          .set({ status: "active", role: existing.role === "owner" ? existing.role : role, isAdmin: role === "admin" })
+          .set({
+            status: "active",
+            role: existing.role === "owner" ? existing.role : role,
+            isAdmin: role === "admin",
+            roles:
+              role === "admin" ? [...new Set([...granted, MALLOYYO_ADMIN])] : granted,
+          })
           .where(eq(users.id, existing.id))
           .returning();
         logger.info("invitation approved a waiting user", { userId: existing.id, actorId: actor.id });

@@ -27,6 +27,7 @@ import { findByDatasetRef, modelFileMap } from "@/lib/mcp-tools";
 import { runNamedMalloyFiles, withModelRuntime, fileUrl } from "@/lib/malloy";
 import { getDashboard, modelConfigJson, type DashboardDetail } from "./meta";
 import { isReservedGiven, leaseScope } from "@/lib/tenancy";
+import { rolesOf, type RoleBearing } from "@/lib/roles";
 import { imageHostsFromConfig } from "./image-hosts";
 import { rendersNoData } from "./about";
 
@@ -96,7 +97,7 @@ export function explainProblems(problems: Array<{ message: string }>): string {
     Malloy text (suggestion queries / ad-hoc panels). Falls back to `index.malloy`
     for a v1 manifest with no `entryFile`. */
 export async function runDashboard(
-  user: { id: string; email: string | null },
+  user: { id: string; email: string | null } & RoleBearing,
   datasetId: string,
   name: string,
   req: { query?: string; malloy?: string },
@@ -111,7 +112,7 @@ export async function runDashboard(
   // caller cannot reach them) and the names gate what a query must reference.
   // Both branches below take both; neither reads them from `givens`.
   const required = found.ds.requiredGivens ?? [];
-  const scope = leaseScope(required, user);
+  const scope = leaseScope(required, { email: user.email, roles: rolesOf(user) });
   const a = await getDashboard(userId, datasetId, name);
   if (!a) return { ok: false, error: `dashboard '${name}' not found` };
   const { files, cacheKey } = await dashboardFiles(a);

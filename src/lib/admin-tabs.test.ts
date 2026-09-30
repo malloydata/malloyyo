@@ -18,7 +18,17 @@ test("no integration: exactly the application's own tabs", () => {
   assert.deepEqual(adminTabs(null), [
     { href: "/admin", label: "General", exact: true },
     { href: "/admin/users", label: "Users" },
+    { href: "/admin/roles", label: "Roles" },
   ]);
+});
+
+// Roles stay whatever owns sign-in. An integration may supply the people; which
+// datasets those people may open is this instance's decision, so the tab does
+// not yield the way Users does.
+test("Roles survives an integration taking over the people surface", () => {
+  const tabs = adminTabs({ adminPages: [{ slug: "members", label: "Members", Component: () => null }] });
+  assert.ok(tabs.some((t) => t.href === "/admin/roles"));
+  assert.ok(!tabs.some((t) => t.href === "/admin/users"));
 });
 
 // Ties the seam's absent case to the surface: this build must not grow or lose admin
@@ -36,6 +46,7 @@ test("an integration's pages follow General, and the Users tab yields to them", 
   });
   assert.deepEqual(tabs, [
     { href: "/admin", label: "General", exact: true },
+    { href: "/admin/roles", label: "Roles" },
     { href: "/admin/x/members", label: "Members" },
     { href: "/admin/x/session", label: "Session" },
   ]);
@@ -46,6 +57,7 @@ test("an integration's pages follow General, and the Users tab yields to them", 
 test("an integration with no pages still supplants the Users tab", () => {
   assert.deepEqual(adminTabs({ adminPages: [] }), [
     { href: "/admin", label: "General", exact: true },
+    { href: "/admin/roles", label: "Roles" },
   ]);
 });
 
@@ -55,5 +67,5 @@ test("a hostile slug cannot escape /admin/x/", () => {
   const tabs = adminTabs({
     adminPages: [{ slug: "../users?x=1", label: "Sneaky", Component: () => null }],
   });
-  assert.equal(tabs[1].href, "/admin/x/..%2Fusers%3Fx%3D1");
+  assert.equal(tabs.at(-1)?.href, "/admin/x/..%2Fusers%3Fx%3D1");
 });

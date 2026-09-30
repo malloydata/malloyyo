@@ -7,6 +7,7 @@ import { eq, desc, ne, and } from "drizzle-orm";
 import { db, datasets, users } from "@/db";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
+import { canAuthor, datasetVisibleWhere } from "@/lib/roles";
 import { nameToSlug } from "@/lib/slug";
 import { parseGitHubRepo } from "@/lib/github";
 import { refreshGitHubModel } from "@/lib/github-refresh";
@@ -28,7 +29,11 @@ export async function POST(req: Request) {
     if (err instanceof UnauthorizedError) return NextResponse.json({ error: "sign in required" }, { status: 401 });
     throw err;
   }
-  if (!isAdmin(user)) return NextResponse.json({ error: "admin required" }, { status: 403 });
+  // Admin only. Creating a dataset means naming a repo this server will compile,
+  // and a model can reach the server's environment — see canAuthor.
+  if (!canAuthor(user)) {
+    return NextResponse.json({ error: "MALLOYYO_ADMIN required" }, { status: 403 });
+  }
 
   let raw: unknown;
   try { raw = await req.json(); } catch {
@@ -76,7 +81,11 @@ export async function POST(req: Request) {
     // Initial creation and every later refresh must ingest the same repository shape.
     // Keeping a second root-model-only loader here once made a newly created dataset omit
     // dashboards until somebody manually refreshed it.
-    const result = await refreshGitHubModel(id);
+    // `creating`: this is the dataset's first model, and no admin has had a
+    // chance to tick what it is scoped by, so the model decides — the same rule
+    // `malloyyo publish --create-dataset` applies. Every LATER refresh omits it,
+    // so a model can never widen its own scope afterwards.
+    const result = await refreshGitHubModel(id, { creating: true });
     if (!result.ok) {
       void captureTelemetry(
         {
@@ -165,9 +174,11 @@ export async function GET() {
     return NextResponse.json(rows);
   }
 
+  // Owned, public, or opened by one of their roles — the same predicate the run
+  // paths use, so a dataset someone can query is a dataset they can see listed.
   const rows = await db
     .select({ id: datasets.id, name: datasets.name, status: datasets.status,
       createdAt: datasets.createdAt, readyAt: datasets.readyAt, isPublic: datasets.isPublic })
-    .from(datasets).where(and(eq(datasets.isPublic, true), ne(datasets.status, "failed"))).orderBy(desc(datasets.createdAt)).limit(50);
+    .from(datasets).where(datasetVisibleWhere(user.id)).orderBy(desc(datasets.createdAt)).limit(50);
   return NextResponse.json(rows);
 }

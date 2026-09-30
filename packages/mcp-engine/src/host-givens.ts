@@ -28,13 +28,54 @@
 export type RequiredGivens = readonly string[];
 
 /**
- * Which required names this query never mentions.
+ * The prefix a Malloyyo server reserves for givens it supplies itself.
  *
- * Empty means the gate passes. Note the direction: a query is refused for what
- * it FAILS to reference, so a query over an unfiltered source stands out while
- * an ordinary query over a source whose `where:` names the given passes without
- * mentioning it anywhere — the filter rides on the source, and the reference
- * comes with it.
+ * Hardcoded rather than passed in, and that is the point. Core's
+ * `finalizeGivens` locks these names — but only the ones the host actually
+ * finalized, which is `datasets.required_givens`. A model that DECLARES
+ * `MALLOYYO_EMAIL` on a dataset nobody ticked the box for is not locked by
+ * anything, and it looks fine from the outside: the declaration default `''`
+ * matches no rows, so every view renders empty and nothing says why. A caller
+ * who passes the name themselves then chooses whose rows they read.
+ *
+ * So the strip below does not consult the requirement list, does not take an
+ * option, and cannot be turned off at a call site. A configuration mistake
+ * must not be the difference between scoped and impersonatable.
+ */
+export const RESERVED_GIVEN_PREFIX = 'MALLOYYO_';
+
+/**
+ * A caller's given map with every reserved name removed.
+ *
+ * Silent rather than an error: a caller cannot set these, so there is nothing
+ * for them to correct, and a model that needs one gets it from the Runtime. The
+ * one case that would deserve a message — a caller deliberately probing — is
+ * the case that must learn the least.
+ */
+export function withoutReservedGivens<T>(
+  givens: Readonly<Record<string, T>> | undefined,
+): Record<string, T> | undefined {
+  if (!givens) return undefined;
+  const kept: Record<string, T> = {};
+  for (const [name, value] of Object.entries(givens)) {
+    if (!name.startsWith(RESERVED_GIVEN_PREFIX)) kept[name] = value;
+  }
+  return kept;
+}
+
+/**
+ * The required names, when a query references NONE of them. Empty means pass.
+ *
+ * ANY, not all. A model may be scoped on more than one axis — one source by the
+ * asker's address, another by the roles they hold — and demanding every name in
+ * every query would make declaring two of them unusable. What the gate is for
+ * is catching a query that is scoped by nothing at all, and one reference is
+ * enough to say it is not.
+ *
+ * Note the direction: a query is refused for what it FAILS to reference, so a
+ * query over an unfiltered source stands out while an ordinary query over a
+ * filtered one passes without mentioning anything — the `where:` rides on the
+ * source, and the reference comes with it.
  */
 export function unreferencedGivens(
   required: RequiredGivens,
@@ -42,15 +83,17 @@ export function unreferencedGivens(
 ): string[] {
   if (required.length === 0) return [];
   const seen = new Set(referenced);
-  return required.filter((name) => !seen.has(name)).sort();
+  if (required.some((name) => seen.has(name))) return [];
+  return [...required].sort();
 }
 
 /** What to tell a caller whose query skipped one. */
 export function unreferencedGivensMessage(missing: string[]): string {
+  const many = missing.length > 1;
   return (
-    `${missing.join(', ')}: this data is scoped by ${missing.length > 1 ? 'these givens' : 'this given'}, ` +
-    `and the query never references ${missing.length > 1 ? 'them' : 'it'}. A query here must run against a ` +
-    `source that filters on ${missing.length > 1 ? 'them' : 'it'} — put the filter on the source ` +
+    `${missing.join(', ')}: this data is scoped by ${many ? 'these givens' : 'this given'}, and the ` +
+    `query references ${many ? 'none of them' : 'it nowhere'}. A query here must run against a source ` +
+    `that filters on ${many ? 'one of them' : 'it'} — put the filter on the source ` +
     `(\`source: x is … extend { where: owner = $${missing[0]} }\`) so every query over it carries the scope.`
   );
 }

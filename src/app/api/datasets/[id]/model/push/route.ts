@@ -245,7 +245,11 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   // drops a requirement the dataset already records — publishing it would
   // return every row to every user (src/lib/tenancy.ts). Decided here, before
   // the dry-run answer and before any write, so a refusal leaves nothing behind.
-  const requirement = requirementForPublish(ds?.requiredGivens ?? [], result.declaredGivens);
+  // A dataset being CREATED by this publish takes its scoping from this model;
+  // an existing one is the authority and the model must satisfy it.
+  const requirement = requirementForPublish(ds?.requiredGivens ?? [], result.declaredGivens, {
+    creating: !ds,
+  });
   if (!requirement.ok) {
     logger.info("model push refused", {
       datasetId: ds?.id,
@@ -283,21 +287,12 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
               isPublic: false,
               status: "ready",
               readyAt: new Date(),
+              // Only here: a dataset created by a publish has had no admin to
+              // configure it, so the model it was created from sets the list.
               requiredGivens: requirement.required,
             })
             .returning()
         )[0];
-
-      // A model that newly declares a reserved given makes its dataset scoped,
-      // from this version on. Same transaction as the version itself: a dataset
-      // that is scoped by a model it does not serve, or vice versa, is exactly
-      // the inconsistency this feature cannot afford.
-      if (requirement.added.length > 0) {
-        await tx
-          .update(datasets)
-          .set({ requiredGivens: requirement.required })
-          .where(eq(datasets.id, target.id));
-      }
 
       const [latest] = await tx
         .select({ version: malloyModels.version })
@@ -390,14 +385,14 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       ok: true,
       version: created.model.version,
       sources: result.sources,
-      // Reported, not just recorded. A dataset becomes scoped by DECLARING the
-      // given, and a declaration can arrive from a shared import the author
-      // never read — `import "../../lib/x.malloy"` surfaces that file's givens,
-      // where `import { thing } from …` does not. Since the requirement is
-      // sticky, a silent auto-mark is one an author cannot publish their way
-      // out of, so say it on the line where it happens.
+      // Reported so an author can see the two ways this can be half-configured:
+      // what the dataset is scoped by, and what the model declared that nobody
+      // asked for — the latter gets no value, so its filter quietly does
+      // nothing until an admin ticks the box.
       ...(requirement.required.length > 0 ? { requiredGivens: requirement.required } : {}),
-      ...(requirement.added.length > 0 ? { scopedNow: requirement.added } : {}),
+      ...(requirement.declaredButUnused.length > 0
+        ? { declaredButUnused: requirement.declaredButUnused }
+        : {}),
       compiledAt: created.model.compiledAt,
       git,
       ...(ds ? {} : { created: true, dataset: created.dataset.name, datasetId: created.dataset.id }),

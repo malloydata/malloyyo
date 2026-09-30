@@ -9,6 +9,7 @@ import {
   jsonRows,
   unreferencedGivens,
   unreferencedGivensMessage,
+  withoutReservedGivens,
 } from "@malloyyo/mcp-engine";
 import { hostname, networkInterfaces } from "node:os";
 import { randomBytes } from "node:crypto";
@@ -834,10 +835,14 @@ export async function runNamedMalloyFiles(
     await gateOnUsage(runner, opts.requireGivens);
     // Values arrive as user JSON; the compiler validates them when binding. The
     // server's own values are NOT here — they ride on the runtime, where a
-    // caller cannot reach them.
+    // caller cannot reach them — and any reserved name a caller SENT comes off
+    // before binding, the same strip the engine applies in
+    // `executeMaterialized`. Repeated for the same reason `gateOnUsage` is:
+    // this path compiles and runs itself rather than going through the engine.
+    const caller = withoutReservedGivens(givens);
     const compileOpts =
-      givens && Object.keys(givens).length > 0
-        ? { givens: givens as Record<string, GivenValue> }
+      caller && Object.keys(caller).length > 0
+        ? { givens: caller as Record<string, GivenValue> }
         : undefined;
     const sql = await runner.getSQL(compileOpts);
     const result = await runner.run({ rowLimit: opts.rowLimit ?? DEFAULT_ROW_LIMIT, ...compileOpts });

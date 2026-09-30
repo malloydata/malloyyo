@@ -30,6 +30,12 @@ export function adminTabs(
     tabs.push({ href: "/admin/users", label: "Users" });
   }
 
+  // Roles stays whoever owns sign-in. An integration may supply the PEOPLE, but
+  // which datasets those people may open is this instance's decision, so this
+  // tab does not yield the way Users does. Before the contributed pages, so the
+  // application's own surface reads as one group.
+  tabs.push({ href: "/admin/roles", label: "Roles" });
+
   for (const page of integration?.adminPages ?? []) {
     tabs.push({ href: `/admin/x/${encodeURIComponent(page.slug)}`, label: page.label });
   }

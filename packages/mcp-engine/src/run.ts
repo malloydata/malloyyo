@@ -9,6 +9,7 @@ import type { GivenValue, QueryMaterializer, Runtime } from '@malloydata/malloy'
 import {
   unreferencedGivens,
   unreferencedGivensMessage,
+  withoutReservedGivens,
   type RequiredGivens,
 } from './host-givens';
 import { API, MalloyError } from '@malloydata/malloy';
@@ -90,8 +91,16 @@ export async function executeMaterialized(
   }
   // The one wire→Malloy coercion for givens: values are user JSON, validated by
   // the compiler when it binds them (a bad value surfaces as a compile problem).
-  const compileOpts = opts.givens
-    ? { givens: opts.givens as Record<string, GivenValue> }
+  //
+  // Reserved names come off FIRST, here, for the same reason the gate above is
+  // here: every run passes through this function, so this is the one place a
+  // caller-supplied `MALLOYYO_*` cannot slip past. Core's `finalizeGivens`
+  // refuses an override of a name the host finalized, but a name it did NOT
+  // finalize — a model declaring `MALLOYYO_EMAIL` on a dataset nobody scoped —
+  // is bindable by whoever asks. See ./host-givens.
+  const caller = withoutReservedGivens(opts.givens);
+  const compileOpts = caller
+    ? { givens: caller as Record<string, GivenValue> }
     : undefined;
   try {
     const t0 = Date.now();

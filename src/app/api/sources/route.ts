@@ -7,6 +7,7 @@ import { db, datasets, malloyModels, malloyModelFiles, users } from "@/db";
 import { DEVCONTAINER_PATH } from "@/lib/github-source-link";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
+import { datasetVisibleWhere } from "@/lib/roles";
 
 export const runtime = "nodejs";
 
@@ -19,9 +20,17 @@ export async function GET() {
 
   const admin = me ? isAdmin(me) : false;
 
+  // Signed in: everything your roles open — which is what makes a grant on
+  // /admin/roles visible here rather than only over MCP. Same predicate the run
+  // paths use, so this list and what you may actually query cannot drift.
+  // Signed out: public datasets only. An admin still sees the whole catalogue,
+  // because naming a dataset is not reading it — every path that returns ROWS
+  // goes through datasetVisibleWhere, which has no admin branch.
   const where = admin
     ? ne(datasets.status, "failed")
-    : and(eq(datasets.isPublic, true), ne(datasets.status, "failed"));
+    : me
+      ? datasetVisibleWhere(me.id)
+      : and(eq(datasets.isPublic, true), ne(datasets.status, "failed"));
 
   const dsList = await db
     .select({

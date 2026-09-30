@@ -1,7 +1,7 @@
 // Copyright (c) The Malloy Foundation
 // SPDX-License-Identifier: MIT
 
-import { eq, and, desc, or, count } from "drizzle-orm";
+import { eq, and, desc, count } from "drizzle-orm";
 import { db, datasets, malloyModels, malloyModelFiles, savedQueries, history, favorites } from "@/db";
 import type { SourceInfo } from "./malloy";
 // NOTE: `runRestrictedMalloyFiles` (and everything under ./malloy) pulls in
@@ -10,6 +10,7 @@ import type { SourceInfo } from "./malloy";
 // so modules that only READ the DB — notably loadSharedQuery, used by the
 // /ltool/[slug] page — don't drag DuckDB into their serverless bundle and 500
 // with "libduckdb.so: cannot open shared object file".
+import { datasetVisibleWhere, rolesOf, type RoleBearing } from "./roles";
 import { env } from "./env";
 import { leaseScope } from "./tenancy";
 import { parseSlug, instanceSlug } from "./slug";
@@ -29,10 +30,10 @@ import {
 // The datasets a user may query: their own or public, and ready. One home for
 // the predicate — the host's findModelByRef and findBySource both build on it.
 export function visibleDatasetWhere(userId: string) {
-  return and(
-    or(eq(datasets.userId, userId), eq(datasets.isPublic, true)),
-    eq(datasets.status, "ready"),
-  );
+  // Owner, public, or granted by a role — see src/lib/roles.ts. Kept as a
+  // re-export rather than inlined because every read path in the app funnels
+  // through this name, and one predicate is the only way that stays true.
+  return datasetVisibleWhere(userId);
 }
 
 // What a viewer may READ ABOUT a dataset: the questions asked of it, the Malloy
@@ -383,7 +384,7 @@ export async function runQueryForWeb(
   // The whole user, not just the id: a model that declared
   // MALLOYYO_EMAIL binds their address, and it must come from the
   // session rather than anything in the request (src/lib/tenancy.ts).
-  user: { id: string; email: string | null },
+  user: { id: string; email: string | null } & RoleBearing,
   source: string,
   malloyQuery: string,
   maxRows = 1000,
@@ -411,7 +412,7 @@ export async function runQueryForWeb(
       cacheKey: model.id,
       // Identity on the runtime, and the names this query must reference.
       // Both from the dataset (src/lib/tenancy.ts) — never from the request.
-      scope: leaseScope(ds.requiredGivens, user),
+      scope: leaseScope(ds.requiredGivens, { email: user.email, roles: rolesOf(user) }),
       requireGivens: ds.requiredGivens,
     });
     const durationMs = Date.now() - t0;
@@ -455,7 +456,7 @@ export async function saveWebQuery(
   // The whole user, not just the id: a model that declared
   // MALLOYYO_EMAIL binds their address, and it must come from the
   // session rather than anything in the request (src/lib/tenancy.ts).
-  user: { id: string; email: string | null },
+  user: { id: string; email: string | null } & RoleBearing,
   source: string,
   malloyQuery: string,
   title: string,
@@ -479,7 +480,7 @@ export async function saveWebQuery(
       cacheKey: model.id,
       // Identity on the runtime, and the names this query must reference.
       // Both from the dataset (src/lib/tenancy.ts) — never from the request.
-      scope: leaseScope(ds.requiredGivens, user),
+      scope: leaseScope(ds.requiredGivens, { email: user.email, roles: rolesOf(user) }),
       requireGivens: ds.requiredGivens,
     });
     const durationMs = Date.now() - t0;

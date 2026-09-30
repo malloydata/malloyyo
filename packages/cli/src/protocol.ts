@@ -50,9 +50,10 @@ export interface ModelStatus {
   sources?: Array<{ name: string; description?: string | null }>;
   /** The MALLOYYO_* givens this dataset is scoped by, after this publish. */
   requiredGivens?: string[];
-  /** Of those, the ones THIS publish added — printed, because the requirement
-      is sticky and a silent auto-mark cannot be undone by publishing again. */
-  scopedNow?: string[];
+  /** Reserved givens the model declares that this dataset is NOT scoped by.
+      Nothing supplies them, so their filters do nothing until an admin ticks
+      the box — worth saying rather than leaving as an empty dashboard. */
+  declaredButUnused?: string[];
   compiledAt?: string | null;
   compileError?: string | null;
   git?: GitInfo;

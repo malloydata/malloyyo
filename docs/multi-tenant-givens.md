@@ -27,24 +27,49 @@ agent composes — and, as below, that is also what makes the safety gate free.
 
 ## Three rules, no new config
 
-### 1. The dataset records what it requires, derived from the model
+### 1. The dataset records what it is scoped by, configured
 
-`datasets.required_givens text[]`, empty by default. On publish — and on GitHub
-refresh, which is how most models actually arrive — compile and read the
-`MALLOYYO_*` givens the model declares:
+`datasets.required_givens`, ticked by an admin from the `givens` catalog. On
+publish — and on GitHub refresh, which is how most models arrive — the model
+must satisfy it:
 
-| dataset has | model declares | outcome |
+| dataset requires | model declares | outcome |
 | --- | --- | --- |
 | nothing | nothing | ordinary dataset, nothing attached |
-| nothing | `MALLOYYO_EMAIL` | **record it** — the dataset is now scoped |
 | `MALLOYYO_EMAIL` | `MALLOYYO_EMAIL` | publish |
-| `MALLOYYO_EMAIL` | nothing | **refuse the publish**, naming it |
+| `MALLOYYO_EMAIL` | nothing | **refused**, naming it |
+| nothing | `MALLOYYO_EMAIL` | published, and **reported** — nothing supplies it, so the filter runs on the declaration default |
 
-Creating a dataset with the given in it marks the dataset; nobody sets a flag.
-A later commit can *add* scoping and can never take it away — clearing a
-requirement is an explicit admin action, not a side effect of a push.
+Configured rather than derived, because the dataset is where access is decided.
+A model arriving from a repo should not get to decide, by what it happens to
+import, whether the data it serves is scoped — and an earlier version of this
+did exactly that, including through a shared `lib/` nobody read.
 
-This is the primary defense, and it fires before anything is ever served.
+The one exception is a dataset CREATED by a publish: there was no admin to have
+ticked anything, so it takes its list from that first model. **Both** creation
+paths do this — `malloyyo publish --create-dataset` and `POST /api/datasets`
+(which passes `creating` to `refreshGitHubModel`). They have to agree: a dataset
+created without its list recorded is a dataset `finalizeGivens` never locks, and
+§3 below is then the only thing standing between a caller and another tenant's
+rows.
+
+### 1a. A caller can never send a reserved name
+
+Every `MALLOYYO_*` key is removed from a caller-supplied `givens` map before the
+compiler sees it, in `executeMaterialized` (and in `runNamedMalloyFiles`, which
+compiles for itself). Unconditionally: it does not consult `required_givens`, it
+takes no option, and no call site can turn it off.
+
+That looks redundant next to `finalizeGivens`, and is not. Core locks exactly the
+names the host finalized — which is `required_givens`. A model that DECLARES
+`MALLOYYO_EMAIL` on a dataset whose box was never ticked is locked by nothing,
+and the failure is invisible: the declaration default `''` matches no rows, so
+every view renders empty and reads as a modelling mistake rather than a missing
+lock. A caller who passes the name then chooses whose rows they read.
+
+So the rule is not "lock the names we supply" but "a caller cannot name one at
+all". The strip is silent rather than an error — there is nothing for an honest
+caller to correct, and a dishonest one learns nothing from it.
 
 ### 2. At serve time, attach unconditionally
 
@@ -114,27 +139,21 @@ the app filters the CONTROLS itself (`visibleGivenSpecs`). The docs say both are
 filtered; measured, only the first is. If that is a bug and gets fixed, the gate
 sees `[]` and refuses every query on a scoped dataset: dark, not open.
 
-## A declaration can arrive by import
+## Declarations still travel by import
 
-A dataset is scoped because its model DECLARES the given — and a declaration
-travels through a non-selective import:
+A plain import brings the givens of the file it imports, where a selective one
+does not:
 
 ```
 import "../../lib/orders.malloy"            → declares ["MALLOYYO_EMAIL"]
 import { orders } from "../../lib/…"        → declares []
 ```
 
-So a shared library that declares the given scopes every dataset that imports
-it whole, including one whose author never intended tenancy. Because the
-requirement is sticky, that is not something they can publish their way out of.
-
-Two consequences worth knowing before it surprises someone:
-
-- publish PRINTS it — `scoped by MALLOYYO_EMAIL`, and a louder line the first
-  time a publish adds one;
-- the escape is a selective import, which surfaces the source without the
-  given. Declaring reserved givens in the dataset's own entry file, rather than
-  in a shared lib, keeps the decision where the dataset is defined.
+This used to be dangerous: declaring scoped a dataset, so a shared library
+scoped every dataset importing it, permanently. With the list configured
+instead, the worst case is now a publish that *reports* a declaration nothing
+supplies. Still worth knowing — that report is the signal an admin has a box to
+tick.
 
 ## What this catches, and what it does not
 

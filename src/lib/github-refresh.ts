@@ -16,7 +16,13 @@ export type RefreshResult =
   | { ok: true; version: number; generatedBy: string; compiledAt: Date | null; sources: SourceInfo[]; fileCount: number; dashboardCount: number }
   | { ok: false; error: string };
 
-export async function refreshGitHubModel(datasetId: string): Promise<RefreshResult> {
+export async function refreshGitHubModel(
+  datasetId: string,
+  /** `creating`: this is the dataset's FIRST model, so it takes its scoping from
+      it. Only `POST /api/datasets` passes it. A later refresh must never widen
+      what a dataset is scoped by — see the requirement check below. */
+  opts: { creating?: boolean } = {},
+): Promise<RefreshResult> {
   const [ds] = await db.select().from(datasets).where(eq(datasets.id, datasetId));
   if (!ds) return { ok: false, error: "dataset not found" };
   if (!ds.githubRepo) return { ok: false, error: "dataset has no github_repo configured" };
@@ -58,11 +64,31 @@ export async function refreshGitHubModel(datasetId: string): Promise<RefreshResu
 
   // The same rule the CLI push path applies, and it matters MORE here: a commit
   // in a model repo refreshes without anyone holding a publish token, so this is
-  // where a dropped `given:` would otherwise quietly unscope a dataset.
-  const requirement = requirementForPublish(ds.requiredGivens ?? [], result.declaredGivens);
+  // where a model that stopped declaring what the dataset is scoped by would
+  // otherwise quietly serve it unscoped. A REFRESH never widens — the dataset's
+  // list wins — and only the create call (`POST /api/datasets`) passes
+  // `creating`.
+  const requirement = requirementForPublish(ds.requiredGivens ?? [], result.declaredGivens, {
+    creating: opts.creating,
+  });
   if (!requirement.ok) {
     logger.error("refreshGitHubModel refused", { datasetId, repo: ds.githubRepo, error: requirement.error });
     return { ok: false, error: requirement.error };
+  }
+
+  // Record it, or the dataset is created scoped by NOTHING while looking scoped.
+  // `leaseScope` finalizes exactly `required_givens`, so an empty list means core
+  // locks no name and a caller can pass `MALLOYYO_EMAIL` themselves. The engine
+  // strips reserved names regardless, but a dataset whose requirement is missing
+  // also has no usage gate — a query over an unfiltered source would pass — so
+  // the list has to be right, not just defended downstream. The CLI path does
+  // this inside its create transaction; here the row already exists.
+  if (opts.creating && requirement.required.length > 0) {
+    await db
+      .update(datasets)
+      .set({ requiredGivens: requirement.required })
+      .where(eq(datasets.id, datasetId));
+    logger.info("dataset scoped by its first model", { datasetId, requiredGivens: requirement.required });
   }
 
   // Structure v2: each dashboard is a `dashboards/<name>.malloy` compiled as its
@@ -104,13 +130,6 @@ export async function refreshGitHubModel(datasetId: string): Promise<RefreshResu
     .orderBy(desc(malloyModels.createdAt))
     .limit(1);
   const nextVersion = (latest?.version ?? 0) + 1;
-
-  if (requirement.added.length > 0) {
-    await db
-      .update(datasets)
-      .set({ requiredGivens: requirement.required })
-      .where(eq(datasets.id, ds.id));
-  }
 
   const indexContent = reader.fetched.get("index.malloy") ?? "";
   const [created] = await db

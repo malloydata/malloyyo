@@ -3,22 +3,15 @@
 
 import { redirect } from "next/navigation";
 import { type User } from "@/db";
-import { env } from "./env";
+import { hasRole, MALLOYYO_ADMIN } from "./roles";
 import { getSessionUser, UnauthorizedError } from "./user";
 
 export function isAdmin(user: User): boolean {
-  // `role` is the authority where the application owns sign-in; where an
-  // integration does, both `role` and `isAdmin` mirror the provider's claim
-  // (src/lib/external-user.ts), so reading either is reading the provider.
-  // `isAdmin` stays consulted because rows granted admin before the role
-  // column existed carry it there.
-  if (user.role === "owner" || user.role === "admin") return true;
-  if (user.isAdmin) return true;
-  // APP_ADMIN_EMAILS is an authorization convenience for someone already
-  // authenticated and authorized — deliberately NOT break-glass (it cannot
-  // admit anyone; see BREAK_GLASS_EMAIL in src/lib/authorize.ts for that).
-  if (user.email && env.APP_ADMIN_EMAILS.includes(user.email.toLowerCase())) return true;
-  return false;
+  // Defined in terms of the role list rather than beside it. rolesOf() folds in
+  // every older way of being an admin — the `role` column, the `isAdmin` flag an
+  // integration mirrors from its provider, and APP_ADMIN_EMAILS — so this answer
+  // and the Roles page always name the same people.
+  return hasRole(user, MALLOYYO_ADMIN);
 }
 
 // The admin gate for API routes: throws, so the route decides the response shape.

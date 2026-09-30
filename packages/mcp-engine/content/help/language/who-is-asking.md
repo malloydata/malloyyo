@@ -38,10 +38,26 @@ it.
 
 ## The `MALLOYYO_` prefix is reserved
 
-`MALLOYYO_EMAIL` is the only one that exists. Declaring any other
-`MALLOYYO_*` given is refused at publish — the prefix means "a value this
-server vouches for", and a `$MALLOYYO_ROLE` the server does not fill would read
-as though it did. Name your own givens anything else.
+Two exist: `MALLOYYO_EMAIL` (the signed-in address) and `MALLOYYO_ROLES` (every
+role that person holds, as a list — `where: department in $MALLOYYO_ROLES`).
+Declaring any other `MALLOYYO_*` given is refused at publish: the prefix means
+"a value this server vouches for", and a `$MALLOYYO_ROLE` nothing fills would
+read as though it did. Name your own givens anything else.
+
+## The dataset decides whether it is supplied
+
+Declaring the given is not enough. An admin ticks what a dataset is scoped by,
+and only then is the value supplied and locked. The two halves check each
+other:
+
+- tick it, and a model that does not declare it **cannot be published** — the
+  data would be served unscoped;
+- declare it without the tick, and nothing supplies it, so your filter runs on
+  the declaration default. `publish` says so in that case; do not ignore the
+  line.
+
+That is why the default matters so much (see Notes below): an unsupplied
+`:: string is ''` matches nothing, which is the safe way to be misconfigured.
 
 ## Running it locally
 

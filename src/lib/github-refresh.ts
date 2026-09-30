@@ -39,18 +39,20 @@ import {
   GitHubURLReader,
   fetchGitHubCommitSha,
   fetchGitHubFile,
+  fetchGitHubTarball,
   listGitHubDir,
   listGitHubTree,
   parseGitHubRepo,
   dirFromTree,
   type GitHubDirEntry,
 } from "./github";
+import { ArchiveURLReader, archiveDir, archiveEntries, extractTarGz } from "./tarball";
 import { DEVCONTAINER_PATH } from "./github-source-link";
 import { introspectModelWithReader, withReaderRuntime, fileUrl, type SourceInfo } from "./malloy";
 import { ABOUT_NAME, ABOUT_TITLE } from "@/lib/dashboards/about";
 import { artifactManifest } from "@/lib/dashboards/manifest";
 import { requirementForPublish } from "./tenancy";
-import { discoverRepoLayout, repoPath, rerootFiles } from "./repo-layout";
+import { discoverRepoLayout, layoutFromListing, repoPath, rerootFiles } from "./repo-layout";
 import { logger } from "./logger";
 
 export type RefreshResult =
@@ -100,6 +102,15 @@ type RepoContext = {
    * the probes are the fallback.
    */
   tree: GitHubDirEntry[] | null;
+  /**
+   * The whole repo, from ONE request.
+   *
+   * When this is present nothing below talks to GitHub again: the reader, the
+   * dashboards listing, every component and the config all come out of it. Null
+   * when the archive could not be had, and then each file is fetched on its own
+   * — correct, just expensive, which is the state this replaces.
+   */
+  archive: Map<string, string> | null;
 };
 
 /** Does the repo contain this exact path? `null` tree means "ask GitHub". */
@@ -108,7 +119,7 @@ function treeHas(tree: GitHubDirEntry[] | null, path: string): boolean | null {
   return tree.some((e) => e.type === "file" && e.path === path);
 }
 
-async function repoContext(
+export async function repoContext(
   ds: Pick<Dataset, "githubRepo" | "githubBranch" | "githubUseToken">,
 ): Promise<RepoContext> {
   const slug = ds.githubRepo!;
@@ -116,28 +127,55 @@ async function repoContext(
   const branch = ds.githubBranch ?? "main";
   const useToken = ds.githubUseToken;
 
-  // Both belong to the REPO and are shared by every dataset in it: connections
-  // are the repo's, and the dev container is fetched for its EXISTENCE rather
-  // than its content, so the app can tell whether the repo opens as a working
-  // codespace without asking GitHub again on every page view. Fetching them per
-  // dataset spent an API call per dataset for one answer, and an instance with
-  // no GITHUB_TOKEN has sixty an hour for everything.
-  let malloyConfig: string | undefined;
-  try {
-    malloyConfig = await fetchGitHubFile(owner, repo, branch, "malloy-config.json", { useToken });
-  } catch {
-    // Not present — most repos have none, and DuckDB is the default world.
+  // The repo, in one request. Everything else in this function — and every file
+  // any dataset's compile asks for — comes out of it.
+  let archive: Map<string, string> | null = null;
+  const tgz = await fetchGitHubTarball(owner, repo, branch, { useToken });
+  if (tgz) {
+    try {
+      const extracted = extractTarGz(tgz);
+      archive = extracted.files;
+      logger.info("repo archive read", {
+        repo: slug,
+        branch,
+        files: archive.size,
+        skipped: extracted.skipped.length,
+        bytes: tgz.length,
+      });
+    } catch (e) {
+      // A repo we cannot unpack is one we can still read file by file.
+      logger.warn("repo archive unreadable — falling back to per-file reads", {
+        repo: slug,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
   }
+
+  // Both belong to the REPO and are shared by every dataset in it: connections
+  // are the repo's, and the dev container is kept for its EXISTENCE rather than
+  // its content, so the app can tell whether the repo opens as a working
+  // codespace without asking GitHub again on every page view.
+  let malloyConfig: string | undefined;
   let devcontainer: string | undefined;
-  try {
-    devcontainer = await fetchGitHubFile(owner, repo, branch, DEVCONTAINER_PATH, { useToken });
-  } catch {
-    // No dev container — the UI says so when someone asks for a codespace.
+  if (archive) {
+    malloyConfig = archive.get("malloy-config.json");
+    devcontainer = archive.get(DEVCONTAINER_PATH);
+  } else {
+    try {
+      malloyConfig = await fetchGitHubFile(owner, repo, branch, "malloy-config.json", { useToken });
+    } catch {
+      // Not present — most repos have none, and DuckDB is the default world.
+    }
+    try {
+      devcontainer = await fetchGitHubFile(owner, repo, branch, DEVCONTAINER_PATH, { useToken });
+    } catch {
+      // No dev container — the UI says so when someone asks for a codespace.
+    }
   }
 
   const sha = await fetchGitHubCommitSha(owner, repo, branch, { useToken });
-  const tree = await listGitHubTree(owner, repo, branch, { useToken });
-  return { owner, repo, branch, useToken, slug, malloyConfig, devcontainer, sha, tree };
+  const tree = archive ? null : await listGitHubTree(owner, repo, branch, { useToken });
+  return { owner, repo, branch, useToken, slug, malloyConfig, devcontainer, sha, tree, archive };
 }
 
 /**
@@ -151,7 +189,9 @@ async function compileDataset(
   opts: { creating?: boolean } = {},
 ): Promise<{ ok: true; compiled: Compiled } | { ok: false; error: string }> {
   const { owner, repo, branch, useToken } = ctx;
-  const reader = new GitHubURLReader(owner, repo, branch, useToken);
+  const reader = ctx.archive
+    ? new ArchiveURLReader(ctx.archive)
+    : new GitHubURLReader(owner, repo, branch, useToken);
 
   // Where this dataset lives. NULL is the repo root — every single-dataset repo,
   // and every row that predates multi-dataset repos.
@@ -177,12 +217,17 @@ async function compileDataset(
   const dashboards: Array<{ base: string; artifact: ArtifactInfo }> = [];
   let bases: string[] = [];
   try {
-    const entries = ctx.tree
-      ? dirFromTree(ctx.tree, dashboardsDir)
-      : await listGitHubDir(owner, repo, branch, dashboardsDir, { useToken });
-    bases = entries
-      .filter((e) => e.type === "file" && e.name.endsWith(".malloy"))
-      .map((e) => e.name.slice(0, -".malloy".length))
+    const names = ctx.archive
+      ? archiveDir(ctx.archive, dashboardsDir)
+      : (ctx.tree
+          ? dirFromTree(ctx.tree, dashboardsDir)
+          : await listGitHubDir(owner, repo, branch, dashboardsDir, { useToken })
+        )
+          .filter((e) => e.type === "file")
+          .map((e) => e.name);
+    bases = names
+      .filter((n) => n.endsWith(".malloy"))
+      .map((n) => n.slice(0, -".malloy".length))
       .sort();
     if (bases.length) {
       type EngineRuntime = Parameters<typeof modelArtifact>[0];
@@ -216,7 +261,13 @@ async function compileDataset(
       let source = "";
       for (const ext of ["jsx", "tsx"]) {
         const path = `${dashboardsDir}/${base}.${ext}`;
-        // Skip the request entirely when the tree says there is no such file.
+        const fromArchive = ctx.archive?.get(path);
+        if (fromArchive !== undefined) {
+          source = fromArchive;
+          break;
+        }
+        if (ctx.archive) continue; // the archive is the whole repo: it is not there
+        // No archive: skip the request when the tree says there is no such file.
         if (treeHas(ctx.tree, path) === false) continue;
         try {
           source = await fetchGitHubFile(owner, repo, branch, path, { useToken });
@@ -240,9 +291,11 @@ async function compileDataset(
     if (!bases.includes(ABOUT_NAME) && !artifacts.some((r) => r.name === ABOUT_NAME)) {
       for (const ext of ["jsx", "tsx"]) {
         const path = `${dashboardsDir}/${ABOUT_NAME}.${ext}`;
+        const fromArchive = ctx.archive?.get(path);
+        if (ctx.archive && fromArchive === undefined) continue;
         if (treeHas(ctx.tree, path) === false) continue;
         try {
-          const source = await fetchGitHubFile(owner, repo, branch, path, { useToken });
+          const source = fromArchive ?? (await fetchGitHubFile(owner, repo, branch, path, { useToken }));
           artifacts.unshift({
             name: ABOUT_NAME,
             title: ABOUT_TITLE,
@@ -342,6 +395,8 @@ async function writeCompiled(
   return { version: created.version, generatedBy: created.generatedBy, compiledAt: created.compiledAt };
 }
 
+export type { RepoContext };
+
 export type RepoRefreshResult = {
   /** Advanced, in this refresh's single transaction, all at `sha`. */
   refreshed: { id: string; name: string; version: number }[];
@@ -373,10 +428,11 @@ export async function refreshRepo(
   if (rows.length === 0) return { error: `no datasets are backed by ${repoSlug}@${branch}` };
 
   const ctx = await repoContext(rows[0]);
-  const layout = await discoverRepoLayout(ctx.owner, ctx.repo, branch, {
-    useToken: ctx.useToken,
-    tree: ctx.tree,
-  });
+  // The archive IS the repo, so the layout comes out of it — no second request
+  // to learn a shape we are already holding.
+  const layout = ctx.archive
+    ? await layoutFromListing(async (path) => archiveEntries(ctx.archive!, path), `${repoSlug}@${branch}`)
+    : await discoverRepoLayout(ctx.owner, ctx.repo, branch, { useToken: ctx.useToken, tree: ctx.tree });
   if (!layout.ok) return { error: layout.error };
 
   // What the repo publishes NOW, keyed by directory. A single-dataset repo
@@ -450,7 +506,10 @@ export async function refreshRepo(
  */
 export async function refreshGitHubModel(
   datasetId: string,
-  opts: { creating?: boolean } = {},
+  /** `ctx`: a context the caller already built. Creation fills several rows from
+      one repo, and building a context per row would download the whole archive
+      per dataset — the cost this change exists to remove. */
+  opts: { creating?: boolean; ctx?: RepoContext } = {},
 ): Promise<RefreshResult> {
   const [ds] = await db.select().from(datasets).where(eq(datasets.id, datasetId));
   if (!ds) return { ok: false, error: "dataset not found" };
@@ -462,7 +521,7 @@ export async function refreshGitHubModel(
     repoDir: ds.repoDir,
   });
 
-  const ctx = await repoContext(ds);
+  const ctx = opts.ctx ?? (await repoContext(ds));
   const r = await compileDataset(ds, ctx, opts);
   if (!r.ok) {
     logger.error("refreshGitHubModel failed", { datasetId, repo: ds.githubRepo, error: r.error });

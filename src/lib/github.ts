@@ -92,6 +92,41 @@ export class GitHubURLReader {
 }
 
 /**
+ * The whole repo, in ONE request.
+ *
+ * This is how a repo should be read. The contents API costs a request per file,
+ * and an instance with no GITHUB_TOKEN has sixty an hour for everything — a
+ * four-dataset repo spent all sixty on a single refresh, measured twice. The
+ * archive is also what `malloyyo publish` sends, so both ways a repo arrives
+ * reach the same extractor (src/lib/tarball.ts).
+ *
+ * Returns null when GitHub will not give it, so a caller can fall back to
+ * reading files one at a time rather than failing outright.
+ */
+export async function fetchGitHubTarball(
+  owner: string,
+  repo: string,
+  ref: string,
+  opts: { useToken?: boolean } = {},
+): Promise<Buffer | null> {
+  const useToken = opts.useToken !== false;
+  const url = `https://api.github.com/repos/${owner}/${repo}/tarball/${encodeURIComponent(ref)}`;
+  const headers: Record<string, string> = {
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+  if (useToken && env.GITHUB_TOKEN) headers["Authorization"] = `Bearer ${env.GITHUB_TOKEN}`;
+
+  const res = await githubFetch(url, headers);
+  if (!res.ok) return null;
+  try {
+    return Buffer.from(await res.arrayBuffer());
+  } catch {
+    return null;
+  }
+}
+
+/**
  * The commit a branch currently points at.
  *
  * Recorded on every model a repo refresh writes, which is what makes "these

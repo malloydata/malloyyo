@@ -10,7 +10,7 @@ import { isAdmin } from "@/lib/admin";
 import { canAuthor, datasetVisibleWhere } from "@/lib/roles";
 import { nameToSlug } from "@/lib/slug";
 import { parseGitHubRepo } from "@/lib/github";
-import { refreshGitHubModel } from "@/lib/github-refresh";
+import { refreshGitHubModel, repoContext, type RepoContext } from "@/lib/github-refresh";
 import { discoverRepoLayout } from "@/lib/repo-layout";
 import { logger, serializeErr } from "@/lib/logger";
 import { captureTelemetry } from "@/lib/telemetry";
@@ -98,6 +98,24 @@ export async function POST(req: Request) {
     );
   }
 
+  // ONE context for the whole repo: it holds the repo archive, and building it
+  // per dataset would download the repo once per dataset — which is the cost
+  // reading the archive exists to remove.
+  let ctx: RepoContext;
+  try {
+    ctx = await repoContext({
+      githubRepo: body.githubRepo,
+      githubBranch: branch,
+      githubUseToken: body.useToken,
+    });
+  } catch (err) {
+    logger.error("could not read the repo", { repo: body.githubRepo, branch, ...serializeErr(err) });
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : String(err) },
+      { status: 502 },
+    );
+  }
+
   const created: { id: string; name: string; dir: string | null }[] = [];
   const failures: { name: string; error: string }[] = [];
   let lastResult: Awaited<ReturnType<typeof refreshGitHubModel>> | null = null;
@@ -124,7 +142,7 @@ export async function POST(req: Request) {
       // chance to tick what it is scoped by, so the model decides — the same rule
       // `malloyyo publish --create-dataset` applies. Every LATER refresh omits it,
       // so a model can never widen its own scope afterwards.
-      const result = await refreshGitHubModel(id, { creating: true });
+      const result = await refreshGitHubModel(id, { creating: true, ctx });
       if (!result.ok) {
         failures.push({ name: item.name, error: result.error });
         continue;

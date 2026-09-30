@@ -28,7 +28,7 @@
  * publishes half of what the author meant, which looks like success.
  */
 
-import { dirFromTree, listGitHubDir, listGitHubTree } from "./github";
+import { dirFromTree, listGitHubDir, listGitHubTree, type GitHubDirEntry } from "./github";
 import {
   DATASETS_DIR,
   ENTRY_FILE,
@@ -57,12 +57,15 @@ export async function discoverRepoLayout(
   owner: string,
   repo: string,
   branch: string,
-  opts: { useToken?: boolean } = {},
+  opts: { useToken?: boolean; tree?: GitHubDirEntry[] | null } = {},
 ): Promise<RepoLayout> {
   // One request for the whole tree when GitHub will give it, falling back to a
   // request per directory when it will not (rate limit, or a repo too large to
-  // return whole). The rules are the same either way.
-  const tree = await listGitHubTree(owner, repo, branch, opts);
+  // return whole). The rules are the same either way. A caller that already has
+  // the tree passes it, so a refresh reads the repo's shape once and then uses
+  // the same answer to avoid probing for files it can see are not there.
+  const tree =
+    opts.tree !== undefined ? opts.tree : await listGitHubTree(owner, repo, branch, opts);
   const list: DirLister = tree
     ? async (path) => dirFromTree(tree, path)
     : (path) => listGitHubDir(owner, repo, branch, path, opts);

@@ -91,6 +91,61 @@ export class GitHubURLReader {
   }
 }
 
+/**
+ * Every path in the repo, in ONE request (the git trees API, recursive).
+ *
+ * The Contents API costs a request per directory, and discovering a
+ * multi-dataset repo walks the root, `datasets/`, and each dataset inside it —
+ * so a four-dataset repo spent six requests before reading a single model. An
+ * instance with no GITHUB_TOKEN has sixty requests an hour for everything, and
+ * adding one repo could spend most of them.
+ *
+ * Returns null when the tree cannot be read (a rate limit, a missing branch, or
+ * GitHub's `truncated` flag on a repo too large to return whole), so callers
+ * fall back to walking directories rather than treating "no tree" as "no files".
+ */
+export async function listGitHubTree(
+  owner: string,
+  repo: string,
+  branch: string,
+  opts: { useToken?: boolean } = {},
+): Promise<GitHubDirEntry[] | null> {
+  const useToken = opts.useToken !== false;
+  const url = `https://api.github.com/repos/${owner}/${repo}/git/trees/${encodeURIComponent(branch)}?recursive=1`;
+  const headers: Record<string, string> = {
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+  if (useToken && env.GITHUB_TOKEN) headers["Authorization"] = `Bearer ${env.GITHUB_TOKEN}`;
+
+  const res = await githubFetch(url, headers);
+  if (!res.ok) return null;
+  const body = (await res.json()) as { tree?: { path: string; type: string }[]; truncated?: boolean };
+  // A truncated tree is a PARTIAL answer, and a partial answer here reads as
+  // "that dataset directory does not exist" — the one shape of wrong that
+  // silently publishes less than the author wrote.
+  if (body.truncated || !Array.isArray(body.tree)) return null;
+  return body.tree.map((e) => ({
+    name: e.path.split("/").pop() ?? e.path,
+    path: e.path,
+    type: e.type === "tree" ? ("dir" as const) : ("file" as const),
+  }));
+}
+
+/** A `listGitHubDir`-shaped view over a whole-repo tree: the direct children of
+    `path` ("" being the root). Lets the layout rules run against one fetch. */
+export function dirFromTree(tree: GitHubDirEntry[], path: string): GitHubDirEntry[] {
+  const prefix = path ? `${path.replace(/\/+$/, "")}/` : "";
+  const out: GitHubDirEntry[] = [];
+  for (const e of tree) {
+    if (!e.path.startsWith(prefix)) continue;
+    const rest = e.path.slice(prefix.length);
+    if (!rest || rest.includes("/")) continue; // not a direct child
+    out.push(e);
+  }
+  return out;
+}
+
 export interface GitHubDirEntry {
   name: string;
   path: string;

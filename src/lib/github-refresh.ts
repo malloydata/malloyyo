@@ -10,6 +10,7 @@ import { introspectModelWithReader, withReaderRuntime, fileUrl, type SourceInfo 
 import { ABOUT_NAME, ABOUT_TITLE } from "@/lib/dashboards/about";
 import { artifactManifest } from "@/lib/dashboards/manifest";
 import { requirementForPublish } from "./tenancy";
+import { repoPath, rerootFiles } from "./repo-layout";
 import { logger } from "./logger";
 
 export type RefreshResult =
@@ -56,7 +57,14 @@ export async function refreshGitHubModel(
     // No dev container in this repo — the UI says so when someone asks for one.
   }
 
-  const result = await introspectModelWithReader(reader, "index.malloy", malloyConfig);
+  // Where this dataset lives in the repo. NULL is the root — every
+  // single-dataset repo, and every row that predates multi-dataset repos.
+  // `malloy-config.json` and the dev container above are deliberately NOT under
+  // it: connections belong to the repo and are shared by every dataset in it.
+  const entryPath = repoPath(ds.repoDir, "index.malloy");
+  const dashboardsDir = repoPath(ds.repoDir, "dashboards");
+
+  const result = await introspectModelWithReader(reader, entryPath, malloyConfig);
   if (!result.ok) {
     logger.error("refreshGitHubModel introspection failed", { datasetId, repo: ds.githubRepo, error: result.error });
     return { ok: false, error: result.error };
@@ -102,7 +110,7 @@ export async function refreshGitHubModel(
   // has a dashboards/index.malloy when deciding about the About page.
   let bases: string[] = [];
   try {
-    const entries = await listGitHubDir(owner, repo, branch, "dashboards", { useToken: ds.githubUseToken });
+    const entries = await listGitHubDir(owner, repo, branch, dashboardsDir, { useToken: ds.githubUseToken });
     bases = entries
       .filter((e) => e.type === "file" && e.name.endsWith(".malloy"))
       .map((e) => e.name.slice(0, -".malloy".length))
@@ -112,7 +120,7 @@ export async function refreshGitHubModel(
       const found = await withReaderRuntime(reader, malloyConfig, async (runtime) => {
         const out: Array<{ base: string; artifact: ArtifactInfo }> = [];
         for (const base of bases) {
-          const r = await modelArtifact(runtime as unknown as EngineRuntime, fileUrl(`dashboards/${base}.malloy`), base);
+          const r = await modelArtifact(runtime as unknown as EngineRuntime, fileUrl(`${dashboardsDir}/${base}.malloy`), base);
           if (r.ok && r.artifact) out.push({ base, artifact: r.artifact });
         }
         return out;
@@ -131,7 +139,18 @@ export async function refreshGitHubModel(
     .limit(1);
   const nextVersion = (latest?.version ?? 0) + 1;
 
-  const indexContent = reader.fetched.get("index.malloy") ?? "";
+  // Re-root at this dataset's own directory, so what is stored is rooted at
+  // `index.malloy` exactly as a single-dataset repo's would be. Everything
+  // downstream — the MCP query entry, dashboards, drafts — assumes that, and
+  // this is the one place that has to know otherwise. The real repo path is
+  // reconstructed from `repo_dir` only where a github.com link needs it.
+  const rerooted = rerootFiles(reader.fetched, ds.repoDir);
+  if (!rerooted.ok) {
+    logger.error("refreshGitHubModel path collision", { datasetId, repo: ds.githubRepo, error: rerooted.error });
+    return { ok: false, error: rerooted.error };
+  }
+
+  const indexContent = rerooted.files.get("index.malloy") ?? "";
   const [created] = await db
     .insert(malloyModels)
     .values({
@@ -144,7 +163,7 @@ export async function refreshGitHubModel(
     })
     .returning();
 
-  const allFiles = new Map(reader.fetched);
+  const allFiles = new Map(rerooted.files);
   if (malloyConfig) allFiles.set("malloy-config.json", malloyConfig);
   if (devcontainer) allFiles.set(DEVCONTAINER_PATH, devcontainer);
 
@@ -169,7 +188,7 @@ export async function refreshGitHubModel(
       let source = "";
       for (const ext of ["jsx", "tsx"]) {
         try {
-          source = await fetchGitHubFile(owner, repo, branch, `dashboards/${base}.${ext}`, { useToken: ds.githubUseToken });
+          source = await fetchGitHubFile(owner, repo, branch, `${dashboardsDir}/${base}.${ext}`, { useToken: ds.githubUseToken });
           break;
         } catch {
           // no component with this extension — try the next / render the default
@@ -198,7 +217,7 @@ export async function refreshGitHubModel(
     if (!bases.includes(ABOUT_NAME) && !rows.some((r) => r.name === ABOUT_NAME)) {
       for (const ext of ["jsx", "tsx"]) {
         try {
-          const source = await fetchGitHubFile(owner, repo, branch, `dashboards/${ABOUT_NAME}.${ext}`, {
+          const source = await fetchGitHubFile(owner, repo, branch, `${dashboardsDir}/${ABOUT_NAME}.${ext}`, {
             useToken: ds.githubUseToken,
           });
           rows.unshift({

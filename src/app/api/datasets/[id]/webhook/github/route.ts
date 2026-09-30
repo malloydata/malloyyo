@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { NextResponse, after } from "next/server";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db, datasets } from "@/db";
 import { refreshGitHubModel } from "@/lib/github-refresh";
 import { logger, serializeErr } from "@/lib/logger";
@@ -29,16 +29,50 @@ export async function POST(
     return NextResponse.json({ ok: false, error: "invalid signature" }, { status: 401 });
   }
 
-  const [ds] = await db.select({ id: datasets.id, githubRepo: datasets.githubRepo }).from(datasets).where(eq(datasets.id, id));
+  const [ds] = await db
+    .select({ id: datasets.id, githubRepo: datasets.githubRepo, githubBranch: datasets.githubBranch })
+    .from(datasets)
+    .where(eq(datasets.id, id));
   if (!ds?.githubRepo) {
     // Return 200 anyway so GitHub doesn't retry endlessly.
     return NextResponse.json({ ok: false, error: "dataset not found or has no github_repo" });
   }
 
+  // A multi-dataset repo has ONE webhook, not one per dataset: the push that
+  // changed `datasets/finance/` may equally have changed a shared `lib/` every
+  // other dataset imports, and a repo whose datasets are at different commits is
+  // the state this layout exists to avoid. So refresh every dataset from this
+  // repo and branch, not only the one whose id is in the URL.
+  const siblings = await db
+    .select({ id: datasets.id, name: datasets.name })
+    .from(datasets)
+    .where(
+      and(
+        eq(datasets.githubRepo, ds.githubRepo),
+        ds.githubBranch === null
+          ? eq(datasets.githubBranch, "main")
+          : eq(datasets.githubBranch, ds.githubBranch),
+        eq(datasets.status, "ready"),
+      ),
+    );
+  // The addressed dataset always refreshes, even if it is not `ready` yet.
+  const targets = siblings.some((s) => s.id === ds.id) ? siblings : [{ id: ds.id, name: "" }, ...siblings];
+
   // Run refresh after the response is sent so GitHub gets a quick 200.
   // `after()` uses waitUntil so Vercel keeps the function alive until done.
   after(
-    refreshGitHubModel(id)
+    Promise.all(targets.map((t) => refreshGitHubModel(t.id)))
+      .then((results) => {
+        const result = results.find((r) => !r.ok) ?? results[0];
+        if (results.some((r) => !r.ok)) {
+          logger.error("webhook refresh: some datasets failed", {
+            repo: ds.githubRepo,
+            failed: results.filter((r) => !r.ok).length,
+            of: results.length,
+          });
+        }
+        return result;
+      })
       .then((result) =>
         captureTelemetry({
           event: "model published",

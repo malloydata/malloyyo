@@ -71,6 +71,9 @@ export async function GET(
     isPublic: ds.isPublic,
     githubRepo: ds.githubRepo ?? null,
     githubBranch: ds.githubBranch ?? null,
+    // Where this dataset lives in a multi-dataset repo; null is the root. The
+    // "view source on GitHub" link needs it, because stored paths are re-rooted.
+    repoDir: ds.repoDir ?? null,
     githubUseToken: ds.githubUseToken,
     isAdmin: me ? isAdmin(me) : false,
     dashboards,

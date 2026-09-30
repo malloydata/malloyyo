@@ -28,6 +28,42 @@
 export type RequiredGivens = readonly string[];
 
 /**
+ * The prefix a Malloyyo server reserves for givens it supplies itself.
+ *
+ * Hardcoded rather than passed in, and that is the point. Core's
+ * `finalizeGivens` locks these names — but only the ones the host actually
+ * finalized, which is `datasets.required_givens`. A model that DECLARES
+ * `MALLOYYO_EMAIL` on a dataset nobody ticked the box for is not locked by
+ * anything, and it looks fine from the outside: the declaration default `''`
+ * matches no rows, so every view renders empty and nothing says why. A caller
+ * who passes the name themselves then chooses whose rows they read.
+ *
+ * So the strip below does not consult the requirement list, does not take an
+ * option, and cannot be turned off at a call site. A configuration mistake
+ * must not be the difference between scoped and impersonatable.
+ */
+export const RESERVED_GIVEN_PREFIX = 'MALLOYYO_';
+
+/**
+ * A caller's given map with every reserved name removed.
+ *
+ * Silent rather than an error: a caller cannot set these, so there is nothing
+ * for them to correct, and a model that needs one gets it from the Runtime. The
+ * one case that would deserve a message — a caller deliberately probing — is
+ * the case that must learn the least.
+ */
+export function withoutReservedGivens<T>(
+  givens: Readonly<Record<string, T>> | undefined,
+): Record<string, T> | undefined {
+  if (!givens) return undefined;
+  const kept: Record<string, T> = {};
+  for (const [name, value] of Object.entries(givens)) {
+    if (!name.startsWith(RESERVED_GIVEN_PREFIX)) kept[name] = value;
+  }
+  return kept;
+}
+
+/**
  * The required names, when a query references NONE of them. Empty means pass.
  *
  * ANY, not all. A model may be scoped on more than one axis — one source by the

@@ -177,9 +177,12 @@ export function leaseScope(
 ): { givens: Record<string, GivenValue>; finalize: readonly string[] } {
   const givens: Record<string, GivenValue> = {};
   for (const name of required) {
-    // An address can be absent (users.email is nullable); a role list cannot —
-    // everyone holds at least MALLOYYO_USER — so only the address has a
-    // "supply nothing and let core refuse" branch.
+    // An address can be absent (users.email is nullable), and a role list can be
+    // EMPTY — a row granted nothing holds nothing. The two fail closed
+    // differently: no address supplies nothing, so core refuses the query; an
+    // empty role list is supplied, and `x in $MALLOYYO_ROLES` then matches no
+    // rows. Both are "you see nothing", which is the only safe answer when we
+    // cannot say who is asking.
     if (name === TENANT_EMAIL_GIVEN && user.email) givens[name] = user.email;
     if (name === TENANT_ROLES_GIVEN) givens[name] = user.roles as unknown as GivenValue;
   }

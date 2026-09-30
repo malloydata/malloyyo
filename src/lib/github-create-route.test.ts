@@ -18,10 +18,20 @@ const route = readFileSync(CREATE_ROUTE, "utf8");
 test("initial GitHub dataset creation uses the dashboard-aware refresh importer", () => {
   assert.match(route, /import \{ refreshGitHubModel \} from "@\/lib\/github-refresh"/);
   assert.equal(
-    [...route.matchAll(/refreshGitHubModel\(id\)/g)].length,
+    [...route.matchAll(/refreshGitHubModel\(id\b/g)].length,
     1,
     "the create route must call the shared importer exactly once",
   );
+});
+
+test("…and tells it this is a CREATE, so the first model sets the scoping", () => {
+  // Without `creating`, a dataset made from a repo whose model declares
+  // MALLOYYO_EMAIL records no requirement. `leaseScope` then finalizes nothing,
+  // so core locks no name and the usage gate is off — the dataset looks scoped
+  // (the declaration default '' matches no rows) while a caller who passes the
+  // given themselves reads whichever tenant they name. The CLI push path has
+  // always done this; only the UI path was missing it.
+  assert.match(route, /refreshGitHubModel\(id,\s*\{\s*creating:\s*true\s*\}\)/);
 });
 
 test("initial GitHub dataset creation has no second root-model-only loader", () => {

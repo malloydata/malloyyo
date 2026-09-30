@@ -978,3 +978,87 @@ test("a draft is recorded by its own author; a colleague gets the files and a no
   const [row] = await db.select().from(draftDashboards).where(eq(draftDashboards.slug, slug));
   assert.equal(row?.promotedAs, null, "the author's row is untouched");
 });
+
+// ── Tenant scoping: the dataset is the authority ────────────────────────────
+//
+// What a dataset is scoped by is CONFIGURED by an admin, and a model published
+// to it must declare those givens. The exception is creation, which has no admin
+// to have configured anything. See docs/multi-tenant-givens.md.
+
+const SCOPED_MODEL = `##! experimental { givens }
+given:
+  MALLOYYO_EMAIL :: string is ''
+#" Pet shop sales, scoped to the buyer.
+source: sales is duckdb.sql("""
+  SELECT 'dog' as animal, 'a@b.com' as buyer, 2 as qty
+  UNION ALL SELECT 'cat', 'c@d.com', 3
+""") extend {
+  where: buyer = $MALLOYYO_EMAIL
+  measure: total_qty is qty.sum()
+  #" Units sold per animal.
+  view: by_animal is { group_by: animal; aggregate: total_qty }
+}
+`;
+
+test("a dataset created by a publish takes its scoping from that model", async () => {
+  const name = `${DS_MAIN}_scoped`;
+  const dir = makeProject(name, { model: SCOPED_MODEL });
+  const r = await runCli(["publish", "test", dir, "--token", token, "--create-dataset"], dir);
+  assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`);
+
+  const [ds] = await datasetRows(name);
+  assert.deepEqual(ds.requiredGivens, ["MALLOYYO_EMAIL"], "no admin had a chance to configure it");
+});
+
+test("a model that stops declaring what the dataset is scoped by is REFUSED", async () => {
+  const name = `${DS_MAIN}_sticky`;
+  const scoped = makeProject(name, { model: SCOPED_MODEL });
+  assert.equal(
+    (await runCli(["publish", "test", scoped, "--token", token, "--create-dataset"], scoped)).code,
+    0,
+  );
+
+  // The accident: the given and its filter are gone. Publishing this would
+  // return every buyer's rows to every user.
+  const plain = makeProject(name, { model: MODEL });
+  const r = await runCli(["publish", "test", plain, "--token", token], plain);
+
+  assert.notEqual(r.code, 0, "the publish must fail");
+  assert.match(`${r.stdout}${r.stderr}`, /does not declare it/);
+
+  const [ds] = await datasetRows(name);
+  assert.deepEqual(ds.requiredGivens, ["MALLOYYO_EMAIL"], "and the requirement survives");
+  assert.equal((await models(ds.id)).length, 1, "no second version was written");
+});
+
+test("publishing does not add to what a dataset is scoped by", async () => {
+  // Configured, not derived: a model declaring MORE than the dataset requires
+  // publishes fine and changes nothing, but says so — nothing supplies the
+  // extra one, so its filter would quietly use the declaration default.
+  const name = `${DS_MAIN}_extra`;
+  const plain = makeProject(name, { model: MODEL });
+  assert.equal(
+    (await runCli(["publish", "test", plain, "--token", token, "--create-dataset"], plain)).code,
+    0,
+  );
+  assert.deepEqual((await datasetRows(name))[0].requiredGivens, [], "created unscoped");
+
+  const scoped = makeProject(name, { model: SCOPED_MODEL });
+  const r = await runCli(["publish", "test", scoped, "--token", token], scoped);
+  assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`);
+  assert.match(r.stdout, /declares MALLOYYO_EMAIL, which this dataset is NOT scoped by/);
+  assert.deepEqual((await datasetRows(name))[0].requiredGivens, [], "still unscoped");
+});
+
+test("a reserved given this server does not fill is refused at publish", async () => {
+  const name = `${DS_MAIN}_reserved`;
+  const dir = makeProject(name, {
+    model: SCOPED_MODEL.replace("MALLOYYO_EMAIL :: string is ''", "MALLOYYO_ROLE :: string is ''")
+      .replace("buyer = $MALLOYYO_EMAIL", "buyer = $MALLOYYO_ROLE"),
+  });
+  const r = await runCli(["publish", "test", dir, "--token", token, "--create-dataset"], dir);
+
+  assert.notEqual(r.code, 0);
+  assert.match(`${r.stdout}${r.stderr}`, /reserved/);
+  assert.equal((await datasetRows(name)).length, 0, "a refused publish creates no dataset");
+});

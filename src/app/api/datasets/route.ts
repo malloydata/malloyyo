@@ -81,7 +81,11 @@ export async function POST(req: Request) {
     // Initial creation and every later refresh must ingest the same repository shape.
     // Keeping a second root-model-only loader here once made a newly created dataset omit
     // dashboards until somebody manually refreshed it.
-    const result = await refreshGitHubModel(id);
+    // `creating`: this is the dataset's first model, and no admin has had a
+    // chance to tick what it is scoped by, so the model decides — the same rule
+    // `malloyyo publish --create-dataset` applies. Every LATER refresh omits it,
+    // so a model can never widen its own scope afterwards.
+    const result = await refreshGitHubModel(id, { creating: true });
     if (!result.ok) {
       void captureTelemetry(
         {

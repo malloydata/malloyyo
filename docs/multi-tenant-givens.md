@@ -46,7 +46,30 @@ import, whether the data it serves is scoped — and an earlier version of this
 did exactly that, including through a shared `lib/` nobody read.
 
 The one exception is a dataset CREATED by a publish: there was no admin to have
-ticked anything, so it takes its list from that first model.
+ticked anything, so it takes its list from that first model. **Both** creation
+paths do this — `malloyyo publish --create-dataset` and `POST /api/datasets`
+(which passes `creating` to `refreshGitHubModel`). They have to agree: a dataset
+created without its list recorded is a dataset `finalizeGivens` never locks, and
+§3 below is then the only thing standing between a caller and another tenant's
+rows.
+
+### 1a. A caller can never send a reserved name
+
+Every `MALLOYYO_*` key is removed from a caller-supplied `givens` map before the
+compiler sees it, in `executeMaterialized` (and in `runNamedMalloyFiles`, which
+compiles for itself). Unconditionally: it does not consult `required_givens`, it
+takes no option, and no call site can turn it off.
+
+That looks redundant next to `finalizeGivens`, and is not. Core locks exactly the
+names the host finalized — which is `required_givens`. A model that DECLARES
+`MALLOYYO_EMAIL` on a dataset whose box was never ticked is locked by nothing,
+and the failure is invisible: the declaration default `''` matches no rows, so
+every view renders empty and reads as a modelling mistake rather than a missing
+lock. A caller who passes the name then chooses whose rows they read.
+
+So the rule is not "lock the names we supply" but "a caller cannot name one at
+all". The strip is silent rather than an error — there is nothing for an honest
+caller to correct, and a dishonest one learns nothing from it.
 
 ### 2. At serve time, attach unconditionally
 

@@ -77,6 +77,8 @@ export {
   declaredGivenNames,
   unreferencedGivens,
   unreferencedGivensMessage,
+  withoutReservedGivens,
+  RESERVED_GIVEN_PREFIX,
   type RequiredGivens,
 } from './host-givens';
 export {

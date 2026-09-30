@@ -12,7 +12,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as malloy from '@malloydata/malloy';
-import { runRestricted, unreferencedGivens, unreferencedGivensMessage } from '../src/index';
+import {
+  runRestricted,
+  unreferencedGivens,
+  unreferencedGivensMessage,
+  withoutReservedGivens,
+} from '../src/index';
 
 // Importing a db-* package self-registers it on malloy's module-level registry,
 // which is what a `{"is": "duckdb"}` connection in the config resolves against.
@@ -99,10 +104,37 @@ test('a scoped model returns only the asker’s rows', async () => {
 });
 
 test('a caller cannot choose who they are', async () => {
-  // core's finalizeGivens, not ours: the override throws at API entry.
+  // TWO mechanisms, and the order matters: our strip removes the reserved name
+  // before the compiler ever sees it, so the run SUCCEEDS and returns the
+  // runtime identity's rows. The override is not rejected, it is ignored — which
+  // is the behaviour we want, because the name is stripped whether or not the
+  // host finalized it, and a caller probing for one learns nothing.
   const r = await run(SCOPED, { email: 'a@b.com', override: 'c@d.com' });
-  assert.equal(r.ok, false);
-  assert.match(r.ok ? '' : r.why, /finalized at the runtime layer/);
+  assert.equal(r.ok, true, r.ok ? '' : r.why);
+  assert.deepEqual(r.ok ? r.rows : null, [{ who: 'a@b.com' }], 'the RUNTIME identity, not the override');
+});
+
+test('…and core refuses the override on its own, if one ever reached it', async () => {
+  // The second mechanism, measured directly rather than through runRestricted,
+  // because the strip above means nothing gets this far any more. Pinned so a
+  // change in core's `finalizeGivens` contract does not pass unnoticed: if this
+  // ever stops throwing, the strip is the only thing left.
+  const cfg = config(true);
+  try {
+    const reader = new malloy.InMemoryURLReader(new Map([[BASE + 'm.malloy', SCOPED]]));
+    const runtime = new malloy.Runtime({
+      config: cfg,
+      urlReader: reader,
+      givens: { MALLOYYO_EMAIL: 'a@b.com' },
+    } as never);
+    const q = runtime.loadModel(new URL(BASE + 'm.malloy')).loadQuery('run: rows');
+    await assert.rejects(
+      () => q.getSQL({ givens: { MALLOYYO_EMAIL: 'c@d.com' } }),
+      /finalized at the runtime layer/,
+    );
+  } finally {
+    await cfg.shutdown('close');
+  }
 });
 
 test('no identity supplied → refused, never the declaration default', async () => {
@@ -145,4 +177,51 @@ test('a source-level filter carries the reference to every query over it', async
   // costs an author nothing when they filter in the right place.
   const r = await run(SCOPED, { email: 'a@b.com' });
   assert.equal(r.ok, true, r.ok ? '' : r.why);
+});
+
+test('a reserved given a caller SENDS is stripped, finalized or not', () => {
+  // The hole this closes: `finalizeGivens` only locks the names the host put in
+  // it, which is `datasets.required_givens`. A model that DECLARES
+  // MALLOYYO_EMAIL on a dataset nobody ticked the box for is locked by nothing,
+  // and it looks fine from outside — the declaration default '' matches no rows,
+  // so every view renders empty. A caller passing the name then picks whose rows
+  // they read. So the strip does not consult the requirement list at all.
+  assert.deepEqual(withoutReservedGivens({ MALLOYYO_EMAIL: 'ceo@corp.com' }), {});
+  assert.deepEqual(
+    withoutReservedGivens({ MALLOYYO_EMAIL: 'ceo@corp.com', REGION: 'west' }),
+    { REGION: 'west' },
+    'an ordinary given is untouched',
+  );
+  assert.deepEqual(withoutReservedGivens({ MALLOYYO_ROLES: ['admin'] }), {});
+  assert.deepEqual(withoutReservedGivens(undefined), undefined, 'nothing sent, nothing built');
+  assert.deepEqual(withoutReservedGivens({}), {});
+  // Prefix, not an allowlist: a name this server does not fill today must not be
+  // settable either, or adding one later silently opens what was already sent.
+  assert.deepEqual(withoutReservedGivens({ MALLOYYO_ORGANIZATION: 'acme' }), {});
+  assert.deepEqual(
+    withoutReservedGivens({ malloyyo_email: 'x' }),
+    { malloyyo_email: 'x' },
+    'case-sensitive: the reserved prefix is exactly MALLOYYO_',
+  );
+});
+
+test('an UNFINALIZED reserved given cannot be set by the caller either', async () => {
+  // The end-to-end version of the test above, and the one that would have caught
+  // the regression: same scoped model, but the host finalizes NOTHING — the state
+  // a dataset with an empty required_givens list is in. Before the strip, the
+  // caller's value bound and they read another tenant's row.
+  const cfg = config(false);
+  try {
+    const reader = new malloy.InMemoryURLReader(new Map([[BASE + 'm.malloy', SCOPED]]));
+    const runtime = new malloy.Runtime({ config: cfg, urlReader: reader } as never);
+    const out = await runRestricted(runtime, new URL(BASE + 'm.malloy'), 'run: rows', {
+      givens: { MALLOYYO_EMAIL: 'a@b.com' },
+    });
+    // The value never reaches the compiler, so the declaration default '' stands
+    // and matches nobody. Empty, not somebody else's rows.
+    assert.equal(out.ok, true, out.ok ? '' : (out.problems ?? []).map((p) => p.message).join(' | '));
+    assert.deepEqual(out.ok ? out.rows : null, [], 'the caller got nothing, not a@b.com');
+  } finally {
+    await cfg.shutdown('close');
+  }
 });

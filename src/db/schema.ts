@@ -172,6 +172,33 @@ export const roles = pgTable("roles", {
     .default(sql`now()`),
 });
 
+/**
+ * The givens a dataset can be scoped by — the checkbox list an admin sees.
+ *
+ * A catalog rather than a hardcoded pair, because the interesting version of
+ * this is the one that is not built in: `ORGANIZATION` on a customer-reports
+ * dataset, satisfied from a value set on the user or on one of their roles.
+ * That work is designed but not built (docs/given-variables.md); the table
+ * exists now so adding it is rows and a resolver rather than another migration
+ * through every call site.
+ *
+ * BUILT-IN givens resolve from the session itself and are seeded here. Anything
+ * else will resolve from a value attached to the user or to a role they hold,
+ * and cannot be created yet.
+ */
+export const givens = pgTable("givens", {
+  /** The name a model declares and a dataset requires — `MALLOYYO_EMAIL`,
+      later `ORGANIZATION`. The primary key, because the name IS the identity
+      everywhere else. */
+  name: text("name").primaryKey(),
+  description: text("description"),
+  /** Resolved from the session. The others (none yet) resolve from variables. */
+  builtin: boolean("builtin").notNull().default(false),
+  createdAt: timestamp("created_at", { withTimezone: true })
+    .notNull()
+    .default(sql`now()`),
+});
+
 export const datasets = pgTable(
   "datasets",
   {
@@ -187,14 +214,21 @@ export const datasets = pgTable(
     githubBranch: text("github_branch"),
     githubUseToken: boolean("github_use_token").notNull().default(true),
     /**
-     * The `MALLOYYO_*` givens this dataset's model must declare, and which the
-     * server supplies on every query against it (src/lib/tenancy.ts).
+     * The givens this dataset is scoped by: supplied on every query against it,
+     * locked so no caller can choose them, and required of every model
+     * published to it (src/lib/tenancy.ts).
      *
-     * DERIVED, then sticky: the first publish whose model declares one records
-     * it here, and a later publish that drops it is REFUSED. A commit can add
-     * tenant scoping to a dataset and can never take it away — removing a
-     * requirement is a deliberate act against this column, not a side effect of
-     * a push. Empty (the default) means an ordinary, unscoped dataset.
+     * CONFIGURED, not derived. An admin ticks them; the model must then declare
+     * them or its publish is refused. The authority sits with the dataset
+     * because that is where access is decided — a model arriving from a repo
+     * should not be able to decide, by what it happens to import, whether the
+     * data it serves is scoped.
+     *
+     * The exception is dataset CREATION, which has no admin to have ticked
+     * anything yet: a dataset created by a publish takes its requirements from
+     * that first model. From then on the list is the admin's.
+     *
+     * Empty (the default) is an ordinary, unscoped dataset.
      */
     requiredGivens: text("required_givens").array().notNull().default(sql`'{}'::text[]`),
     /**

@@ -58,7 +58,9 @@ export async function refreshGitHubModel(datasetId: string): Promise<RefreshResu
 
   // The same rule the CLI push path applies, and it matters MORE here: a commit
   // in a model repo refreshes without anyone holding a publish token, so this is
-  // where a dropped `given:` would otherwise quietly unscope a dataset.
+  // where a model that stopped declaring what the dataset is scoped by would
+  // otherwise quietly serve it unscoped. A refresh never creates a dataset, so
+  // there is no `creating` case: the dataset's list always wins.
   const requirement = requirementForPublish(ds.requiredGivens ?? [], result.declaredGivens);
   if (!requirement.ok) {
     logger.error("refreshGitHubModel refused", { datasetId, repo: ds.githubRepo, error: requirement.error });
@@ -104,13 +106,6 @@ export async function refreshGitHubModel(datasetId: string): Promise<RefreshResu
     .orderBy(desc(malloyModels.createdAt))
     .limit(1);
   const nextVersion = (latest?.version ?? 0) + 1;
-
-  if (requirement.added.length > 0) {
-    await db
-      .update(datasets)
-      .set({ requiredGivens: requirement.required })
-      .where(eq(datasets.id, ds.id));
-  }
 
   const indexContent = reader.fetched.get("index.malloy") ?? "";
   const [created] = await db

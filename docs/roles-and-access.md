@@ -63,8 +63,10 @@ subsets, that is two datasets — see [Organising a repo](#organising-a-repo).
 
 ## Inside a dataset: two givens
 
-A model can ask who is asking. Two values are supplied by Malloyyo and cannot be
-set by anyone making a query:
+A model can ask who is asking. Two values can be supplied by Malloyyo, and
+neither can be set by anyone making a query. **An admin ticks which of them a
+dataset is scoped by** — declaring one in a model does not scope the data by
+itself:
 
 ```malloy
 ##! experimental { givens }
@@ -79,6 +81,15 @@ the model without it would be refused rather than run unscoped.
 
 `$MALLOYYO_EMAIL` is the signed-in address. `$MALLOYYO_ROLES` is the list of
 roles that person holds, built-in and your own together.
+
+The two halves check each other. Tick a given on the dataset and a model that
+does not declare it cannot be published. Declare one that is not ticked and
+nothing supplies it — the model's default applies, and `publish` says so.
+
+Only these two today. The interesting version is the one that is not built in —
+`ORGANIZATION` on a customer-reports dataset, satisfied from a value set on the
+person or on one of their roles. That is designed but not built; see
+`docs/given-variables.md`.
 
 Scope rows by whoever is asking:
 

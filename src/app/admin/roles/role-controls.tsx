@@ -239,3 +239,53 @@ export function DefaultRoles({ all, current }: { all: string[]; current: string[
     </div>
   );
 }
+
+/** What a dataset is scoped by. Configured, not inferred from the model — the
+    model must then declare what is ticked here or its next publish is refused. */
+export function DatasetGivens({
+  datasetId,
+  all,
+  required,
+}: {
+  datasetId: string;
+  all: { name: string; description: string | null }[];
+  required: string[];
+}) {
+  const { run, busy, error } = useAction();
+  const [picked, setPicked] = useState<string[]>(required);
+  const dirty = picked.length !== required.length || picked.some((g) => !required.includes(g));
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex flex-wrap gap-x-3 gap-y-1">
+        {all.map((g) => (
+          <label key={g.name} className="inline-flex items-center gap-1 text-xs" title={g.description ?? undefined}>
+            <input
+              type="checkbox"
+              checked={picked.includes(g.name)}
+              onChange={(e) =>
+                setPicked((p) => (e.target.checked ? [...p, g.name] : p.filter((x) => x !== g.name)))
+              }
+            />
+            <span className="font-mono">{g.name}</span>
+          </label>
+        ))}
+      </div>
+      {dirty && (
+        <span className="inline-flex items-center gap-2">
+          <button
+            type="button"
+            className={BTN}
+            disabled={busy}
+            onClick={() => void run({ action: "set-dataset-givens", datasetId, givens: picked })}
+          >
+            Save
+          </button>
+          <button type="button" className={BTN} disabled={busy} onClick={() => setPicked(required)}>
+            Cancel
+          </button>
+        </span>
+      )}
+      {error && <span className="text-xs text-red-600 dark:text-red-400">{error}</span>}
+    </div>
+  );
+}

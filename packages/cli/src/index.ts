@@ -226,13 +226,12 @@ async function publish(
       (dashboards.length ? `, ${dashboards.length} dashboard(s)` : "") +
       (out.requiredGivens?.length ? `, scoped by ${out.requiredGivens.join(", ")}` : ""),
   );
-  if (out.scopedNow?.length) {
-    // Sticky: only an admin can clear it. If this is a surprise, the likely
-    // cause is a non-selective `import` of a file that declares the given —
-    // `import { thing } from "…"` surfaces the source without the given.
+  if (out.declaredButUnused?.length) {
+    const many = out.declaredButUnused.length > 1;
     console.log(
-      `  ↳ this publish SCOPED the dataset by ${out.scopedNow.join(", ")}. Every query must now ` +
-        `filter on ${out.scopedNow.length > 1 ? "them" : "it"}, and only an admin can undo this.`,
+      `  ↳ this model declares ${out.declaredButUnused.join(", ")}, which this dataset is NOT ` +
+        `scoped by. Nothing supplies ${many ? "them" : "it"}, so ${many ? "those filters" : "that filter"} ` +
+        `will use the declaration default. An admin ticks ${many ? "them" : "it"} on the dataset.`,
     );
   }
 }

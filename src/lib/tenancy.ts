@@ -26,9 +26,11 @@
  *
  * WHAT IS OURS is making it impossible to quietly stop being scoped:
  *
- *   1. The DATASET records what it requires (`datasets.required_givens`),
- *      derived from the first model that declares it. A later publish that
- *      drops the declaration is REFUSED — see requirementForPublish below.
+ *   1. The DATASET records what it is scoped by (`datasets.required_givens`),
+ *      configured by an admin. A model published to it must declare those
+ *      givens or the publish is REFUSED — see requirementForPublish below. A
+ *      dataset created BY a publish takes its list from that first model,
+ *      because there was no admin to have ticked anything yet.
  *   2. The values are attached to EVERY lease on such a dataset, not only when
  *      the model still declares the name. Attaching conditionally is the branch
  *      that fails open: a model that stopped declaring it would simply stop
@@ -100,47 +102,64 @@ export function reservedGivenError(names: string[]): string {
 }
 
 export type RequirementDecision =
-  | { ok: true; required: string[]; added: string[] }
+  | { ok: true; required: string[]; declaredButUnused: string[] }
   | { ok: false; error: string };
 
 /**
- * What a dataset requires after this publish, or why the publish is refused.
+ * Whether this model may be published to this dataset, given what the dataset
+ * is scoped by.
  *
- * `current` is what the dataset already records; `declared` is what the model
- * being published declares. The asymmetry is the whole point:
+ * The direction matters and it is the opposite of what it was. The DATASET is
+ * the authority — an admin ticked what it is scoped by — and the model must
+ * declare those givens or the publish is refused. A model arriving from a repo
+ * does not get to decide, by what it happens to import, whether the data it
+ * serves is scoped.
  *
- *   - a name the model declares and the dataset does not → **recorded**. This is
- *     how a dataset becomes scoped: by someone publishing a model that says so,
- *     not by an admin remembering to tick a box.
- *   - a name the dataset requires and the model no longer declares → **refused**,
- *     because that publish would otherwise make the data unscoped. Removing a
- *     requirement is a deliberate act against the dataset, not a side effect of
- *     a push.
+ * `current` is what the dataset requires; `declared` is what the model declares.
+ *
+ *   - required but NOT declared → refused. The dataset says "scope by this" and
+ *     the model has nowhere to put the value; publishing it would serve the data
+ *     unscoped.
+ *   - declared but NOT required → allowed, and reported. The author may be
+ *     mid-setup, waiting for an admin to tick the box. Nothing is supplied for
+ *     it, so the model's own default applies — which is why the safe-default
+ *     advice in yo_help matters.
+ *
+ * `creating` is the one exception: a dataset created by a publish has had no
+ * admin to tick anything, so it takes its requirements from that first model.
  */
 export function requirementForPublish(
   current: readonly string[],
   declared: Iterable<string>,
+  opts: { creating?: boolean } = {},
 ): RequirementDecision {
   const unsupported = unsupportedReservedGivens(declared);
   if (unsupported.length > 0) return { ok: false, error: reservedGivenError(unsupported) };
 
-  const declaredReserved = new Set(reservedDeclarations(declared));
-  const dropped = current.filter((n) => !declaredReserved.has(n)).sort();
-  if (dropped.length > 0) {
+  const declaredSet = new Set(declared);
+
+  if (opts.creating) {
+    const required = reservedDeclarations(declared);
+    return { ok: true, required, declaredButUnused: [] };
+  }
+
+  const missing = [...current].filter((n) => !declaredSet.has(n)).sort();
+  if (missing.length > 0) {
     return {
       ok: false,
       error:
-        `${dropped.join(", ")}: this dataset is scoped by ${dropped.length > 1 ? "these givens" : "this given"}, ` +
-        `and the model being published no longer declares ${dropped.length > 1 ? "them" : "it"}. ` +
-        `Publishing it would return every row to every user. Restore the declaration ` +
-        `(\`given: ${dropped[0]} :: string is ''\`) and the filter that uses it, or have an admin ` +
-        `clear the requirement on the dataset first.`,
+        `${missing.join(", ")}: this dataset is scoped by ${missing.length > 1 ? "these givens" : "this given"}, ` +
+        `and the model being published does not declare ${missing.length > 1 ? "them" : "it"}. ` +
+        `Publishing it would serve the data unscoped. Declare ${missing.length > 1 ? "them" : "it"} ` +
+        `(\`given: ${missing[0]} :: string is ''\`) and filter on ${missing.length > 1 ? "them" : "it"}, ` +
+        `or have an admin untick ${missing.length > 1 ? "them" : "it"} on the dataset.`,
     };
   }
 
-  const required = [...new Set([...current, ...declaredReserved])].sort();
-  const added = required.filter((n) => !current.includes(n));
-  return { ok: true, required, added };
+  const declaredButUnused = reservedDeclarations(declared)
+    .filter((n) => !current.includes(n))
+    .sort();
+  return { ok: true, required: [...current], declaredButUnused };
 }
 
 /**

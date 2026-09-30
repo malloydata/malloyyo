@@ -7,7 +7,7 @@
 
 import { NextResponse } from "next/server";
 import { eq, inArray, sql } from "drizzle-orm";
-import { db, datasets, instanceSettings, roles, users } from "@/db";
+import { db, datasets, givens, instanceSettings, roles, users } from "@/db";
 import { requireAdmin } from "@/lib/admin";
 import { UnauthorizedError } from "@/lib/user";
 import { env } from "@/lib/env";
@@ -90,6 +90,25 @@ export async function POST(req: Request) {
       break;
     }
 
+    case "set-dataset-givens": {
+      // What a dataset is scoped by. Configured here, not derived from whatever
+      // a model happened to declare — and only names from the catalog, so a
+      // typo cannot create a requirement nothing can ever satisfy.
+      const datasetId = typeof body?.datasetId === "string" ? body.datasetId : null;
+      if (!datasetId) return bad("datasetId is required");
+      const wanted = Array.isArray(body?.givens)
+        ? (body.givens as unknown[]).filter((x): x is string => typeof x === "string")
+        : [];
+      if (wanted.length > 0) {
+        const known = await db.select({ name: givens.name }).from(givens).where(inArray(givens.name, wanted));
+        const unknown = wanted.filter((g) => !known.some((k) => k.name === g));
+        if (unknown.length) return bad(`unknown given(s): ${unknown.join(", ")}`);
+      }
+      await db.update(datasets).set({ requiredGivens: [...new Set(wanted)] }).where(eq(datasets.id, datasetId));
+      logger.info("dataset givens set", { datasetId, givens: wanted, actorId: actor.id });
+      break;
+    }
+
     case "set-default": {
       const wanted = Array.isArray(body?.roles) ? (body.roles as unknown[]).filter((x): x is string => typeof x === "string") : [];
       await db
@@ -104,7 +123,9 @@ export async function POST(req: Request) {
     }
 
     default:
-      return bad("expected action: create | delete | set-datasets | set-user-roles | set-default");
+      return bad(
+        "expected action: create | delete | set-datasets | set-user-roles | set-dataset-givens | set-default",
+      );
   }
 
   return NextResponse.json({ ok: true });

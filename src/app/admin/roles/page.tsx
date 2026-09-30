@@ -8,10 +8,17 @@
 // set once and then forgotten.
 
 import { asc, desc, eq } from "drizzle-orm";
-import { db, datasets, roles as rolesTable, users } from "@/db";
+import { db, datasets, givens as givensTable, roles as rolesTable, users } from "@/db";
 import { requireAdminPage } from "@/lib/admin";
 import { defaultRoles, isBuiltinRole, rolesOf } from "@/lib/roles";
-import { DefaultRoles, DeleteRoleButton, NewRoleForm, RoleDatasets, UserRoles } from "./role-controls";
+import {
+  DatasetGivens,
+  DefaultRoles,
+  DeleteRoleButton,
+  NewRoleForm,
+  RoleDatasets,
+  UserRoles,
+} from "./role-controls";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -25,18 +32,24 @@ const THEAD =
 export default async function AdminRolesPage() {
   await requireAdminPage();
 
-  const [catalog, dsRows, people, fallback] = await Promise.all([
+  const [catalog, dsRows, people, fallback, givenCatalog] = await Promise.all([
     db.select().from(rolesTable).orderBy(asc(rolesTable.builtin), asc(rolesTable.name)),
     // Ready datasets only. A failed or half-built row cannot be opened by
     // anyone, and listing it here means two checkboxes with the same label and
     // no way to tell which is which.
     db
-      .select({ id: datasets.id, name: datasets.name, roles: datasets.roles })
+      .select({
+        id: datasets.id,
+        name: datasets.name,
+        roles: datasets.roles,
+        requiredGivens: datasets.requiredGivens,
+      })
       .from(datasets)
       .where(eq(datasets.status, "ready"))
       .orderBy(asc(datasets.name)),
     db.select().from(users).orderBy(desc(users.createdAt)),
     defaultRoles(),
+    db.select().from(givensTable).orderBy(asc(givensTable.name)),
   ]);
 
   const allRoleNames = catalog.map((r) => r.name);
@@ -133,6 +146,42 @@ export default async function AdminRolesPage() {
                   </td>
                   <td className={TD}>
                     <UserRoles userId={u.id} all={allRoleNames} held={rolesOf(u)} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <section className="flex flex-col gap-3">
+        <div>
+          <h2 className="text-sm font-medium">What each dataset is scoped by</h2>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 max-w-2xl">
+            Rows inside a dataset, narrowed to whoever is asking. Tick one and every model
+            published here must declare it — a publish that does not is refused rather than
+            serving the data unscoped. Leave them clear for a dataset everyone with a role sees
+            in full.
+          </p>
+        </div>
+        <div className={TABLE_WRAP}>
+          <table className="w-full text-sm">
+            <thead className={THEAD}>
+              <tr>
+                <th className={TH}>Dataset</th>
+                <th className={TH}>Scoped by</th>
+              </tr>
+            </thead>
+            <tbody>
+              {dsRows.map((d) => (
+                <tr key={d.id} className="border-b border-gray-100 dark:border-gray-800 last:border-0">
+                  <td className={TD}>{d.name}</td>
+                  <td className={TD}>
+                    <DatasetGivens
+                      datasetId={d.id}
+                      all={givenCatalog.map((g) => ({ name: g.name, description: g.description }))}
+                      required={d.requiredGivens ?? []}
+                    />
                   </td>
                 </tr>
               ))}

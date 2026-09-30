@@ -74,6 +74,17 @@ export { run, executeMaterialized, DEFAULT_ROW_LIMIT, type RunOptions } from './
 export { jsonRows } from './rows';
 export { validateRestricted, runRestricted } from './restricted';
 export {
+  DATASETS_DIR,
+  ENTRY_FILE,
+  layoutFromListing,
+  nameToSlug,
+  repoPath,
+  type DirEntry,
+  type DirLister,
+  type DiscoveredDataset,
+  type RepoLayout,
+} from './repo-layout';
+export {
   declaredGivenNames,
   unreferencedGivens,
   unreferencedGivensMessage,

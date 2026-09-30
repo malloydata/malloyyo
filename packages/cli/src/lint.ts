@@ -241,3 +241,89 @@ export function printLintReport(report: LintReport): void {
     for (const w of d.warnings) console.log(`      warning: ${w}`);
   }
 }
+
+// ── The repo ────────────────────────────────────────────────────────────────
+//
+// A repo is the unit you validate, because it is the unit that publishes. One
+// dataset or several, `malloyyo lint` answers for all of it — and it answers the
+// LAYOUT question too, using the same rules the server uses (they live in the
+// engine, over an injected lister). A repo that lints clean here is one the
+// server will accept; that equivalence is the whole point of sharing the rules
+// rather than writing a second copy that agrees today.
+//
+// This matters more than it looks, because a GitHub-backed repo refreshes on a
+// TRIGGER. Nobody is watching a push the way they watch a publish, so the last
+// moment a human sees an error is here.
+
+import { layoutFromListing, type DirEntry, type DirLister } from "@malloyyo/mcp-engine";
+
+/** Read a directory of the repo on disk, "" being its root. Missing is empty —
+    the same answer the server's lister gives for a path GitHub does not have. */
+function fsLister(root: string): DirLister {
+  return async (path: string): Promise<DirEntry[]> => {
+    const dir = path ? join(root, path) : root;
+    if (!existsSync(dir)) return [];
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+    return entries
+      .filter((e) => e.isDirectory() || e.isFile())
+      .map((e) => ({
+        name: e.name,
+        path: path ? `${path}/${e.name}` : e.name,
+        type: e.isDirectory() ? ("dir" as const) : ("file" as const),
+      }));
+  };
+}
+
+export interface RepoLintReport {
+  ok: boolean;
+  /** The repo's shape is wrong — nothing could be linted. */
+  layoutError?: string;
+  /** One entry per dataset the repo publishes. `dir` is "" for a single-dataset
+      repo, whose one dataset is the repo root. */
+  datasets: { name: string; dir: string; report: LintReport }[];
+}
+
+/**
+ * Lint every dataset the repo publishes.
+ *
+ * Layout problems are lint errors, not surprises for later: a repo with both a
+ * root `index.malloy` and a `datasets/` directory, or a `datasets/` subdirectory
+ * with no entry file, fails HERE — on a laptop, with the directory named — rather
+ * than on a server whose logs the author cannot read.
+ */
+export async function lintRepo(root: string): Promise<RepoLintReport> {
+  const abs = resolve(root);
+  const layout = await layoutFromListing(fsLister(abs), abs);
+  if (!layout.ok) return { ok: false, layoutError: layout.error, datasets: [] };
+
+  const targets =
+    layout.kind === "single"
+      ? [{ name: "", dir: "" }]
+      : layout.datasets.map((d) => ({ name: d.name, dir: d.dir }));
+
+  const datasets: RepoLintReport["datasets"] = [];
+  for (const t of targets) {
+    const report = await lintDashboards(t.dir ? join(abs, t.dir) : abs);
+    datasets.push({ name: t.name, dir: t.dir, report });
+  }
+  return { ok: datasets.every((d) => d.report.ok), datasets };
+}
+
+/** Print a repo lint, naming each dataset when there is more than one. */
+export function printRepoLintReport(repo: RepoLintReport): void {
+  if (repo.layoutError) {
+    console.log(`  ✗ ${repo.layoutError}`);
+    return;
+  }
+  const many = repo.datasets.length > 1;
+  for (const d of repo.datasets) {
+    if (many) console.log(`  ${d.dir}`);
+    if (d.report.dashboards.length === 0 && many) console.log("    (no dashboards)");
+    printLintReport(d.report);
+  }
+}

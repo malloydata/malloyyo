@@ -3,7 +3,7 @@ import { Command } from "commander";
 import { resolve } from "node:path";
 import { resolveTarget, resolveInstance, resolvePublishTarget, type Target } from "./config.js";
 import { gatherDirectory, gatherDashboards, gitInfo } from "./gather.js";
-import { lintDashboards, printLintReport } from "./lint.js";
+import { lintDashboards, lintRepo, printLintReport, printRepoLintReport } from "./lint.js";
 import { missingEnvRefs, missingEnvHint } from "./shared/env-refs.js";
 import {
   getAccessToken,
@@ -340,17 +340,31 @@ program
 
 program
   .command("lint")
-  .argument("[dir]", "directory to lint", ".")
-  .description("validate ./dashboards against the model (manifest, query, givens, Dashboard.tsx)")
+  .argument("[dir]", "repo (or dataset directory) to lint", ".")
+  .description("validate the whole repo: its layout, and every dataset's dashboards")
   .action(async (dir: string) => {
     const root = resolve(dir);
-    const report = await lintDashboards(root);
-    if (report.dashboards.length === 0) {
-      console.log("no dashboards to lint");
+    // THE REPO, not a directory. A repo publishes as a unit, and for a
+    // GitHub-backed one it refreshes on a trigger — so this is the last moment a
+    // human sees an error, and it has to have looked at all of it. Pointing this
+    // at a single dataset directory still works: that directory is a repo shape
+    // of its own.
+    const repo = await lintRepo(root);
+    if (repo.layoutError) {
+      console.error(`✗ ${repo.layoutError}`);
+      process.exit(1);
+    }
+    const total = repo.datasets.reduce((n, d) => n + d.report.dashboards.length, 0);
+    if (total === 0) {
+      console.log(
+        repo.datasets.length > 1
+          ? `${repo.datasets.length} datasets, no dashboards to lint`
+          : "no dashboards to lint",
+      );
       return;
     }
-    printLintReport(report);
-    if (!report.ok) {
+    printRepoLintReport(repo);
+    if (!repo.ok) {
       // Same diagnosis publish gives: an unset {env:…} secret surfaces here as a
       // connection error with no hint of which variable is missing.
       const hint = missingEnvHint(missingEnvRefs(gatherDirectory(root).config), "this shell");

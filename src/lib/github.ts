@@ -92,6 +92,36 @@ export class GitHubURLReader {
 }
 
 /**
+ * The commit a branch currently points at.
+ *
+ * Recorded on every model a repo refresh writes, which is what makes "these
+ * four datasets are at the same commit" a checkable fact rather than an
+ * intention. Before this, a GitHub-backed model recorded only
+ * `github:owner/repo@branch` — the branch, never which commit of it — so a repo
+ * whose datasets had drifted apart looked exactly like one that had not.
+ *
+ * Null when it cannot be read: a refresh should not fail for want of a label.
+ */
+export async function fetchGitHubCommitSha(
+  owner: string,
+  repo: string,
+  branch: string,
+  opts: { useToken?: boolean } = {},
+): Promise<string | null> {
+  const useToken = opts.useToken !== false;
+  const url = `https://api.github.com/repos/${owner}/${repo}/commits/${encodeURIComponent(branch)}`;
+  const headers: Record<string, string> = {
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+  if (useToken && env.GITHUB_TOKEN) headers["Authorization"] = `Bearer ${env.GITHUB_TOKEN}`;
+  const res = await githubFetch(url, headers);
+  if (!res.ok) return null;
+  const body = (await res.json()) as { sha?: string };
+  return typeof body.sha === "string" ? body.sha : null;
+}
+
+/**
  * Every path in the repo, in ONE request (the git trees API, recursive).
  *
  * The Contents API costs a request per directory, and discovering a

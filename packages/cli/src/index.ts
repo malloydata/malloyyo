@@ -276,6 +276,15 @@ async function publish(
 ): Promise<void> {
   const root = resolve(dir);
 
+  // A URL typed where a target NAME goes. It is the obvious thing to type and
+  // the obvious intent, and failing it with `Unknown target "http://…"` sends
+  // someone looking for a config problem they do not have. `-i` is the flag
+  // that takes a URL, so put it there.
+  if (target && /^https?:\/\//i.test(target)) {
+    opts = { ...opts, instance: opts.instance ?? target };
+    target = undefined;
+  }
+
   // Which shape is this repo? The answer decides which flags mean anything, so
   // it is read from the repo rather than from what the caller typed — a repo
   // that grew a `datasets/` directory should say so, not publish its root.
@@ -310,14 +319,15 @@ async function publish(
   if (opts.createDatasets) {
     throw new Error("--create-datasets is for a repo with a datasets/ directory; use --create-dataset.");
   }
-  // Transitional — see OLD_LAYOUT_NOTICE. Printed before the publish, not after,
-  // so it is still on screen when the publish output scrolls.
-  if (repoLayout.oldLayout) console.log(`\n${OLD_LAYOUT_NOTICE}\n`);
 
   const t = resolvePublishTarget(root, target, {
     instance: opts.instance,
     dataset: opts.dataset,
   });
+  // Transitional — see OLD_LAYOUT_NOTICE. AFTER the target resolves: printing
+  // it first buried the actual error under five lines of layout advice.
+  if (repoLayout.oldLayout) console.log(`\n${OLD_LAYOUT_NOTICE}\n`);
+
   const source = tokenSource(t, { tokenFlag: opts.token });
   const bearer = await getAccessToken(t, { tokenFlag: opts.token });
 

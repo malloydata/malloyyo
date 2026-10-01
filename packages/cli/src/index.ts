@@ -136,7 +136,30 @@ function requestFailed(
  * Named after the flags it explains, since `--instance`/`--dataset` are the part of this
  * command that isn't guessable from the argument list alone.
  */
-const PUBLISH_HELP = `Target resolution:
+const PUBLISH_HELP = `One dataset, or several:
+  A repo publishes ONE dataset when it has an index.malloy at its root, and
+  several when it has a datasets/ directory — one per subdirectory, named
+  after it. The shape is read from the repo, so you do not declare it:
+
+    index.malloy                 →  malloyyo publish --dataset movies
+    dashboards/                              (--create-dataset to make it)
+
+    datasets/finance/index.malloy  →  malloyyo publish --repo owner/name
+    datasets/sales/index.malloy              (--create-datasets to make them)
+    malloy-config.json
+
+  --dataset names ONE dataset and cannot address a repo that holds several;
+  --repo names the whole repo and has nothing to say about one. Each refuses
+  the layout it cannot address, and names the other.
+
+  A repo is published as a UNIT: every dataset in it is linted first, and the
+  server compiles them all and writes them in one transaction, or writes none.
+  Half a repo is an instance that looks complete and is missing the dataset
+  nobody checks.
+
+  Run \`malloyyo lint\` to see what your repo publishes before sending it.
+
+Target resolution:
   The instance and dataset normally come from the \`malloyyo\` block in
   malloy-config.json. Either can be overridden, and giving BOTH means the
   config is never read — so a repo with no targets (or none for this

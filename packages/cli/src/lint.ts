@@ -279,8 +279,26 @@ function fsLister(root: string): DirLister {
   };
 }
 
+/**
+ * What `lint` and `publish` say when they meet a repo built the old way.
+ *
+ * TRANSITIONAL. This constant, the two places that print it, and
+ * `yo_help("repo/convert-single-dataset")` are the whole of the single-dataset
+ * deprecation — delete those three and nothing else knows about it.
+ */
+export const OLD_LAYOUT_NOTICE = [
+  "This repo has index.malloy at its root — the old single-dataset layout.",
+  "Repos now publish one dataset per directory under datasets/.",
+  "",
+  "It still works. To convert it, run `claude` here and ask it to convert this",
+  'repo to the datasets/ layout, or read yo_help("repo/convert-single-dataset").',
+].join("\n");
+
 export interface RepoLintReport {
   ok: boolean;
+  /** The repo is the old single-dataset shape. Transitional — see
+      OLD_LAYOUT_NOTICE. */
+  oldLayout?: boolean;
   /** The repo's shape is wrong — nothing could be linted. */
   layoutError?: string;
   /** One entry per dataset the repo publishes. `dir` is "" for a single-dataset
@@ -301,17 +319,17 @@ export async function lintRepo(root: string): Promise<RepoLintReport> {
   const layout = await layoutFromListing(fsLister(abs), abs);
   if (!layout.ok) return { ok: false, layoutError: layout.error, datasets: [] };
 
-  const targets =
-    layout.kind === "single"
-      ? [{ name: "", dir: "" }]
-      : layout.datasets.map((d) => ({ name: d.name, dir: d.dir }));
+  const oldLayout = layout.kind === "single";
+  const targets = oldLayout
+    ? [{ name: "", dir: "" }]
+    : layout.datasets.map((d) => ({ name: d.name, dir: d.dir }));
 
   const datasets: RepoLintReport["datasets"] = [];
   for (const t of targets) {
     const report = await lintDashboards(t.dir ? join(abs, t.dir) : abs);
     datasets.push({ name: t.name, dir: t.dir, report });
   }
-  return { ok: datasets.every((d) => d.report.ok), datasets };
+  return { ok: datasets.every((d) => d.report.ok), datasets, oldLayout };
 }
 
 /** Print a repo lint, naming each dataset when there is more than one. */

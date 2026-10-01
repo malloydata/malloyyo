@@ -4,7 +4,14 @@ import { resolve } from "node:path";
 import { resolveTarget, resolveInstance, resolvePublishTarget, type Target } from "./config.js";
 import { gatherDirectory, gatherDashboards, gatherRepoFiles, gitInfo } from "./gather.js";
 import { buildTarGz } from "@malloyyo/mcp-engine";
-import { lintDashboards, lintRepo, printLintReport, printRepoLintReport, type RepoLintReport } from "./lint.js";
+import {
+  OLD_LAYOUT_NOTICE,
+  lintDashboards,
+  lintRepo,
+  printLintReport,
+  printRepoLintReport,
+  type RepoLintReport,
+} from "./lint.js";
 import { missingEnvRefs, missingEnvHint } from "./shared/env-refs.js";
 import {
   getAccessToken,
@@ -303,6 +310,9 @@ async function publish(
   if (opts.createDatasets) {
     throw new Error("--create-datasets is for a repo with a datasets/ directory; use --create-dataset.");
   }
+  // Transitional — see OLD_LAYOUT_NOTICE. Printed before the publish, not after,
+  // so it is still on screen when the publish output scrolls.
+  if (repoLayout.oldLayout) console.log(`\n${OLD_LAYOUT_NOTICE}\n`);
 
   const t = resolvePublishTarget(root, target, {
     instance: opts.instance,
@@ -509,9 +519,11 @@ program
           ? `${repo.datasets.length} datasets, no dashboards to lint`
           : "no dashboards to lint",
       );
+      if (repo.oldLayout) console.log(`\n${OLD_LAYOUT_NOTICE}`);
       return;
     }
     printRepoLintReport(repo);
+    if (repo.oldLayout) console.log(`\n${OLD_LAYOUT_NOTICE}`);
     if (!repo.ok) {
       // Same diagnosis publish gives: an unset {env:…} secret surfaces here as a
       // connection error with no hint of which variable is missing.
@@ -555,8 +567,8 @@ program
   .command("init")
   .argument("[dir]", "model repo to set up", ".")
   .description(
-    "set up a model repo: write .mcp.json so `cd <repo> && claude` opens in " +
-      "author mode, and scaffold index.malloy if missing",
+    "set up an empty model repo: .mcp.json so `cd <repo> && claude` opens in " +
+      "author mode, plus malloy-config.json and datasets/. Ask claude to add datasets.",
   )
   .action(initCmd);
 

@@ -94,3 +94,22 @@ test('a directory that is not a repo at all says so', async () => {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("an old single-dataset repo is flagged, not failed", () => {
+  // It still publishes. The notice is how someone learns the layout moved on —
+  // transitional, and deleted with the rest of the single-dataset support.
+  return lintRepo(FIXTURE).then((r) => {
+    assert.equal(r.oldLayout, true, "a root index.malloy is the old shape");
+    assert.ok(r.datasets.length > 0, "and it is still linted");
+  });
+});
+
+test("a datasets/ repo is not flagged", async () => {
+  const root = repo({ "datasets/alpha": FIXTURE });
+  try {
+    const r = await lintRepo(root);
+    assert.ok(!r.oldLayout);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

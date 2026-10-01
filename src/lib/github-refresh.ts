@@ -79,6 +79,8 @@ type Compiled = {
   /** `## dataset { title= }`, or null when the model declares none and the
       title should be derived from the name. */
   title: string | null;
+  /** The model's `##"` doc string. */
+  description: string | null;
   indexContent: string;
 };
 
@@ -396,6 +398,7 @@ async function compileDataset(
       artifacts,
       requiredGivens: opts.creating && requirement.required.length > 0 ? requirement.required : null,
       title: result.meta.title ?? null,
+      description: result.meta.description ?? null,
       indexContent: rerooted.files.get("index.malloy") ?? "",
     },
   };
@@ -453,7 +456,10 @@ async function writeCompiled(
   // label, so changing it in the model is the way to change it, and there is
   // nothing to protect the way `required_givens` protects scoping. Cleared when
   // the tag goes, so the derived title takes over again.
-  await tx.update(datasets).set({ title: compiled.title }).where(eq(datasets.id, ds.id));
+  await tx
+    .update(datasets)
+    .set({ title: compiled.title, description: compiled.description })
+    .where(eq(datasets.id, ds.id));
   if (compiled.requiredGivens) {
     await tx.update(datasets).set({ requiredGivens: compiled.requiredGivens }).where(eq(datasets.id, ds.id));
     logger.info("dataset scoped by its first model", {

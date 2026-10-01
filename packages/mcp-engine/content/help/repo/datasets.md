@@ -31,9 +31,16 @@ lib/                            shared code, imported by relative path
   is granted against — so a directory that is not already one is converted:
   `datasets/the-look/` publishes `the_look`. `malloyyo lint` prints the name it
   will publish as, next to the directory.
-- **A dataset can say what to CALL it**, at model scope in its `index.malloy`:
+- **A dataset can say what to CALL it and what it IS**, at model scope in its
+  `index.malloy`:
 
+      ##" Deals, contacts and companies, as the sales team sees them.
       ## dataset { title="HubSpot CRM" }
+
+  Note `##"` — two hashes. A `#"` attaches to whatever declaration follows it,
+  so `#"` above the first source documents that SOURCE and leaves the dataset
+  with no description. The description shows where someone is deciding whether
+  they want this dataset, or who should see it.
 
   With no tag the title is derived from the name — `hub_spot` → "Hub Spot" —
   so a dataset that says nothing still reads properly. Use the tag when the

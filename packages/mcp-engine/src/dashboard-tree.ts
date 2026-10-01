@@ -22,6 +22,8 @@ export interface TreeDataset {
   dataset: string;
   /** What to show for it. Absent means derive it from the name. */
   title?: string;
+  /** What it is — the model's `##"` doc string, shown on hover. */
+  description?: string;
   dashboards: TreeDashboard[];
 }
 

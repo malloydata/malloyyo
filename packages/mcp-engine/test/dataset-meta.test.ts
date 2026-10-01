@@ -29,9 +29,33 @@ test('a declared title wins; blank and missing both fall back', () => {
   assert.equal(datasetTitle('hub_spot', '   '), 'Hub Spot', 'whitespace is not a title');
 });
 
+test('the description comes from ##", not #"', () => {
+  // `#"` attaches to whatever DECLARATION follows it, so a `#"` above the first
+  // source documents that source and leaves the model with nothing. Measured
+  // against a real compile — the first version of this shipped without a
+  // description because it asked the wrong annotation.
+  const withDocs = (docs: string[]) => ({
+    annotations: {
+      parseAsTag: () => ({ tag: { has: () => false, text: () => undefined, tag: () => undefined } }),
+      forRoute: (r: string) => (r === '"' ? docs.map((content) => ({ content })) : []),
+    },
+  });
+  assert.deepEqual(readDatasetMeta(withDocs(['Deals from the CRM.'])), {
+    description: 'Deals from the CRM.',
+  });
+  assert.deepEqual(readDatasetMeta(withDocs([])), {}, 'no doc string, no description');
+  assert.deepEqual(readDatasetMeta(withDocs(['  ', ''])), {}, 'whitespace is not a description');
+  assert.deepEqual(
+    readDatasetMeta(withDocs(['One.', 'Two.'])).description,
+    'One.\nTwo.',
+    'several lines join',
+  );
+});
+
 test('readDatasetMeta: the tag, and nothing when there is none', () => {
   const tagged = {
     annotations: {
+      forRoute: () => [],
       parseAsTag: () => ({
         tag: {
           has: (k: string) => k === 'dataset',
@@ -43,12 +67,12 @@ test('readDatasetMeta: the tag, and nothing when there is none', () => {
   };
   assert.deepEqual(readDatasetMeta(tagged), { title: 'HubSpot CRM' });
 
-  const bare = { annotations: { parseAsTag: () => ({ tag: { has: () => false, text: () => undefined, tag: () => undefined } }) } };
+  const bare = { annotations: { forRoute: () => [], parseAsTag: () => ({ tag: { has: () => false, text: () => undefined, tag: () => undefined } }) } };
   assert.deepEqual(readDatasetMeta(bare), {});
 });
 
 test('an unparseable annotation is not a failure', () => {
   // A compile that worked must not be undone by a tag we could not read.
-  const broken = { annotations: { parseAsTag: () => { throw new Error('bad tag'); } } };
+  const broken = { annotations: { forRoute: () => [], parseAsTag: () => { throw new Error('bad tag'); } } };
   assert.deepEqual(readDatasetMeta(broken), {});
 });

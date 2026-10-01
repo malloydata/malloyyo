@@ -30,6 +30,7 @@ export async function GET(req: Request) {
         .map((ds) => ({
           dataset: ds.name,
           title: datasetTitle(ds.name, ds.title),
+          ...(ds.description ? { description: ds.description } : {}),
           dashboards: (byDataset.get(ds.id) ?? []).map((d) => wire(d, user.id)),
         }))
         .sort((a, b) => a.dataset.localeCompare(b.dataset)),

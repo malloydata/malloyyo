@@ -12,6 +12,7 @@
  * So a dataset carries a title the same way a dashboard does
  * (`# artifact { title= }`), declared at model scope in its `index.malloy`:
  *
+ *     ##" Deals, contacts and companies, as the sales team sees them.
  *     ## dataset { title="HubSpot CRM" }
  *
  * With no tag the title is DERIVED from the name, so every dataset that exists
@@ -29,17 +30,24 @@ interface TagLike {
   tag(key: string): TagLike | undefined;
 }
 interface Tagged {
-  annotations: { parseAsTag(): { tag: TagLike } };
+  annotations: {
+    parseAsTag(): { tag: TagLike };
+    forRoute(route: string): { content: string }[];
+  };
 }
 
 export interface DatasetMeta {
   /** `## dataset { title= }`, when the model declares one. */
   title?: string;
+  /**
+   * The model's own doc string — `##"`, two hashes.
+   *
+   * `#"` attaches to whatever DECLARATION follows it, so a `#"` above the first
+   * source documents that source and leaves the model with nothing. `##"` is the
+   * model's.
+   */
+  description?: string;
 }
-
-// No description here yet. A `#"` line above the first source attaches to that
-// SOURCE, not to the model, so it came back empty — and a field that never
-// populates is worse than no field. Worth doing deliberately if it is wanted.
 
 /**
  * A readable title from a dataset name.
@@ -78,5 +86,15 @@ export function readDatasetMeta(model: unknown): DatasetMeta {
   } catch {
     // An unparseable annotation is not a reason to fail a compile that worked.
   }
-  return title ? { title } : {};
+  let description: string | undefined;
+  try {
+    const docs = m.annotations
+      .forRoute('"')
+      .map((n) => n.content.trim())
+      .filter(Boolean);
+    if (docs.length) description = docs.join("\n");
+  } catch {
+    // Same reasoning as the tag: a doc string we cannot read is not a failure.
+  }
+  return { ...(title ? { title } : {}), ...(description ? { description } : {}) };
 }

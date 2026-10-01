@@ -106,7 +106,7 @@ export function RoleDatasets({
   granted,
 }: {
   name: string;
-  all: { id: string; name: string; title: string }[];
+  all: { id: string; name: string; title: string; description?: string }[];
   granted: string[];
 }) {
   const { run, busy, error } = useAction();
@@ -128,7 +128,7 @@ export function RoleDatasets({
             />
             {/* The name is the tooltip: titles are not unique, and this is a
                 grant. */}
-            <span title={d.name}>{d.title}</span>
+            <span title={d.description ? `${d.name} — ${d.description}` : d.name}>{d.title}</span>
           </label>
         ))}
       </div>

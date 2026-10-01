@@ -43,6 +43,7 @@ export default async function AdminRolesPage() {
         id: datasets.id,
         name: datasets.name,
         title: datasets.title,
+        description: datasets.description,
         roles: datasets.roles,
         requiredGivens: datasets.requiredGivens,
       })
@@ -62,6 +63,7 @@ export default async function AdminRolesPage() {
     id: d.id,
     name: d.name,
     title: datasetTitle(d.name, d.title),
+    description: d.description ?? undefined,
   }));
   const members = people.filter((u) => u.status !== "pending");
   const holders = (role: string) => members.filter((u) => rolesOf(u).includes(role)).length;
@@ -195,6 +197,13 @@ export default async function AdminRolesPage() {
                   <td className={TD}>
                     <div>{datasetTitle(d.name, d.title)}</div>
                     <div className="font-mono text-xs text-gray-500 dark:text-gray-400">{d.name}</div>
+                    {/* What it IS — the question an admin is actually asking
+                        when deciding who should see it. */}
+                    {d.description && (
+                      <div className="mt-0.5 max-w-md text-xs text-gray-500 dark:text-gray-400">
+                        {d.description}
+                      </div>
+                    )}
                   </td>
                   <td className={TD}>
                     <DatasetGivens

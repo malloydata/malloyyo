@@ -218,6 +218,9 @@ export const datasets = pgTable(
      * datasets may share a title, and nothing stops them.
      */
     title: text("title"),
+    /** The model's own doc string (`##"`) — what this dataset is, for someone
+        deciding whether they want it or who should see it. */
+    description: text("description"),
     isPublic: boolean("is_public").notNull().default(false),
     status: datasetStatus("status").notNull().default("pending"),
     statusError: text("status_error"),

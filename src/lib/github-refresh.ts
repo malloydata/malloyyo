@@ -46,7 +46,7 @@ import {
   dirFromTree,
   type GitHubDirEntry,
 } from "./github";
-import { ArchiveURLReader, archiveDir, archiveEntries, extractTarGz } from "./tarball";
+import { ArchiveURLReader, archiveEntries, archiveLister, extractTarGz } from "./tarball";
 import { DEVCONTAINER_PATH } from "./github-source-link";
 import { introspectModelWithReader, withReaderRuntime, fileUrl, type SourceInfo } from "./malloy";
 import { ABOUT_NAME, ABOUT_TITLE } from "@/lib/dashboards/about";
@@ -281,7 +281,7 @@ async function compileDataset(
   let bases: string[] = [];
   try {
     const names = ctx.archive
-      ? archiveDir(ctx.archive, dashboardsDir)
+      ? archiveEntries(ctx.archive, dashboardsDir).filter((e) => e.type === "file").map((e) => e.name)
       : (ctx.tree
           ? dirFromTree(ctx.tree, dashboardsDir)
           : await listGitHubDir(owner, repo, branch, dashboardsDir, { useToken })
@@ -318,27 +318,30 @@ async function compileDataset(
   // The dashboards' optional flat components, fetched HERE rather than beside
   // the insert — so the write half touches nothing but the database, and no
   // transaction is held open across the network.
+  // ONE lookup for a dashboard's optional .jsx/.tsx. Written twice before — and
+  // the two had already drifted in how they short-circuit on the archive, which
+  // is invisible until one of them stops finding a component.
+  const componentSource = async (base: string): Promise<string> => {
+    for (const ext of ["jsx", "tsx"]) {
+      const path = `${dashboardsDir}/${base}.${ext}`;
+      const fromArchive = ctx.archive?.get(path);
+      if (fromArchive !== undefined) return fromArchive;
+      // The archive is the whole repo: absent there means absent.
+      if (ctx.archive) continue;
+      if (treeHas(ctx.tree, path) === false) continue;
+      try {
+        return await fetchGitHubFile(owner, repo, branch, path, { useToken });
+      } catch {
+        // no component with this extension — try the next
+      }
+    }
+    return "";
+  };
+
   const artifacts: Compiled["artifacts"] = [];
   try {
     for (const { base, artifact: a } of dashboards) {
-      let source = "";
-      for (const ext of ["jsx", "tsx"]) {
-        const path = `${dashboardsDir}/${base}.${ext}`;
-        const fromArchive = ctx.archive?.get(path);
-        if (fromArchive !== undefined) {
-          source = fromArchive;
-          break;
-        }
-        if (ctx.archive) continue; // the archive is the whole repo: it is not there
-        // No archive: skip the request when the tree says there is no such file.
-        if (treeHas(ctx.tree, path) === false) continue;
-        try {
-          source = await fetchGitHubFile(owner, repo, branch, path, { useToken });
-          break;
-        } catch {
-          // no component with this extension — try the next / render the default
-        }
-      }
+      const source = await componentSource(base);
       artifacts.push({ name: a.name || base, title: a.title, manifest: artifactManifest(base, a), source });
     }
     // The written front door: `dashboards/index.jsx|tsx` with no `index.malloy`.
@@ -352,23 +355,14 @@ async function compileDataset(
     // insert, and getDashboard's unordered `.limit(1)` would then serve whichever
     // Postgres happened to return.
     if (!bases.includes(ABOUT_NAME) && !artifacts.some((r) => r.name === ABOUT_NAME)) {
-      for (const ext of ["jsx", "tsx"]) {
-        const path = `${dashboardsDir}/${ABOUT_NAME}.${ext}`;
-        const fromArchive = ctx.archive?.get(path);
-        if (ctx.archive && fromArchive === undefined) continue;
-        if (treeHas(ctx.tree, path) === false) continue;
-        try {
-          const source = fromArchive ?? (await fetchGitHubFile(owner, repo, branch, path, { useToken }));
-          artifacts.unshift({
-            name: ABOUT_NAME,
-            title: ABOUT_TITLE,
-            manifest: { title: ABOUT_TITLE },
-            source,
-          });
-          break;
-        } catch {
-          // no landing page with this extension — try the next, else there is none
-        }
+      const source = await componentSource(ABOUT_NAME);
+      if (source) {
+        artifacts.unshift({
+          name: ABOUT_NAME,
+          title: ABOUT_TITLE,
+          manifest: { title: ABOUT_TITLE },
+          source,
+        });
       }
     }
   } catch (e) {
@@ -458,7 +452,17 @@ async function writeCompiled(
   // the tag goes, so the derived title takes over again.
   await tx
     .update(datasets)
-    .set({ title: compiled.title, description: compiled.description })
+    .set({
+      title: compiled.title,
+      description: compiled.description,
+      // "Last publish" means the last time this dataset's model changed, by any
+      // route. The CLI's single-dataset path set these and this one did not, so
+      // a repo publish left them reading whatever the previous CLI push said.
+      lastPublishAt: new Date(),
+      lastPublishSha: ctx.sha,
+      lastPublishBranch: ctx.branch,
+      lastPublishError: null,
+    })
     .where(eq(datasets.id, ds.id));
   if (compiled.requiredGivens) {
     await tx.update(datasets).set({ requiredGivens: compiled.requiredGivens }).where(eq(datasets.id, ds.id));
@@ -493,9 +497,11 @@ export type RepoRefreshResult = {
  * that did not is the one nobody checks.
  */
 export async function compileAndWrite(
-  targets: Array<Pick<Dataset, "id" | "name" | "repoDir" | "requiredGivens">>,
+  /** `creating` is PER TARGET, because one publish can create some datasets and
+      refresh others — and splitting that into two calls would be two
+      transactions, which is a repo that half-lands by construction. */
+  targets: Array<Pick<Dataset, "id" | "name" | "repoDir" | "requiredGivens"> & { creating?: boolean }>,
   ctx: RepoContext,
-  opts: { creating?: boolean } = {},
 ): Promise<{
   refreshed: { id: string; name: string; version: number }[];
   failed: { id: string; name: string; error: string }[];
@@ -503,7 +509,7 @@ export async function compileAndWrite(
   const compiled: { ds: (typeof targets)[number]; c: Compiled }[] = [];
   const failed: { id: string; name: string; error: string }[] = [];
   for (const ds of targets) {
-    const r = await compileDataset(ds, ctx, opts);
+    const r = await compileDataset(ds, ctx, { creating: ds.creating });
     if (r.ok) compiled.push({ ds, c: r.compiled });
     else failed.push({ id: ds.id, name: ds.name, error: r.error });
   }
@@ -541,7 +547,7 @@ export async function refreshRepo(
   // The archive IS the repo, so the layout comes out of it — no second request
   // to learn a shape we are already holding.
   const layout = ctx.archive
-    ? await layoutFromListing(async (path) => archiveEntries(ctx.archive!, path), `${repoSlug}@${branch}`)
+    ? await layoutFromListing(archiveLister(ctx.archive), `${repoSlug}@${branch}`)
     : await discoverRepoLayout(ctx.owner, ctx.repo, branch, { useToken: ctx.useToken, tree: ctx.tree });
   if (!layout.ok) return { error: layout.error };
 

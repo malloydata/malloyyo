@@ -25,11 +25,11 @@ import fs from "node:fs";
 import path from "node:path";
 import * as esbuild from "esbuild";
 import { type GivenSpec, type TileSpec } from "./host.js";
-import { discoverRepoDashboards, type RepoDashboard } from "./repo.js";
+import { discoverRepoDashboards, navTree, type RepoDashboard } from "./repo.js";
 import { initConnections } from "./connections.js";
 import { givensFromSearch, urlStateFromSearch } from "./shared/givens-url.js";
 import { safeJson } from "./shared/html.js";
-import { navHtml as sharedNav, siblingList, switcherHtml, SWITCHER_JS, NAV_CSS } from "./shared/nav.js";
+import { navWithSwitcher, siblingList, SWITCHER_JS, NAV_CSS } from "./shared/nav.js";
 import {
   rendersNoData,
   hostAliasPlugin,
@@ -190,39 +190,18 @@ export const DEV_PATHS = {
 } as const;
 
 /** The nav entries: addressed by slug, labelled by title, grouped by dataset. */
-const navEntries = (all: RepoDashboard[]) =>
-  all.map((d) => ({ name: d.slug, title: d.title || d.name, group: d.dataset || undefined }));
-
-/** The switcher's tree, in nav order: a branch per dataset, its dashboards
-    under it. One unnamed dataset in a single-dataset repo, which the switcher
-    draws flat. */
-function navTree(all: RepoDashboard[]) {
-  const byDataset = new Map<string, RepoDashboard[]>();
-  for (const d of all) byDataset.set(d.dataset, [...(byDataset.get(d.dataset) ?? []), d]);
-  return [...byDataset.entries()].map(([dataset, ds]) => ({
-    dataset,
-    // The label, so the menu reads like the app does.
-    title: ds[0]?.datasetLabel || undefined,
-    dashboards: ds.map((d) => ({ name: d.name, title: d.title || d.name, description: d.description })),
-  }));
-}
-
 const devSiblings = (dash: RepoDashboard, all: RepoDashboard[]) =>
-  siblingList(dash.slug, navEntries(all), dashLink);
+  siblingList(
+    dash.slug,
+    all.map((d) => ({ name: d.slug, title: d.title || d.name })),
+    dashLink,
+  );
 
 function navHtml(dash: RepoDashboard, all: RepoDashboard[]): string {
-  // The bar keeps the brand; the dashboards move into the switcher, because a
-  // repo with four datasets has fifteen of them and a row of pills wraps onto
-  // three lines with two entries called "About".
-  return (
-    `<nav class="dash-nav">` +
-    sharedNav(dash.slug, [], dashLink).replace(/^<nav class="dash-nav">|<\/nav>$/g, "") +
-    switcherHtml(dash.slug, navTree(all), dashLink, {
-      dataset: dash.datasetLabel || dash.dataset || undefined,
-      label: dash.title || dash.name,
-    }) +
-    `</nav>`
-  );
+  return navWithSwitcher(dash.slug, navTree(all), dashLink, {
+    dataset: dash.datasetLabel || dash.dataset || undefined,
+    label: dash.title || dash.name,
+  });
 }
 
 /** Shell for a TAG-ONLY dashboard: NO iframe. The runtime's DefaultDashboard

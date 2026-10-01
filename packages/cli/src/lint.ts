@@ -261,29 +261,8 @@ export function printLintReport(report: LintReport): void {
 // TRIGGER. Nobody is watching a push the way they watch a publish, so the last
 // moment a human sees an error is here.
 
-import { datasetTitle, layoutFromListing, type DirEntry, type DirLister } from "@malloyyo/mcp-engine";
-
-/** Read a directory of the repo on disk, "" being its root. Missing is empty —
-    the same answer the server's lister gives for a path GitHub does not have. */
-function fsLister(root: string): DirLister {
-  return async (path: string): Promise<DirEntry[]> => {
-    const dir = path ? join(root, path) : root;
-    if (!existsSync(dir)) return [];
-    let entries;
-    try {
-      entries = readdirSync(dir, { withFileTypes: true });
-    } catch {
-      return [];
-    }
-    return entries
-      .filter((e) => e.isDirectory() || e.isFile())
-      .map((e) => ({
-        name: e.name,
-        path: path ? `${path}/${e.name}` : e.name,
-        type: e.isDirectory() ? ("dir" as const) : ("file" as const),
-      }));
-  };
-}
+import { datasetTitle, layoutFromListing } from "@malloyyo/mcp-engine";
+import { fsLister } from "./repo.js";
 
 /**
  * What `lint` and `publish` say when they meet a repo built the old way.

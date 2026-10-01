@@ -82,7 +82,9 @@ export {
 export { filterTree, type TreeDashboard, type TreeDataset } from './dashboard-tree';
 export {
   ArchiveURLReader,
-  archiveDir,
+  archiveLister,
+  keepsFile,
+  KEEP_EXTENSIONS,
   archiveEntries,
   buildTarGz,
   extractTarGz,

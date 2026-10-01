@@ -14,6 +14,18 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
     contents-API calls, and GitHub intermittently returns spurious 400s and
     secondary-rate-limit 403/429s under that load — retry those; 401 (auth) and
     404 (missing) are definitive. */
+/** The headers every GitHub call sends. One place, because this was written
+    five times and a change applied to four of them is a bug that shows up on
+    exactly one code path. */
+function githubHeaders(useToken: boolean, accept = "application/vnd.github+json"): Record<string, string> {
+  const headers: Record<string, string> = {
+    Accept: accept,
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+  if (useToken && env.GITHUB_TOKEN) headers["Authorization"] = `Bearer ${env.GITHUB_TOKEN}`;
+  return headers;
+}
+
 async function githubFetch(url: string, headers: Record<string, string>): Promise<Response> {
   for (let attempt = 0; ; attempt++) {
     let res: Response;
@@ -38,11 +50,7 @@ export async function fetchGitHubFile(
 ): Promise<string> {
   const useToken = opts.useToken !== false;
   const url = `https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${branch}`;
-  const headers: Record<string, string> = {
-    Accept: "application/vnd.github.raw+json",
-    "X-GitHub-Api-Version": "2022-11-28",
-  };
-  if (useToken && env.GITHUB_TOKEN) headers["Authorization"] = `Bearer ${env.GITHUB_TOKEN}`;
+  const headers = githubHeaders(useToken, "application/vnd.github.raw+json");
 
   const res = await githubFetch(url, headers);
   if (!res.ok) {
@@ -111,11 +119,7 @@ export async function fetchGitHubTarball(
 ): Promise<Buffer | null> {
   const useToken = opts.useToken !== false;
   const url = `https://api.github.com/repos/${owner}/${repo}/tarball/${encodeURIComponent(ref)}`;
-  const headers: Record<string, string> = {
-    Accept: "application/vnd.github+json",
-    "X-GitHub-Api-Version": "2022-11-28",
-  };
-  if (useToken && env.GITHUB_TOKEN) headers["Authorization"] = `Bearer ${env.GITHUB_TOKEN}`;
+  const headers = githubHeaders(useToken, "application/vnd.github+json");
 
   const res = await githubFetch(url, headers);
   if (!res.ok) return null;
@@ -145,11 +149,7 @@ export async function fetchGitHubCommitSha(
 ): Promise<string | null> {
   const useToken = opts.useToken !== false;
   const url = `https://api.github.com/repos/${owner}/${repo}/commits/${encodeURIComponent(branch)}`;
-  const headers: Record<string, string> = {
-    Accept: "application/vnd.github+json",
-    "X-GitHub-Api-Version": "2022-11-28",
-  };
-  if (useToken && env.GITHUB_TOKEN) headers["Authorization"] = `Bearer ${env.GITHUB_TOKEN}`;
+  const headers = githubHeaders(useToken, "application/vnd.github+json");
   const res = await githubFetch(url, headers);
   if (!res.ok) return null;
   const body = (await res.json()) as { sha?: string };
@@ -177,11 +177,7 @@ export async function listGitHubTree(
 ): Promise<GitHubDirEntry[] | null> {
   const useToken = opts.useToken !== false;
   const url = `https://api.github.com/repos/${owner}/${repo}/git/trees/${encodeURIComponent(branch)}?recursive=1`;
-  const headers: Record<string, string> = {
-    Accept: "application/vnd.github+json",
-    "X-GitHub-Api-Version": "2022-11-28",
-  };
-  if (useToken && env.GITHUB_TOKEN) headers["Authorization"] = `Bearer ${env.GITHUB_TOKEN}`;
+  const headers = githubHeaders(useToken, "application/vnd.github+json");
 
   const res = await githubFetch(url, headers);
   if (!res.ok) return null;
@@ -231,11 +227,7 @@ export async function listGitHubDir(
 ): Promise<GitHubDirEntry[]> {
   const useToken = opts.useToken !== false;
   const url = `https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${branch}`;
-  const headers: Record<string, string> = {
-    Accept: "application/vnd.github+json",
-    "X-GitHub-Api-Version": "2022-11-28",
-  };
-  if (useToken && env.GITHUB_TOKEN) headers["Authorization"] = `Bearer ${env.GITHUB_TOKEN}`;
+  const headers = githubHeaders(useToken, "application/vnd.github+json");
 
   const res = await githubFetch(url, headers);
   if (res.status === 404) return [];

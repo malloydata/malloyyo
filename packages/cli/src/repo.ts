@@ -24,6 +24,7 @@ import {
   type DirLister,
 } from "@malloyyo/mcp-engine";
 import { discoverDashboards, type Dashboard } from "./discover.js";
+import type { SwitcherDataset } from "./shared/nav.js";
 import { makeRunner, type ModelRunner } from "./host.js";
 
 /** Read a directory of the repo on disk, "" being its root. Missing is empty. */
@@ -141,4 +142,26 @@ export async function discoverRepoDashboards(root: string): Promise<RepoDashboar
       await Promise.all(runners.map((r) => r.dispose().catch(() => {})));
     },
   };
+}
+
+/**
+ * The switcher's tree: a branch per dataset, its dashboards under it.
+ *
+ * Here, not in `dashboard.ts` and again in `bundle.ts`, because the slug is
+ * built here — and the two copies of this that existed differed from the
+ * switcher's own idea of a slug, which emitted links to pages that did not
+ * exist.
+ */
+export function navTree(all: RepoDashboard[]): SwitcherDataset[] {
+  const byDataset = new Map<string, RepoDashboard[]>();
+  for (const d of all) byDataset.set(d.dataset, [...(byDataset.get(d.dataset) ?? []), d]);
+  return [...byDataset.entries()].map(([dataset, ds]) => ({
+    dataset,
+    title: ds[0]?.datasetLabel || undefined,
+    dashboards: ds.map((d) => ({
+      slug: d.slug,
+      title: d.title || d.name,
+      ...(d.description ? { description: d.description } : {}),
+    })),
+  }));
 }

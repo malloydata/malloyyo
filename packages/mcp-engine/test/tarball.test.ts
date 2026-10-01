@@ -4,7 +4,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { gzipSync } from "node:zlib";
-import { archiveDir, archiveEntries, ArchiveURLReader, buildTarGz, extractTarGz } from '../src/tarball';
+import { archiveEntries, ArchiveURLReader, buildTarGz, extractTarGz } from '../src/tarball';
 
 // The repo arrives as ONE archive — from GitHub, and (soon) from the CLI. The
 // parser is hand-written rather than a dependency, so the formats GitHub
@@ -170,8 +170,6 @@ test("archiveDir / archiveEntries list direct children only", () => {
     ["datasets/a/dashboards/x.malloy", ""],
     ["datasets/b/index.malloy", ""],
   ]);
-  assert.deepEqual(archiveDir(files, ""), ["index.malloy"]);
-  assert.deepEqual(archiveDir(files, "datasets/a/dashboards"), ["x.malloy"]);
   // Directories are inferred: an archive has no entries for them of its own.
   assert.deepEqual(
     archiveEntries(files, "").map((e) => `${e.type}:${e.name}`),

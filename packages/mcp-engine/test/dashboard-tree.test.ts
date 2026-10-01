@@ -1,9 +1,12 @@
 // Copyright (c) The Malloy Foundation
 // SPDX-License-Identifier: MIT
 
+// filterTree moved to the engine; its test follows it, so the engine does not
+// ship a rule covered only by another package's suite.
+
 import test from "node:test";
 import assert from "node:assert/strict";
-import { filterTree, type TreeDataset } from "./dashboard-tree";
+import { filterTree, type TreeDataset } from '../src/dashboard-tree';
 
 const TREE: TreeDataset[] = [
   {

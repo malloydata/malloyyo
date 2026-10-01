@@ -28,6 +28,7 @@
  */
 
 import { gunzipSync, gzipSync } from "node:zlib";
+import { DATASETS_DIR, ENTRY_FILE, type DirEntry } from "./repo-layout";
 
 const BLOCK = 512;
 
@@ -37,7 +38,17 @@ const BLOCK = 512;
  * reads. Everything the model path ever asks for is text with one of these
  * extensions.
  */
-const KEEP = new Set([".malloy", ".json", ".jsx", ".tsx", ".ts", ".js", ".md", ".sql", ".csv", ".txt"]);
+export const KEEP_EXTENSIONS: ReadonlySet<string> = new Set([
+  ".malloy", ".json", ".jsx", ".tsx", ".ts", ".js", ".md", ".sql", ".csv", ".txt",
+]);
+
+/** Is this a file a repo archive carries? Exported because the CLI packs the
+    archive the server extracts — the two lists have to BE one list, and a
+    comment asserting they match is not the same as them matching. */
+export function keepsFile(path: string): boolean {
+  const dot = path.lastIndexOf(".");
+  return dot !== -1 && KEEP_EXTENSIONS.has(path.slice(dot).toLowerCase());
+}
 
 /** Per file, and for the archive as a whole. A repo that exceeds these is not
     one this server can usefully compile, and the caps are what stop a
@@ -126,9 +137,7 @@ export function extractTarGz(gz: Buffer): Tarball {
     if (type !== "0") continue;
     if (size === 0) continue;
 
-    const dot = name.lastIndexOf(".");
-    const ext = dot === -1 ? "" : name.slice(dot).toLowerCase();
-    if (!KEEP.has(ext) || size > MAX_FILE) {
+    if (!keepsFile(name) || size > MAX_FILE) {
       skipped.push(name);
       continue;
     }
@@ -170,8 +179,8 @@ export function extractTarGz(gz: Buffer): Tarball {
  */
 function looksLikeRepoRoot(paths: Iterable<string>): boolean {
   for (const p of paths) {
-    if (p === "index.malloy" || p === "malloy-config.json") return true;
-    if (p.startsWith("datasets/")) return true;
+    if (p === ENTRY_FILE || p === "malloy-config.json") return true;
+    if (p.startsWith(`${DATASETS_DIR}/`)) return true;
   }
   return false;
 }
@@ -215,19 +224,6 @@ export class ArchiveURLReader {
     this.fetched.set(path, content);
     return content;
   }
-}
-
-/** Direct children of `dir` in an extracted archive ("" being the root). */
-export function archiveDir(files: ReadonlyMap<string, string>, dir: string): string[] {
-  const prefix = dir ? `${dir.replace(/\/+$/, "")}/` : "";
-  const out: string[] = [];
-  for (const path of files.keys()) {
-    if (!path.startsWith(prefix)) continue;
-    const rest = path.slice(prefix.length);
-    if (!rest || rest.includes("/")) continue;
-    out.push(rest);
-  }
-  return out.sort();
 }
 
 /**
@@ -333,4 +329,10 @@ export function buildTarGz(files: ReadonlyMap<string, string>): Buffer {
   // Two zero blocks end the archive.
   parts.push(Buffer.alloc(BLOCK * 2, 0));
   return gzipSync(Buffer.concat(parts));
+}
+
+/** A `DirLister` over an extracted archive, for the layout rules. Both the
+    GitHub refresh and the CLI repo push need exactly this. */
+export function archiveLister(files: ReadonlyMap<string, string>): (path: string) => Promise<DirEntry[]> {
+  return async (path: string) => archiveEntries(files, path);
 }

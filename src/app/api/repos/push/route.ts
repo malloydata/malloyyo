@@ -22,7 +22,7 @@ import { db, datasets } from "@/db";
 import { credentialLabel, requireBearer } from "@/lib/bearer-auth";
 import { canAuthor } from "@/lib/roles";
 import { compileAndWrite, contextFromArchive } from "@/lib/github-refresh";
-import { extractTarGz, archiveEntries } from "@/lib/tarball";
+import { extractTarGz, archiveLister } from "@/lib/tarball";
 import { layoutFromListing } from "@/lib/repo-layout";
 import { logger, serializeErr } from "@/lib/logger";
 import { captureTelemetry } from "@/lib/telemetry";
@@ -63,7 +63,7 @@ export async function POST(req: Request) {
   if (files.size === 0) return bad("the repo archive contains no model files", 400);
 
   // The same rules the server applies to a repo it pulls, over the archive.
-  const layout = await layoutFromListing(async (path) => archiveEntries(files, path), repoSlug);
+  const layout = await layoutFromListing(archiveLister(files), repoSlug);
   if (!layout.ok) return bad(layout.error, 400, { kind: "compile" });
 
   const publishes =
@@ -154,20 +154,17 @@ export async function POST(req: Request) {
       origin: `cli:${repoSlug}@${branch}`,
     });
 
-    // `creating` applies only to the rows this request made: a dataset already
-    // here is the authority on what it is scoped by, and a publish may not widen
-    // it (src/lib/tenancy.ts).
+    // ONE call, so ONE transaction. `creating` rides on each target — it applies
+    // only to the rows this request made, because a dataset already here is the
+    // authority on what it is scoped by and a publish may not widen it
+    // (src/lib/tenancy.ts). Two calls would have been two transactions, and a
+    // repo that creates one dataset while refreshing another would half-land.
     const fresh = new Set(createdIds);
-    const { refreshed, failed } = await compileAndWrite(
-      targets.filter((t) => !fresh.has(t.id)),
+    const { refreshed, failed: allFailed } = await compileAndWrite(
+      targets.map((t) => ({ ...t, creating: fresh.has(t.id) })),
       ctx,
     );
-    const madeResult =
-      fresh.size > 0
-        ? await compileAndWrite(targets.filter((t) => fresh.has(t.id)), ctx, { creating: true })
-        : { refreshed: [], failed: [] };
 
-    const allFailed = [...failed, ...madeResult.failed];
     if (allFailed.length > 0) {
       // Nothing was written for any dataset — including the rows just inserted,
       // which are removed so the instance is exactly as it started.
@@ -187,7 +184,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const published = [...refreshed, ...madeResult.refreshed];
+    const published = refreshed;
     void captureTelemetry({
       event: "model published",
       properties: {

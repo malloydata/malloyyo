@@ -8,7 +8,24 @@
 //
 // Dependency-free so the Node dev server and the emitted static site share it.
 
-import type { TreeDataset } from "@malloyyo/mcp-engine";
+/**
+ * What the switcher renders. A dashboard arrives with its SLUG already built —
+ * the address, from the one place that knows how addresses are made. This type
+ * is deliberately not the engine's `TreeDataset`: that one is the hosted menu's
+ * shape, which builds its own hrefs from dataset + name.
+ */
+export interface SwitcherDashboard {
+  /** How this dashboard is addressed on this host. */
+  slug: string;
+  title: string;
+  description?: string;
+}
+export interface SwitcherDataset {
+  dataset: string;
+  title?: string;
+  description?: string;
+  dashboards: SwitcherDashboard[];
+}
 
 export interface NavDashboard {
   name: string;
@@ -168,25 +185,29 @@ export function siblingList<T extends NavDashboard & { description?: string }>(
  */
 export function switcherHtml(
   activeSlug: string,
-  tree: TreeDataset[],
+  tree: SwitcherDataset[],
   href: (slug: string) => string,
   opts: { dataset?: string; label?: string } = {},
 ): string {
+  // `flat` decides LAYOUT ONLY — no branches, no filter box, for a repo with one
+  // dataset. It must never decide an address: slugs arrive already built, by the
+  // one place that knows the convention (repo.ts). Deriving them here from
+  // `tree.length` disagreed with that place for a repo holding exactly one
+  // dataset under `datasets/` — the shape every new repo starts in — and emitted
+  // links to pages that do not exist.
   const flat = tree.length <= 1;
-  const slugOf = (ds: string, name: string) => (flat ? name : `${ds}/${name}`);
 
   const groups = tree
     .map((ds) => {
       const open = flat || ds.dataset === opts.dataset ? ' data-open="1"' : "";
       const leaves = ds.dashboards
         .map((d) => {
-          const slug = slugOf(ds.dataset, d.name);
-          const on = slug === activeSlug ? " on" : "";
+          const on = d.slug === activeSlug ? " on" : "";
           return (
-            `<a class="leaf${on}" href="${esc(href(slug))}"` +
+            `<a class="leaf${on}" href="${esc(href(d.slug))}"` +
             `${d.description ? ` title="${esc(d.description)}"` : ""}` +
-            ` data-find="${esc(`${ds.dataset} ${ds.title ?? ""} ${d.name} ${d.title}`.toLowerCase())}">` +
-            `${esc(d.title || d.name)}</a>`
+            ` data-find="${esc(`${ds.dataset} ${ds.title ?? ""} ${d.slug} ${d.title}`.toLowerCase())}">` +
+            `${esc(d.title)}</a>`
           );
         })
         .join("");
@@ -264,3 +285,21 @@ export const SWITCHER_JS = `
   document.addEventListener('keydown',function(e){ if(e.key==='Escape') openState(false); });
 })();
 `;
+
+/**
+ * The bar: brand, then the switcher. Both hosts render exactly this; the only
+ * thing that differs is the link shape, which is already a parameter.
+ *
+ * Replaces two copies that each rebuilt the bar by calling `navHtml` with an
+ * empty list and regex-stripping its wrapper tags back off.
+ */
+export function navWithSwitcher(
+  activeSlug: string,
+  tree: SwitcherDataset[],
+  href: (slug: string) => string,
+  opts: { dataset?: string; label?: string; homeHref?: string } = {},
+): string {
+  const brand =
+    `<a class="brand" href="${esc(opts.homeHref ?? "./")}" title="Home" aria-label="Home">${HOME_ICON}</a>`;
+  return `<nav class="dash-nav">${brand}${switcherHtml(activeSlug, tree, href, opts)}</nav>`;
+}

@@ -1,6 +1,7 @@
 import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { execFileSync } from "node:child_process";
+import { keepsFile } from "@malloyyo/mcp-engine";
 import { makeRunner } from "./host.js";
 import { aboutPage } from "./discover.js";
 import type { ModelFile, GitInfo, DashboardPayload } from "./protocol.js";
@@ -175,11 +176,12 @@ export function gitInfo(dir: string): GitInfo {
  * little more than one dataset needs costs nothing.
  *
  * Still not everything: a model repo may hold committed data or built docs, and
- * those are neither compiled nor stored. Same extensions the server's extractor
- * keeps, so what is packed is what would survive the trip anyway.
+ * those are neither compiled nor stored. The extension list is the extractor's
+ * OWN (`keepsFile`), not a copy of it — the copy had already drifted, dropping
+ * .sql/.csv/.txt that a GitHub pull kept, so the same repo carried different
+ * files depending on which way it arrived.
  */
 export function gatherRepoFiles(dir: string): Map<string, string> {
-  const KEEP = new Set([".malloy", ".json", ".jsx", ".tsx", ".ts", ".js", ".md"]);
   const out = new Map<string, string>();
 
   const walk = (cur: string): void => {
@@ -190,8 +192,7 @@ export function gatherRepoFiles(dir: string): Map<string, string> {
         walk(full);
         continue;
       }
-      const dot = entry.lastIndexOf(".");
-      if (dot === -1 || !KEEP.has(entry.slice(dot).toLowerCase())) continue;
+      if (!keepsFile(entry)) continue;
       out.set(relative(dir, full).split(sep).join("/"), readFileSync(full, "utf8"));
     }
   };

@@ -6,7 +6,7 @@
 // exported here so server imports read like every other lib module.
 export {
   ArchiveURLReader,
-  archiveDir,
+  archiveLister,
   archiveEntries,
   buildTarGz,
   extractTarGz,

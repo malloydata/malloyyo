@@ -16,7 +16,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import * as esbuild from "esbuild";
-import { discoverRepoDashboards, type RepoDashboard } from "./repo.js";
+import { discoverRepoDashboards, navTree, type RepoDashboard } from "./repo.js";
 import { readSiteConfig } from "./config.js";
 import {
   rendersNoData,
@@ -24,7 +24,7 @@ import {
   hostAliasPlugin,
   browserBuildBase,
 } from "./discover.js";
-import { switcherHtml, SWITCHER_JS, navHtml as sharedNav, NAV_CSS } from "./shared/nav.js";
+import { navWithSwitcher, SWITCHER_JS, NAV_CSS } from "./shared/nav.js";
 import { safeJson } from "./shared/html.js";
 import { serveStatic } from "./static-server.js";
 
@@ -191,29 +191,11 @@ const pageLink = (cleanUrls: boolean) => (slug: string) =>
   cleanUrls ? `./${encodeURIComponent(pageFile(slug))}` : `./${encodeURIComponent(pageFile(slug))}.html`;
 
 /** The switcher's tree: a branch per dataset, its dashboards under it. */
-function bundleTree(all: RepoDashboard[]) {
-  const byDataset = new Map<string, RepoDashboard[]>();
-  for (const d of all) byDataset.set(d.dataset, [...(byDataset.get(d.dataset) ?? []), d]);
-  return [...byDataset.entries()].map(([dataset, ds]) => ({
-    dataset,
-    // The label, so the menu reads like the app does.
-    title: ds[0]?.datasetLabel || undefined,
-    dashboards: ds.map((d) => ({ name: d.name, title: d.title || d.name, description: d.description })),
-  }));
-}
-
 function navFor(dash: RepoDashboard, all: RepoDashboard[], cleanUrls: boolean): string {
-  // Same switcher the dev server renders — a static site with fifteen
-  // dashboards needs it more, not less.
-  return (
-    `<nav class="dash-nav">` +
-    sharedNav(dash.slug, [], pageLink(cleanUrls)).replace(/^<nav class="dash-nav">|<\/nav>$/g, "") +
-    switcherHtml(dash.slug, bundleTree(all), pageLink(cleanUrls), {
-      dataset: dash.datasetLabel || dash.dataset || undefined,
-      label: dash.title || dash.name,
-    }) +
-    `</nav>`
-  );
+  return navWithSwitcher(dash.slug, navTree(all), pageLink(cleanUrls), {
+    dataset: dash.datasetLabel || dash.dataset || undefined,
+    label: dash.title || dash.name,
+  });
 }
 
 /** Google Analytics 4, injected into every emitted page's <head>.
@@ -327,7 +309,7 @@ function indexPage(
 ${analyticsSnippet(analytics)}
 </head>
 <body>
-${sharedNav("", dashboards, link)}
+${navWithSwitcher("", navTree(dashboards), link)}
 ${body}
 </body>
 </html>

@@ -16,6 +16,7 @@ datasets/
     dashboards/
       spend.malloy
   sales/
+    malloy-config.json          …unless a dataset brings its own
     index.malloy
     dashboards/
 lib/                            shared code, imported by relative path
@@ -28,8 +29,10 @@ lib/                            shared code, imported by relative path
 - **The directory names the dataset.** `datasets/finance/` publishes `finance`.
 - **A dataset publishes exactly what its own `index.malloy` exports.** A source
   next door is not hidden from it, it is absent.
-- **`malloy-config.json` stays at the repo ROOT.** Connections belong to the
-  repo. A dataset directory must not have one.
+- **`malloy-config.json` can be at the repo root or in a dataset.** At the root
+  it is shared by every dataset. In a dataset it is that dataset's own — and it
+  REPLACES the root's rather than adding to it, so a dataset that brings its own
+  cannot reach a connection only the root declares. Nearest one wins.
 - **The repo publishes as a unit.** Every dataset is linted, and the server
   writes all of them or none.
 - **Never have both layouts.** A root `index.malloy` AND a `datasets/` directory

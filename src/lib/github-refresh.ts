@@ -237,7 +237,26 @@ async function compileDataset(
   const entryPath = repoPath(ds.repoDir, "index.malloy");
   const dashboardsDir = repoPath(ds.repoDir, "dashboards");
 
-  const result = await introspectModelWithReader(reader, entryPath, ctx.malloyConfig);
+  // NEAREST CONFIG WINS. `malloy-config.json` may sit at the repo root, where it
+  // is shared by every dataset, or inside a dataset, where it is that dataset's
+  // own. This is the same answer `discoverConfig` gives the CLI — it walks up
+  // from the model root to the repo root and takes the first it finds — and the
+  // two have to agree, or `malloyyo lint` blesses a repo this then refuses.
+  const localConfigPath = ds.repoDir ? repoPath(ds.repoDir, "malloy-config.json") : null;
+  let malloyConfig = ctx.malloyConfig;
+  if (localConfigPath) {
+    if (ctx.archive) {
+      malloyConfig = ctx.archive.get(localConfigPath) ?? ctx.malloyConfig;
+    } else {
+      try {
+        malloyConfig = await fetchGitHubFile(owner, repo, branch, localConfigPath, { useToken });
+      } catch {
+        // No config of its own — the repo's applies.
+      }
+    }
+  }
+
+  const result = await introspectModelWithReader(reader, entryPath, malloyConfig);
   if (!result.ok) return { ok: false, error: result.error };
 
   // A REFRESH never widens what a dataset is scoped by: the dataset's list wins,
@@ -270,7 +289,7 @@ async function compileDataset(
       .sort();
     if (bases.length) {
       type EngineRuntime = Parameters<typeof modelArtifact>[0];
-      const found = await withReaderRuntime(reader, ctx.malloyConfig, async (runtime) => {
+      const found = await withReaderRuntime(reader, malloyConfig, async (runtime) => {
         const out: Array<{ base: string; artifact: ArtifactInfo }> = [];
         for (const base of bases) {
           const r = await modelArtifact(
@@ -361,7 +380,9 @@ async function compileDataset(
   if (!rerooted.ok) return { ok: false, error: rerooted.error };
 
   const files = new Map(rerooted.files);
-  if (ctx.malloyConfig) files.set("malloy-config.json", ctx.malloyConfig);
+  // Stored at the model root either way, so what the dataset serves with is
+  // what it compiled with.
+  if (malloyConfig) files.set("malloy-config.json", malloyConfig);
   if (ctx.devcontainer) files.set(DEVCONTAINER_PATH, ctx.devcontainer);
 
   return {

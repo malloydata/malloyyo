@@ -177,6 +177,7 @@ datasets/
 lib/
   orders.malloy         shared definitions, imported by both
 malloy-config.json      connections, shared by all of them
+                        (a dataset may bring its own, which then replaces it)
 ```
 
 - **The directory name is the dataset name.** `datasets/finance/` publishes a

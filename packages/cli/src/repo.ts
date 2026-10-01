@@ -96,7 +96,9 @@ export async function discoverRepoDashboards(root: string): Promise<RepoDashboar
   try {
     for (const u of units) {
       const modelRoot = u.dir ? path.join(root, u.dir) : root;
-      const runner = await makeRunner(modelRoot);
+      // The repo root is the ceiling for the config search: `malloy-config.json`
+      // lives there and its connections belong to every dataset.
+      const runner = await makeRunner(modelRoot, { repoRoot: root });
       runners.push(runner);
       if (!runner.entryExists()) {
         throw new Error(

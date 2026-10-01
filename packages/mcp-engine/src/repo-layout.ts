@@ -17,10 +17,10 @@
  *   lib/                    shared, imported by relative path
  *   malloy-config.json      connections, shared by all of them
  *
- * `malloy-config.json` stays at the ROOT in both. Connections belong to the
- * repo, not to a dataset — which is also what lets `lib/` be imported from
- * `datasets/finance/index.malloy` as `../../lib/orders.malloy` and resolve, since
- * file paths are keyed from the repo root.
+ * `malloy-config.json` may sit at the ROOT, where every dataset shares it, or
+ * inside a dataset, where it is that dataset's own and replaces the root's.
+ * Nearest one wins — which is what `discoverConfig` does walking up from a model
+ * root, and what the server mirrors when it compiles from an archive.
  *
  * A repo with BOTH is an error rather than a guess. Guessing picks one and
  * publishes half of what the author meant, which looks like success.

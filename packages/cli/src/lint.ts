@@ -58,9 +58,15 @@ function landingPageErrors(dir: string, file: string): string[] {
   }
 }
 
-export async function lintDashboards(root: string): Promise<LintReport> {
+export async function lintDashboards(
+  root: string,
+  /** The repo root, when `root` is a dataset directory inside one: the config
+      search may walk up to it, because `malloy-config.json` lives there and its
+      connections belong to every dataset. */
+  opts: { repoRoot?: string } = {},
+): Promise<LintReport> {
   const abs = resolve(root);
-  const runner = await makeRunner(abs);
+  const runner = await makeRunner(abs, opts);
   try {
     return await runLint(abs, runner);
   } finally {
@@ -326,7 +332,7 @@ export async function lintRepo(root: string): Promise<RepoLintReport> {
 
   const datasets: RepoLintReport["datasets"] = [];
   for (const t of targets) {
-    const report = await lintDashboards(t.dir ? join(abs, t.dir) : abs);
+    const report = await lintDashboards(t.dir ? join(abs, t.dir) : abs, { repoRoot: abs });
     datasets.push({ name: t.name, dir: t.dir, report });
   }
   return { ok: datasets.every((d) => d.report.ok), datasets, oldLayout };

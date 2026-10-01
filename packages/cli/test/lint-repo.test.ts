@@ -113,3 +113,69 @@ test("a datasets/ repo is not flagged", async () => {
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+// ── malloy-config.json: root, or the dataset's own ──────────────────────────
+
+/** A repo whose datasets need a named connection, placed where `where` says. */
+function configRepo(where: "root" | "dataset"): string {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "lint-cfg-"));
+  const ds = path.join(root, "datasets", "alpha");
+  fs.mkdirSync(path.join(ds, "dashboards"), { recursive: true });
+  const config = JSON.stringify({ connections: { warehouse: { is: "duckdb" } } });
+  fs.writeFileSync(path.join(where === "root" ? root : ds, "malloy-config.json"), config);
+  fs.writeFileSync(
+    path.join(ds, "index.malloy"),
+    `source: sales is warehouse.sql("SELECT 'a' as region, 10 as amt") extend {\n  measure: total is amt.sum()\n}\n`,
+  );
+  fs.writeFileSync(
+    path.join(ds, "dashboards", "totals.malloy"),
+    `import "../index.malloy"\n# artifact title="Totals"\nquery: totals is sales -> { group_by: region; aggregate: total }\n`,
+  );
+  return root;
+}
+
+test("a dataset uses the REPO's malloy-config.json", async () => {
+  // Connections belong to the repo. A dataset's model root is datasets/<name>/,
+  // so a config search that does not reach the repo root finds nothing and every
+  // connection the repo declares goes missing — lint failing on a repo the
+  // server publishes happily, which is the one thing these two must not do.
+  const root = configRepo("root");
+  try {
+    const r = await lintRepo(root);
+    assert.equal(r.ok, true, JSON.stringify(r.datasets[0]?.report.dashboards));
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("…or its own, which is the one that wins", async () => {
+  // Nearest config wins: at the root it is shared by every dataset, inside a
+  // dataset it is that dataset's own.
+  const root = configRepo("dataset");
+  try {
+    const r = await lintRepo(root);
+    assert.equal(r.ok, true);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a dataset's own config REPLACES the repo's, it does not merge", async () => {
+  // So a dataset that brings its own cannot reach a connection the root declares
+  // — worth pinning, because "shared" and "merged" are easy to confuse and the
+  // failure is a connection that resolves locally and not on the server.
+  const root = configRepo("root");
+  const ds = path.join(root, "datasets", "alpha");
+  fs.writeFileSync(
+    path.join(ds, "malloy-config.json"),
+    JSON.stringify({ connections: { other: { is: "duckdb" } } }),
+  );
+  try {
+    const r = await lintRepo(root);
+    assert.equal(r.ok, false, "the root's `warehouse` is not visible here");
+    const errs = r.datasets.flatMap((d) => d.report.dashboards.flatMap((x) => x.errors)).join(" ");
+    assert.match(errs, /warehouse/, `names the missing connection: ${errs}`);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

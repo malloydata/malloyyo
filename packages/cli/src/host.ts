@@ -116,8 +116,18 @@ function fsReader(): URLReader {
 
 /** core's own config discovery (malloy-config[.local].json), else a bare
     DuckDB world — same fallback the hosted server and `malloyyo mcp` use. */
-async function loadConfig(rootUrl: URL, reader: URLReader): Promise<MalloyConfig> {
-  const discovered = await discoverConfig(rootUrl, rootUrl, reader).catch(() => null);
+/**
+ * `malloy-config.json`, found by walking UP from the model root to `ceilingUrl`.
+ *
+ * The ceiling matters for a multi-dataset repo. Connections belong to the REPO
+ * and the config sits at its root, but a dataset's model root is
+ * `datasets/<name>/` — so searching only there finds nothing, every connection
+ * the repo declares is missing, and `lint` fails on a repo the server publishes
+ * happily. Passing the same URL for both (which this did) is the single-dataset
+ * case, where the repo root and the model root are the same directory.
+ */
+async function loadConfig(rootUrl: URL, reader: URLReader, ceilingUrl = rootUrl): Promise<MalloyConfig> {
+  const discovered = await discoverConfig(rootUrl, ceilingUrl, reader).catch(() => null);
   return (
     discovered ??
     new MalloyConfig({ includeDefaultConnections: true } as never, {
@@ -194,7 +204,14 @@ export interface ModelRunner {
   root: string;
 }
 
-export async function makeRunner(root: string): Promise<ModelRunner> {
+export async function makeRunner(
+  root: string,
+  /** `repoRoot`: the directory the config search may walk up to. A dataset in a
+      multi-dataset repo has its model root under `datasets/`, and the config it
+      needs is at the repo root above it. Defaults to `root` — the
+      single-dataset case, where they are the same place. */
+  opts: { repoRoot?: string } = {},
+): Promise<ModelRunner> {
   // Registers connection types and verifies the registry we read is the one
   // that was written to; MUST run before any MalloyConfig is built.
   await initConnections();
@@ -210,7 +227,10 @@ export async function makeRunner(root: string): Promise<ModelRunner> {
   // (prepareSource layers its own per-entry cache over it), so it's shared too.
   const reader = fsReader();
   let configPromise: Promise<MalloyConfig> | null = null;
-  const getConfig = () => (configPromise ??= loadConfig(rootUrl, reader));
+  const ceilingUrl = opts.repoRoot
+    ? url.pathToFileURL(path.resolve(opts.repoRoot) + path.sep)
+    : rootUrl;
+  const getConfig = () => (configPromise ??= loadConfig(rootUrl, reader, ceilingUrl));
 
   // Local stand-ins for the givens a Malloyyo server fills — read from the
   // ENVIRONMENT, per model, on first use. Lazy because it needs the model's

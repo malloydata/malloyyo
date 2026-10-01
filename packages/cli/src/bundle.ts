@@ -16,17 +16,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import * as esbuild from "esbuild";
-import { makeRunner, type ModelRunner } from "./host.js";
+import { discoverRepoDashboards, type RepoDashboard } from "./repo.js";
 import { readSiteConfig } from "./config.js";
 import {
-  discoverDashboards,
   rendersNoData,
   resolveRuntimeDir,
   hostAliasPlugin,
   browserBuildBase,
-  type Dashboard,
 } from "./discover.js";
-import { navHtml as sharedNav, NAV_CSS } from "./shared/nav.js";
+import { switcherHtml, SWITCHER_JS, navHtml as sharedNav, NAV_CSS } from "./shared/nav.js";
 import { safeJson } from "./shared/html.js";
 import { serveStatic } from "./static-server.js";
 
@@ -175,11 +173,44 @@ function copyDuckDBAssets(outDir: string): string[] {
 }
 
 
+/**
+ * A slug as a file name. `ecommerce/overview` becomes `ecommerce.overview`.
+ *
+ * FLAT, not a subdirectory. Every page links to its siblings and its assets
+ * relatively (`./assets/site.css`, `./other.html`) because a GitHub Pages site
+ * is served from a subpath and absolute links would 404 — and a page one
+ * directory down would resolve all of those against the wrong place. The dot
+ * keeps every page at the site root, where the existing links already work.
+ * A single-dataset repo has no dot: its file names are unchanged.
+ */
+export const pageFile = (slug: string) => slug.replace(/\//g, ".");
+
 /** Link shape per target: sibling .html files for a plain static host, clean
     extensionless paths where the host rewrites them (vercel.json cleanUrls). */
-function navFor(dash: Dashboard, all: Dashboard[], cleanUrls: boolean): string {
-  return sharedNav(dash.name, all, (n) =>
-    cleanUrls ? `./${encodeURIComponent(n)}` : `./${encodeURIComponent(n)}.html`,
+const pageLink = (cleanUrls: boolean) => (slug: string) =>
+  cleanUrls ? `./${encodeURIComponent(pageFile(slug))}` : `./${encodeURIComponent(pageFile(slug))}.html`;
+
+/** The switcher's tree: a branch per dataset, its dashboards under it. */
+function bundleTree(all: RepoDashboard[]) {
+  const byDataset = new Map<string, RepoDashboard[]>();
+  for (const d of all) byDataset.set(d.dataset, [...(byDataset.get(d.dataset) ?? []), d]);
+  return [...byDataset.entries()].map(([dataset, ds]) => ({
+    dataset,
+    dashboards: ds.map((d) => ({ name: d.name, title: d.title || d.name, description: d.description })),
+  }));
+}
+
+function navFor(dash: RepoDashboard, all: RepoDashboard[], cleanUrls: boolean): string {
+  // Same switcher the dev server renders — a static site with fifteen
+  // dashboards needs it more, not less.
+  return (
+    `<nav class="dash-nav">` +
+    sharedNav(dash.slug, [], pageLink(cleanUrls)).replace(/^<nav class="dash-nav">|<\/nav>$/g, "") +
+    switcherHtml(dash.slug, bundleTree(all), pageLink(cleanUrls), {
+      dataset: dash.dataset || undefined,
+      label: dash.title || dash.name,
+    }) +
+    `</nav>`
   );
 }
 
@@ -197,8 +228,8 @@ function analyticsSnippet(id: string | undefined): string {
 }
 
 function page(
-  dash: Dashboard,
-  all: Dashboard[],
+  dash: RepoDashboard,
+  all: RepoDashboard[],
   title: string,
   givenSpecs: unknown[],
   tileSpecs: unknown[] | undefined,
@@ -206,11 +237,15 @@ function page(
   analytics: string | undefined,
 ): string {
   const info = {
-    name: dash.name,
+    // How this page is addressed ON THIS HOST, which is what the runtime pushes
+    // into the URL. A bundle's pages are flat files, so it is the file id — the
+    // dev server uses `?d=<slug>`, where a slash is fine.
+    name: pageFile(dash.slug),
     query: dash.query,
     title: dash.title,
     description: dash.description,
-    entryFile: dash.entryFile,
+    // Repo-relative — the inlined file map is keyed that way.
+    entryFile: dash.repoEntryFile ?? dash.entryFile,
     tiles: dash.tiles,
     tileSpecs,
     dashboard_columns: dash.dashboard_columns,
@@ -228,6 +263,7 @@ ${analyticsSnippet(analytics)}
 </head>
 <body>
 ${navFor(dash, all, cleanUrls)}
+<script>${SWITCHER_JS}</script>
 <div id="root"></div>
 <script>
 window.__DASHBOARD__ = ${safeJson(info)};
@@ -242,7 +278,7 @@ window.__GIVENS__ = ${safeJson(givenSpecs)};
 // the runtime keys off, so every shareable link fell back to defaults).
 </script>
 <script src="./assets/model-files.js"></script>
-<script type="module" src="./assets/${dash.name}.js"></script>
+<script type="module" src="./assets/${pageFile(dash.slug)}.js"></script>
 </body>
 </html>
 `;
@@ -253,13 +289,13 @@ window.__GIVENS__ = ${safeJson(givenSpecs)};
     custom landing page is ordinary React — it needs no Malloy and no DuckDB, so
     it is bundled separately and stays tiny. */
 function indexPage(
-  dashboards: Dashboard[],
+  dashboards: RepoDashboard[],
   title: string,
   custom: boolean,
   cleanUrls: boolean,
   analytics: string | undefined,
 ): string {
-  const link = (n: string) => (cleanUrls ? `./${encodeURIComponent(n)}` : `./${encodeURIComponent(n)}.html`);
+  const link = pageLink(cleanUrls);
   // The About page is this page — it must not list itself among the dashboards
   // it is introducing, in the cards or in the custom landing's injected list.
   const listed = dashboards.filter((d) => !rendersNoData(d));
@@ -355,9 +391,18 @@ export async function bundleDashboards(opts: BundleOptions = {}): Promise<void> 
   const cleanUrls = target === "vercel";
   const selfHostDuckdb = opts.duckdb === "bundled";
 
-  const runner: ModelRunner = await makeRunner(root);
-  const dashboards = await discoverDashboards(root, runner);
-  if (dashboards.length === 0) throw new Error(`no dashboards found in ${path.join(root, "dashboards")}`);
+  // THE REPO: one site for everything it publishes. A single-dataset repo
+  // bundles exactly as it always did — unqualified slugs, the same file names,
+  // so a site already published from one is not renamed under its readers.
+  const repo = await discoverRepoDashboards(root);
+  const dashboards = repo.dashboards;
+  if (dashboards.length === 0) {
+    throw new Error(
+      repo.multi
+        ? `no dashboards found — each dataset keeps its own in datasets/<name>/dashboards/`
+        : `no dashboards found in ${path.join(root, "dashboards")}`,
+    );
+  }
 
   // Data files copied in by a PREVIOUS run are not predictable from this run's
   // model — if the data moved (data/ -> docs/), last run's copies are orphans
@@ -428,7 +473,7 @@ export async function bundleDashboards(opts: BundleOptions = {}): Promise<void> 
   // Only what the dashboards actually import — see reachableModelFiles.
   const usedFiles = reachableModelFiles(
     modelFiles,
-    dashboards.map((d) => d.entryFile).filter((f): f is string => !!f),
+    dashboards.map((d) => d.repoEntryFile ?? d.entryFile).filter((f): f is string => !!f),
   );
   const { map: tableFiles, copies } = tableFilePlan(usedFiles, outRel);
   for (const rel of copies) {
@@ -484,10 +529,10 @@ export async function bundleDashboards(opts: BundleOptions = {}): Promise<void> 
   // esbuild resolves a given import specifier once per build, so N entries all
   // pointing at the same source could never resolve `virtual:dashboard` to N
   // different components. The generated stub names its component directly.
-  const byEntry = new Map(dashboards.map((d) => [`vdash:${d.name}`, d]));
+  const byEntry = new Map(dashboards.map((d) => [`vdash:${pageFile(d.slug)}`, d]));
 
   await esbuild.build({
-    entryPoints: Object.fromEntries(dashboards.map((d) => [d.name, `vdash:${d.name}`])),
+    entryPoints: Object.fromEntries(dashboards.map((d) => [pageFile(d.slug), `vdash:${pageFile(d.slug)}`])),
     bundle: true,
     splitting: true,
     format: "esm",
@@ -512,8 +557,11 @@ export async function bundleDashboards(opts: BundleOptions = {}): Promise<void> 
               contents: `${imp}\nimport { boot } from ${JSON.stringify(wasmEntry)};\nboot(Dashboard);\n`,
               loader: "js",
               // Resolve the component's own imports (react, @malloyyo/dashboard)
-              // from the model repo's directory, matching `dashboard dev`.
-              resolveDir: path.dirname(dash.tsxPath ?? path.join(root, "dashboards", "x")),
+              // from the DATASET's directory, matching `dashboard dev`. Not the
+              // repo root: a multi-dataset repo has no `dashboards/` of its own,
+              // and esbuild resolving from a directory that does not exist fails
+              // even the absolute import above.
+              resolveDir: path.dirname(dash.tsxPath ?? path.join(dash.root, "dashboards", "x")),
             };
           });
           b.onResolve({ filter: /^@malloyyo\/dashboard$/ }, () => ({ path: runtimeIndex }));
@@ -535,17 +583,23 @@ export async function bundleDashboards(opts: BundleOptions = {}): Promise<void> 
     let specs: unknown[] = [];
     let tileSpecs: unknown[] | undefined;
     if (d.tiles && d.entryFile) {
-      const t = await runner.dashboardTiles(d.entryFile, d.tiles);
+      const t = await d.runner.dashboardTiles(d.entryFile, d.tiles);
       specs = t.union;
       tileSpecs = t.tiles;
     } else {
       const got = d.entryFile
-        ? await runner.givensForQueryIn(d.entryFile, d.query)
-        : await runner.givensForQuery(d.query);
+        ? await d.runner.givensForQueryIn(d.entryFile, d.query)
+        : await d.runner.givensForQuery(d.query);
       if (!got.ok) throw new Error(`dashboard ${d.name}: ${got.error}`);
       specs = got.givens;
     }
-    fs.writeFileSync(path.join(outDir, `${d.name}.html`), page(d, dashboards, title, specs, tileSpecs, cleanUrls, analytics));
+    // `<dataset>/<name>.html` in a multi-dataset repo, so two datasets may each
+    // have an `about`. The subdirectory comes from the slug, so links built from
+    // it resolve without the page builders knowing anything about datasets.
+    fs.writeFileSync(
+      path.join(outDir, `${pageFile(d.slug)}.html`),
+      page(d, dashboards, title, specs, tileSpecs, cleanUrls, analytics),
+    );
   }
   fs.writeFileSync(path.join(outDir, "index.html"), indexPage(dashboards, title, !!landing, cleanUrls, analytics));
 
@@ -587,7 +641,7 @@ export async function bundleDashboards(opts: BundleOptions = {}): Promise<void> 
     .reduce((a, f) => a + bytes(path.join(assetDir, f)), 0);
 
   console.log(`\nbundled ${dashboards.length} dashboard(s) → ${path.relative(process.cwd(), outDir) || "."}/`);
-  for (const d of dashboards) console.log(`  ${d.name}.html   ${d.title ?? ""}`);
+  for (const d of dashboards) console.log(`  ${pageFile(d.slug)}.html   ${d.title ?? ""}`);
   console.log(`\n  js         ${(jsTotal / 1048576).toFixed(2)} MB`);
   console.log(
     selfHostDuckdb

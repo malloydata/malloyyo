@@ -24,17 +24,16 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import * as esbuild from "esbuild";
-import { makeRunner, type GivenSpec, type ModelRunner, type TileSpec } from "./host.js";
+import { type GivenSpec, type TileSpec } from "./host.js";
+import { discoverRepoDashboards, type RepoDashboard } from "./repo.js";
 import { initConnections } from "./connections.js";
 import { givensFromSearch, urlStateFromSearch } from "./shared/givens-url.js";
 import { safeJson } from "./shared/html.js";
-import { navHtml as sharedNav, siblingList, NAV_CSS } from "./shared/nav.js";
+import { navHtml as sharedNav, siblingList, switcherHtml, SWITCHER_JS, NAV_CSS } from "./shared/nav.js";
 import {
-  discoverDashboards,
   rendersNoData,
   hostAliasPlugin,
   resolveRuntimeDir,
-  type Dashboard,
 } from "./discover.js";
 
 const resolveFrameEntry = (): string => path.join(resolveRuntimeDir(), "..", "frame-entry.tsx");
@@ -68,9 +67,9 @@ function makeBundler() {
       .readdirSync(runtimeDir)
       .map((f) => fs.statSync(path.join(runtimeDir, f)).mtimeMs)
       .reduce((a, b) => a + b, 0);
-  return async function bundle(dash: Dashboard): Promise<string> {
+  return async function bundle(dash: RepoDashboard): Promise<string> {
     const stamp = runtimeStamp() + (dash.tsxPath ? fs.statSync(dash.tsxPath).mtimeMs : 0);
-    const hit = cache.get(dash.name);
+    const hit = cache.get(dash.slug);
     if (hit && hit.stamp === stamp) return hit.js;
     const result = await esbuild.build({
       entryPoints: [frameEntry],
@@ -112,7 +111,7 @@ function makeBundler() {
       ],
     });
     const js = result.outputFiles[0].text;
-    cache.set(dash.name, { stamp, js });
+    cache.set(dash.slug, { stamp, js });
     return js;
   };
 }
@@ -155,7 +154,8 @@ const html = (body: string, title: string) =>
   `<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title>` +
   `<meta name="viewport" content="width=device-width,initial-scale=1">` +
   `<style>${NAV_CSS}</style></head>` +
-  `<body style="margin:0">${body}</body></html>`;
+  // The switcher's script runs after the body, so it finds the control.
+  `<body style="margin:0">${body}<script>${SWITCHER_JS}</script></body></html>`;
 
 /** The dev server's link shape for the shared switcher: `?d=<name>`. The bar
     itself (markup, brand, styling) lives in shared/nav so dev and every bundle
@@ -189,11 +189,38 @@ export const DEV_PATHS = {
   run: "api/run",
 } as const;
 
-const devSiblings = (dash: Dashboard, all: Dashboard[]) =>
-  siblingList(dash.name, all, dashLink);
+/** The nav entries: addressed by slug, labelled by title, grouped by dataset. */
+const navEntries = (all: RepoDashboard[]) =>
+  all.map((d) => ({ name: d.slug, title: d.title || d.name, group: d.dataset || undefined }));
 
-function navHtml(dash: Dashboard, all: Dashboard[]): string {
-  return sharedNav(dash.name, all, dashLink);
+/** The switcher's tree, in nav order: a branch per dataset, its dashboards
+    under it. One unnamed dataset in a single-dataset repo, which the switcher
+    draws flat. */
+function navTree(all: RepoDashboard[]) {
+  const byDataset = new Map<string, RepoDashboard[]>();
+  for (const d of all) byDataset.set(d.dataset, [...(byDataset.get(d.dataset) ?? []), d]);
+  return [...byDataset.entries()].map(([dataset, ds]) => ({
+    dataset,
+    dashboards: ds.map((d) => ({ name: d.name, title: d.title || d.name, description: d.description })),
+  }));
+}
+
+const devSiblings = (dash: RepoDashboard, all: RepoDashboard[]) =>
+  siblingList(dash.slug, navEntries(all), dashLink);
+
+function navHtml(dash: RepoDashboard, all: RepoDashboard[]): string {
+  // The bar keeps the brand; the dashboards move into the switcher, because a
+  // repo with four datasets has fifteen of them and a row of pills wraps onto
+  // three lines with two entries called "About".
+  return (
+    `<nav class="dash-nav">` +
+    sharedNav(dash.slug, [], dashLink).replace(/^<nav class="dash-nav">|<\/nav>$/g, "") +
+    switcherHtml(dash.slug, navTree(all), dashLink, {
+      dataset: dash.dataset || undefined,
+      label: dash.title || dash.name,
+    }) +
+    `</nav>`
+  );
 }
 
 /** Shell for a TAG-ONLY dashboard: NO iframe. The runtime's DefaultDashboard
@@ -201,15 +228,15 @@ function navHtml(dash: Dashboard, all: Dashboard[]): string {
     direct-fetch host — see frame-inpage-entry.tsx. There's no untrusted author
     code, so nothing needs sandboxing; the iframe just caused lifecycle pain. */
 function inPageShell(
-  dash: Dashboard,
-  all: Dashboard[],
+  dash: RepoDashboard,
+  all: RepoDashboard[],
   givenSpecs: GivenSpec[],
   initialGivens: Record<string, string>,
   initialUrlState: Record<string, string>,
   tileSpecs?: TileSpec[],
 ): string {
   const info = {
-    name: dash.name,
+    name: dash.slug,
     query: dash.query,
     title: dash.title,
     description: dash.description,
@@ -228,14 +255,14 @@ function inPageShell(
       `window.__INITIAL_GIVENS__=${safeJson(initialGivens)};` +
       `window.__INITIAL_URLSTATE__=${safeJson(initialUrlState)}</script>` +
       `<script>try{new EventSource('${DEV_PATHS.events}').onmessage=()=>location.reload();}catch(e){}</script>` +
-      `<script src="${DEV_PATHS.inPage(dash.name)}"></script>`,
+      `<script src="${DEV_PATHS.inPage(dash.slug)}"></script>`,
     dash.title,
   );
 }
 
 function parentShell(
-  dash: Dashboard,
-  all: Dashboard[],
+  dash: RepoDashboard,
+  all: RepoDashboard[],
   initialGivens: Record<string, string>,
   initialUrlState: Record<string, string>,
 ): string {
@@ -258,7 +285,7 @@ function parentShell(
   //   - inbound messages report `origin: "null"`, so SOURCE identity is the
   //     guard; there is no meaningful origin to compare.
   //   - outbound must target "*", because an opaque origin cannot be named.
-  const d = safeJson(dash.name);
+  const d = safeJson(dash.slug);
   const nav = navHtml(dash, all);
   return html(
     `<div style="display:flex;flex-direction:column;height:100vh">` +
@@ -266,7 +293,7 @@ function parentShell(
       // allow-popups(+escape-sandbox): let a # link mark open its target in a
       // normal new tab on click instead of being blocked by the sandbox.
       `<iframe id="f" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"` +
-      ` src="${DEV_PATHS.frame(dash.name)}${givensQs}"` +
+      ` src="${DEV_PATHS.frame(dash.slug)}${givensQs}"` +
       ` style="border:0;flex:1;width:100%"></iframe>` +
       `</div>` +
       `<script>
@@ -330,8 +357,8 @@ function urlStateFromUrl(url: URL): Record<string, string> {
 }
 
 function frameDoc(
-  dash: Dashboard,
-  all: Dashboard[],
+  dash: RepoDashboard,
+  all: RepoDashboard[],
   givenSpecs: GivenSpec[],
   initialGivens: Record<string, string>,
   initialUrlState: Record<string, string>,
@@ -342,7 +369,7 @@ function frameDoc(
   // production build would also send a strict CSP (connect-src 'none',
   // img-src data:, etc.) to close exfil side-channels — see repo-artifacts.md §8.
   const info = {
-    name: dash.name,
+    name: dash.slug,
     query: dash.query,
     title: dash.title,
     description: dash.description,
@@ -392,28 +419,28 @@ export async function serveDashboard(opts: {
   // can't read the shell or reach /api/run except via postMessage.
 
 
-  const runner: ModelRunner = await makeRunner(root);
-  if (!runner.entryExists()) {
-    throw new Error(`No index.malloy at ${root} — run this from a Malloy model repo.`);
-  }
-  let dashboards = await discoverDashboards(root, runner);
+  // THE REPO, not one model root: a repo holds a dataset per directory under
+  // datasets/, and `dashboard dev` shows all of it. A single-dataset repo comes
+  // back as one unnamed unit with unqualified slugs, so its URLs are unchanged.
+  let repo = await discoverRepoDashboards(root);
+  let dashboards = repo.dashboards;
   if (dashboards.length === 0) {
     throw new Error(
       `No dashboards declared — tag a top-level query with \`# artifact title="…"\` in the model.`,
     );
   }
-  let byName = new Map(dashboards.map((d) => [d.name, d]));
+  let bySlug = new Map(dashboards.map((d) => [d.slug, d]));
   const bundle = makeBundler();
   const inPageBundle = makeInPageBundler();
 
-  const pick = (url: URL): Dashboard =>
-    byName.get(url.searchParams.get("d") ?? dashboards[0].name) ?? dashboards[0];
+  const pick = (url: URL): RepoDashboard =>
+    bySlug.get(url.searchParams.get("d") ?? dashboards[0].slug) ?? dashboards[0];
 
   /** Introspect a dashboard's given specs (+ per-tile specs for composites) from
       the model, PER LOAD — an edit to a `given:` decl shows up on reload. Shared
       by the sandboxed /frame route and the in-page tag-only shell. */
   async function resolveGivens(
-    dash: Dashboard,
+    dash: RepoDashboard,
   ): Promise<{ ok: true; union: GivenSpec[]; tiles?: TileSpec[] } | { ok: false; error: string }> {
     // The About page runs no query, so there is nothing to introspect and no
     // entry file to compile. Asking anyway would compile the model to answer a
@@ -421,12 +448,12 @@ export async function serveDashboard(opts: {
     // "model error" printed over the page the author wrote.
     if (rendersNoData(dash)) return { ok: true, union: [] };
     if (dash.tiles && dash.entryFile) {
-      const t = await runner.dashboardTiles(dash.entryFile, dash.tiles);
+      const t = await dash.runner.dashboardTiles(dash.entryFile, dash.tiles);
       return { ok: true, union: t.union, tiles: t.tiles };
     }
     const specs = dash.entryFile
-      ? await runner.givensForQueryIn(dash.entryFile, dash.query)
-      : await runner.givensForQuery(dash.query);
+      ? await dash.runner.givensForQueryIn(dash.entryFile, dash.query)
+      : await dash.runner.givensForQuery(dash.query);
     if (!specs.ok) return { ok: false, error: specs.error };
     return { ok: true, union: specs.givens };
   }
@@ -447,10 +474,16 @@ export async function serveDashboard(opts: {
       if (!f.endsWith(".malloy") && !f.includes("dashboards")) return;
       clearTimeout(debounce);
       debounce = setTimeout(() => {
-        discoverDashboards(root, runner)
-          .then((next) => {
-            dashboards = next;
-            byName = new Map(dashboards.map((d) => [d.name, d]));
+        // Re-discover the REPO: an edit may have added a dataset, not just a
+        // dashboard. The old runners are disposed after the new ones are built,
+        // so a broken edit leaves the server serving what it had.
+        discoverRepoDashboards(root)
+          .then(async (next) => {
+            const old = repo;
+            repo = next;
+            dashboards = next.dashboards;
+            bySlug = new Map(dashboards.map((d) => [d.slug, d]));
+            await old.dispose().catch(() => {});
             console.error(`  ↻ ${f} changed — reloading`);
             notifyReload();
           })
@@ -526,7 +559,7 @@ export async function serveDashboard(opts: {
       }
       if (url.pathname === "/api/run" && req.method === "POST") {
         const { d, query, malloy, givens } = JSON.parse(await readBody(req));
-        const dash = byName.get(d);
+        const dash = bySlug.get(d);
         if (!dash) return send(404, "application/json", JSON.stringify({ ok: false, problems: [{ message: `no dashboard '${d}'` }] }));
         // Governance: a dashboard may run (a) any named query the model publishes
         // (composite dashboards run each declared tile as one of these), or (b)
@@ -539,11 +572,11 @@ export async function serveDashboard(opts: {
         const out =
           typeof malloy === "string"
             ? entry
-              ? await runner.runTextIn(entry, malloy, givens ?? {})
-              : await runner.runText(malloy, givens ?? {})
+              ? await dash.runner.runTextIn(entry, malloy, givens ?? {})
+              : await dash.runner.runText(malloy, givens ?? {})
             : entry
-              ? await runner.runIn(entry, String(query ?? ""), givens ?? {})
-              : await runner.run(String(query ?? dash.query), givens ?? {});
+              ? await dash.runner.runIn(entry, String(query ?? ""), givens ?? {})
+              : await dash.runner.run(String(query ?? dash.query), givens ?? {});
         return send(200, "application/json", JSON.stringify(out));
       }
       send(404, "text/plain", "not found");
@@ -561,7 +594,9 @@ export async function serveDashboard(opts: {
   console.error(`  http://localhost:${port}/`);
   for (const d of dashboards) {
     const kind = d.tsxPath ? "custom (iframe)" : "tag-only (in-page)";
-    console.error(`    • ${d.name} (${kind})  →  http://localhost:${port}/?d=${d.name}`);
+    console.error(
+      `    • ${d.slug} (${kind})  →  http://localhost:${port}/?d=${encodeURIComponent(d.slug)}`,
+    );
   }
   console.error(`  Ctrl-C to stop.\n`);
   await new Promise<void>(() => {});

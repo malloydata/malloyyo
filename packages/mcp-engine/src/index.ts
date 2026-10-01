@@ -73,6 +73,7 @@ export { modelCatalogEntry } from './catalog';
 export { run, executeMaterialized, DEFAULT_ROW_LIMIT, type RunOptions } from './run';
 export { jsonRows } from './rows';
 export { validateRestricted, runRestricted } from './restricted';
+export { filterTree, type TreeDashboard, type TreeDataset } from './dashboard-tree';
 export {
   ArchiveURLReader,
   archiveDir,

@@ -137,27 +137,20 @@ function requestFailed(
  * command that isn't guessable from the argument list alone.
  */
 const PUBLISH_HELP = `One dataset, or several:
-  A repo publishes ONE dataset when it has an index.malloy at its root, and
-  several when it has a datasets/ directory — one per subdirectory, named
-  after it. The shape is read from the repo, so you do not declare it:
+  The repo's shape decides, so you don't declare it:
 
-    index.malloy                 →  malloyyo publish --dataset movies
-    dashboards/                              (--create-dataset to make it)
+    index.malloy                    one dataset
+    dashboards/                     publish --dataset movies
+                                    --create-dataset to make it
 
-    datasets/finance/index.malloy  →  malloyyo publish --repo owner/name
-    datasets/sales/index.malloy              (--create-datasets to make them)
-    malloy-config.json
+    datasets/finance/index.malloy   one dataset per directory
+    datasets/sales/index.malloy     publish --repo owner/name
+    malloy-config.json              --create-datasets to make them
 
-  --dataset names ONE dataset and cannot address a repo that holds several;
-  --repo names the whole repo and has nothing to say about one. Each refuses
-  the layout it cannot address, and names the other.
+  Use the wrong flag for your layout and the error says which to use.
 
-  A repo is published as a UNIT: every dataset in it is linted first, and the
-  server compiles them all and writes them in one transaction, or writes none.
-  Half a repo is an instance that looks complete and is missing the dataset
-  nobody checks.
-
-  Run \`malloyyo lint\` to see what your repo publishes before sending it.
+  A repo publishes as a unit: every dataset is linted, and the server writes
+  all of them or none. \`malloyyo lint\` shows what yours publishes.
 
 Target resolution:
   The instance and dataset normally come from the \`malloyyo\` block in

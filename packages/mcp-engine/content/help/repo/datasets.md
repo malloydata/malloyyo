@@ -27,6 +27,19 @@ lib/                            shared code, imported by relative path
 ## The rules worth knowing before you start
 
 - **The directory names the dataset.** `datasets/finance/` publishes `finance`.
+  The name is a slug — it is the URL, what a publish matches on, and what a role
+  is granted against — so a directory that is not already one is converted:
+  `datasets/the-look/` publishes `the_look`. `malloyyo lint` prints the name it
+  will publish as, next to the directory.
+- **A dataset can say what to CALL it**, at model scope in its `index.malloy`:
+
+      ## dataset { title="HubSpot CRM" }
+
+  With no tag the title is derived from the name — `hub_spot` → "Hub Spot" —
+  so a dataset that says nothing still reads properly. Use the tag when the
+  mechanical version is wrong: an acronym, a product's own capitalisation.
+  The title is presentation ONLY. It is not unique, nothing is looked up by it,
+  and changing it renames nothing.
 - **A dataset publishes exactly what its own `index.malloy` exports.** A source
   next door is not hidden from it, it is absent.
 - **`malloy-config.json` can be at the repo root or in a dataset.** At the root

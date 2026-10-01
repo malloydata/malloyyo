@@ -18,7 +18,10 @@ export interface TreeDashboard {
   mine?: boolean;
 }
 export interface TreeDataset {
+  /** The dataset's NAME — its identity, and what links are built from. */
   dataset: string;
+  /** What to show for it. Absent means derive it from the name. */
+  title?: string;
   dashboards: TreeDashboard[];
 }
 
@@ -29,9 +32,12 @@ export function filterTree(tree: TreeDataset[], q: string): TreeDataset[] {
   const needle = q.trim().toLowerCase();
   if (!needle) return tree;
   const hit = (s: string) => s.toLowerCase().includes(needle);
+  // A dataset matches on its title as well as its name — the title is what the
+  // menu shows, so it is what someone types.
+  const dsHit = (ds: TreeDataset) => hit(ds.dataset) || hit(ds.title ?? "");
   return tree
     .map((ds) =>
-      hit(ds.dataset) ? ds : { ...ds, dashboards: ds.dashboards.filter((d) => hit(d.title) || hit(d.name)) },
+      dsHit(ds) ? ds : { ...ds, dashboards: ds.dashboards.filter((d) => hit(d.title) || hit(d.name)) },
     )
-    .filter((ds) => ds.dashboards.length > 0 || hit(ds.dataset));
+    .filter((ds) => ds.dashboards.length > 0 || dsHit(ds));
 }

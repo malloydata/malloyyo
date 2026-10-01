@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { NextResponse } from "next/server";
+import { datasetTitle } from "@malloyyo/mcp-engine";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import type { DashboardSummary } from "@/lib/dashboards";
 import { allDashboardsByDataset, listAllDashboards, listDashboardsAndDrafts } from "@/lib/dashboards";
@@ -28,6 +29,7 @@ export async function GET(req: Request) {
       datasets
         .map((ds) => ({
           dataset: ds.name,
+          title: datasetTitle(ds.name, ds.title),
           dashboards: (byDataset.get(ds.id) ?? []).map((d) => wire(d, user.id)),
         }))
         .sort((a, b) => a.dataset.localeCompare(b.dataset)),

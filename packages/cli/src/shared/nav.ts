@@ -185,18 +185,18 @@ export function switcherHtml(
           return (
             `<a class="leaf${on}" href="${esc(href(slug))}"` +
             `${d.description ? ` title="${esc(d.description)}"` : ""}` +
-            ` data-find="${esc(`${ds.dataset} ${d.name} ${d.title}`.toLowerCase())}">` +
+            ` data-find="${esc(`${ds.dataset} ${ds.title ?? ""} ${d.name} ${d.title}`.toLowerCase())}">` +
             `${esc(d.title || d.name)}</a>`
           );
         })
         .join("");
       if (flat) return `<div class="grp" data-open="1"><div class="kids">${leaves}</div></div>`;
       return (
-        `<div class="grp"${open} data-ds="${esc(ds.dataset.toLowerCase())}">` +
+        `<div class="grp"${open} data-ds="${esc(`${ds.dataset} ${ds.title ?? ""}`.toLowerCase())}">` +
         `<button class="branch" aria-expanded="${open ? "true" : "false"}">` +
         `<svg class="tw" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" ` +
         `stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>` +
-        `${esc(ds.dataset)}</button>` +
+`<span title="${esc(ds.dataset)}">${esc(ds.title ?? ds.dataset)}</span></button>` +
         `<div class="kids indent">${leaves}</div></div>`
       );
     })

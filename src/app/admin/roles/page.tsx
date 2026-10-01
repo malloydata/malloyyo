@@ -11,6 +11,7 @@ import { asc, desc, eq } from "drizzle-orm";
 import { db, datasets, givens as givensTable, roles as rolesTable, users } from "@/db";
 import { requireAdminPage } from "@/lib/admin";
 import { defaultRoles, isBuiltinRole, NEVER_A_DEFAULT, rolesOf } from "@/lib/roles";
+import { datasetTitle } from "@malloyyo/mcp-engine";
 import {
   DatasetGivens,
   DefaultRoles,
@@ -41,6 +42,7 @@ export default async function AdminRolesPage() {
       .select({
         id: datasets.id,
         name: datasets.name,
+        title: datasets.title,
         roles: datasets.roles,
         requiredGivens: datasets.requiredGivens,
       })
@@ -53,7 +55,14 @@ export default async function AdminRolesPage() {
   ]);
 
   const allRoleNames = catalog.map((r) => r.name);
-  const allDatasets = dsRows.map((d) => ({ id: d.id, name: d.name }));
+  // Title for reading, NAME underneath. This page is where access is decided,
+  // and titles are not unique — two datasets may both be called "Sales", and a
+  // row you cannot tell apart is a role granted to the wrong one.
+  const allDatasets = dsRows.map((d) => ({
+    id: d.id,
+    name: d.name,
+    title: datasetTitle(d.name, d.title),
+  }));
   const members = people.filter((u) => u.status !== "pending");
   const holders = (role: string) => members.filter((u) => rolesOf(u).includes(role)).length;
   const grantedFor = (role: string) =>
@@ -183,7 +192,10 @@ export default async function AdminRolesPage() {
             <tbody>
               {dsRows.map((d) => (
                 <tr key={d.id} className="border-b border-gray-100 dark:border-gray-800 last:border-0">
-                  <td className={TD}>{d.name}</td>
+                  <td className={TD}>
+                    <div>{datasetTitle(d.name, d.title)}</div>
+                    <div className="font-mono text-xs text-gray-500 dark:text-gray-400">{d.name}</div>
+                  </td>
                   <td className={TD}>
                     <DatasetGivens
                       key={(d.requiredGivens ?? []).join(",")}

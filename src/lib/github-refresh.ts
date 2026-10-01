@@ -76,6 +76,9 @@ type Compiled = {
   artifacts: Array<Omit<typeof malloyArtifacts.$inferInsert, "modelId">>;
   /** What the dataset should be scoped by after this publish (creation only). */
   requiredGivens: string[] | null;
+  /** `## dataset { title= }`, or null when the model declares none and the
+      title should be derived from the name. */
+  title: string | null;
   indexContent: string;
 };
 
@@ -392,6 +395,7 @@ async function compileDataset(
       files,
       artifacts,
       requiredGivens: opts.creating && requirement.required.length > 0 ? requirement.required : null,
+      title: result.meta.title ?? null,
       indexContent: rerooted.files.get("index.malloy") ?? "",
     },
   };
@@ -445,6 +449,11 @@ async function writeCompiled(
   if (compiled.artifacts.length > 0) {
     await tx.insert(malloyArtifacts).values(compiled.artifacts.map((a) => ({ ...a, modelId: created.id })));
   }
+  // The title follows the model on EVERY publish, not just creation: it is a
+  // label, so changing it in the model is the way to change it, and there is
+  // nothing to protect the way `required_givens` protects scoping. Cleared when
+  // the tag goes, so the derived title takes over again.
+  await tx.update(datasets).set({ title: compiled.title }).where(eq(datasets.id, ds.id));
   if (compiled.requiredGivens) {
     await tx.update(datasets).set({ requiredGivens: compiled.requiredGivens }).where(eq(datasets.id, ds.id));
     logger.info("dataset scoped by its first model", {

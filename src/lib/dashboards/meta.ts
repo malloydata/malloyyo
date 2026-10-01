@@ -142,11 +142,11 @@ export async function listAllDashboards(userId: string): Promise<DashboardSummar
  * reach a dataset that has nothing built on it yet.
  */
 export async function allDashboardsByDataset(userId: string): Promise<{
-  datasets: { id: string; name: string }[];
+  datasets: { id: string; name: string; title: string | null }[];
   byDataset: Map<string, DashboardSummary[]>;
 }> {
   const dsList = await db
-    .select({ id: datasets.id, name: datasets.name })
+    .select({ id: datasets.id, name: datasets.name, title: datasets.title })
     .from(datasets)
     .where(visibleDatasetWhere(userId))
     .orderBy(desc(datasets.createdAt));

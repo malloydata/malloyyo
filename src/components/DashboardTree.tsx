@@ -226,7 +226,7 @@ export function DashboardTree({
                                 : "text-gray-700 dark:text-gray-300"
                             }`}
                           >
-                            {ds.dataset}
+                            <span title={ds.dataset}>{ds.title ?? ds.dataset}</span>
                           </span>
                           <span className="ml-auto shrink-0 pl-2 text-[10px] text-gray-400">
                             {ds.dashboards.length || ""}

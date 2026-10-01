@@ -196,6 +196,8 @@ function bundleTree(all: RepoDashboard[]) {
   for (const d of all) byDataset.set(d.dataset, [...(byDataset.get(d.dataset) ?? []), d]);
   return [...byDataset.entries()].map(([dataset, ds]) => ({
     dataset,
+    // The label, so the menu reads like the app does.
+    title: ds[0]?.datasetLabel || undefined,
     dashboards: ds.map((d) => ({ name: d.name, title: d.title || d.name, description: d.description })),
   }));
 }
@@ -207,7 +209,7 @@ function navFor(dash: RepoDashboard, all: RepoDashboard[], cleanUrls: boolean): 
     `<nav class="dash-nav">` +
     sharedNav(dash.slug, [], pageLink(cleanUrls)).replace(/^<nav class="dash-nav">|<\/nav>$/g, "") +
     switcherHtml(dash.slug, bundleTree(all), pageLink(cleanUrls), {
-      dataset: dash.dataset || undefined,
+      dataset: dash.datasetLabel || dash.dataset || undefined,
       label: dash.title || dash.name,
     }) +
     `</nav>`

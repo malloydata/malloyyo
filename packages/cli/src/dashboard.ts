@@ -201,6 +201,8 @@ function navTree(all: RepoDashboard[]) {
   for (const d of all) byDataset.set(d.dataset, [...(byDataset.get(d.dataset) ?? []), d]);
   return [...byDataset.entries()].map(([dataset, ds]) => ({
     dataset,
+    // The label, so the menu reads like the app does.
+    title: ds[0]?.datasetLabel || undefined,
     dashboards: ds.map((d) => ({ name: d.name, title: d.title || d.name, description: d.description })),
   }));
 }
@@ -216,7 +218,7 @@ function navHtml(dash: RepoDashboard, all: RepoDashboard[]): string {
     `<nav class="dash-nav">` +
     sharedNav(dash.slug, [], dashLink).replace(/^<nav class="dash-nav">|<\/nav>$/g, "") +
     switcherHtml(dash.slug, navTree(all), dashLink, {
-      dataset: dash.dataset || undefined,
+      dataset: dash.datasetLabel || dash.dataset || undefined,
       label: dash.title || dash.name,
     }) +
     `</nav>`

@@ -7,6 +7,8 @@ import { DuckDBConnection as MalloyDuckDBConnection } from "@malloydata/db-duckd
 import {
   declaredGivenNames,
   jsonRows,
+  readDatasetMeta,
+  type DatasetMeta,
   unreferencedGivens,
   unreferencedGivensMessage,
   withoutReservedGivens,
@@ -175,7 +177,10 @@ export async function introspectModelWithReader(
   reader: malloy.URLReader | GitHubURLReader,
   entryPath: string,
   configJson?: string,
-): Promise<{ ok: true; sources: SourceInfo[]; declaredGivens: string[] } | { ok: false; error: string }> {
+): Promise<
+  | { ok: true; sources: SourceInfo[]; declaredGivens: string[]; meta: DatasetMeta }
+  | { ok: false; error: string }
+> {
   logger.debug("introspectModel start", { entryPath, hasConfig: !!configJson });
   let handle: RuntimeParts | undefined;
   try {
@@ -188,7 +193,7 @@ export async function introspectModelWithReader(
       description: e.annotations.forRoute('"')[0]?.content.trim() ?? null,
     }));
     logger.debug("introspectModel ok", { entryPath, sourceCount: sources.length, sources: sources.map((s) => s.name) });
-    return { ok: true, sources, declaredGivens: [...declaredGivenNames(compiled)] };
+    return { ok: true, sources, declaredGivens: [...declaredGivenNames(compiled)], meta: readDatasetMeta(compiled) };
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     logger.error("introspectModel failed", { entryPath, hasConfig: !!configJson, error });
@@ -204,7 +209,10 @@ export async function introspectModelWithReader(
 export async function introspectModelFiles(
   files: Map<string, string>,
   entryPath: string,
-): Promise<{ ok: true; sources: SourceInfo[]; declaredGivens: string[] } | { ok: false; error: string }> {
+): Promise<
+  | { ok: true; sources: SourceInfo[]; declaredGivens: string[]; meta: DatasetMeta }
+  | { ok: false; error: string }
+> {
   logger.debug("introspectModelFiles start", { entryPath, fileCount: files.size });
   let handle: RuntimeParts | undefined;
   try {
@@ -219,7 +227,7 @@ export async function introspectModelFiles(
     // What the model DECLARES, for the dataset's requirement (src/lib/tenancy.ts).
     // Reported rather than judged: the rule needs the dataset's current value,
     // which this function has no business knowing.
-    return { ok: true, sources, declaredGivens: [...declaredGivenNames(compiled)] };
+    return { ok: true, sources, declaredGivens: [...declaredGivenNames(compiled)], meta: readDatasetMeta(compiled) };
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err);
     logger.error("introspectModelFiles failed", { entryPath, fileCount: files.size, error });

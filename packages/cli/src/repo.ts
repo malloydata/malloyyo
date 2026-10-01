@@ -17,7 +17,12 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { layoutFromListing, type DirEntry, type DirLister } from "@malloyyo/mcp-engine";
+import {
+  datasetTitle,
+  layoutFromListing,
+  type DirEntry,
+  type DirLister,
+} from "@malloyyo/mcp-engine";
 import { discoverDashboards, type Dashboard } from "./discover.js";
 import { makeRunner, type ModelRunner } from "./host.js";
 
@@ -45,6 +50,9 @@ export function fsLister(root: string): DirLister {
 export type RepoDashboard = Dashboard & {
   /** The dataset it belongs to; "" in a single-dataset repo. */
   dataset: string;
+  /** What that dataset is CALLED — `## dataset { title= }`, else derived from
+      the name. "" in a single-dataset repo, which shows no dataset. */
+  datasetLabel: string;
   /**
    * How it is addressed: the dashboard name on its own in a single-dataset
    * repo, `<dataset>/<name>` otherwise. Dev routes `?d=` on it and bundle names
@@ -93,6 +101,7 @@ export async function discoverRepoDashboards(root: string): Promise<RepoDashboar
 
   const runners: ModelRunner[] = [];
   const dashboards: RepoDashboard[] = [];
+  const titleOf = new Map<string, string | undefined>();
   try {
     for (const u of units) {
       const modelRoot = u.dir ? path.join(root, u.dir) : root;
@@ -107,10 +116,12 @@ export async function discoverRepoDashboards(root: string): Promise<RepoDashboar
             : `No index.malloy at ${root} — run this from a Malloy model repo, or ask claude to add a dataset.`,
         );
       }
+      if (u.dataset) titleOf.set(u.dataset, (await runner.datasetMeta()).title);
       for (const d of await discoverDashboards(modelRoot, runner)) {
         dashboards.push({
           ...d,
           dataset: u.dataset,
+          datasetLabel: u.dataset ? datasetTitle(u.dataset, titleOf.get(u.dataset)) : "",
           slug: multi ? `${u.dataset}/${d.name}` : d.name,
           runner,
           root: modelRoot,

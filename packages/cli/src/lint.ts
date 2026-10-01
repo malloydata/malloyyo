@@ -261,7 +261,7 @@ export function printLintReport(report: LintReport): void {
 // TRIGGER. Nobody is watching a push the way they watch a publish, so the last
 // moment a human sees an error is here.
 
-import { layoutFromListing, type DirEntry, type DirLister } from "@malloyyo/mcp-engine";
+import { datasetTitle, layoutFromListing, type DirEntry, type DirLister } from "@malloyyo/mcp-engine";
 
 /** Read a directory of the repo on disk, "" being its root. Missing is empty —
     the same answer the server's lister gives for a path GitHub does not have. */
@@ -309,7 +309,7 @@ export interface RepoLintReport {
   layoutError?: string;
   /** One entry per dataset the repo publishes. `dir` is "" for a single-dataset
       repo, whose one dataset is the repo root. */
-  datasets: { name: string; dir: string; report: LintReport }[];
+  datasets: { name: string; dir: string; title: string; report: LintReport }[];
 }
 
 /**
@@ -332,8 +332,18 @@ export async function lintRepo(root: string): Promise<RepoLintReport> {
 
   const datasets: RepoLintReport["datasets"] = [];
   for (const t of targets) {
-    const report = await lintDashboards(t.dir ? join(abs, t.dir) : abs, { repoRoot: abs });
-    datasets.push({ name: t.name, dir: t.dir, report });
+    const root = t.dir ? join(abs, t.dir) : abs;
+    const report = await lintDashboards(root, { repoRoot: abs });
+    let title = "";
+    if (t.name) {
+      const runner = await makeRunner(root, { repoRoot: abs });
+      try {
+        title = datasetTitle(t.name, (await runner.datasetMeta()).title);
+      } finally {
+        await runner.dispose().catch(() => {});
+      }
+    }
+    datasets.push({ name: t.name, dir: t.dir, title, report });
   }
   return { ok: datasets.every((d) => d.report.ok), datasets, oldLayout };
 }
@@ -346,7 +356,13 @@ export function printRepoLintReport(repo: RepoLintReport): void {
   }
   const many = repo.datasets.length > 1;
   for (const d of repo.datasets) {
-    if (many) console.log(`  ${d.dir}`);
+    // Directory, the NAME it publishes as, and the title it will be shown
+    // under. The name is not always the directory — `the-look` publishes as
+    // `the_look` — and finding that out at publish time is too late.
+    if (many) {
+      const asName = d.dir.split("/").pop() === d.name ? "" : `  →  ${d.name}`;
+      console.log(`  ${d.dir}${asName}   “${d.title}”`);
+    }
     if (d.report.dashboards.length === 0 && many) console.log("    (no dashboards)");
     printLintReport(d.report);
   }

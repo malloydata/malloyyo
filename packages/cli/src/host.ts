@@ -30,6 +30,8 @@ import {
   type DashboardGivenSpec,
   type DashboardGivenSpecsResult,
   type RunResult,
+  readDatasetMeta,
+  type DatasetMeta,
 } from "@malloyyo/mcp-engine";
 import { initConnections, withConnectionDiagnostics } from "./connections.js";
 import {
@@ -197,6 +199,10 @@ export interface ModelRunner {
     tiles: string[],
   ): Promise<{ ok: true; tiles: TileSpec[]; union: GivenSpec[] }>;
   entryExists(): boolean;
+  /** `## dataset { title= }` from the entry model, when it declares one. The
+      CLI reports it so an author sees what their dataset will be called before
+      they publish it. */
+  datasetMeta(): Promise<DatasetMeta>;
   /** Close the shared connections for good (release sockets/file locks, drop
       the schema cache). Call at end of a short-lived command (e.g. `lint`) so
       the process can exit promptly; long-lived hosts can rely on process exit. */
@@ -348,6 +354,19 @@ export async function makeRunner(
   return {
     root: abs,
     entryExists: () => fs.existsSync(path.join(abs, ENTRY)),
+    datasetMeta: async () => {
+      if (!fs.existsSync(path.join(abs, ENTRY))) return {};
+      try {
+        const config = await getConfig();
+        const { reader: prepared, entry } = prepareSource(reader, { url: path.join(abs, ENTRY) });
+        const model = await new Runtime({ config, urlReader: prepared }).loadModel(entry).getModel();
+        return readDatasetMeta(model);
+      } catch {
+        // A model that will not compile has a title nobody can read yet; lint
+        // reports the compile failure, which is the useful message.
+        return {};
+      }
+    },
     async dispose() {
       clearIdleTimer();
       if (!configPromise) return;

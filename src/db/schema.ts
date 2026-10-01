@@ -207,6 +207,17 @@ export const datasets = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
+    /**
+     * What to CALL it, as against what it is.
+     *
+     * `name` is the identity — a slug, the URL, what a publish matches on and
+     * what a role is granted against. This is presentation only: the model
+     * declares it with `## dataset { title="HubSpot CRM" }`. Null means derive
+     * it from the name (`hub_spot` → "Hub Spot"), so a dataset that never says
+     * anything still reads properly. Never used to look a dataset up — two
+     * datasets may share a title, and nothing stops them.
+     */
+    title: text("title"),
     isPublic: boolean("is_public").notNull().default(false),
     status: datasetStatus("status").notNull().default("pending"),
     statusError: text("status_error"),

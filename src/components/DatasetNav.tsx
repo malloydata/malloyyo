@@ -55,7 +55,7 @@ export function DatasetNav({
     fetch(`/api/datasets/${datasetId}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
-        if (d?.name) setDatasetName(d.name);
+        if (d?.name) setDatasetName(d.title || d.name);
         if (Array.isArray(d?.malloyModel?.sources)) setModelSources(d.malloyModel.sources);
         if (d) {
           setRepo({

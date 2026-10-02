@@ -179,3 +179,53 @@ test("a dataset's own config REPLACES the repo's, it does not merge", async () =
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("a dataset directory pointed at DIRECTLY still finds the repo's config", async () => {
+  // `malloyyo init` prints `dashboard dev -C datasets/<name>` as the next thing
+  // to run, and `lint datasets/<name>` is documented as working — so the config
+  // ceiling cannot be whatever was typed. It was, and every repo whose
+  // connections are not all defaults failed with "No connection named …" from a
+  // directory that lints clean one level up.
+  const root = configRepo("root");
+  try {
+    const r = await lintRepo(path.join(root, "datasets", "alpha"));
+    assert.equal(r.ok, true, JSON.stringify(r.datasets[0]?.report.dashboards));
+    assert.equal(r.datasets.length, 1, "that one dataset");
+    assert.ok(!r.oldLayout, "and it is NOT an old-layout repo to convert");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a repo `malloyyo init` just made is empty, not broken", async () => {
+  // init leaves `datasets/` with nothing in it and tells you to run `lint`.
+  // Nothing can be published from that, so it stays a refusal — but it is
+  // reported as a state, so `lint` can say "no datasets yet" and exit 0 rather
+  // than failing a repo whose author has not written anything wrong.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "lint-empty-"));
+  fs.mkdirSync(path.join(root, "datasets"), { recursive: true });
+  fs.writeFileSync(path.join(root, "datasets", ".gitkeep"), "");
+  try {
+    const r = await lintRepo(root);
+    assert.equal(r.ok, false);
+    assert.equal(r.empty, true, "distinguishable from a layout mistake");
+    assert.ok(r.layoutError, "and still says what is missing");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a dataset directory with no index.malloy is a mistake, not an empty repo", async () => {
+  // The two must not collapse: this one has to fail.
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "lint-noentry-"));
+  fs.mkdirSync(path.join(root, "datasets", "alpha"), { recursive: true });
+  fs.writeFileSync(path.join(root, "datasets", "alpha", "README.md"), "");
+  try {
+    const r = await lintRepo(root);
+    assert.equal(r.ok, false);
+    assert.equal(r.empty, undefined, "not forgiven");
+    assert.match(r.layoutError ?? "", /datasets\/alpha/, "and named");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

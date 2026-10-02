@@ -193,7 +193,11 @@ export const DEV_PATHS = {
 const devSiblings = (dash: RepoDashboard, all: RepoDashboard[]) =>
   siblingList(
     dash.slug,
-    all.map((d) => ({ name: d.slug, title: d.title || d.name })),
+    all.map((d) => ({
+      name: d.slug,
+      title: d.title || d.name,
+      ...(d.description ? { description: d.description } : {}),
+    })),
     dashLink,
   );
 

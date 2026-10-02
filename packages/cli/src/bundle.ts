@@ -16,7 +16,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import * as esbuild from "esbuild";
-import { discoverRepoDashboards, navTree, type RepoDashboard } from "./repo.js";
+import { discoverRepoDashboards, navTree, SKIP_DIRS, type RepoDashboard } from "./repo.js";
 import { readSiteConfig } from "./config.js";
 import {
   rendersNoData,
@@ -38,7 +38,7 @@ const esc = (s: string) =>
     land on file:///index.malloy, so the keys mirror the on-disk layout. */
 function inlineModelFiles(root: string): Record<string, string> {
   const files: Record<string, string> = {};
-  const skip = new Set(["node_modules", ".git", "docs", "dist"]);
+  const skip = SKIP_DIRS;
   const walk = (dir: string) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
       if (entry.name.startsWith(".") || skip.has(entry.name)) continue;
@@ -272,13 +272,16 @@ window.__GIVENS__ = ${safeJson(givenSpecs)};
     written introduction; without one we emit a plain list of dashboards. The
     custom landing page is ordinary React — it needs no Malloy and no DuckDB, so
     it is bundled separately and stays tiny. */
-function indexPage(
+export function indexPage(
   dashboards: RepoDashboard[],
   title: string,
   custom: boolean,
   cleanUrls: boolean,
   analytics: string | undefined,
 ): string {
+  // Addressed by SLUG, like every other link on the site: `pageLink` maps a slug
+  // to this target's URL shape, and a dashboard's name is not unique across
+  // datasets.
   const link = pageLink(cleanUrls);
   // The About page is this page — it must not list itself among the dashboards
   // it is introducing, in the cards or in the custom landing's injected list.
@@ -286,14 +289,14 @@ function indexPage(
   const body = custom
     ? `<div id="root"></div>\n` +
       `<script>window.__DASHBOARDS__ = ${safeJson(
-        listed.map((d) => ({ name: d.name, title: d.title, description: d.description, href: link(d.name) })),
+        listed.map((d) => ({ name: d.slug, title: d.title, description: d.description, href: link(d.slug) })),
       )};</script>\n` +
       `<script type="module" src="./assets/index.js"></script>`
     : `<main class="index"><h1>${esc(title)}</h1><ul>` +
       listed
         .map(
           (d) =>
-            `<li><a href="${link(d.name)}"><strong>${esc(d.title || d.name)}</strong>` +
+            `<li><a href="${link(d.slug)}"><strong>${esc(d.title || d.name)}</strong>` +
             (d.description ? `<span>${esc(d.description)}</span>` : "") +
             `</a></li>`,
         )

@@ -2,11 +2,10 @@ import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { execFileSync } from "node:child_process";
 import { keepsFile } from "@malloyyo/mcp-engine";
+import { SKIP_DIRS, isBundleOutput } from "./repo.js";
 import { makeRunner } from "./host.js";
 import { aboutPage } from "./discover.js";
 import type { ModelFile, GitInfo, DashboardPayload } from "./protocol.js";
-
-const SKIP_DIRS = new Set(["node_modules", ".git"]);
 
 /** What `malloyyo init` writes, and the only dev container GitHub finds without
     being told where to look (a `devcontainer_path=` URL parameter can name
@@ -189,7 +188,8 @@ export function gatherRepoFiles(dir: string): Map<string, string> {
       if (entry.startsWith(".") || SKIP_DIRS.has(entry)) continue;
       const full = join(cur, entry);
       if (statSync(full).isDirectory()) {
-        walk(full);
+        // An emitted static site is not the repo's source, wherever `-o` put it.
+        if (!isBundleOutput(full)) walk(full);
         continue;
       }
       if (!keepsFile(entry)) continue;

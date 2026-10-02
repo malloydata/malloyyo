@@ -20,12 +20,67 @@ import path from "node:path";
 import {
   datasetTitle,
   layoutFromListing,
+  DATASETS_DIR,
   type DirEntry,
   type DirLister,
 } from "@malloyyo/mcp-engine";
 import { discoverDashboards, type Dashboard } from "./discover.js";
 import type { SwitcherDataset } from "./shared/nav.js";
 import { makeRunner, type ModelRunner } from "./host.js";
+
+/**
+ * Directories a repo's own files are never in.
+ *
+ * `docs/` is where `dashboard bundle` writes the static site, and this repo's
+ * instructions tell authors to COMMIT it so GitHub Pages can serve it — so a
+ * walker that does not skip it packs the emitted bundle JS back into the repo's
+ * sources. One list, because two walkers disagreeing about this is how 7MB of
+ * generated JavaScript ended up inside a publish archive.
+ */
+export const SKIP_DIRS: ReadonlySet<string> = new Set(["node_modules", ".git", "docs", "dist"]);
+
+/**
+ * The file `dashboard bundle` writes into every site it emits.
+ *
+ * `SKIP_DIRS` covers the directory the instructions tell authors to commit, but
+ * `-o` takes any directory and nothing persists the choice — so a walker also
+ * recognises an emitted site by what the bundler put in it, rather than by where
+ * the author happened to put it.
+ */
+const BUNDLE_MARKER = ["assets", "model-files.js"] as const;
+
+/** Is this directory an emitted static site rather than part of the repo? */
+export function isBundleOutput(dir: string): boolean {
+  return fs.existsSync(path.join(dir, ...BUNDLE_MARKER));
+}
+
+/**
+ * The repo root above a model root.
+ *
+ * `malloy-config.json` at the repo root is shared by every dataset, and the
+ * config search needs the repo root as its ceiling to find it. Commands are
+ * pointed at a DATASET directory often enough that the ceiling cannot just be
+ * whatever was typed — `malloyyo init` prints `dashboard dev -C datasets/<name>`
+ * as the next thing to run, and `lint datasets/<name>` is documented as working.
+ * A directory whose parent is `datasets/` is a dataset, so the repo is its
+ * grandparent.
+ *
+ * Evidence is required, not just the name: a perfectly ordinary repo can be
+ * checked out at `~/work/datasets/thing`, and walking up out of it would hand
+ * the config search a stranger's `malloy-config.json`. A repo root is where the
+ * git checkout or the shared config is; with neither, the directory we were
+ * given is its own root, which is what every single-dataset repo is.
+ */
+export function repoRootOf(modelRoot: string): string {
+  const abs = path.resolve(modelRoot);
+  const parent = path.dirname(abs);
+  if (path.basename(parent) !== DATASETS_DIR) return abs;
+  const above = path.dirname(parent);
+  const isRepo =
+    fs.existsSync(path.join(above, ".git")) ||
+    fs.existsSync(path.join(above, "malloy-config.json"));
+  return isRepo ? above : abs;
+}
 
 /** Read a directory of the repo on disk, "" being its root. Missing is empty. */
 export function fsLister(root: string): DirLister {
@@ -91,6 +146,7 @@ export type RepoDashboards = {
  * version worth having: the nav cannot list what has not been compiled.
  */
 export async function discoverRepoDashboards(root: string): Promise<RepoDashboards> {
+  const repoRoot = repoRootOf(root);
   const layout = await layoutFromListing(fsLister(root), root);
   if (!layout.ok) throw new Error(layout.error);
 
@@ -107,8 +163,9 @@ export async function discoverRepoDashboards(root: string): Promise<RepoDashboar
     for (const u of units) {
       const modelRoot = u.dir ? path.join(root, u.dir) : root;
       // The repo root is the ceiling for the config search: `malloy-config.json`
-      // lives there and its connections belong to every dataset.
-      const runner = await makeRunner(modelRoot, { repoRoot: root });
+      // lives there and its connections belong to every dataset. It is not
+      // necessarily what we were pointed AT — `-C datasets/sales` is a dataset.
+      const runner = await makeRunner(modelRoot, { repoRoot });
       runners.push(runner);
       if (!runner.entryExists()) {
         throw new Error(

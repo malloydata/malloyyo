@@ -69,7 +69,12 @@ export type DiscoveredDataset = {
 export type RepoLayout =
   | { ok: true; kind: "single" }
   | { ok: true; kind: "multi"; datasets: DiscoveredDataset[] }
-  | { ok: false; error: string };
+  /** `empty` marks the one refusal that is a repo's STARTING state rather than a
+      mistake: `datasets/` with nothing in it yet, which is what `malloyyo init`
+      leaves behind. Nothing can be published from it, so this is still a
+      refusal — but `lint` reports it as "no datasets yet" and exits 0, instead
+      of failing a repo whose author has not written anything wrong. */
+  | { ok: false; error: string; empty?: true };
 
 /** Lists one directory of the repo, "" being the root. */
 export type DirLister = (path: string) => Promise<DirEntry[]>;
@@ -116,6 +121,7 @@ export async function layoutFromListing(list: DirLister, label = "this repo"): P
   if (subdirs.length === 0) {
     return {
       ok: false,
+      empty: true,
       error: `${DATASETS_DIR}/ has no subdirectories — each dataset is a directory under it.`,
     };
   }

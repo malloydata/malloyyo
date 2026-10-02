@@ -23,6 +23,9 @@ export interface DashboardLint {
 export interface LintReport {
   ok: boolean;
   dashboards: DashboardLint[];
+  /** What this dataset is CALLED, when `lintDashboards` was told which dataset
+      it is linting. Read off the same compile the lint already did. */
+  datasetTitle?: string;
 }
 
 /** Backtick-quote a field name unless it's a plain identifier — the same rule
@@ -60,15 +63,29 @@ function landingPageErrors(dir: string, file: string): string[] {
 
 export async function lintDashboards(
   root: string,
-  /** The repo root, when `root` is a dataset directory inside one: the config
-      search may walk up to it, because `malloy-config.json` lives there and its
-      connections belong to every dataset. */
-  opts: { repoRoot?: string } = {},
+  opts: {
+    /** The repo root, when `root` is a dataset directory inside one: the config
+        search may walk up to it, because `malloy-config.json` lives there and its
+        connections belong to every dataset. */
+    repoRoot?: string;
+    /** The dataset this directory publishes, when it is one of several. Reads
+        its display title off the compile the lint is already doing. */
+    datasetName?: string;
+  } = {},
 ): Promise<LintReport> {
   const abs = resolve(root);
   const runner = await makeRunner(abs, opts);
   try {
-    return await runLint(abs, runner);
+    const report = await runLint(abs, runner);
+    if (!opts.datasetName) return report;
+    let declared: string | undefined;
+    try {
+      declared = (await runner.datasetMeta()).title;
+    } catch {
+      // A model that does not compile has no title to read; the name still
+      // derives one, and the lint failure is the thing worth reporting.
+    }
+    return { ...report, datasetTitle: datasetTitle(opts.datasetName, declared) };
   } finally {
     // Close the shared connections so the CLI process exits promptly.
     await runner.dispose();
@@ -262,7 +279,7 @@ export function printLintReport(report: LintReport): void {
 // moment a human sees an error is here.
 
 import { datasetTitle, layoutFromListing } from "@malloyyo/mcp-engine";
-import { fsLister } from "./repo.js";
+import { fsLister, repoRootOf } from "./repo.js";
 
 /**
  * What `lint` and `publish` say when they meet a repo built the old way.
@@ -286,6 +303,9 @@ export interface RepoLintReport {
   oldLayout?: boolean;
   /** The repo's shape is wrong — nothing could be linted. */
   layoutError?: string;
+  /** The shape is not wrong, just unwritten: `datasets/` with nothing in it yet.
+      A repo `malloyyo init` just made. */
+  empty?: boolean;
   /** One entry per dataset the repo publishes. `dir` is "" for a single-dataset
       repo, whose one dataset is the repo root. */
   datasets: { name: string; dir: string; title: string; report: LintReport }[];
@@ -301,28 +321,32 @@ export interface RepoLintReport {
  */
 export async function lintRepo(root: string): Promise<RepoLintReport> {
   const abs = resolve(root);
+  // `lint datasets/sales` lints that one dataset — but its connections still
+  // come from the repo's `malloy-config.json`, one level above it.
+  const repoRoot = repoRootOf(abs);
   const layout = await layoutFromListing(fsLister(abs), abs);
-  if (!layout.ok) return { ok: false, layoutError: layout.error, datasets: [] };
+  if (!layout.ok) {
+    return { ok: false, layoutError: layout.error, datasets: [], ...(layout.empty ? { empty: true } : {}) };
+  }
 
-  const oldLayout = layout.kind === "single";
-  const targets = oldLayout
-    ? [{ name: "", dir: "" }]
-    : layout.datasets.map((d) => ({ name: d.name, dir: d.dir }));
+  // What to lint comes from the LAYOUT: one unnamed dataset at the root, or one
+  // per directory. Whether to nag about converting is a different question — a
+  // dataset directory pointed at directly reads as the single-dataset shape, and
+  // its repo is already converted.
+  const targets =
+    layout.kind === "single"
+      ? [{ name: "", dir: "" }]
+      : layout.datasets.map((d) => ({ name: d.name, dir: d.dir }));
+  const oldLayout = layout.kind === "single" && repoRoot === abs;
 
   const datasets: RepoLintReport["datasets"] = [];
   for (const t of targets) {
     const root = t.dir ? join(abs, t.dir) : abs;
-    const report = await lintDashboards(root, { repoRoot: abs });
-    let title = "";
-    if (t.name) {
-      const runner = await makeRunner(root, { repoRoot: abs });
-      try {
-        title = datasetTitle(t.name, (await runner.datasetMeta()).title);
-      } finally {
-        await runner.dispose().catch(() => {});
-      }
-    }
-    datasets.push({ name: t.name, dir: t.dir, title, report });
+    const report = await lintDashboards(root, {
+      repoRoot,
+      ...(t.name ? { datasetName: t.name } : {}),
+    });
+    datasets.push({ name: t.name, dir: t.dir, title: report.datasetTitle ?? "", report });
   }
   return { ok: datasets.every((d) => d.report.ok), datasets, oldLayout };
 }

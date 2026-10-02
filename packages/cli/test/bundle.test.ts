@@ -18,6 +18,7 @@ import {
 } from "../src/shared/givens-url.js";
 import {
   findTableRefs,
+  indexPage,
   isDataFile,
   reachableModelFiles,
   tableFilePlan,
@@ -198,4 +199,56 @@ test("findTableRefs dedupes across files and handles both quote styles", () => {
     "file:///two.malloy": 'source: z is duckdb.table("b.parquet")',
   };
   assert.deepEqual(findTableRefs(files), ["a.parquet", "b.parquet"]);
+});
+
+// ── The landing page's own links ─────────────────────────────────────────────
+//
+// Every address on a bundled site is built from a dashboard's SLUG, by
+// `pageLink`. The landing page passed the bare `name` instead. In a
+// single-dataset repo name === slug, so this was invisible; in a multi-dataset
+// one the page on disk is `sales.overview.html` and every card on the front page
+// pointed at `./overview.html`, and two datasets both publishing an `overview`
+// collapsed onto one dead href.
+
+// `query` matters: a dashboard with neither a query nor tiles is the About page
+// itself, which `indexPage` filters OUT of the list it is introducing — so a
+// fixture without one makes every assertion below pass against an empty page.
+const DASHES = [
+  { name: "overview", slug: "sales/overview", title: "Overview", description: "By region.", query: "overview" },
+  { name: "overview", slug: "the_look/overview", title: "Look Overview", query: "overview" },
+] as unknown as Parameters<typeof indexPage>[0];
+
+/** The landing page's own cards, not the nav switcher that sits above them. */
+const cards = (html: string) => [...html.matchAll(/<li><a href="([^"]+)"/g)].map((m) => m[1]!);
+
+test("the landing page addresses dashboards by slug, like every other link", () => {
+  const html = indexPage(DASHES, "multi", false, false, undefined);
+  const hrefs = cards(html);
+  assert.deepEqual(hrefs.sort(), ["./sales.overview.html", "./the_look.overview.html"]);
+  // Two datasets publishing the same dashboard name must not share an href.
+  assert.equal(new Set(hrefs).size, 2, "distinct links");
+  assert.doesNotMatch(html, /href="\.\/overview\.html"/, "the page that does not exist");
+});
+
+test("a custom landing page gets the same addresses, and distinct keys", () => {
+  // `window.__DASHBOARDS__` feeds a repo's own `dashboards/index.jsx`: dead
+  // links there, plus two React children keyed the same.
+  const html = indexPage(DASHES, "multi", true, false, undefined);
+  const json = /__DASHBOARDS__ = (\[[\s\S]*?\]);/.exec(html)?.[1];
+  assert.ok(json, "the injected list");
+  const list = JSON.parse(json) as { name: string; href: string }[];
+  assert.deepEqual(
+    list.map((d) => d.href).sort(),
+    ["./sales.overview.html", "./the_look.overview.html"],
+  );
+  assert.equal(new Set(list.map((d) => d.name)).size, 2, "and identifiable apart");
+});
+
+test("a single-dataset repo's landing page is byte-for-byte what it was", () => {
+  // The shape every published site is today: slug === name, so nothing moves.
+  const one = [
+    { name: "overview", slug: "overview", title: "Overview", query: "overview" },
+  ] as unknown as Parameters<typeof indexPage>[0];
+  assert.deepEqual(cards(indexPage(one, "repo", false, false, undefined)), ["./overview.html"]);
+  assert.deepEqual(cards(indexPage(one, "repo", false, true, undefined)), ["./overview"]);
 });

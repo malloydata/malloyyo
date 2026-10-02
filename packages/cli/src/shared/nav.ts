@@ -27,12 +27,12 @@ export interface SwitcherDataset {
   dashboards: SwitcherDashboard[];
 }
 
+/** What `siblingList` needs of a dashboard: an address and something to call
+    it. The switcher has its own shape (`SwitcherDashboard`) because it is a
+    tree and this is a list. */
 export interface NavDashboard {
   name: string;
   title?: string;
-  /** The dataset it belongs to, in a repo that publishes more than one. Drawn
-      as a divider between groups; absent in a single-dataset repo. */
-  group?: string;
 }
 
 const esc = (s: string) =>
@@ -52,13 +52,10 @@ export const LOGO = `<svg viewBox="0 0 240 240" width="20" height="20" aria-hidd
     page chrome, so it shouldn't invert with the color scheme. */
 export const NAV_CSS = `
 .dash-nav{display:flex;gap:4px;align-items:center;padding:8px 14px;background:#000;font:13px system-ui,-apple-system,sans-serif;flex-wrap:wrap}
-/* The home icon is an <a> too, so it opts OUT of the switcher-link padding and
-   keeps its own square hit area. */
+/* The home icon keeps its own square hit area. */
 .dash-nav a.brand{display:inline-flex;align-items:center;justify-content:center;color:#9aa1ac;padding:5px;border-radius:6px;text-decoration:none}
 .dash-nav a.brand:hover{background:#1f232a;color:#fff}
 .dash-nav .brand svg{display:block}
-.dash-nav .sep{width:1px;align-self:stretch;background:#2c3038;margin:0 10px}
-.dash-nav a{padding:4px 10px;border-radius:6px;text-decoration:none;color:#c9ced6}
 /* The switcher: the same control the hosted app uses, in vanilla. A row of
    pills stops working at about five dashboards — a repo with four datasets has
    fifteen — so the list moves into a menu and the bar keeps one button. */
@@ -100,48 +97,13 @@ export const NAV_CSS = `
   .dash-pick .leaf{color:#c9ced6}
   .dash-pick .leaf.on{background:#fff;color:#000}
 }
-.dash-nav a:hover{background:#1f232a;color:#fff}
-.dash-nav a.on{background:#fff;color:#000;font-weight:550}
 `;
-
-/** Render the bar. `href` maps a dashboard name to a link for THIS host — the
-    only thing that varies across dev / pages / vercel. The brand shows even for
-    a single dashboard; only the switcher links are conditional. */
-export const MALLOYYO_REPO = "https://github.com/malloydata/malloyyo";
 
 /** Home, back to the landing page. Attribution lives on that page rather than
     in the bar — the bar should be navigation. */
 const HOME_ICON = `<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" \
 stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">\
 <path d="M3 10.2 12 3.5l9 6.7"/><path d="M5.2 8.9V20h13.6V8.9"/><path d="M9.6 20v-6.2h4.8V20"/></svg>`;
-
-export function navHtml(
-  active: string,
-  all: NavDashboard[],
-  href: (name: string) => string,
-  homeHref = "./",
-): string {
-  // A repo with several datasets puts a divider between them, so a bar of
-  // fourteen links reads as four groups. `group` is absent in a single-dataset
-  // repo and the bar is exactly what it always was.
-  const brand =
-    `<a class="brand" href="${esc(homeHref)}" title="Home" aria-label="Home">${HOME_ICON}</a>`;
-  if (all.length <= 1) return `<nav class="dash-nav">${brand}</nav>`;
-  let group: string | undefined;
-  const links = all
-    .map((x) => {
-      const divider = group !== undefined && x.group !== group ? '<span class="sep"></span>' : "";
-      group = x.group;
-      return (
-        divider +
-        `<a href="${esc(href(x.name))}"${x.name === active ? ' class="on"' : ""}` +
-        `${x.group ? ` title="${esc(x.group)}"` : ""}>` +
-        `${esc(x.title || x.name)}</a>`
-      );
-    })
-    .join("");
-  return `<nav class="dash-nav">${brand}<span class="sep"></span>${links}</nav>`;
-}
 
 /** The sibling list a host injects as `window.__DASHBOARDS__`, in nav order and
     excluding the current page.
@@ -199,7 +161,8 @@ export function switcherHtml(
 
   const groups = tree
     .map((ds) => {
-      const open = flat || ds.dataset === opts.dataset ? ' data-open="1"' : "";
+      const open =
+        flat || ds.dashboards.some((d) => d.slug === activeSlug) ? ' data-open="1"' : "";
       const leaves = ds.dashboards
         .map((d) => {
           const on = d.slug === activeSlug ? " on" : "";
@@ -235,7 +198,9 @@ export function switcherHtml(
     `<svg class="chev" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" ` +
     `stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>` +
     `</button>` +
-    `<div class="panel" role="menu">${filter}<div class="list">${groups}</div></div>` +
+    `<div class="panel" role="menu">${filter}<div class="list">${groups}` +
+    (flat ? "" : `<div class="empty" hidden>no match</div>`) +
+    `</div></div>` +
     `</div>`
   );
 }
@@ -243,12 +208,23 @@ export function switcherHtml(
 /** The switcher's behaviour: open/close, filter, expand. Inline it once per
     page. Same rules as the hosted menu — Escape and a click outside close it,
     a search opens everything that matched (hiding a match behind a closed
-    branch is the one thing a search must not do), and closing forgets it. */
+    branch is the one thing a search must not do), and clearing the search puts
+    the branches back the way the page rendered them. That last part needs the
+    rendered state remembered: without it, closing the menu after a search left
+    the searched-for dataset expanded and the one you are standing in shut. */
 export const SWITCHER_JS = `
 (function(){
   var p=document.querySelector('.dash-pick'); if(!p) return;
   var btn=p.querySelector(':scope>button'), inp=p.querySelector('.filter input');
   var grps=[].slice.call(p.querySelectorAll('.grp'));
+  var none=p.querySelector('.empty');
+  // How the page rendered: which branch holds the dashboard you are on. A
+  // cleared search restores this rather than whatever the search expanded.
+  var init=grps.map(function(g){return g.dataset.open==='1';});
+  function setOpen(g,on){
+    g.dataset.open=on?'1':'0';
+    var b=g.querySelector('.branch'); if(b) b.setAttribute('aria-expanded',on?'true':'false');
+  }
   function openState(on){
     p.dataset.open=on?'1':'0';
     btn.setAttribute('aria-expanded',on?'true':'false');
@@ -257,30 +233,35 @@ export const SWITCHER_JS = `
   }
   function apply(q){
     q=q.trim().toLowerCase();
-    grps.forEach(function(g){
+    var hits=0;
+    grps.forEach(function(g,i){
       var ds=g.dataset.ds||'', dsHit=!!q&&ds.indexOf(q)>=0;
       var any=false;
       [].slice.call(g.querySelectorAll('.leaf')).forEach(function(a){
         var hit=!q||dsHit||(a.dataset.find||'').indexOf(q)>=0;
-        a.style.display=hit?'':'none'; if(hit) any=true;
+        a.style.display=hit?'':'none'; if(hit){any=true;hits++;}
       });
       g.style.display=any?'':'none';
-      // While searching, everything that survived is open.
-      if(q) g.dataset.open=any?'1':'0';
-      var b=g.querySelector('.branch'); if(b) b.setAttribute('aria-expanded',g.dataset.open==='1'?'true':'false');
+      // While searching, everything that survived is open; with the box empty,
+      // back to how the page rendered.
+      setOpen(g,q?any:init[i]);
     });
+    if(none) none.hidden=!q||hits>0;
   }
   btn.addEventListener('click',function(e){e.stopPropagation();openState(p.dataset.open!=='1');});
   grps.forEach(function(g){
     var b=g.querySelector('.branch'); if(!b) return;
     b.addEventListener('click',function(e){
       e.stopPropagation();
-      g.dataset.open=g.dataset.open==='1'?'0':'1';
-      b.setAttribute('aria-expanded',g.dataset.open==='1'?'true':'false');
+      setOpen(g,g.dataset.open!=='1');
     });
   });
   if(inp){inp.addEventListener('input',function(){apply(inp.value);});
           inp.addEventListener('click',function(e){e.stopPropagation();});}
+  // Chrome inside the panel is not a dismissal — padding and the filter row's
+  // margin used to bubble to the document handler and close the menu.
+  var panel=p.querySelector('.panel');
+  if(panel) panel.addEventListener('click',function(e){e.stopPropagation();});
   document.addEventListener('click',function(){ if(p.dataset.open==='1') openState(false); });
   document.addEventListener('keydown',function(e){ if(e.key==='Escape') openState(false); });
 })();

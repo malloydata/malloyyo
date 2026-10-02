@@ -123,13 +123,13 @@ function allowAuthorTools(root: string): { added: string[]; note?: string } {
  * built the old way; it is left exactly as it is, and `lint` and `publish` are
  * where the conversion gets explained.
  */
-function scaffoldRepo(root: string): { notes: string[] } {
+function scaffoldRepo(root: string): { notes: string[]; oldLayout?: true } {
   const notes: string[] = [];
 
   if (fs.existsSync(path.join(root, "index.malloy"))) {
     notes.push("• index.malloy at the root — the old single-dataset layout, left as-is");
     notes.push("  (run `malloyyo lint` here for how to convert it)");
-    return { notes };
+    return { notes, oldLayout: true };
   }
 
   const configPath = path.join(root, "malloy-config.json");
@@ -294,6 +294,15 @@ export async function initCmd(dir: string): Promise<void> {
 
   console.log("");
   console.log("Next:");
+  if (repo.oldLayout) {
+    // This repo publishes one dataset from its root, and the flags that address
+    // it are the single-dataset ones. `lint` is where converting is explained.
+    console.log("  claude              # author mode");
+    console.log("  malloyyo lint                        # what this repo publishes");
+    console.log("  malloyyo dashboard dev               # see it render");
+    console.log("  malloyyo publish --dataset <name>");
+    return;
+  }
   console.log("  claude              # author mode — ask it to add a dataset");
   console.log("");
   console.log("Once a dataset exists:");

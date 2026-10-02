@@ -199,6 +199,189 @@ export const givens = pgTable("givens", {
     .default(sql`now()`),
 });
 
+/**
+ * What made a revision: a `malloyyo publish`, or a GitHub pull.
+ *
+ * On the REVISION rather than the repo, because they are not alternatives — a
+ * repo attached to GitHub can also be pushed to directly, and which one produced
+ * the bytes that are live is the question people actually ask.
+ */
+export const repoRevisionSource = pgEnum("repo_revision_source", ["cli", "github"]);
+
+/**
+ * A MODEL REPO — the unit of publish, as a thing rather than a coincidence.
+ *
+ * It used to be a query predicate: `datasets` rows that happened to share
+ * `(github_repo, github_branch)`, two nullable text columns any admin could edit
+ * one row at a time. Nearly every serious bug in that design was a consequence —
+ * a credential stored per dataset and resolved by `rows[0]` on an unordered
+ * query, a refresh fanning out to seven dead rows, a CLI publish stamping a
+ * branch that made its own output GitHub-overwritable, and no owner and no head
+ * commit anywhere.
+ *
+ * So: one row per repo. Everything that is true of the REPO lives here, once.
+ *
+ * GITHUB IS OPTIONAL AND SEPARATE. `github_repo` null means "this repo arrived
+ * by `malloyyo publish` and is not attached to GitHub" — which is the common case
+ * and used to be unexpressible, because one pair of columns meant both "these
+ * datasets belong together" and "GitHub backs this". A CLI publish therefore had
+ * to assert the second to say the first, and stamped the author's local branch
+ * name; the refresh button then pulled `github.com/<slug>@wip` over the top of
+ * what had just been pushed. Attaching a repo to GitHub is now a separate,
+ * deliberate act.
+ */
+export const repos = pgTable(
+  "repos",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    /**
+     * The repo's name on this instance, and the NAMESPACE its datasets live in:
+     * a dataset is addressed `<slug>:<name>`, which is what makes two repos able
+     * to publish a `sales` each.
+     *
+     * Defaulted from the GitHub repo name on creation and never changed by a
+     * publish — it is baked into every qualified name, so it is the repo's
+     * identity, not a label that follows the config.
+     */
+    slug: text("slug").notNull(),
+    /** Presentation only, as on a dataset. Null means derive from the slug. */
+    title: text("title"),
+    /**
+     * WHO OWNS THE REPO. Publishing to it is the owner's or an admin's, which is
+     * the gate the first implementation shipped without — a repo had no owner to
+     * check, so any member with a publish token could overwrite anyone's
+     * datasets, and compiling a model resolves schemas by running SQL against
+     * this server's own configured connections.
+     */
+    ownerId: uuid("owner_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** `owner/name`, or null for a repo that is not attached to GitHub. */
+    githubRepo: text("github_repo"),
+    /** Only meaningful with `github_repo`. The branch a refresh pulls. */
+    githubBranch: text("github_branch"),
+    /**
+     * May this server send its `GITHUB_TOKEN` when reading the repo?
+     *
+     * A property of A REPO — can we read it? — and it used to be stored once per
+     * dataset. In the production fork one repo had three rows with two different
+     * values and the refresh picked a winner with `rows[0]` on a query with no
+     * ORDER BY; for a private repo that is an intermittent failure that flips
+     * with row order. One repo, one answer.
+     */
+    githubUseToken: boolean("github_use_token").notNull().default(false),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .default(sql`now()`),
+    updatedAt: timestamp("updated_at", { withTimezone: true })
+      .notNull()
+      .default(sql`now()`),
+  },
+  (t) => [
+    uniqueIndex("repos_slug_unique").on(t.slug),
+    // One repo per GitHub (repo, branch). Two repos claiming the same one would
+    // make a webhook push ambiguous and let two owners overwrite each other's
+    // datasets from the same commit.
+    uniqueIndex("repos_github_unique")
+      .on(t.githubRepo, t.githubBranch)
+      .where(sql`github_repo is not null`),
+    index("repos_owner_idx").on(t.ownerId),
+  ],
+);
+
+/**
+ * ONE PUBLISH OF A REPO — the bytes, and what became of them.
+ *
+ * A revision is created by a `malloyyo publish` or a GitHub push, holds the
+ * repo's content as a ZIP, and is INERT until it is activated. Nothing serves
+ * from a revision that is not `active`, which is the whole point:
+ *
+ *   store the archive  →  materialize it  →  compile every dataset in it
+ *                      →  activate, or record why not
+ *
+ * The store happens first and commits on its own. That is safe precisely because
+ * the row is inert — a process that dies mid-compile leaves a revision nobody
+ * reads, with the previous one still serving. The design it replaces inserted
+ * `ready` dataset rows, compiled, and deleted them again on failure; that is a
+ * compensating action, and a compensating action only runs if the process
+ * survives to run it. A timeout during a compile (which does network I/O and
+ * resolves schemas by running SQL, so it is the slow part) left dataset rows
+ * holding their names under a unique index with nothing able to release them.
+ *
+ * A ZIP, not a tar.gz and not per-file rows. Per-file rows made "what is in this
+ * repo" a question about a table rather than about the repo. Between the two
+ * archive formats, gzip is one stream and cannot be read partially, while a zip
+ * has a central directory with per-member offsets and independent deflate — so
+ * one dataset's files can be read without inflating the rest, and a member's
+ * uncompressed size is known before anything is inflated, which is what bounds
+ * a decompression bomb.
+ */
+export const repoRevisions = pgTable(
+  "repo_revisions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    repoId: uuid("repo_id")
+      .notNull()
+      .references(() => repos.id, { onDelete: "cascade" }),
+    /** 1, 2, 3 … within the repo. What a human calls it. */
+    revision: integer("revision").notNull(),
+    source: repoRevisionSource("source").notNull(),
+    /** Who published it. Null for a GitHub webhook, which has no user. */
+    createdById: uuid("created_by_id").references(() => users.id, { onDelete: "set null" }),
+    /**
+     * THE HEAD COMMIT, which the old design had nowhere to put. For a GitHub
+     * revision this is the commit the branch pointed at; for a CLI revision it
+     * is what the author's working tree was on, and `git_dirty` says whether it
+     * was the commit or something on top of it.
+     */
+    gitSha: text("git_sha"),
+    gitBranch: text("git_branch"),
+    gitDirty: boolean("git_dirty"),
+    /** The repo, as a zip. See the note above. */
+    archive: bytea("archive").notNull(),
+    archiveBytes: integer("archive_bytes").notNull(),
+    /** sha256 of the zip. Lets a webhook storm recognise bytes it already has. */
+    archiveSha256: text("archive_sha256").notNull(),
+    /**
+     * What this revision DECLARES it publishes, from the layout rules — one
+     * entry per dataset directory. Recorded at verify time so "what does the
+     * live revision publish" is answerable without unpacking the archive, and so
+     * a directory no dataset covers yet is reportable.
+     */
+    datasets: jsonb("datasets").$type<Array<{ name: string; dir: string }>>(),
+    /**
+     * Does this revision carry `.devcontainer/devcontainer.json` — i.e. does the
+     * repo open as a working codespace?
+     *
+     * A fact about the REPO's content, recorded once at verify time, because the
+     * alternative is asking GitHub on every page view (which with GITHUB_TOKEN
+     * unset spends a 60/hour budget on the home page) or probing a per-file
+     * table (which no longer exists for revision-backed models).
+     */
+    hasDevcontainer: boolean("has_devcontainer").notNull().default(false),
+    /** Set when every dataset in it compiled. Null means it never did. */
+    verifiedAt: timestamp("verified_at", { withTimezone: true }),
+    /** Why verification failed, for the revision that did not go live. */
+    verifyError: text("verify_error"),
+    /**
+     * IS THIS WHAT THE REPO SERVES? Exactly one revision per repo may be, and
+     * the partial unique index below is what guarantees it — a flag with a
+     * constraint rather than a pointer column on `repos`, so a repo cannot be
+     * made to point at another repo's revision at all.
+     */
+    active: boolean("active").notNull().default(false),
+    activatedAt: timestamp("activated_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .default(sql`now()`),
+  },
+  (t) => [
+    uniqueIndex("repo_revisions_repo_revision_unique").on(t.repoId, t.revision),
+    uniqueIndex("repo_revisions_one_active").on(t.repoId).where(sql`active`),
+    index("repo_revisions_repo_created_idx").on(t.repoId, t.createdAt),
+  ],
+);
+
 export const datasets = pgTable(
   "datasets",
   {
@@ -224,24 +407,33 @@ export const datasets = pgTable(
     isPublic: boolean("is_public").notNull().default(false),
     status: datasetStatus("status").notNull().default("pending"),
     statusError: text("status_error"),
-    githubRepo: text("github_repo"),
-    githubBranch: text("github_branch"),
-    githubUseToken: boolean("github_use_token").notNull().default(true),
+    /**
+     * WHICH REPO PUBLISHES THIS DATASET. A real foreign key, which is the whole
+     * rewrite in one column: membership used to be recomputed on every refresh by
+     * matching two denormalized text columns, with no status filter — measured
+     * against the production fork, one repo matched seven rows, none of them
+     * `ready`, so a single webhook push compiled the same model seven times and
+     * wrote seven model versions for datasets nobody could see.
+     *
+     * NULL is a dataset that no repo publishes: a Claude-authored one, or the
+     * single-dataset `malloyyo publish --dataset x` path, which sends no repo.
+     */
+    repoId: uuid("repo_id").references(() => repos.id, { onDelete: "cascade" }),
     /**
      * Where in the repo this dataset lives: the directory holding its
      * `index.malloy` and its `dashboards/`, e.g. `datasets/finance`.
      *
-     * NULL is the repo root, which is every dataset that existed before
-     * multi-dataset repos and every single-dataset repo since. The two layouts
-     * are exclusive — a repo has a root `index.malloy` OR a `datasets/`
-     * directory, never both (src/lib/repo-layout.ts), so a repo cannot half-
-     * publish while looking fine.
+     * `''` IS THE REPO ROOT — not null, deliberately. A nullable column cannot
+     * be constrained by a partial unique index (two `(repo_id, NULL)` rows do not
+     * conflict in Postgres), and `datasets_repo_dir_ready_unique` below is what
+     * makes "seven live rows for one directory" impossible rather than merely
+     * unexpected.
      *
-     * `malloy-config.json` is NOT under here. Connections are the repo's, shared
-     * by every dataset in it, so it stays at the root — which is also what makes
-     * a shared `lib/` importable by relative path from any of them.
+     * `malloy-config.json` is NOT necessarily under here. The nearest one wins,
+     * walking up to the repo root — which is `discoverConfig`'s rule, and what
+     * makes a shared `lib/` importable by relative path from any dataset.
      */
-    repoDir: text("repo_dir"),
+    repoDir: text("repo_dir").notNull().default(""),
     /**
      * The givens this dataset is scoped by: supplied on every query against it,
      * locked so no caller can choose them, and required of every model
@@ -283,10 +475,75 @@ export const datasets = pgTable(
   },
   (t) => [
     index("datasets_user_id_idx").on(t.userId),
-    // One live (ready) dataset per name on the server — names are used as URLs.
-    // Partial: failed/stale dupes (hidden by visibleDatasetWhere) don't conflict.
-    uniqueIndex("datasets_name_ready_unique").on(t.name).where(sql`status = 'ready'`),
+    index("datasets_repo_idx").on(t.repoId),
+    /**
+     * Names are unique WITHIN A REPO, not on the instance.
+     *
+     * The global index this replaces (`datasets_name_ready_unique`) is why two
+     * repos could not both publish a `sales`: a repo brings N common nouns into
+     * one namespace, and `sales`, `orders` and `users` are what model
+     * directories are actually called. The public name is now `<repo>:<name>`
+     * (src/lib/repos.ts), so the collision has nowhere left to happen.
+     */
+    uniqueIndex("datasets_repo_name_ready_unique")
+      .on(t.repoId, t.name)
+      .where(sql`status = 'ready' and repo_id is not null`),
+    /**
+     * NOT unique, deliberately.
+     *
+     * Two live datasets on one directory is a real configuration: the same model
+     * served twice, scoped differently — `required_givens` and `roles` are the
+     * dataset's, not the model's. Forbidding it would also have made the
+     * migration able to FAIL on real data (a repo added twice under two names
+     * is an ordinary thing to find in production), and a migration that can fail
+     * on data it did not choose is a landmine in a deploy.
+     *
+     * The bug this looks like it should prevent — a refresh fanning out to seven
+     * rows for one directory, none of them live — is prevented by `repo_id`
+     * being a foreign key and by the `status = 'ready'` filter on membership,
+     * not by this. So: the unit of COMPILE is a directory, and the unit of
+     * WRITE is a dataset (src/lib/repo-publish.ts).
+     */
+    index("datasets_repo_dir_idx").on(t.repoId, t.repoDir),
+    /**
+     * A dataset no repo publishes still has only its bare name to be addressed
+     * by, so that name still has to be unique — among the repo-less ones.
+     */
+    uniqueIndex("datasets_unscoped_name_ready_unique")
+      .on(t.name)
+      .where(sql`status = 'ready' and repo_id is null`),
   ],
+);
+
+/**
+ * AN OLD NAME, PINNED TO THE DATASET IT USED TO MEAN.
+ *
+ * Dataset names were globally unique and are now scoped to a repo, so the public
+ * name of `sales` became `acme:sales`. More things depended on the old spelling
+ * than it looks: shareable query slugs and saved MCP client configs are out in
+ * the world, `--dataset <name>` targets by name, and `malloy-config.json` files
+ * in people's repos name their target. Renaming every dataset without an alias
+ * path would break all of it silently.
+ *
+ * The table FREEZES the historical meaning, which a plain fall-back-to-bare-name
+ * rule cannot. Without it, the day a second repo publishes its own `sales` every
+ * old link to the first becomes ambiguous — with it, `sales` keeps resolving to
+ * the dataset it always meant, and the newcomer is reachable as `other:sales`.
+ *
+ * `alias` is the primary key: one global namespace, one answer, no ordering.
+ */
+export const datasetAliases = pgTable(
+  "dataset_aliases",
+  {
+    alias: text("alias").primaryKey(),
+    datasetId: uuid("dataset_id")
+      .notNull()
+      .references(() => datasets.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .default(sql`now()`),
+  },
+  (t) => [index("dataset_aliases_dataset_idx").on(t.datasetId)],
 );
 
 export const malloyModels = pgTable(
@@ -296,6 +553,28 @@ export const malloyModels = pgTable(
     datasetId: uuid("dataset_id")
       .notNull()
       .references(() => datasets.id, { onDelete: "cascade" }),
+    /**
+     * The repo revision this model was compiled out of. Null for a model that
+     * came from somewhere else: a Claude-authored one, or the single-dataset
+     * `--dataset x` push, which carries no repo.
+     *
+     * It is what makes activation one act for a whole repo. The datasets of a
+     * repo move together because they share a revision, so "are these four at
+     * the same commit?" is a column comparison rather than four timestamps that
+     * happen to be close. Uniform staleness is one comparison; mixed staleness
+     * is an investigation.
+     */
+    revisionId: uuid("revision_id").references(() => repoRevisions.id, { onDelete: "cascade" }),
+    /**
+     * IS THIS THE MODEL THE DATASET SERVES? Exactly one per dataset, enforced by
+     * the partial unique index below.
+     *
+     * This replaces `order by created_at desc limit 1`, which is not a fact but
+     * a guess: two versions written in the same millisecond tie, and the winner
+     * is whichever Postgres returned. Activation now says which one, and a read
+     * asks instead of ordering.
+     */
+    active: boolean("active").notNull().default(false),
     version: integer("version").notNull().default(1),
     source: text("source").notNull(),
     generatedBy: text("generated_by").notNull(),
@@ -322,7 +601,11 @@ export const malloyModels = pgTable(
       .notNull()
       .default(sql`now()`),
   },
-  (t) => [index("malloy_models_dataset_id_idx").on(t.datasetId)],
+  (t) => [
+    index("malloy_models_dataset_id_idx").on(t.datasetId),
+    index("malloy_models_revision_idx").on(t.revisionId),
+    uniqueIndex("malloy_models_one_active").on(t.datasetId).where(sql`active`),
+  ],
 );
 
 // One row per file in a multi-file GitHub-loaded model.
@@ -804,6 +1087,11 @@ export const draftDashboards = pgTable(
   (t) => [index("draft_dashboards_user_idx").on(t.userId, t.updatedAt)],
 );
 
+export type Repo = typeof repos.$inferSelect;
+export type NewRepo = typeof repos.$inferInsert;
+export type RepoRevision = typeof repoRevisions.$inferSelect;
+export type RepoRevisionSource = (typeof repoRevisionSource.enumValues)[number];
+export type DatasetAlias = typeof datasetAliases.$inferSelect;
 export type Dataset = typeof datasets.$inferSelect;
 export type NewDataset = typeof datasets.$inferInsert;
 export type DatasetStatus = (typeof datasetStatus.enumValues)[number];

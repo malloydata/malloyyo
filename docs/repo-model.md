@@ -160,6 +160,15 @@ aside rather than quietly replacing a newer one.
 A CI job that goes green on a repo that never compiled is worse than one that
 goes red.
 
+**A directory with no dataset: the two callers want opposite things.** A CLI
+publish REFUSES and names `--create-datasets`, because someone is reading an
+exit code. A GitHub refresh REPORTS it as `unclaimed` and moves the datasets
+that do exist on, because nobody reads a webhook's exit code — refusing the
+whole publish would mean a repo that gained a `datasets/newthing/` directory
+silently stops refreshing on every push until someone notices. Collapsing the
+two into one behaviour was a regression I nearly shipped; `onMissing` is the
+distinction, made explicit.
+
 ## Compiling the way the CLI compiles
 
 This is the structural half, and it is why the revision is materialized.
@@ -238,6 +247,10 @@ shapes the fork actually held, and checks all of it.
 - **The archive lives in Postgres `bytea`**, capped at 32MB. Blob storage is the
   obvious next step and changes one module.
 - **Old revisions are never pruned.** Every publish keeps its archive.
+- **An empty repo can be left behind** if `POST /api/datasets` dies between
+  creating the repo row and pulling. It serves nothing and retrying the same
+  request reuses it, so the name is not permanently lost — but with no repo UI
+  there is nothing that lists it.
 - **No UI** for repos: no list, no rename, no "attach to GitHub" form. The
   dataset config page still posts its GitHub fields to
   `PATCH /api/datasets/:id`, which applies them to the repo.

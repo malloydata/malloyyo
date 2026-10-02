@@ -629,9 +629,12 @@ test("a single-dataset repo publishes, and takes the name it was given", async (
   assert.deepEqual((await datasetsOf(repo.id)).map((d) => d.repoDir), [""], "at the repo root");
 });
 
-test("a directory the repo publishes with no dataset is REPORTED, not created", async () => {
-  // Which datasets exist is a deliberate act needing an owner and a free name,
-  // and a webhook has no business choosing either.
+test("a REFRESH reports an uncovered directory and keeps refreshing the rest", async () => {
+  // THE TWO CALLERS WANT OPPOSITE THINGS, and collapsing them was a regression
+  // I nearly shipped. Nobody reads a webhook's exit code, so refusing the whole
+  // publish would mean a repo that gained a `datasets/newthing/` directory
+  // silently STOPS REFRESHING on every push until someone notices — the
+  // opposite of what a trigger should do.
   const repo = await makeRepo("unclaimed");
   assert.ok(
     (await publishRevision({
@@ -644,13 +647,42 @@ test("a directory the repo publishes with no dataset is REPORTED, not created", 
   );
   const r = await publishRevision({
     repo,
-    raw: multiRepo(["kept", "newcomer"]),
+    raw: multiRepo(["kept", "newcomer"], { lib: true }),
     source: "github",
     createdById: null,
     createDatasets: false,
   });
-  assert.equal(r.ok, false, "a refresh does not create datasets");
+  assert.ok(r.ok, r.ok ? "" : r.error);
+  assert.deepEqual(r.unclaimed.map((u) => u.dir), ["datasets/newcomer"], "reported");
+  assert.deepEqual(r.datasets.map((d) => d.name), ["kept"], "and `kept` moved on");
+  assert.equal(r.revision, 2, "the repo really is at the new commit");
+  // A webhook has no business choosing an owner or a name, so it creates nothing.
+  assert.equal((await datasetsOf(repo.id)).length, 1);
+});
+
+test("…but a CLI publish REFUSES, because someone is reading an exit code", async () => {
+  // The other half of the same decision, and the message the CLI prints.
+  const repo = await makeRepo("unclaimed_cli");
+  assert.ok(
+    (await publishRevision({
+      repo,
+      raw: multiRepo(["kept"]),
+      source: "cli",
+      createdById: owner.id,
+      createDatasets: true,
+    })).ok,
+  );
+  const r = await publishRevision({
+    repo,
+    raw: multiRepo(["kept", "newcomer"]),
+    source: "cli",
+    createdById: owner.id,
+    createDatasets: false,
+    onMissing: "refuse",
+  });
+  assert.equal(r.ok, false);
   assert.equal(r.ok === false ? r.kind : "", "request");
+  assert.match(r.ok === false ? r.error : "", /--create-datasets/);
   assert.deepEqual(r.ok === false ? r.missing?.map((m) => m.name) : [], ["newcomer"]);
   assert.equal((await datasetsOf(repo.id)).length, 1);
 });
@@ -762,4 +794,51 @@ test("the head commit is on the revision, which is what makes 'same commit' chec
     .where(and(eq(malloyModels.revisionId, rev.id), isNotNull(malloyModels.gitSha)));
   assert.equal(models.length, 2);
   assert.equal(new Set(models.map((m) => m.gitSha)).size, 1, "one commit across the repo");
+});
+
+test("two publishes racing cannot leave an OLDER revision live", async () => {
+  // Both verify independently and both may succeed; without the guard the
+  // slower, older one would land last and quietly replace the newer. The repo
+  // row is locked at activation and the live revision is compared.
+  //
+  // A real race, so it is asserted on the INVARIANT rather than on which call
+  // won: exactly one revision is live, it is the highest-numbered one that
+  // verified, and every dataset serves a model from it.
+  //
+  // THIS TEST DOES NOT PROVE THE GUARD. The guard only fires when the
+  // HIGHER-numbered revision activates FIRST, and nothing here can make that
+  // happen — if the two serialize in order, they both land correctly and the
+  // comparison never runs, and the test passes either way. Said plainly rather
+  // than left to be believed: the mechanism is pinned separately, by
+  // src/lib/repos-push-atomic.test.ts, which reads the comparison and the row
+  // lock out of the source. What this test IS good for is the invariant, which
+  // must hold under either interleaving.
+  const repo = await makeRepo("racing");
+  assert.ok(
+    (await publishRevision({
+      repo,
+      raw: multiRepo(["r"]),
+      source: "cli",
+      createdById: owner.id,
+      createDatasets: true,
+    })).ok,
+  );
+
+  const results = await Promise.all([
+    publishRevision({ repo, raw: multiRepo(["r"], { lib: true }), source: "cli", createdById: owner.id }),
+    publishRevision({ repo, raw: zip({ "malloy-config.json": CONFIG, "datasets/r/index.malloy": `${MODEL}\n// b\n` }), source: "cli", createdById: owner.id }),
+  ]);
+  const landed = results.filter((r) => r.ok).map((r) => (r.ok ? r.revision : 0));
+  assert.ok(landed.length >= 1, "at least one of them verified");
+
+  const live = await liveRevision(repo.id);
+  const all = await revisionsOf(repo.id);
+  assert.equal(all.filter((r) => r.active).length, 1, "exactly one live revision");
+  assert.equal(
+    live.revision,
+    Math.max(...landed),
+    "and it is the highest-numbered revision that verified",
+  );
+  const ds = (await datasetsOf(repo.id))[0];
+  assert.equal((await activeModel(ds.id)).revisionId, live.id, "the dataset serves it");
 });

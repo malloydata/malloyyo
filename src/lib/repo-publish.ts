@@ -132,6 +132,24 @@ export type PublishInput = {
   git?: { sha?: string | null; branch?: string | null; dirty?: boolean | null };
   /** May this publish create datasets for directories that have none yet? */
   createDatasets?: boolean;
+  /**
+   * What to do about a directory the repo publishes that no dataset covers,
+   * when `createDatasets` is false.
+   *
+   * THE TWO CALLERS WANT OPPOSITE THINGS, and collapsing them was a regression
+   * I nearly shipped.
+   *
+   * `"refuse"` is for a CLI publish: someone is reading an exit code, and
+   * "pass --create-datasets" is the next thing they should do.
+   *
+   * `"report"` is for a GitHub refresh, and is the old behaviour. Nobody reads
+   * a webhook's exit code — so refusing the whole publish would mean a repo
+   * that gained a `datasets/newthing/` directory silently STOPS REFRESHING on
+   * every push until an admin notices, which is the opposite of what a trigger
+   * should do. The directory is reported as `unclaimed` and the datasets that
+   * do exist move on.
+   */
+  onMissing?: "refuse" | "report";
   /** The owner for datasets this publish creates. Defaults to the repo's owner. */
   datasetOwnerId?: string;
   /**
@@ -468,7 +486,7 @@ async function verifyAndActivate(
   for (const d of live) byDir.set(d.repoDir, [...(byDir.get(d.repoDir) ?? []), d]);
 
   const missing = declared.filter((d) => !byDir.has(d.dir));
-  if (missing.length > 0 && !input.createDatasets) {
+  if (missing.length > 0 && !input.createDatasets && (input.onMissing ?? "report") === "refuse") {
     const names = missing.map((m) => m.name || (input.rootDatasetName ?? input.repo.slug));
     const err =
       `${names.join(", ")}: not on this instance yet. ` +
@@ -482,6 +500,13 @@ async function verifyAndActivate(
       missing: missing.map((m, i) => ({ name: names[i], dir: m.dir })),
     };
   }
+  // Reported, not created. Which datasets exist is a deliberate act needing an
+  // owner and a free name, and a webhook has no business choosing either — but
+  // neither does it get to stop the repo refreshing over it.
+  const unclaimed = input.createDatasets
+    ? []
+    : missing.map((m) => ({ name: m.name || input.repo.slug, dir: m.dir }));
+  const toCompile = declared.filter((d) => input.createDatasets || byDir.has(d.dir));
 
   // A directory that is GONE means the repo stopped publishing that dataset. It
   // is not refreshed and not touched: saved queries, share links and history
@@ -498,7 +523,7 @@ async function verifyAndActivate(
   // and the only way they are guaranteed to be the same model.
   const compiled: CompiledDir[] = [];
   const failures: PublishFailure[] = [];
-  for (const d of declared) {
+  for (const d of toCompile) {
     const r = await compileDir(repoRoot, d.dir, d.name, allDirs, filePaths);
     if (r.ok) compiled.push(r.compiled);
     else failures.push({ name: d.name || input.repo.slug, dir: d.dir, error: r.error });
@@ -555,10 +580,13 @@ async function verifyAndActivate(
   const activated = await activate(input, revision, plans);
   if (!activated.ok) return activated;
 
-  const covered = new Set(compiled.map((c) => c.dir));
-  const unclaimed = declared
-    .filter((d) => !covered.has(d.dir))
-    .map((d) => ({ name: d.name, dir: d.dir }));
+  if (unclaimed.length > 0) {
+    logger.warn("repo publishes directories no dataset covers — add them to create them", {
+      repo: input.repo.slug,
+      revision: revision.revision,
+      unclaimed: unclaimed.map((u) => u.dir),
+    });
+  }
 
   logger.info("repo revision live", {
     repo: input.repo.slug,

@@ -19,7 +19,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { and, desc, eq, ne } from "drizzle-orm";
 import { nameToSlug as engineSlug } from "@malloyyo/mcp-engine";
-import { db, datasets, repos, users } from "@/db";
+import { db, datasets, repoRevisions, repos, users } from "@/db";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
 import { canAuthor, datasetVisibleWhere } from "@/lib/roles";
@@ -88,7 +88,28 @@ export async function POST(req: Request) {
   // so the caller gets a sentence rather than a unique-violation; the indexes
   // are what make it true under a race.
   const [bySlug] = await db.select().from(repos).where(eq(repos.slug, slug)).limit(1);
-  if (bySlug) {
+  // AN EMPTY REPO IS REUSED, not refused.
+  //
+  // This route creates the repo row before pulling, and removes it again if
+  // nothing lands. That delete is a compensating action, which is exactly what
+  // this rewrite set out to get rid of — so it must not be the only thing
+  // standing between a crashed request and a permanently unusable name. If the
+  // process dies between the insert and the delete, what is left is a repo with
+  // no datasets and no live revision: it serves nothing, and RETRYING THE SAME
+  // REQUEST now simply picks it up. The delete is a tidy-up, not a correctness
+  // requirement.
+  const reusable =
+    bySlug &&
+    (await db.select({ id: datasets.id }).from(datasets).where(eq(datasets.repoId, bySlug.id)).limit(1))
+      .length === 0 &&
+    (
+      await db
+        .select({ id: repoRevisions.id })
+        .from(repoRevisions)
+        .where(and(eq(repoRevisions.repoId, bySlug.id), eq(repoRevisions.active, true)))
+        .limit(1)
+    ).length === 0;
+  if (bySlug && !reusable) {
     return NextResponse.json(
       {
         error:
@@ -104,7 +125,7 @@ export async function POST(req: Request) {
     .from(repos)
     .where(and(eq(repos.githubRepo, body.githubRepo), eq(repos.githubBranch, branch)))
     .limit(1);
-  if (attached) {
+  if (attached && attached.id !== bySlug?.id) {
     return NextResponse.json(
       { error: `${body.githubRepo}@${branch} is already on this instance as the repo "${attached.slug}"` },
       { status: 409 },
@@ -118,16 +139,28 @@ export async function POST(req: Request) {
   // inside the activation transaction, after every model compiled.
   let repo;
   try {
-    [repo] = await db
-      .insert(repos)
-      .values({
-        slug,
-        ownerId: user.id,
-        githubRepo: body.githubRepo,
-        githubBranch: branch,
-        githubUseToken: body.useToken,
-      })
-      .returning();
+    [repo] = reusable
+      ? await db
+          .update(repos)
+          .set({
+            ownerId: user.id,
+            githubRepo: body.githubRepo,
+            githubBranch: branch,
+            githubUseToken: body.useToken,
+            updatedAt: new Date(),
+          })
+          .where(eq(repos.id, bySlug!.id))
+          .returning()
+      : await db
+          .insert(repos)
+          .values({
+            slug,
+            ownerId: user.id,
+            githubRepo: body.githubRepo,
+            githubBranch: branch,
+            githubUseToken: body.useToken,
+          })
+          .returning();
   } catch (err) {
     logger.info("repo create raced", { slug, ...serializeErr(err) });
     return NextResponse.json({ error: `the repo "${slug}" was just created by someone else` }, { status: 409 });

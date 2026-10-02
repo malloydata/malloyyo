@@ -142,6 +142,9 @@ export async function POST(req: Request) {
       // `--repo` is the multi-dataset flag; a root `index.malloy` is
       // `--dataset <name>`'s business, and the refusal names it.
       refuseRootLayout: true,
+      // Someone is reading an exit code: name the flag rather than publishing
+      // what happens to be covered and leaving a directory behind silently.
+      onMissing: "refuse",
     });
 
     if (!result.ok) {

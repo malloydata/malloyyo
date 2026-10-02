@@ -100,3 +100,27 @@ test("verification failure records, and returns, without activating", () => {
   assert.match(body, /set\(\{\s*verifyError: error\s*\}\)/, "it records the reason");
   assert.doesNotMatch(body, /delete\(/, "and removes nothing");
 });
+
+test("activation never moves a repo backwards, and takes the repo's row lock to decide", () => {
+  // Two publishes verify independently and both may succeed, so the slower,
+  // older one can reach activation last. Without the comparison it would
+  // quietly replace the newer revision.
+  //
+  // PINNED HERE because the race is not reachable from a test: the guard fires
+  // only when the higher-numbered revision activates FIRST, and nothing can
+  // force that interleaving. test/repo-publish.test.ts runs two publishes
+  // concurrently and checks the INVARIANT (exactly one live revision, and it is
+  // the highest that verified), which holds under either order — so it would
+  // pass with the guard removed. This is the half that would not.
+  const from = pipeline.indexOf("async function activate(");
+  const body = pipeline.slice(from);
+  assert.match(
+    body,
+    /select 1 from repos where id = \$\{input\.repo\.id\} for update/,
+    "the repo row is locked, so the comparison cannot be read stale",
+  );
+  const lockAt = body.indexOf("for update");
+  const compareAt = body.indexOf("live.revision > revision.revision");
+  assert.ok(compareAt > lockAt, "and the comparison happens under that lock");
+  assert.match(body, /return \{ stale: live\.revision as number \}/, "an older revision steps aside");
+});

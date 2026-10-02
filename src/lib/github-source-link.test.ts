@@ -11,8 +11,6 @@ import {
   dashboardSourceUrl,
   repoUrl,
   codespaceUrl,
-  hasDevcontainer,
-  DEVCONTAINER_PATH,
 } from "./github-source-link";
 
 test("parseRepoSlug accepts the shapes a repo is actually stored in", () => {
@@ -189,27 +187,10 @@ test("codespaceUrl is null when there is no GitHub repo to open", () => {
   assert.equal(codespaceUrl("owner/repo/extra"), null);
 });
 
-test("hasDevcontainer reads the published file list, not the repo", () => {
-  const model = [
-    { path: "index.malloy" },
-    { path: "malloy-config.json" },
-    { path: "dashboards/trend.malloy" },
-  ];
-  assert.equal(hasDevcontainer(model), false);
-  assert.equal(hasDevcontainer([...model, { path: DEVCONTAINER_PATH }]), true);
-});
-
-test("hasDevcontainer is false for a model with no file list at all", () => {
-  // A dataset whose latest version predates file ingestion, or has no model yet.
-  assert.equal(hasDevcontainer(null), false);
-  assert.equal(hasDevcontainer(undefined), false);
-  assert.equal(hasDevcontainer([]), false);
-});
-
-test("hasDevcontainer only counts the dev container GitHub finds on its own", () => {
-  // A committed config somewhere else is real, but Codespaces will not use it
-  // without a devcontainer_path= parameter — so it is not what this claims.
-  assert.equal(hasDevcontainer([{ path: ".devcontainer/malloyyo/devcontainer.json" }]), false);
-  assert.equal(hasDevcontainer([{ path: "devcontainer.json" }]), false);
-  assert.equal(hasDevcontainer([{ path: ".devcontainer/Dockerfile" }]), false);
-});
+// `hasDevcontainer(files)` used to live here, reading a published model's file
+// list. It is gone: a dev container is a fact about the REPO's content, and
+// `repo_revisions.has_devcontainer` records it once at verify time. The file
+// list it read no longer exists for a repo-backed model — the revision's zip is
+// the store of record — so a helper that derived the answer from one would have
+// quietly started returning false for every repo. The CONSTANT stays in the
+// module, because that is the path the verify looks for.

@@ -139,12 +139,6 @@ export async function resolveDatasetByRef(ref: string) {
   return r.ok ? r.dataset : null;
 }
 
-/** As above, but keeps the REASON - so a caller can say "that name means two
-    datasets, here they are" instead of "not found". */
-export async function resolveDatasetByRefDetailed(ref: string) {
-  const { resolveDatasetRef } = await import("./repos");
-  return resolveDatasetRef(ref);
-}
 
 export async function latestModel(datasetId: string) {
   const [active] = await db

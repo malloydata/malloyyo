@@ -257,9 +257,4 @@ export function writeDatasetWorkspace(
   return ws;
 }
 
-/** Does this repo root hold an `index.malloy` directly? (The single layout.) */
-export function hasRootEntry(repoRoot: string): boolean {
-  return fs.existsSync(path.join(repoRoot, ENTRY_FILE));
-}
-
 export { DATASETS_DIR, ENTRY_FILE };

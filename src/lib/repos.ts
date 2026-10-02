@@ -30,7 +30,7 @@
  *                                    how the previous design chose a credential.
  */
 
-import { and, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { nameToSlug } from "@malloyyo/mcp-engine";
 import { db, datasetAliases, datasets, repos, type Dataset, type Repo } from "@/db";
 import { qualifiedName, repoSlugFromGitHub, splitQualified } from "./repo-names";
@@ -134,13 +134,6 @@ export async function repoDatasets(repoId: string): Promise<Dataset[]> {
     .orderBy(datasets.repoDir, datasets.name);
 }
 
-/** The repo's live revision, or null for one that has never published. */
-export async function activeRevisionId(repoId: string): Promise<string | null> {
-  const rows = await db.execute<{ id: string }>(
-    sql`select id from repo_revisions where repo_id = ${repoId} and active limit 1`,
-  );
-  return rows[0]?.id ?? null;
-}
 
 export type RepoLookup = { repo: Repo } | { missing: true } | { error: string };
 
@@ -204,11 +197,6 @@ export async function findRepoForPublish(opts: {
   return { missing: true };
 }
 
-/** Load a repo by its slug. */
-export async function repoBySlug(slug: string): Promise<Repo | null> {
-  const [r] = await db.select().from(repos).where(eq(repos.slug, slug)).limit(1);
-  return r ?? null;
-}
 
 /** Load a repo by id. */
 export async function repoById(id: string): Promise<Repo | null> {
@@ -216,11 +204,3 @@ export async function repoById(id: string): Promise<Repo | null> {
   return r ?? null;
 }
 
-/** Repos for a set of datasets, keyed by repo id — for list endpoints that
-    would otherwise do a query per row. */
-export async function reposByIds(ids: Array<string | null>): Promise<Map<string, Repo>> {
-  const wanted = [...new Set(ids.filter((i): i is string => !!i))];
-  if (wanted.length === 0) return new Map();
-  const rows = await db.select().from(repos).where(inArray(repos.id, wanted));
-  return new Map(rows.map((r) => [r.id, r]));
-}

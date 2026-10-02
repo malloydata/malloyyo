@@ -35,7 +35,6 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import url from "node:url";
 import { and, eq, sql } from "drizzle-orm";
 import { modelArtifact, layoutFromListing, type ArtifactInfo } from "@malloyyo/mcp-engine";
 import {
@@ -744,21 +743,4 @@ async function activate(
     await recordFailure(revision.id, msg).catch(() => {});
     throw err;
   }
-}
-
-/** Dataset directories a revision declares, for callers that need the shape
-    without re-materializing — e.g. the stored file map (src/lib/repo-files.ts). */
-export function declaredDirs(rev: { datasets: Array<{ name: string; dir: string }> | null }): string[] {
-  return (rev.datasets ?? []).map((d) => d.dir);
-}
-
-/** The URL pair `discoverConfigText` wants for a path inside a repo ROOT on
-    disk. Exported so a test can exercise the same walk the compile uses. */
-export function configUrlsFor(repoRoot: string, dir: string): { start: URL; ceiling: URL } {
-  const abs = path.resolve(repoRoot);
-  const base = dir.replace(/^\/+|\/+$/g, "");
-  return {
-    start: url.pathToFileURL((base ? path.join(abs, base) : abs) + path.sep),
-    ceiling: url.pathToFileURL(abs + path.sep),
-  };
 }

@@ -54,19 +54,6 @@ function clean(slug: string): string | null {
 export const DEVCONTAINER_PATH = ".devcontainer/devcontainer.json";
 
 /**
- * Whether a published model carries a dev container — i.e. whether a codespace
- * opened on this repo comes up with the Malloyyo tooling installed.
- *
- * False for a model published BEFORE this file was ingested, which is
- * indistinguishable from a repo that genuinely has none. That is deliberate:
- * both are fixed the same way (run `malloyyo init`, commit, publish), so the UI
- * can say one thing to both without lying to either.
- */
-export function hasDevcontainer(files?: { path: string }[] | null): boolean {
-  return (files ?? []).some((f) => f.path === DEVCONTAINER_PATH);
-}
-
-/**
  * "Open this repo in a codespace" — the link that RESUMES the viewer's existing
  * codespace for that branch if they have one, and creates one otherwise.
  *

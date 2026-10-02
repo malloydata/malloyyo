@@ -504,7 +504,13 @@ function GitHubConfig({
     const res = await fetch(`/api/datasets/${datasetId}`, {
       method: "PATCH",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ githubRepo: repo || null, githubBranch: branch || null, githubUseToken: true }),
+      // NOT githubUseToken. This form has no control for it, and sending
+      // `true` on every save is how one repo in production ended up with three
+      // dataset rows carrying two different answers - the CLI publish path
+      // wrote `false` and this wrote `true`, so any repo touched by both had
+      // mixed values by construction. The flag is the repo's, and only
+      // something that actually asks about it may set it.
+      body: JSON.stringify({ githubRepo: repo || null, githubBranch: branch || null }),
     });
     setSaving(false);
     if (!res.ok) { setError("save failed"); return; }

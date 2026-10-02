@@ -105,6 +105,15 @@ export type SourceLinkInput = {
   /** datasets.github_repo / github_branch (the pull path). */
   datasetRepo?: string | null;
   datasetBranch?: string | null;
+  /**
+   * datasets.repo_dir — where this dataset lives in a multi-dataset repo.
+   *
+   * Stored file paths are re-rooted at that directory (src/lib/repo-layout.ts),
+   * which is what keeps the runtime's "a model is rooted at index.malloy"
+   * invariant true for every dataset. A github.com link is the one thing that
+   * needs the real repo path back, so it is put back here and nowhere else.
+   */
+  datasetDir?: string | null;
   /** malloy_models.git_* (the CLI-push path). */
   gitRepo?: string | null;
   gitBranch?: string | null;
@@ -159,7 +168,9 @@ export function dashboardSourceUrl(input: SourceLinkInput): string | null {
     input.datasetBranch ||
     "main";
 
-  const encodedPath = path.split("/").map(encodeURIComponent).join("/");
+  const dir = (input.datasetDir ?? "").replace(/^\/+|\/+$/g, "");
+  const repoRelative = dir ? `${dir}/${path}` : path;
+  const encodedPath = repoRelative.split("/").map(encodeURIComponent).join("/");
   return `https://github.com/${slug}/blob/${encodeURIComponent(ref)}/${encodedPath}`;
 }
 

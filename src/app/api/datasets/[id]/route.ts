@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { NextResponse } from "next/server";
+import { datasetTitle } from "@malloyyo/mcp-engine";
 import { and, desc, eq } from "drizzle-orm";
 import { db, datasets, malloyModels, malloyModelFiles, malloyArtifacts } from "@/db";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
@@ -69,8 +70,13 @@ export async function GET(
     status: ds.status, statusError: ds.statusError,
     createdAt: ds.createdAt, readyAt: ds.readyAt,
     isPublic: ds.isPublic,
+    // The label. `name` stays the identity — URLs, grants and publishes use it.
+    title: datasetTitle(ds.name, ds.title),
     githubRepo: ds.githubRepo ?? null,
     githubBranch: ds.githubBranch ?? null,
+    // Where this dataset lives in a multi-dataset repo; null is the root. The
+    // "view source on GitHub" link needs it, because stored paths are re-rooted.
+    repoDir: ds.repoDir ?? null,
     githubUseToken: ds.githubUseToken,
     isAdmin: me ? isAdmin(me) : false,
     dashboards,

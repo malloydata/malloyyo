@@ -207,12 +207,41 @@ export const datasets = pgTable(
       .notNull()
       .references(() => users.id, { onDelete: "cascade" }),
     name: text("name").notNull(),
+    /**
+     * What to CALL it, as against what it is.
+     *
+     * `name` is the identity — a slug, the URL, what a publish matches on and
+     * what a role is granted against. This is presentation only: the model
+     * declares it with `## dataset { title="HubSpot CRM" }`. Null means derive
+     * it from the name (`hub_spot` → "Hub Spot"), so a dataset that never says
+     * anything still reads properly. Never used to look a dataset up — two
+     * datasets may share a title, and nothing stops them.
+     */
+    title: text("title"),
+    /** The model's own doc string (`##"`) — what this dataset is, for someone
+        deciding whether they want it or who should see it. */
+    description: text("description"),
     isPublic: boolean("is_public").notNull().default(false),
     status: datasetStatus("status").notNull().default("pending"),
     statusError: text("status_error"),
     githubRepo: text("github_repo"),
     githubBranch: text("github_branch"),
     githubUseToken: boolean("github_use_token").notNull().default(true),
+    /**
+     * Where in the repo this dataset lives: the directory holding its
+     * `index.malloy` and its `dashboards/`, e.g. `datasets/finance`.
+     *
+     * NULL is the repo root, which is every dataset that existed before
+     * multi-dataset repos and every single-dataset repo since. The two layouts
+     * are exclusive — a repo has a root `index.malloy` OR a `datasets/`
+     * directory, never both (src/lib/repo-layout.ts), so a repo cannot half-
+     * publish while looking fine.
+     *
+     * `malloy-config.json` is NOT under here. Connections are the repo's, shared
+     * by every dataset in it, so it stays at the root — which is also what makes
+     * a shared `lib/` importable by relative path from any of them.
+     */
+    repoDir: text("repo_dir"),
     /**
      * The givens this dataset is scoped by: supplied on every query against it,
      * locked so no caller can choose them, and required of every model

@@ -349,6 +349,12 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
           lastPublishSha: git.sha ?? null,
           lastPublishBranch: git.branch ?? null,
           lastPublishError: null,
+          // The model says what to CALL this dataset — the same `## dataset` tag
+          // and `##"` doc string the GitHub and `--repo` paths read. This path
+          // already had `result.meta` and ignored it, so a single-dataset
+          // publish left the title null while its siblings got theirs.
+          title: result.meta.title ?? null,
+          description: result.meta.description ?? null,
         })
         .where(eq(datasets.id, target.id));
 

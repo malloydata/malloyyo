@@ -1,9 +1,12 @@
 // Copyright (c) The Malloy Foundation
 // SPDX-License-Identifier: MIT
 
+// filterTree moved to the engine; its test follows it, so the engine does not
+// ship a rule covered only by another package's suite.
+
 import test from "node:test";
 import assert from "node:assert/strict";
-import { filterTree, type TreeDataset } from "./dashboard-tree";
+import { filterTree, type TreeDataset } from '../src/dashboard-tree';
 
 const TREE: TreeDataset[] = [
   {
@@ -36,7 +39,7 @@ test("a dashboard match keeps only the matching leaves, and drops empty branches
     out.map((d) => d.dataset),
     ["babynames"],
   );
-  assert.deepEqual(out[0].dashboards.map((d) => d.title), [
+  assert.deepEqual(out[0]?.dashboards.map((d) => d.title), [
     "Name explorer",
     "Name over Time",
     "Top Names by Decade",
@@ -48,13 +51,13 @@ test("filtering leaves the order alone — the menu sorts drafts itself", () => 
   // The reader's own draft leads the USER DASHBOARDS half (DashboardTree does
   // that sort at render); the filter must not reshuffle what it hands over.
   const out = filterTree(TREE, "babynames");
-  assert.deepEqual(out[0].dashboards, TREE[0].dashboards, "same rows, same order");
+  assert.deepEqual(out[0]?.dashboards, TREE[0]?.dashboards, "same rows, same order");
 });
 
 test("a dataset match keeps ALL of its dashboards — you asked for the dataset", () => {
   const out = filterTree(TREE, "movies");
   assert.equal(out.length, 1);
-  assert.equal(out[0].dashboards.length, 2, "not just the ones whose titles say 'movies'");
+  assert.equal(out[0]?.dashboards.length, 2, "not just the ones whose titles say 'movies'");
 });
 
 test("a dataset with no dashboards is reachable by name, and hidden otherwise", () => {

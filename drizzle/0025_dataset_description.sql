@@ -1,0 +1,1 @@
+ALTER TABLE "datasets" ADD COLUMN "description" text;

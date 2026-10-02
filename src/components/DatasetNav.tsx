@@ -36,6 +36,7 @@ export function DatasetNav({
   const [repo, setRepo] = useState<{
     datasetRepo: string | null;
     datasetBranch: string | null;
+    datasetDir?: string | null;
     gitRepo?: string | null;
     gitBranch?: string | null;
     gitSha?: string | null;
@@ -54,12 +55,16 @@ export function DatasetNav({
     fetch(`/api/datasets/${datasetId}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
-        if (d?.name) setDatasetName(d.name);
+        if (d?.name) setDatasetName(d.title || d.name);
         if (Array.isArray(d?.malloyModel?.sources)) setModelSources(d.malloyModel.sources);
         if (d) {
           setRepo({
             datasetRepo: d.githubRepo ?? null,
             datasetBranch: d.githubBranch ?? null,
+            // Multi-dataset repo: stored paths are re-rooted at the dataset's
+            // directory, so the link needs it put back.
+            datasetDir: d.repoDir ?? null,
+            
             gitRepo: d.malloyModel?.git?.repo ?? null,
             gitBranch: d.malloyModel?.git?.branch ?? null,
             gitSha: d.malloyModel?.git?.sha ?? null,

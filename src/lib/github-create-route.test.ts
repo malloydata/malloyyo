@@ -16,7 +16,7 @@ const CREATE_ROUTE = join(ROOT, "src", "app", "api", "datasets", "route.ts");
 const route = readFileSync(CREATE_ROUTE, "utf8");
 
 test("initial GitHub dataset creation uses the dashboard-aware refresh importer", () => {
-  assert.match(route, /import \{ refreshGitHubModel \} from "@\/lib\/github-refresh"/);
+  assert.match(route, /import \{[^}]*refreshGitHubModel[^}]*\} from "@\/lib\/github-refresh"/);
   assert.equal(
     [...route.matchAll(/refreshGitHubModel\(id\b/g)].length,
     1,
@@ -31,7 +31,15 @@ test("…and tells it this is a CREATE, so the first model sets the scoping", ()
   // (the declaration default '' matches no rows) while a caller who passes the
   // given themselves reads whichever tenant they name. The CLI push path has
   // always done this; only the UI path was missing it.
-  assert.match(route, /refreshGitHubModel\(id,\s*\{\s*creating:\s*true\s*\}\)/);
+  assert.match(route, /refreshGitHubModel\(id,\s*\{[^}]*creating:\s*true/);
+});
+
+test("…and reads the repo ONCE, not once per dataset", () => {
+  // The context holds the repo archive. Building it per dataset would download
+  // the whole repo per dataset, which is the cost reading an archive exists to
+  // remove — and a four-dataset repo is exactly where it would hurt.
+  assert.match(route, /repoContext\(/, "the route builds the context itself");
+  assert.match(route, /refreshGitHubModel\(id,\s*\{[^}]*ctx\b/, "and hands it to every dataset");
 });
 
 test("initial GitHub dataset creation has no second root-model-only loader", () => {

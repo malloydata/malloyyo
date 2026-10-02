@@ -1,11 +1,11 @@
 import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { execFileSync } from "node:child_process";
+import { keepsFile } from "@malloyyo/mcp-engine";
+import { SKIP_DIRS, isBundleOutput } from "./repo.js";
 import { makeRunner } from "./host.js";
 import { aboutPage } from "./discover.js";
 import type { ModelFile, GitInfo, DashboardPayload } from "./protocol.js";
-
-const SKIP_DIRS = new Set(["node_modules", ".git"]);
 
 /** What `malloyyo init` writes, and the only dev container GitHub finds without
     being told where to look (a `devcontainer_path=` URL parameter can name
@@ -163,4 +163,58 @@ export function gitInfo(dir: string): GitInfo {
   } catch {
     return {};
   }
+}
+
+/**
+ * Every file in the repo the server could need, repo-relative.
+ *
+ * `gatherDirectory` answers this for ONE dataset and returns only `.malloy`,
+ * because the old wire format carried dashboards separately. A repo archive
+ * carries the repo, so the components come along in it — and the server keeps
+ * each dataset's own transitive closure out of what it is sent, so sending a
+ * little more than one dataset needs costs nothing.
+ *
+ * Still not everything: a model repo may hold committed data or built docs, and
+ * those are neither compiled nor stored. The extension list is the extractor's
+ * OWN (`keepsFile`), not a copy of it — the copy had already drifted, dropping
+ * .sql/.csv/.txt that a GitHub pull kept, so the same repo carried different
+ * files depending on which way it arrived.
+ */
+/**
+ * Files that are the author's machine's business and never the server's.
+ *
+ * `malloy-config-local.json` is Malloy's local override (config_discover.js),
+ * which is where a connection's REAL credentials go while `malloy-config.json`
+ * carries `{"env": …}` references — so it is the one file in a model repo most
+ * likely to hold a secret, and it is usually gitignored for exactly that reason.
+ * This walker reads the filesystem, not git, so gitignore does not save it: it
+ * has to be named. The single-dataset walker never had this exposure, because it
+ * asks for `malloy-config.json` by name rather than keeping every `.json`.
+ */
+const LOCAL_ONLY = new Set(["malloy-config-local.json"]);
+
+export function gatherRepoFiles(dir: string): Map<string, string> {
+  const out = new Map<string, string>();
+
+  const walk = (cur: string): void => {
+    for (const entry of readdirSync(cur)) {
+      if (entry.startsWith(".") || SKIP_DIRS.has(entry)) continue;
+      const full = join(cur, entry);
+      if (statSync(full).isDirectory()) {
+        // An emitted static site is not the repo's source, wherever `-o` put it.
+        if (!isBundleOutput(full)) walk(full);
+        continue;
+      }
+      if (!keepsFile(entry) || LOCAL_ONLY.has(entry)) continue;
+      out.set(relative(dir, full).split(sep).join("/"), readFileSync(full, "utf8"));
+    }
+  };
+  walk(dir);
+
+  // Explicit, because walk() skips every dotted entry — see DEVCONTAINER_PATH.
+  const devcontainer = join(dir, ...DEVCONTAINER_PATH.split("/"));
+  if (existsSync(devcontainer)) {
+    out.set(DEVCONTAINER_PATH, readFileSync(devcontainer, "utf8"));
+  }
+  return out;
 }

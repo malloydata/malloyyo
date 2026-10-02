@@ -8,6 +8,28 @@
 //
 // Dependency-free so the Node dev server and the emitted static site share it.
 
+/**
+ * What the switcher renders. A dashboard arrives with its SLUG already built —
+ * the address, from the one place that knows how addresses are made. This type
+ * is deliberately not the engine's `TreeDataset`: that one is the hosted menu's
+ * shape, which builds its own hrefs from dataset + name.
+ */
+export interface SwitcherDashboard {
+  /** How this dashboard is addressed on this host. */
+  slug: string;
+  title: string;
+  description?: string;
+}
+export interface SwitcherDataset {
+  dataset: string;
+  title?: string;
+  description?: string;
+  dashboards: SwitcherDashboard[];
+}
+
+/** What `siblingList` needs of a dashboard: an address and something to call
+    it. The switcher has its own shape (`SwitcherDashboard`) because it is a
+    tree and this is a list. */
 export interface NavDashboard {
   name: string;
   title?: string;
@@ -30,46 +52,58 @@ export const LOGO = `<svg viewBox="0 0 240 240" width="20" height="20" aria-hidd
     page chrome, so it shouldn't invert with the color scheme. */
 export const NAV_CSS = `
 .dash-nav{display:flex;gap:4px;align-items:center;padding:8px 14px;background:#000;font:13px system-ui,-apple-system,sans-serif;flex-wrap:wrap}
-/* The home icon is an <a> too, so it opts OUT of the switcher-link padding and
-   keeps its own square hit area. */
+/* The home icon keeps its own square hit area. */
 .dash-nav a.brand{display:inline-flex;align-items:center;justify-content:center;color:#9aa1ac;padding:5px;border-radius:6px;text-decoration:none}
 .dash-nav a.brand:hover{background:#1f232a;color:#fff}
 .dash-nav .brand svg{display:block}
-.dash-nav .sep{width:1px;align-self:stretch;background:#2c3038;margin:0 10px}
-.dash-nav a{padding:4px 10px;border-radius:6px;text-decoration:none;color:#c9ced6}
-.dash-nav a:hover{background:#1f232a;color:#fff}
-.dash-nav a.on{background:#fff;color:#000;font-weight:550}
+/* The switcher: the same control the hosted app uses, in vanilla. A row of
+   pills stops working at about five dashboards — a repo with four datasets has
+   fifteen — so the list moves into a menu and the bar keeps one button. */
+.dash-pick{position:relative;font:13px system-ui,-apple-system,sans-serif}
+.dash-pick>button{display:flex;align-items:center;gap:6px;max-width:60vw;padding:4px 8px;border:0;border-radius:6px;
+  background:transparent;color:#c9ced6;font:inherit;cursor:pointer}
+.dash-pick>button:hover{background:#1f232a;color:#fff}
+.dash-pick .ds{font-weight:600;color:#fff}
+.dash-pick .slash{color:#5b6270}
+.dash-pick .lbl{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dash-pick .chev{flex:none;opacity:.6}
+.dash-pick[data-open="1"] .panel{display:block}
+.dash-pick .panel{display:none;position:absolute;left:0;top:100%;margin-top:4px;z-index:50;width:340px;max-width:92vw;
+  background:#fff;color:#111;border:1px solid #d7dbe0;border-radius:8px;box-shadow:0 10px 30px rgba(0,0,0,.25)}
+.dash-pick .filter{padding:6px;border-bottom:1px solid #eceef1}
+.dash-pick .filter input{width:100%;box-sizing:border-box;padding:5px 8px;border:0;border-radius:4px;background:#f3f4f6;
+  font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:#111}
+.dash-pick .filter input:focus{outline:0}
+.dash-pick .list{max-height:60vh;overflow-y:auto;padding:4px}
+.dash-pick .branch{display:flex;align-items:center;gap:5px;width:100%;padding:4px 6px;border:0;border-radius:4px;
+  background:transparent;font:inherit;font-weight:600;color:#111;cursor:pointer;text-align:left}
+.dash-pick .branch:hover{background:#f3f4f6}
+.dash-pick .branch .tw{flex:none;transition:transform .12s}
+.dash-pick .branch[aria-expanded="true"] .tw{transform:rotate(90deg)}
+.dash-pick .leaf{display:block;padding:4px 8px;border-radius:4px;text-decoration:none;color:#374151;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dash-pick .leaf:hover{background:#f3f4f6}
+.dash-pick .leaf.on{background:#111;color:#fff}
+.dash-pick .kids{display:none}
+.dash-pick .kids.indent .leaf{margin-left:16px}
+.dash-pick .grp[data-open="1"] .kids{display:block}
+.dash-pick .empty{padding:6px 8px;color:#9aa1ac}
+@media (prefers-color-scheme:dark){
+  .dash-pick .panel{background:#0b0d11;color:#e6e8eb;border-color:#262b33}
+  .dash-pick .filter{border-bottom-color:#1a1e25}
+  .dash-pick .filter input{background:#14181e;color:#e6e8eb}
+  .dash-pick .branch{color:#e6e8eb}
+  .dash-pick .branch:hover,.dash-pick .leaf:hover{background:#171b22}
+  .dash-pick .leaf{color:#c9ced6}
+  .dash-pick .leaf.on{background:#fff;color:#000}
+}
 `;
-
-/** Render the bar. `href` maps a dashboard name to a link for THIS host — the
-    only thing that varies across dev / pages / vercel. The brand shows even for
-    a single dashboard; only the switcher links are conditional. */
-export const MALLOYYO_REPO = "https://github.com/malloydata/malloyyo";
 
 /** Home, back to the landing page. Attribution lives on that page rather than
     in the bar — the bar should be navigation. */
 const HOME_ICON = `<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" \
 stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">\
 <path d="M3 10.2 12 3.5l9 6.7"/><path d="M5.2 8.9V20h13.6V8.9"/><path d="M9.6 20v-6.2h4.8V20"/></svg>`;
-
-export function navHtml(
-  active: string,
-  all: NavDashboard[],
-  href: (name: string) => string,
-  homeHref = "./",
-): string {
-  const brand =
-    `<a class="brand" href="${esc(homeHref)}" title="Home" aria-label="Home">${HOME_ICON}</a>`;
-  if (all.length <= 1) return `<nav class="dash-nav">${brand}</nav>`;
-  const links = all
-    .map(
-      (x) =>
-        `<a href="${esc(href(x.name))}"${x.name === active ? ' class="on"' : ""}>` +
-        `${esc(x.title || x.name)}</a>`,
-    )
-    .join("");
-  return `<nav class="dash-nav">${brand}<span class="sep"></span>${links}</nav>`;
-}
 
 /** The sibling list a host injects as `window.__DASHBOARDS__`, in nav order and
     excluding the current page.
@@ -91,4 +125,162 @@ export function siblingList<T extends NavDashboard & { description?: string }>(
       ...(d.description ? { description: d.description } : {}),
       href: href(d.name),
     }));
+}
+
+// ── The dashboard switcher ──────────────────────────────────────────────────
+
+/**
+ * The same control the hosted app puts in its header (src/components/
+ * DashboardTree.tsx), in dependency-free HTML + a little script so the dev
+ * server and every static bundle can render it.
+ *
+ * A row of pills stops scaling at about five dashboards — a repo with four
+ * datasets has fifteen, wrapping onto three lines with two of them called
+ * "About". So: one button saying where you are, and a menu holding everything.
+ *
+ * The tree is INLINED rather than fetched. A bundle is a static site with no
+ * API to ask, and the dev server already knows the answer at render time.
+ *
+ * A single-dataset repo gets a flat list with no branches and no filter box —
+ * the same judgement the hosted one makes, for the same reason: one dataset is
+ * not a tree.
+ */
+export function switcherHtml(
+  activeSlug: string,
+  tree: SwitcherDataset[],
+  href: (slug: string) => string,
+  opts: { dataset?: string; label?: string } = {},
+): string {
+  // `flat` decides LAYOUT ONLY — no branches, no filter box, for a repo with one
+  // dataset. It must never decide an address: slugs arrive already built, by the
+  // one place that knows the convention (repo.ts). Deriving them here from
+  // `tree.length` disagreed with that place for a repo holding exactly one
+  // dataset under `datasets/` — the shape every new repo starts in — and emitted
+  // links to pages that do not exist.
+  const flat = tree.length <= 1;
+
+  const groups = tree
+    .map((ds) => {
+      const open =
+        flat || ds.dashboards.some((d) => d.slug === activeSlug) ? ' data-open="1"' : "";
+      const leaves = ds.dashboards
+        .map((d) => {
+          const on = d.slug === activeSlug ? " on" : "";
+          return (
+            `<a class="leaf${on}" href="${esc(href(d.slug))}"` +
+            `${d.description ? ` title="${esc(d.description)}"` : ""}` +
+            ` data-find="${esc(`${ds.dataset} ${ds.title ?? ""} ${d.slug} ${d.title}`.toLowerCase())}">` +
+            `${esc(d.title)}</a>`
+          );
+        })
+        .join("");
+      if (flat) return `<div class="grp" data-open="1"><div class="kids">${leaves}</div></div>`;
+      return (
+        `<div class="grp"${open} data-ds="${esc(`${ds.dataset} ${ds.title ?? ""}`.toLowerCase())}">` +
+        `<button class="branch" aria-expanded="${open ? "true" : "false"}">` +
+        `<svg class="tw" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" ` +
+        `stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>` +
+`<span title="${esc(ds.dataset)}">${esc(ds.title ?? ds.dataset)}</span></button>` +
+        `<div class="kids indent">${leaves}</div></div>`
+      );
+    })
+    .join("");
+
+  const filter = flat
+    ? ""
+    : `<div class="filter"><input type="search" placeholder="filter…" aria-label="Filter dashboards"></div>`;
+
+  return (
+    `<div class="dash-pick" data-open="0">` +
+    `<button type="button" aria-haspopup="menu" aria-expanded="false" title="All datasets and dashboards">` +
+    (opts.dataset ? `<span class="ds">${esc(opts.dataset)}</span><span class="slash">/</span>` : "") +
+    `<span class="lbl">${esc(opts.label ?? "dashboards")}</span>` +
+    `<svg class="chev" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" ` +
+    `stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>` +
+    `</button>` +
+    `<div class="panel" role="menu">${filter}<div class="list">${groups}` +
+    (flat ? "" : `<div class="empty" hidden>no match</div>`) +
+    `</div></div>` +
+    `</div>`
+  );
+}
+
+/** The switcher's behaviour: open/close, filter, expand. Inline it once per
+    page. Same rules as the hosted menu — Escape and a click outside close it,
+    a search opens everything that matched (hiding a match behind a closed
+    branch is the one thing a search must not do), and clearing the search puts
+    the branches back the way the page rendered them. That last part needs the
+    rendered state remembered: without it, closing the menu after a search left
+    the searched-for dataset expanded and the one you are standing in shut. */
+export const SWITCHER_JS = `
+(function(){
+  var p=document.querySelector('.dash-pick'); if(!p) return;
+  var btn=p.querySelector(':scope>button'), inp=p.querySelector('.filter input');
+  var grps=[].slice.call(p.querySelectorAll('.grp'));
+  var none=p.querySelector('.empty');
+  // How the page rendered: which branch holds the dashboard you are on. A
+  // cleared search restores this rather than whatever the search expanded.
+  var init=grps.map(function(g){return g.dataset.open==='1';});
+  function setOpen(g,on){
+    g.dataset.open=on?'1':'0';
+    var b=g.querySelector('.branch'); if(b) b.setAttribute('aria-expanded',on?'true':'false');
+  }
+  function openState(on){
+    p.dataset.open=on?'1':'0';
+    btn.setAttribute('aria-expanded',on?'true':'false');
+    if(!on&&inp){inp.value='';apply('');}
+    if(on&&inp){inp.focus();}
+  }
+  function apply(q){
+    q=q.trim().toLowerCase();
+    var hits=0;
+    grps.forEach(function(g,i){
+      var ds=g.dataset.ds||'', dsHit=!!q&&ds.indexOf(q)>=0;
+      var any=false;
+      [].slice.call(g.querySelectorAll('.leaf')).forEach(function(a){
+        var hit=!q||dsHit||(a.dataset.find||'').indexOf(q)>=0;
+        a.style.display=hit?'':'none'; if(hit){any=true;hits++;}
+      });
+      g.style.display=any?'':'none';
+      // While searching, everything that survived is open; with the box empty,
+      // back to how the page rendered.
+      setOpen(g,q?any:init[i]);
+    });
+    if(none) none.hidden=!q||hits>0;
+  }
+  btn.addEventListener('click',function(e){e.stopPropagation();openState(p.dataset.open!=='1');});
+  grps.forEach(function(g){
+    var b=g.querySelector('.branch'); if(!b) return;
+    b.addEventListener('click',function(e){
+      e.stopPropagation();
+      setOpen(g,g.dataset.open!=='1');
+    });
+  });
+  if(inp){inp.addEventListener('input',function(){apply(inp.value);});
+          inp.addEventListener('click',function(e){e.stopPropagation();});}
+  // Chrome inside the panel is not a dismissal — padding and the filter row's
+  // margin used to bubble to the document handler and close the menu.
+  var panel=p.querySelector('.panel');
+  if(panel) panel.addEventListener('click',function(e){e.stopPropagation();});
+  document.addEventListener('click',function(){ if(p.dataset.open==='1') openState(false); });
+  document.addEventListener('keydown',function(e){ if(e.key==='Escape') openState(false); });
+})();
+`;
+
+/**
+ * The bar: brand, then the switcher. Both hosts render exactly this; the only
+ * thing that differs is the link shape, which is already a parameter.
+ *
+ * Replaces two copies that each rebuilt the bar by calling `navHtml` with an
+ * empty list and regex-stripping its wrapper tags back off.
+ */
+export function navWithSwitcher(
+  activeSlug: string,
+  tree: SwitcherDataset[],
+  href: (slug: string) => string,
+  opts: { dataset?: string; label?: string; homeHref?: string } = {},
+): string {
+  const brand =
+    `<a class="brand" href="${esc(opts.homeHref ?? "./")}" title="Home" aria-label="Home">${HOME_ICON}</a>`;
+  return `<nav class="dash-nav">${brand}${switcherHtml(activeSlug, tree, href, opts)}</nav>`;
 }

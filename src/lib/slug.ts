@@ -37,12 +37,8 @@ export function parseSlug(slug: string): { code: string; matchesInstance: boolea
   return { code, matchesInstance: code === env.INSTANCE_CODE };
 }
 
-export function nameToSlug(s: string): string {
-  return (
-    s
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "_")
-      .replace(/^_+|_+$/g, "")
-      .slice(0, 48) || "dataset"
-  );
-}
+// One implementation, in the engine: `malloyyo lint` and `malloyyo publish` have
+// to compute the same dataset name from a `datasets/<dir>` directory that this
+// server will, character for character. Re-exported here so every existing
+// caller keeps its import.
+export { nameToSlug } from "@malloyyo/mcp-engine";

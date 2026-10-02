@@ -29,15 +29,22 @@ import type { SwitcherDataset } from "./shared/nav.js";
 import { makeRunner, type ModelRunner } from "./host.js";
 
 /**
- * Directories a repo's own files are never in.
+ * Directories a repo's own files are never in, at any depth.
  *
- * `docs/` is where `dashboard bundle` writes the static site, and this repo's
- * instructions tell authors to COMMIT it so GitHub Pages can serve it — so a
- * walker that does not skip it packs the emitted bundle JS back into the repo's
- * sources. One list, because two walkers disagreeing about this is how 7MB of
- * generated JavaScript ended up inside a publish archive.
+ * Only these two, and deliberately. `docs` and `dist` were here for one release
+ * and were a mistake: this set is matched by BASENAME at every level, while
+ * nothing else in the system excludes those names, so a dataset legitimately
+ * called `datasets/docs/` was listed by the layout rules, counted by the CLI,
+ * and then packed into the archive with none of its files — a silent
+ * half-publish reporting success. It also dropped `docs/shared.malloy` from a
+ * single-dataset repo that imported it, which compiles here and not on the
+ * server.
+ *
+ * What those names were reaching for is "the static site `dashboard bundle`
+ * emitted", and that is `isBundleOutput`'s job: it asks what a directory
+ * CONTAINS, so it is right at any depth and wherever `-o` put it.
  */
-export const SKIP_DIRS: ReadonlySet<string> = new Set(["node_modules", ".git", "docs", "dist"]);
+export const SKIP_DIRS: ReadonlySet<string> = new Set(["node_modules", ".git"]);
 
 /**
  * The file `dashboard bundle` writes into every site it emits.
@@ -73,6 +80,13 @@ export function isBundleOutput(dir: string): boolean {
  */
 export function repoRootOf(modelRoot: string): string {
   const abs = path.resolve(modelRoot);
+  // ITS OWN checkout wins, before anything above is considered. A model repo
+  // cloned to `~/work/datasets/mymodel` is a repo that happens to sit in a
+  // directory called `datasets`, and walking up out of it made it unpublishable
+  // — while the advice the refusal printed would have published the unrelated
+  // container above it under the repo's name. `.git` is a FILE in a worktree or
+  // submodule, which `existsSync` matches either way.
+  if (fs.existsSync(path.join(abs, ".git"))) return abs;
   const parent = path.dirname(abs);
   if (path.basename(parent) !== DATASETS_DIR) return abs;
   const above = path.dirname(parent);

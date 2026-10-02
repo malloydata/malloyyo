@@ -4,7 +4,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { gzipSync, gunzipSync } from "node:zlib";
-import { archiveEntries, ArchiveURLReader, buildTarGz, extractTarGz } from '../src/tarball';
+import { archiveEntries, ArchiveURLReader, archiveLister, buildTarGz, extractTarGz } from '../src/tarball';
+import { layoutFromListing } from '../src/repo-layout';
 
 // The repo arrives as ONE archive — from GitHub, and (soon) from the CLI. The
 // parser is hand-written rather than a dependency, so the formats GitHub
@@ -303,4 +304,62 @@ test('the ustar prefix is joined even when the name starts with it', () => {
     [...t.files.keys()].includes('datasets/datasets/x.malloy'),
     `prefix joined unconditionally: ${[...t.files.keys()]}`,
   );
+});
+
+// ── Empty files ─────────────────────────────────────────────────────────────
+//
+// The extractor used to drop zero-length members before the `skipped` bookkeeping
+// ran, so an empty file was neither kept nor explained. That is not a cosmetic
+// gap: every layout rule keys on whether a file EXISTS.
+
+test('an empty file survives the round trip, because the layout rules key on its existence', () => {
+  const src = new Map([
+    ['index.malloy', ''],
+    ['dashboards/a.malloy', 'query: q is x -> { group_by: y }'],
+  ]);
+  const { files, skipped } = extractTarGz(buildTarGz(src));
+  assert.deepEqual([...files.keys()].sort(), ['dashboards/a.malloy', 'index.malloy']);
+  assert.equal(files.get('index.malloy'), '', 'kept, and still empty');
+  assert.deepEqual(skipped, [], 'nothing was skipped — it was kept');
+});
+
+test('an empty entry file does not make its dataset disappear', async () => {
+  // The failure this exists for. `touch datasets/finance/index.malloy` used to
+  // publish `sales` alone and report SUCCESS — the half-publish repo-layout.ts
+  // refuses by name for every other cause.
+  const { files } = extractTarGz(
+    buildTarGz(
+      new Map([
+        ['datasets/sales/index.malloy', 'source: a is duckdb.sql("select 1 as x")'],
+        ['datasets/finance/index.malloy', ''],
+      ]),
+    ),
+  );
+  const layout = await layoutFromListing(archiveLister(files), 'owner/repo');
+  assert.equal(layout.ok, true, layout.ok ? '' : layout.error);
+  assert.deepEqual(
+    layout.ok && layout.kind === 'multi' ? layout.datasets.map((d) => d.name).sort() : [],
+    ['finance', 'sales'],
+    'both datasets are present — an empty model is a compile error later, not a vanishing act',
+  );
+});
+
+test('an empty root index.malloy still reads as the single-dataset layout', async () => {
+  const { files } = extractTarGz(buildTarGz(new Map([['index.malloy', '']])));
+  const layout = await layoutFromListing(archiveLister(files), 'owner/repo');
+  assert.equal(layout.ok && layout.kind, 'single', 'not "no index.malloy at the root"');
+});
+
+test('an empty dashboard is still a dashboard', async () => {
+  // Dashboards are discovered from the archive, and a missing dashboard is
+  // non-fatal upstream — so a vanishing one is a silent deletion on refresh.
+  const { files } = extractTarGz(
+    buildTarGz(
+      new Map([
+        ['datasets/sales/index.malloy', 'source: a is duckdb.sql("select 1 as x")'],
+        ['datasets/sales/dashboards/overview.malloy', ''],
+      ]),
+    ),
+  );
+  assert.ok(files.has('datasets/sales/dashboards/overview.malloy'));
 });

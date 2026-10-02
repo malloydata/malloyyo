@@ -315,23 +315,28 @@ async function publish(
     }
     return publishRepo(root, names, target, opts as PublishRepoOptions);
   }
+  // FIRST, because this one is about WHERE you are standing and the next is about
+  // which flag you typed. The other order made the two refusals a loop: pointed
+  // at a dataset directory, `--repo` was refused with "use --dataset", and
+  // `--dataset` was refused with "publish the repo instead".
+  //
+  // A dataset of a repo is not independently publishable, and allowing it fails
+  // in the worst available shape: the model compiles here, because the config
+  // search walks up to the repo's `malloy-config.json` — but only the files UNDER
+  // this directory are uploaded, so the server receives a model with no
+  // connections at all. Lint passes, publish ships something broken.
+  const repoRoot = repoRootOf(root);
+  if (repoRoot !== root) {
+    const rel = relative(repoRoot, root).split(sep).join("/");
+    throw new Error(
+      `${rel} is one dataset of the repo above it, and a repo publishes as one unit.\n` +
+        `Publish the repo:  cd ${repoRoot} && malloyyo publish --repo <owner/name>`,
+    );
+  }
   if (opts.repo) {
     throw new Error(
       `${root} publishes a single dataset (index.malloy at its root), so --repo has nothing to name.\n` +
         `Use --dataset <name>.`,
-    );
-  }
-  // A dataset of a repo is not independently publishable, and the failure if it
-  // were allowed is the worst shape available: the model compiles here, because
-  // the config search walks up to the repo's `malloy-config.json` — but only the
-  // files UNDER this directory are uploaded, so the server receives a model with
-  // no connections at all. Lint passes, publish ships something broken.
-  if (repoRootOf(root) !== root) {
-    const repoRoot = repoRootOf(root);
-    const rel = relative(repoRoot, root).split(sep).join("/");
-    throw new Error(
-      `${rel} is one dataset of the repo above it, and a repo publishes as one unit.\n` +
-        `Publish the repo instead, from ${repoRoot}:  malloyyo publish --repo <owner/name>`,
     );
   }
   if (opts.createDatasets) {

@@ -16,7 +16,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { createRequire } from "node:module";
 import * as esbuild from "esbuild";
-import { discoverRepoDashboards, navTree, SKIP_DIRS, type RepoDashboard } from "./repo.js";
+import { discoverRepoDashboards, navTree, SKIP_DIRS, isBundleOutput, type RepoDashboard } from "./repo.js";
 import { readSiteConfig } from "./config.js";
 import {
   rendersNoData,
@@ -38,12 +38,14 @@ const esc = (s: string) =>
     land on file:///index.malloy, so the keys mirror the on-disk layout. */
 function inlineModelFiles(root: string): Record<string, string> {
   const files: Record<string, string> = {};
-  const skip = SKIP_DIRS;
   const walk = (dir: string) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      if (entry.name.startsWith(".") || skip.has(entry.name)) continue;
+      if (entry.name.startsWith(".") || SKIP_DIRS.has(entry.name)) continue;
       const abs = path.join(dir, entry.name);
-      if (entry.isDirectory()) walk(abs);
+      // An emitted site holds no .malloy, so this only matters for the repo that
+      // bundles INTO a directory it also keeps models in — but the walkers agree
+      // on what an emitted site is, and that is the point.
+      if (entry.isDirectory()) { if (!isBundleOutput(abs)) walk(abs); }
       else if (entry.name.endsWith(".malloy")) {
         const rel = path.relative(root, abs).split(path.sep).join("/");
         files[`file:///${rel}`] = fs.readFileSync(abs, "utf8");
@@ -281,8 +283,9 @@ export function indexPage(
 ): string {
   // Addressed by SLUG, like every other link on the site: `pageLink` maps a slug
   // to this target's URL shape, and a dashboard's name is not unique across
-  // datasets.
+  // datasets. Neither is its TITLE, which is why the cards name the dataset too.
   const link = pageLink(cleanUrls);
+  const multi = new Set(dashboards.map((d) => d.dataset)).size > 1;
   // The About page is this page — it must not list itself among the dashboards
   // it is introducing, in the cards or in the custom landing's injected list.
   const listed = dashboards.filter((d) => !rendersNoData(d));
@@ -296,7 +299,9 @@ export function indexPage(
       listed
         .map(
           (d) =>
-            `<li><a href="${link(d.slug)}"><strong>${esc(d.title || d.name)}</strong>` +
+            `<li><a href="${link(d.slug)}">` +
+            (multi && d.datasetLabel ? `<em>${esc(d.datasetLabel)}</em>` : "") +
+            `<strong>${esc(d.title || d.name)}</strong>` +
             (d.description ? `<span>${esc(d.description)}</span>` : "") +
             `</a></li>`,
         )
@@ -314,6 +319,7 @@ ${analyticsSnippet(analytics)}
 <body>
 ${navWithSwitcher("", navTree(dashboards), link)}
 ${body}
+<script>${SWITCHER_JS}</script>
 </body>
 </html>
 `;
@@ -326,6 +332,7 @@ body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 -apple-system,B
 .index{max-width:760px;margin:0 auto;padding:48px 20px}
 .index h1{font-size:22px;font-weight:650;margin:0 0 22px}
 .index ul{list-style:none;padding:0;margin:0;display:grid;gap:10px}
+.index li a em{display:block;font-style:normal;font-size:12px;color:var(--muted);margin-bottom:2px}
 .index a{display:flex;flex-direction:column;gap:3px;padding:16px 18px;border:1px solid var(--line);border-radius:12px;background:var(--card);text-decoration:none;color:inherit}
 .index a:hover{border-color:var(--accent)}
 .index span{font-size:13px;color:var(--muted)}

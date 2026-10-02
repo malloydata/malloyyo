@@ -180,6 +180,19 @@ export function gitInfo(dir: string): GitInfo {
  * .sql/.csv/.txt that a GitHub pull kept, so the same repo carried different
  * files depending on which way it arrived.
  */
+/**
+ * Files that are the author's machine's business and never the server's.
+ *
+ * `malloy-config-local.json` is Malloy's local override (config_discover.js),
+ * which is where a connection's REAL credentials go while `malloy-config.json`
+ * carries `{"env": …}` references — so it is the one file in a model repo most
+ * likely to hold a secret, and it is usually gitignored for exactly that reason.
+ * This walker reads the filesystem, not git, so gitignore does not save it: it
+ * has to be named. The single-dataset walker never had this exposure, because it
+ * asks for `malloy-config.json` by name rather than keeping every `.json`.
+ */
+const LOCAL_ONLY = new Set(["malloy-config-local.json"]);
+
 export function gatherRepoFiles(dir: string): Map<string, string> {
   const out = new Map<string, string>();
 
@@ -192,7 +205,7 @@ export function gatherRepoFiles(dir: string): Map<string, string> {
         if (!isBundleOutput(full)) walk(full);
         continue;
       }
-      if (!keepsFile(entry)) continue;
+      if (!keepsFile(entry) || LOCAL_ONLY.has(entry)) continue;
       out.set(relative(dir, full).split(sep).join("/"), readFileSync(full, "utf8"));
     }
   };

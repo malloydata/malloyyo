@@ -37,10 +37,7 @@ export function DashboardTree({
   const [tree, setTree] = useState<TreeDataset[] | null>(null);
   const [failed, setFailed] = useState(false);
   const [query, setQuery] = useState("");
-  // The dataset you are in starts expanded. Opening a menu where every branch is
-  // shut hides the dashboards you are most likely reaching for behind a click,
-  // and the CLI's copy of this control does the same.
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set(currentDataset ? [currentDataset] : []));
+  const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   // Fetched when it is first opened, not on mount: this walks every visible
   // dataset, and a dashboard page should not wait on a menu nobody clicked.

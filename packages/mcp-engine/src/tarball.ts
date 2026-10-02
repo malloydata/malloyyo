@@ -180,8 +180,16 @@ export function extractTarGz(gz: Buffer): Tarball {
 
     // Regular file only. A NUL typeflag already read as "0" above; '5' is a
     // directory, and the rest (links, devices) have no meaning for a model repo.
+    //
+    // An EMPTY regular file is kept, deliberately. Dropping zero-length members
+    // looked free — there are no bytes — and was not: the layout rules key on a
+    // file EXISTING, not on what is in it. A `touch index.malloy`, a half-saved
+    // file, an editor leaving a stub, and the dataset holding it stopped existing
+    // as far as the server could see. `datasets/finance/index.malloy` empty meant
+    // the repo published `sales` alone and reported success, which is the exact
+    // half-publish `repo-layout.ts` refuses by name for every other cause. Worse,
+    // it was not even recorded in `skipped`, so nothing could explain the gap.
     if (type !== "0") continue;
-    if (size === 0) continue;
 
     if (!safeName(name)) {
       skipped.push(name);

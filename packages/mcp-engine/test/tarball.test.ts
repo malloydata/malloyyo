@@ -3,7 +3,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { gzipSync } from "node:zlib";
+import { gzipSync, gunzipSync } from "node:zlib";
 import { archiveEntries, ArchiveURLReader, buildTarGz, extractTarGz } from '../src/tarball';
 
 // The repo arrives as ONE archive — from GitHub, and (soon) from the CLI. The
@@ -232,4 +232,75 @@ test("a path that cannot fit any tar header is refused, not truncated", () => {
   // Silently shortening a path would publish a file under the wrong name.
   const absurd = "datasets/" + "x".repeat(200) + "/" + "y".repeat(120) + ".malloy";
   assert.throws(() => buildTarGz(new Map([[absurd, "a"]])), /path too long for a tar header/);
+});
+
+// ── Hostile input ───────────────────────────────────────────────────────────
+//
+// The extractor reads bytes a caller supplies (POST /api/repos/push), so
+// "parses a real GitHub tarball correctly" is not the property that matters.
+// Each of these was demonstrated against the shipped code before being fixed.
+
+test('a decompression bomb is refused, not materialised', () => {
+  // gunzipSync with no maxOutputLength defaults to buffer.kMaxLength — none. A
+  // 4MB upload of compressed NULs expanded past a gigabyte before any per-member
+  // cap was consulted, because those are checked AFTER the archive is in memory.
+  // Measured at 1029:1.
+  const huge = Buffer.concat([
+    entry('datasets/a/index.malloy', 'x'),
+    Buffer.alloc(BLOCK * 2, 0),
+  ]);
+  const padded = Buffer.concat([huge, Buffer.alloc(200 * 1024 * 1024, 0)]);
+  assert.throws(() => extractTarGz(gzipSync(padded)), /expands past|exceeds/);
+});
+
+test('a path that escapes the archive is dropped, and reported', () => {
+  // Nothing writes these to disk today and `fileUrl` clamps `..` at the root —
+  // but that containment lives in other code, and a parser reading attacker
+  // bytes should not depend on it.
+  const hostile = [
+    'r/../../../../etc/passwd.malloy',
+    'r/..\\..\\win.malloy',
+    'r/ok.malloy',
+  ];
+  const t = extractTarGz(
+    tarball(...hostile.map((n) => entry(n, 'x')), entry('r/index.malloy', 'root')),
+  );
+  assert.deepEqual([...t.files.keys()].sort(), ['index.malloy', 'ok.malloy']);
+  assert.ok(
+    t.skipped.some((p) => p.includes('etc/passwd')),
+    `the escape is reported, not silently gone: ${JSON.stringify(t.skipped)}`,
+  );
+});
+
+test('an absolute member name is dropped', () => {
+  // It survived extraction before, and an absolute stored path collapses onto
+  // the same file:// URL as its relative twin at serve time — two files that are
+  // distinct at publish and identical when read back.
+  const t = extractTarGz(tarball(entry('/etc/cron.d/evil.malloy', 'x'), entry('index.malloy', 'ok')));
+  assert.deepEqual([...t.files.keys()], ['index.malloy']);
+});
+
+test('a truncated archive is an error, not a short one', () => {
+  // Returning what was read publishes a repo missing files — and a missing
+  // dashboard is non-fatal further up, so a half-downloaded tarball would
+  // silently delete a dataset's dashboards rather than fail.
+  const whole = tarball(
+    entry('r/index.malloy', 'a'),
+    entry('r/dashboards/one.malloy', 'b'),
+    entry('r/dashboards/two.malloy', 'c'),
+  );
+  const cut = gzipSync(gunzipSync(whole).subarray(0, BLOCK * 4));
+  assert.throws(() => extractTarGz(cut), /truncated/);
+});
+
+test('the ustar prefix is joined even when the name starts with it', () => {
+  // The old `!name.startsWith(prefix)` guard dropped the prefix for a name that
+  // legitimately began with that string, producing a wrong path.
+  const t = extractTarGz(
+    tarball(entry('datasets/x.malloy', 'v', { prefix: 'r/datasets' }), entry('r/index.malloy', 'i')),
+  );
+  assert.ok(
+    [...t.files.keys()].includes('datasets/datasets/x.malloy'),
+    `prefix joined unconditionally: ${[...t.files.keys()]}`,
+  );
 });

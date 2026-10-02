@@ -55,6 +55,29 @@ export function keepsFile(path: string): boolean {
     pathological repo from being an out-of-memory. */
 const MAX_FILE = 4 * 1024 * 1024;
 const MAX_TOTAL = 64 * 1024 * 1024;
+/** A repo with more members than this is not one anybody compiles. Bounded
+    because 300 000 one-byte members fit in a 4MB request and cost ~400MB of Map. */
+const MAX_MEMBERS = 20_000;
+/** The longest member name worth honouring. A GNU long-name entry carries an
+    unbounded string, and nothing legitimate needs more than this. */
+const MAX_NAME = 1024;
+
+/**
+ * Is this member name one we will store?
+ *
+ * Refused: anything absolute, anything with a `..` segment, backslashes, NULs,
+ * and anything absurdly long. NOT because a traversal currently escapes —
+ * nothing writes these to disk, and `fileUrl` clamps `..` at the root — but
+ * because that containment is incidental to code elsewhere, and a parser reading
+ * attacker bytes should not depend on it. An absolute name also survives into
+ * stored paths today, where `/a/b.malloy` and `a/b.malloy` collapse to the same
+ * URL at serve time and row order decides which content the compiler sees.
+ */
+function safeName(name: string): boolean {
+  if (!name || name.length > MAX_NAME) return false;
+  if (name.startsWith("/") || name.includes("\\") || name.includes("\0")) return false;
+  return !name.split("/").some((seg) => seg === "..");
+}
 
 function str(b: Buffer, start: number, len: number): string {
   const s = b.subarray(start, start + len);
@@ -88,9 +111,17 @@ export type Tarball = {
 export function extractTarGz(gz: Buffer): Tarball {
   let buf: Buffer;
   try {
-    buf = gunzipSync(gz);
+    // BOUNDED. Without maxOutputLength the default is buffer.kMaxLength, i.e.
+    // none: a 4MB upload of compressed NULs expands past a gigabyte before any
+    // of the caps below are consulted, because they are checked per member after
+    // the whole archive is already in memory. Measured at 1029:1.
+    buf = gunzipSync(gz, { maxOutputLength: MAX_TOTAL });
   } catch (e) {
-    throw new Error(`not a gzipped archive: ${e instanceof Error ? e.message : String(e)}`);
+    const msg = e instanceof Error ? e.message : String(e);
+    if ((e as { code?: string }).code === "ERR_BUFFER_TOO_LARGE") {
+      throw new Error(`archive expands past ${Math.round(MAX_TOTAL / 1024 / 1024)}MB`);
+    }
+    throw new Error(`not a gzipped archive: ${msg}`);
   }
 
   const raw = new Map<string, string>();
@@ -99,17 +130,28 @@ export function extractTarGz(gz: Buffer): Tarball {
   let offset = 0;
   // Set by an 'L' or 'x' entry, and consumed by the entry after it.
   let pendingName: string | null = null;
+  // tar ends with two zero blocks. Without that marker the archive simply ran
+  // out — which the loop below would otherwise treat as a clean finish, and a
+  // repo missing its last files publishes as if it were whole.
+  let terminated = false;
 
   while (offset + BLOCK <= buf.length) {
     const header = buf.subarray(offset, offset + BLOCK);
     // Two zero blocks end the archive; one is enough to stop reading.
-    if (header.every((b) => b === 0)) break;
+    if (header.every((b) => b === 0)) {
+      terminated = true;
+      break;
+    }
 
     const size = octal(header, 124, 12);
     const type = String.fromCharCode(header[156] || 0x30);
     const dataStart = offset + BLOCK;
     const dataEnd = dataStart + size;
-    if (dataEnd > buf.length) break; // truncated archive
+    // A truncated archive is an ERROR, not a short one. Returning what was read
+    // publishes a repo missing files, and a missing dashboard is non-fatal
+    // further up — so a half-downloaded tarball would silently delete dashboards
+    // rather than fail.
+    if (dataEnd > buf.length) throw new Error("archive is truncated");
     // Entries are padded out to a whole number of blocks.
     offset = dataStart + Math.ceil(size / BLOCK) * BLOCK;
 
@@ -129,24 +171,37 @@ export function extractTarGz(gz: Buffer): Tarball {
     let name = pendingName ?? str(header, 0, 100);
     pendingName = null;
     if (!name) continue;
+    // Unconditional: ustar splits a path into prefix + name and never repeats
+    // the prefix inside the name, so a `startsWith` guard only mis-fires when a
+    // name legitimately begins with its own prefix string — dropping it and
+    // producing a wrong path.
     const prefix = str(header, 345, 155);
-    if (prefix && !name.startsWith(prefix)) name = `${prefix}/${name}`;
+    if (prefix) name = `${prefix}/${name}`;
 
     // Regular file only. A NUL typeflag already read as "0" above; '5' is a
     // directory, and the rest (links, devices) have no meaning for a model repo.
     if (type !== "0") continue;
     if (size === 0) continue;
 
+    if (!safeName(name)) {
+      skipped.push(name);
+      continue;
+    }
+    // Counted for EVERY member, kept or not: a name we skip still cost the
+    // bytes, and only counting kept files made the rest free weight.
+    total += size;
+    if (total > MAX_TOTAL) {
+      throw new Error(`archive exceeds ${Math.round(MAX_TOTAL / 1024 / 1024)}MB`);
+    }
+    if (raw.size >= MAX_MEMBERS) throw new Error(`archive holds more than ${MAX_MEMBERS} files`);
     if (!keepsFile(name) || size > MAX_FILE) {
       skipped.push(name);
       continue;
     }
-    total += size;
-    if (total > MAX_TOTAL) {
-      throw new Error(`archive exceeds ${Math.round(MAX_TOTAL / 1024 / 1024)}MB of model files`);
-    }
     raw.set(name, buf.subarray(dataStart, dataEnd).toString("utf8"));
   }
+
+  if (!terminated) throw new Error("archive is truncated");
 
   // One wrapper directory, stripped from both lists together — the same root or
   // neither, since `skipped` exists to explain a gap in `files`.

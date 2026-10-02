@@ -21,6 +21,7 @@ import { and, eq, inArray } from "drizzle-orm";
 import { db, datasets } from "@/db";
 import { credentialLabel, requireBearer } from "@/lib/bearer-auth";
 import { canAuthor } from "@/lib/roles";
+import { isAdmin } from "@/lib/admin";
 import { compileAndWrite, contextFromArchive } from "@/lib/github-refresh";
 import { extractTarGz, archiveLister } from "@/lib/tarball";
 import { layoutFromListing } from "@/lib/repo-layout";
@@ -87,6 +88,29 @@ export async function POST(req: Request) {
     .from(datasets)
     .where(and(eq(datasets.githubRepo, repoSlug), eq(datasets.githubBranch, branch)));
   const byDir = new Map(existing.map((d) => [d.repoDir ?? null, d]));
+
+  // WHO MAY WRITE TO AN EXISTING DATASET: its owner, or an admin. The same gate
+  // /api/datasets/[id]/model/push has had all along — this route is a second
+  // publish path and shipped without it, so any member holding a publish token
+  // could overwrite a dataset they do not own.
+  //
+  // That is not defacement, it is code execution: the archive carries the repo's
+  // `malloy-config.json`, whose connection secrets are `{"env": …}` refs resolved
+  // against THIS SERVER's environment, and compiling resolves schemas by running
+  // SQL. It is the precise reach that got MALLOYYO_DEVELOPER deleted
+  // (src/lib/roles.ts).
+  const mine = (d: (typeof existing)[number]) => d.userId === auth.user.id;
+  const foreign = existing.filter(
+    (d) => publishes.some((p) => p.dir === (d.repoDir ?? null)) && !mine(d),
+  );
+  if (foreign.length > 0 && !isAdmin(auth.user)) {
+    return bad(
+      `that account doesn't own ${foreign.map((d) => `"${d.name}"`).join(", ")} and isn't an ` +
+        `admin on this instance — publishing is limited to a dataset's owner`,
+      403,
+      { kind: "request" },
+    );
+  }
 
   const missing = publishes.filter((p) => !byDir.has(p.dir));
   if (missing.length > 0 && !body.createDatasets) {
@@ -217,7 +241,11 @@ export async function POST(req: Request) {
     if (createdIds.length > 0) {
       await db.delete(datasets).where(inArray(datasets.id, createdIds)).catch(() => {});
     }
+    // The message stays in the log: this route is reachable by any member with a
+    // publish token, and a raw database error is not theirs to read.
     logger.error("repo push failed", { repo: repoSlug, ...serializeErr(err) });
-    return bad(err instanceof Error ? err.message : String(err), 500, { kind: "persist" });
+    return bad("the publish could not be completed — the server log has the detail", 500, {
+      kind: "persist",
+    });
   }
 }

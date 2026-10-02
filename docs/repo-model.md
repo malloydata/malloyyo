@@ -211,6 +211,14 @@ A repo-backed model's files are derived from its revision
 never needs invalidating. `malloy_model_files` rows are no longer written for
 them; legacy models still read theirs, chosen by `revision_id IS NULL`.
 
+**The zip is read partially, and that is tested behaviourally.** One cheap pass
+over the central directory gives the path list without inflating anything; only
+the members in this dataset's view are then decompressed. A four-dataset repo
+does not pay for the other three. The test corrupts a sibling's deflate stream,
+shows that a whole-archive read throws, and shows that serving this dataset does
+not — a file-set assertion alone could not tell "excluded from the view" from
+"inflated and then dropped".
+
 ## Migration
 
 `0026_repos_first_class.sql` is additive and backfills.

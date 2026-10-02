@@ -15,8 +15,17 @@
  * Claude-authored one, or a single-dataset `--dataset x` push — still reads its
  * rows, so nothing historical had to be rewritten to land this.
  *
- * The cache is keyed by revision id, which is immutable, so it never needs
- * invalidating — the same argument that makes `compiled_model_def`'s key
+ * THE ZIP IS READ PARTIALLY, which is the whole reason it is a zip.
+ *
+ * A zip's central directory lists every member's name and uncompressed size
+ * without inflating anything, so the path list comes out of one cheap pass and
+ * only the members in THIS DATASET'S VIEW are then inflated. A four-dataset repo
+ * does not pay for the other three, and a repo carrying committed data files
+ * does not pay for them at all. `.tar.gz` can do none of this: gzip is one
+ * stream, so the alternative was inflating the whole repo to serve one dataset.
+ *
+ * Both caches are keyed by revision id, which is immutable, so neither ever
+ * needs invalidating — the same argument that makes `compiled_model_def`'s key
  * `malloy_models.id`.
  */
 
@@ -32,37 +41,50 @@ export type RevisionBackedModel = {
   source: string;
 };
 
-type Unpacked = {
-  /** repo-relative path → text. Directory members dropped. */
-  files: Map<string, string>;
+/** A revision's central directory plus its bytes. Nothing inflated yet. */
+type RevisionIndex = {
+  zip: Uint8Array;
+  /** Every FILE path in the repo, repo-relative. Directory members dropped. */
+  paths: string[];
   /** What the revision declared it publishes, for sibling exclusion. */
   dirs: string[];
 };
 
-const CACHE_MAX = 8;
-const cache = new Map<string, Unpacked>();
-
-function cacheGet(key: string): Unpacked | undefined {
-  const hit = cache.get(key);
-  if (hit) {
-    cache.delete(key);
-    cache.set(key, hit);
-  }
-  return hit;
+/** A small LRU. Two of them, so one revision's index is shared by its datasets. */
+function lru<V>(max: number) {
+  const m = new Map<string, V>();
+  return {
+    get(k: string): V | undefined {
+      const hit = m.get(k);
+      if (hit !== undefined) {
+        m.delete(k);
+        m.set(k, hit);
+      }
+      return hit;
+    },
+    set(k: string, v: V): void {
+      m.set(k, v);
+      while (m.size > max) {
+        const oldest = m.keys().next().value;
+        if (oldest === undefined) break;
+        m.delete(oldest);
+      }
+    },
+  };
 }
 
-function cacheSet(key: string, value: Unpacked): void {
-  cache.set(key, value);
-  while (cache.size > CACHE_MAX) {
-    const oldest = cache.keys().next().value;
-    if (oldest === undefined) break;
-    cache.delete(oldest);
-  }
-}
+const indexes = lru<RevisionIndex>(4);
+const views = lru<Map<string, string>>(16);
 
-/** Unpack a revision's archive, once per instance per revision. */
-async function unpackRevision(revisionId: string): Promise<Unpacked | null> {
-  const hit = cacheGet(revisionId);
+/**
+ * A revision's path list, WITHOUT inflating a byte.
+ *
+ * `unzipSync`'s filter is called once per member with the name and the declared
+ * sizes from the central directory; returning false skips the inflation. So this
+ * walks the whole repo and decompresses none of it.
+ */
+async function revisionIndex(revisionId: string): Promise<RevisionIndex | null> {
+  const hit = indexes.get(revisionId);
   if (hit) return hit;
   const [rev] = await db
     .select({ archive: repoRevisions.archive, datasets: repoRevisions.datasets })
@@ -70,16 +92,18 @@ async function unpackRevision(revisionId: string): Promise<Unpacked | null> {
     .where(eq(repoRevisions.id, revisionId))
     .limit(1);
   if (!rev) return null;
-  const members = unzipSync(new Uint8Array(rev.archive));
-  const files = new Map<string, string>();
-  for (const [name, bytes] of Object.entries(members)) {
-    if (name.endsWith("/")) continue;
-    files.set(name, strFromU8(bytes));
-  }
-  const out: Unpacked = { files, dirs: (rev.datasets ?? []).map((d) => d.dir) };
-  cacheSet(revisionId, out);
-  logger.debug("revision unpacked", { revisionId, files: files.size });
-  return out;
+  const zip = new Uint8Array(rev.archive);
+  const paths: string[] = [];
+  unzipSync(zip, {
+    filter: (file) => {
+      if (!file.name.endsWith("/")) paths.push(file.name);
+      return false;
+    },
+  });
+  const index: RevisionIndex = { zip, paths, dirs: (rev.datasets ?? []).map((d) => d.dir) };
+  indexes.set(revisionId, index);
+  logger.debug("revision indexed", { revisionId, paths: paths.length, bytes: zip.length });
+  return index;
 }
 
 /**
@@ -94,23 +118,13 @@ export async function modelFilesFor(
   repoDir: string,
 ): Promise<Map<string, string>> {
   if (model.revisionId) {
-    const unpacked = await unpackRevision(model.revisionId);
-    if (unpacked) {
-      const view = datasetView(unpacked.files.keys(), repoDir, unpacked.dirs);
-      if ("error" in view) {
-        // Verification refuses this, so reaching it means the revision was
-        // stored by an older build. Fail loudly rather than serve a model whose
-        // files are not the ones it compiled against.
-        throw new Error(`revision ${model.revisionId}: ${view.error}`);
-      }
-      const out = new Map<string, string>();
-      for (const [viewPath, repoPath] of view.files) {
-        const text = unpacked.files.get(repoPath);
-        if (text !== undefined) out.set(viewPath, text);
-      }
-      const config = await revisionConfig(unpacked, repoDir);
-      if (config !== undefined) out.set("malloy-config.json", config);
-      return out;
+    const cached = views.get(`${model.revisionId}:${repoDir}`);
+    if (cached) return new Map(cached);
+    const index = await revisionIndex(model.revisionId);
+    if (index) {
+      const built = await buildView(index, repoDir, model.revisionId);
+      views.set(`${model.revisionId}:${repoDir}`, built);
+      return new Map(built);
     }
     logger.warn("revision archive missing — falling back to stored file rows", {
       modelId: model.id,
@@ -126,6 +140,37 @@ export async function modelFilesFor(
   return new Map([["index.malloy", model.source]]);
 }
 
+async function buildView(
+  index: RevisionIndex,
+  repoDir: string,
+  revisionId: string,
+): Promise<Map<string, string>> {
+  const view = datasetView(index.paths, repoDir, index.dirs);
+  if ("error" in view) {
+    // Verification refuses this, so reaching it means the revision was stored
+    // by an older build. Fail loudly rather than serve a model whose files are
+    // not the ones it compiled against.
+    throw new Error(`revision ${revisionId}: ${view.error}`);
+  }
+
+  // Inflate THIS DATASET'S members, and the config candidates the walk below
+  // may ask for. Everything else stays compressed.
+  const wanted = new Set(view.files.values());
+  for (const path of index.paths) {
+    if ((CONFIG_NAMES as readonly string[]).includes(path.split("/").pop() ?? "")) wanted.add(path);
+  }
+  const members = unzipSync(index.zip, { filter: (file) => wanted.has(file.name) });
+
+  const out = new Map<string, string>();
+  for (const [viewPath, repoPath] of view.files) {
+    const bytes = members[repoPath];
+    if (bytes !== undefined) out.set(viewPath, strFromU8(bytes));
+  }
+  const config = await revisionConfig(members, repoDir);
+  if (config !== undefined) out.set("malloy-config.json", config);
+  return out;
+}
+
 /**
  * The config that applies to one directory of a stored revision.
  *
@@ -134,13 +179,16 @@ export async function modelFilesFor(
  * config file wins" has one answer wherever it is asked: the author's machine,
  * the verify, and here.
  */
-async function revisionConfig(unpacked: Unpacked, repoDir: string): Promise<string | undefined> {
+async function revisionConfig(
+  members: Record<string, Uint8Array>,
+  repoDir: string,
+): Promise<string | undefined> {
   const base = repoDir.replace(/^\/+|\/+$/g, "");
   const readURL = async (u: URL): Promise<string> => {
     const rel = decodeURIComponent(u.pathname).replace(/^\/+/, "");
-    const text = unpacked.files.get(rel);
-    if (text === undefined) throw new Error(`${rel} not in the revision`);
-    return text;
+    const bytes = members[rel];
+    if (bytes === undefined) throw new Error(`${rel} not in the revision`);
+    return strFromU8(bytes);
   };
   const found = await discoverConfigText(
     readURL,

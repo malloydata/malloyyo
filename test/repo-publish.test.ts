@@ -18,7 +18,7 @@
 import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
 import { and, eq, isNotNull, sql } from "drizzle-orm";
-import { strToU8, zipSync } from "fflate";
+import { strToU8, unzipSync, zipSync } from "fflate";
 import {
   db,
   datasetAliases,
@@ -841,4 +841,85 @@ test("two publishes racing cannot leave an OLDER revision live", async () => {
   );
   const ds = (await datasetsOf(repo.id))[0];
   assert.equal((await activeModel(ds.id)).revisionId, live.id, "the dataset serves it");
+});
+
+test("serving one dataset INFLATES NOTHING of its siblings — the reason it is a zip", async () => {
+  // The claim that made zip the stored format is that a zip can be read
+  // PARTIALLY: the central directory gives every member's name and size without
+  // inflating anything, so only this dataset's members are decompressed. Gzip is
+  // one stream and can do none of it.
+  //
+  // PROVEN, not asserted. The sibling's compressed bytes are deliberately
+  // corrupted, so inflating them throws — and the test shows that inflating
+  // everything DOES throw while serving `a` does not. A file-set assertion
+  // alone could not tell "excluded from the view" from "inflated and dropped".
+  const repo = await makeRepo("partial");
+  const good = strToU8("source: a is 1\n".repeat(200));
+  const sibling = strToU8("source: b is 2\n".repeat(200));
+  const raw = Buffer.from(
+    zipSync(
+      {
+        "malloy-config.json": strToU8(CONFIG),
+        "datasets/a/index.malloy": good,
+        "datasets/b/index.malloy": sibling,
+      },
+      { level: 6, mtime: new Date("1980-06-01T12:00:00Z") },
+    ),
+  );
+  // Mangle the deflate stream of `datasets/b/index.malloy`, in place, right
+  // after its local file header.
+  const name = Buffer.from("datasets/b/index.malloy");
+  const dataStart = raw.indexOf(name) + name.length;
+  for (let i = dataStart + 4; i < dataStart + 24; i += 1) raw[i] ^= 0xff;
+
+  // The corruption is real: a whole-archive read fails.
+  assert.throws(() => unzipSync(new Uint8Array(raw)), /invalid|unexpected|incorrect/i);
+
+  // Stored by hand, because `normalizeArchive` would (rightly) have nothing to
+  // say about a member it never inflates either — this is about the SERVING
+  // path, so the row is written directly.
+  const [rev] = await db
+    .insert(repoRevisions)
+    .values({
+      repoId: repo.id,
+      revision: 1,
+      source: "cli",
+      archive: raw,
+      archiveBytes: raw.length,
+      archiveSha256: "handmade",
+      datasets: [
+        { name: "a", dir: "datasets/a" },
+        { name: "b", dir: "datasets/b" },
+      ],
+      active: true,
+      activatedAt: new Date(),
+      verifiedAt: new Date(),
+    })
+    .returning();
+  const [ds] = await db
+    .insert(datasets)
+    .values({
+      userId: owner.id,
+      repoId: repo.id,
+      repoDir: "datasets/a",
+      name: "a",
+      status: "ready",
+      readyAt: new Date(),
+    })
+    .returning();
+  const [model] = await db
+    .insert(malloyModels)
+    .values({
+      datasetId: ds.id,
+      revisionId: rev.id,
+      active: true,
+      version: 1,
+      source: "source: a is 1",
+      generatedBy: "test",
+    })
+    .returning();
+
+  const files = await modelFileMap(model, ds.repoDir);
+  assert.deepEqual([...files.keys()].sort(), ["index.malloy", "malloy-config.json"]);
+  assert.match(files.get("index.malloy") ?? "", /source: a is 1/);
 });

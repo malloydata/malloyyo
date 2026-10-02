@@ -104,7 +104,15 @@ WITH pairs AS (
 		) AS base
 	FROM named n
 ), numbered AS (
-	SELECT s.*, row_number() OVER (PARTITION BY s.base ORDER BY s.github_repo, s.github_branch) AS rn
+	-- WHICH REPO KEEPS THE BARE NAME, when two slugify the same. The default
+	-- branch first, then the oldest: a repo on `main` is the one whose links and
+	-- saved client configs are most likely in use, and `twig@dev` becoming
+	-- `twig_2` reads as the deliberate variant that it is. Fully ordered, so the
+	-- answer does not depend on row order.
+	SELECT s.*, row_number() OVER (
+		PARTITION BY s.base
+		ORDER BY (s.github_branch = 'main') DESC, s.created_at ASC, s.github_repo, s.github_branch
+	) AS rn
 	FROM slugged s
 )
 INSERT INTO repos (slug, owner_id, github_repo, github_branch, github_use_token, created_at, updated_at)

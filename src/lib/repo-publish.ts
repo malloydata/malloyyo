@@ -314,7 +314,10 @@ export async function publishRevision(input: PublishInput): Promise<PublishResul
   // ── 1. the bytes ──────────────────────────────────────────────────────────
   let archive;
   try {
-    archive = await normalizeArchive(input.raw);
+    // Only GitHub's archive carries a wrapper directory. Inferring it from the
+    // path list ate a multi-dataset repo's own `datasets/` (see
+    // `commonRootPrefix`), so the source says.
+    archive = await normalizeArchive(input.raw, { stripWrapper: input.source === "github" });
   } catch (err) {
     if (err instanceof ArchiveError) return { ok: false, kind: "archive", error: err.message };
     throw err;

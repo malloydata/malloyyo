@@ -52,6 +52,17 @@ export const ARCHIVE_LIMITS = {
 
 export class ArchiveError extends Error {}
 
+/**
+ * A fixed timestamp for every stored member.
+ *
+ * fflate reads a Date in LOCAL time and the zip format only holds 1980-2099, so
+ * this is a mid-year instant that lands inside the range from any timezone. It
+ * exists so the stored bytes do not carry the pack time; the CONTENT HASH below
+ * is what actually has to be stable, and it is computed over the file set rather
+ * than over the container precisely so a zip header cannot affect it.
+ */
+const ZIP_EPOCH = new Date("1980-06-01T12:00:00Z");
+
 /** `PK\x03\x04` — the local file header every non-empty zip starts with. */
 function isZip(buf: Buffer): boolean {
   return buf.length >= 4 && buf[0] === 0x50 && buf[1] === 0x4b && buf[2] === 0x03 && buf[3] === 0x04;
@@ -80,13 +91,15 @@ export function isSafeMemberPath(name: string): boolean {
 }
 
 /**
- * GitHub's zipball wraps everything in `<repo>-<sha>/`. Strip it, so the stored
- * archive is rooted at the repo exactly as the CLI's is — one shape downstream,
- * not two that agree until they do not.
+ * The single top-level directory every member shares, if there is one.
  *
- * Only ever strips a prefix that EVERY member shares, so a repo whose own
- * top-level is a single directory is left alone unless that directory is the
- * only thing there, which is what the GitHub shape is.
+ * GitHub's zipball wraps everything in `<repo>-<sha>/` and the stored archive
+ * has to be rooted at the repo, so that prefix comes off. But it is only ever
+ * removed when the CALLER says the archive came from GitHub, never inferred:
+ * a multi-dataset repo holding nothing but `datasets/` has a shared top-level
+ * directory too, and inferring here silently ate it — which turned a perfectly
+ * good repo into one with no `index.malloy` and no `datasets/` and a refusal
+ * nobody could explain. A test caught it; the inference was the bug.
  */
 export function commonRootPrefix(names: Iterable<string>): string | null {
   let root: string | null = null;
@@ -118,8 +131,27 @@ export type RepoArchive = {
   entries: ArchiveEntry[];
 };
 
-function sha256(buf: Buffer): string {
-  return createHash("sha256").update(buf).digest("hex");
+/**
+ * THE CONTENT HASH — over the file set, not over the container.
+ *
+ * `archive_sha256` is what lets a webhook recognise bytes the instance already
+ * serves instead of minting a revision per push, so it has to be stable across
+ * everything that is not the content: the compression level, the member order,
+ * the zip's timestamps, and the format the archive arrived in. A hash of the
+ * zip bytes is stable across none of those.
+ */
+function contentHash(files: ReadonlyMap<string, Uint8Array>): string {
+  const h = createHash("sha256");
+  for (const name of [...files.keys()].sort()) {
+    const bytes = files.get(name)!;
+    h.update(name);
+    h.update("\0");
+    h.update(String(bytes.length));
+    h.update("\0");
+    h.update(bytes);
+    h.update("\0");
+  }
+  return h.digest("hex");
 }
 
 /**
@@ -252,7 +284,19 @@ async function readTarGz(gz: Buffer): Promise<Map<string, Uint8Array>> {
  * GitHub's zipball needs only its wrapper directory removed; an older CLI's
  * tar.gz is read once and repacked. Everything downstream sees one format.
  */
-export async function normalizeArchive(raw: Buffer): Promise<RepoArchive> {
+export async function normalizeArchive(
+  raw: Buffer,
+  opts: {
+    /**
+     * Remove the single top-level directory every member shares.
+     *
+     * TRUE only for GitHub's zipball/tarball, which always wraps. The CLI's
+     * archive is repo-rooted by construction, and a repo that happens to hold
+     * one top-level directory must keep it (see `commonRootPrefix`).
+     */
+    stripWrapper?: boolean;
+  } = {},
+): Promise<RepoArchive> {
   const members = isZip(raw)
     ? readZip(raw)
     : isGzip(raw)
@@ -263,7 +307,7 @@ export async function normalizeArchive(raw: Buffer): Promise<RepoArchive> {
 
   if (members.size === 0) throw new ArchiveError("the repo archive is empty");
 
-  const root = commonRootPrefix(members.keys());
+  const root = opts.stripWrapper ? commonRootPrefix(members.keys()) : null;
   const kept = new Map<string, Uint8Array>();
   const rejected: string[] = [];
   for (const [name, bytes] of members) {
@@ -292,7 +336,11 @@ export async function normalizeArchive(raw: Buffer): Promise<RepoArchive> {
   for (const [name, bytes] of [...kept].sort((a, b) => a[0].localeCompare(b[0]))) {
     toPack[name] = bytes;
   }
-  const zip = Buffer.from(zipSync(toPack, { level: 6, mtime: 0 }));
+  // A FIXED mtime, so identical content hashes to one value. Without it the
+  // hash carries the pack time and `archive_sha256` could never recognise bytes
+  // the instance already serves - which is the whole reason a webhook storm does
+  // not mint a revision per push. (fflate requires 1980-2099; zip's own epoch.)
+  const zip = Buffer.from(zipSync(toPack, { level: 6, mtime: ZIP_EPOCH }));
 
   const entries: ArchiveEntry[] = [...kept]
     .map(([name, bytes]) => ({
@@ -302,7 +350,7 @@ export async function normalizeArchive(raw: Buffer): Promise<RepoArchive> {
     }))
     .sort((a, b) => a.path.localeCompare(b.path));
 
-  return { zip, sha256: sha256(zip), entries };
+  return { zip, sha256: contentHash(kept), entries };
 }
 
 /** Re-read a stored archive's listing without writing it anywhere. */

@@ -33,27 +33,14 @@
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { nameToSlug } from "@malloyyo/mcp-engine";
 import { db, datasetAliases, datasets, repos, type Dataset, type Repo } from "@/db";
+import { qualifiedName, repoSlugFromGitHub, splitQualified } from "./repo-names";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** The separator. A colon rather than a slash: a slash in a dataset ref would
-    collide with every URL path that already carries one. */
-export const QUALIFIER = ":";
-
-/** `acme:sales`, or just `sales` for a dataset no repo publishes. */
-export function qualifiedName(repoSlug: string | null | undefined, name: string): string {
-  return repoSlug ? `${repoSlug}${QUALIFIER}${name}` : name;
-}
-
-/** Split a ref that carries a qualifier. Null when it carries none. */
-export function splitQualified(ref: string): { repo: string; name: string } | null {
-  const i = ref.indexOf(QUALIFIER);
-  if (i <= 0 || i === ref.length - 1) return null;
-  const repo = ref.slice(0, i);
-  const name = ref.slice(i + 1);
-  if (name.includes(QUALIFIER)) return null;
-  return { repo, name };
-}
+// The SPELLING rules live in ./repo-names, which imports no database - so a
+// unit test and a client component can reach them. Re-exported here because
+// every server-side caller wants both halves from one place.
+export { QUALIFIER, qualifiedName, splitQualified, repoSlugFromGitHub } from "./repo-names";
 
 export type DatasetRef =
   | { ok: true; dataset: Dataset; repo: Repo | null; matchedBy: "id" | "qualified" | "alias" | "name" }
@@ -153,18 +140,6 @@ export async function activeRevisionId(repoId: string): Promise<string | null> {
     sql`select id from repo_revisions where repo_id = ${repoId} and active limit 1`,
   );
   return rows[0]?.id ?? null;
-}
-
-/**
- * A repo slug from a GitHub slug or a typed name.
- *
- * The LAST path segment, slugified the way a dataset name is — which is the same
- * `nameToSlug` the layout rules use for a dataset directory, so a repo and its
- * datasets are named by one rule.
- */
-export function repoSlugFromGitHub(githubRepo: string): string {
-  const leaf = githubRepo.trim().replace(/\.git$/i, "").split(/[/:]/).filter(Boolean).pop() ?? "";
-  return nameToSlug(leaf);
 }
 
 export type RepoLookup = { repo: Repo } | { missing: true } | { error: string };

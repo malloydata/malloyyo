@@ -203,7 +203,11 @@ export async function discoverConfigText(
     );
   }
   if (!config) return {};
-  const configURL = config.readOverlay("config", "configURL");
+  // `readOverlay` is ASYNC. Reading it without awaiting hands back a Promise,
+  // `typeof` says "object", and the function silently reports "no config" - a
+  // repo compiling with no connections at all and a baffling "no connection
+  // named" instead of a missing-file message.
+  const configURL = await config.readOverlay("config", "configURL");
   if (typeof configURL !== "string") return {};
   const matched = new URL(configURL);
   const text = await readURL(matched);

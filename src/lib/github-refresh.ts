@@ -502,6 +502,20 @@ export async function compileAndWrite(
       transactions, which is a repo that half-lands by construction. */
   targets: Array<Pick<Dataset, "id" | "name" | "repoDir" | "requiredGivens"> & { creating?: boolean }>,
   ctx: RepoContext,
+  /**
+   * Dataset rows this publish is CREATING, written inside the same transaction,
+   * before the model versions that reference them.
+   *
+   * A target does not have to exist in the database to be compiled — the compile
+   * phase reads the four fields above and the archive, nothing else. So a caller
+   * creating datasets hands the rows over here rather than inserting them first
+   * and deleting them if the compile fails. That deletion was a compensating
+   * action, and a compensating action only runs if the process survives to run
+   * it: a crash in the middle of a compile left `ready` rows with no model
+   * behind them, holding their names under `datasets_name_ready_unique` with
+   * nothing able to release them.
+   */
+  createRows: (typeof datasets.$inferInsert)[] = [],
 ): Promise<{
   refreshed: { id: string; name: string; version: number }[];
   failed: { id: string; name: string; error: string }[];
@@ -513,10 +527,14 @@ export async function compileAndWrite(
     if (r.ok) compiled.push({ ds, c: r.compiled });
     else failed.push({ id: ds.id, name: ds.name, error: r.error });
   }
+  // Nothing compiled means nothing is written — and nothing was created either,
+  // because the inserts live in the transaction below.
   if (failed.length > 0) return { refreshed: [], failed };
 
   const refreshed: { id: string; name: string; version: number }[] = [];
   await db.transaction(async (tx) => {
+    // First: the rows the model versions are about to reference.
+    if (createRows.length > 0) await tx.insert(datasets).values(createRows);
     for (const { ds, c } of compiled) {
       const written = await writeCompiled(tx, ds, c, ctx);
       refreshed.push({ id: ds.id, name: ds.name, version: written.version });

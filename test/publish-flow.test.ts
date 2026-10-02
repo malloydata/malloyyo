@@ -1141,6 +1141,44 @@ test("a repo with a broken dataset publishes NOTHING", async () => {
   assert.deepEqual(after, before, "no dataset gained a version — not even the one that compiled");
 });
 
+test("a repo that fails to compile while CREATING leaves no rows, and no name taken", async () => {
+  // The creation path's half of all-or-nothing.
+  //
+  // This test passes against the shape that had the bug, and that is the point
+  // worth writing down: the old code inserted the rows, compiled, and deleted
+  // them when the compile failed, which is indistinguishable from here because
+  // this process stays alive to run the delete. What it could not survive was a
+  // timeout or a redeploy mid-compile, leaving a `ready` row with no model
+  // holding its name under `datasets_name_ready_unique` forever. That window is
+  // not reachable from a test; src/lib/repos-push-atomic.test.ts pins the
+  // mechanism that closes it. This one pins the contract that mechanism serves.
+  const names = [`rf_x_${RUN}`, `rf_y_${RUN}`];
+  const broken = makeRepo(names, { broken: names[1] });
+  const bad = await runCli(
+    ["publish", "-i", serverUrl, "--repo", REPO_SLUG, "--create-datasets", "--token", token, "--skip-lint"],
+    broken,
+  );
+  assert.notEqual(bad.code, 0, "the publish must fail");
+
+  for (const name of names) {
+    assert.equal((await datasetRows(name)).length, 0, `${name} was not created`);
+  }
+
+  // And the names are still free — the symptom the old shape produced was a 409
+  // here, permanently, with nothing on the instance able to release it.
+  const good = makeRepo(names);
+  const ok = await runCli(
+    ["publish", "-i", serverUrl, "--repo", REPO_SLUG, "--create-datasets", "--token", token],
+    good,
+  );
+  assert.equal(ok.code, 0, `the same names publish cleanly afterwards:\n${ok.stdout}\n${ok.stderr}`);
+  for (const name of names) {
+    const [ds] = await datasetRows(name);
+    assert.ok(ds, `${name} exists now`);
+    assert.equal((await models(ds.id)).length, 1, "…with the model it was created with");
+  }
+});
+
 test("a dataset the instance does not have is refused until --create-datasets", async () => {
   const dir = makeRepo([`rf_e_${RUN}`]);
   const r = await runCli(["publish", "-i", serverUrl, "--repo", REPO_SLUG, "--token", token], dir);

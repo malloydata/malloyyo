@@ -33,6 +33,21 @@ export const runtime = "nodejs";
 const bad = (error: string, status: number, extra: Record<string, unknown> = {}) =>
   NextResponse.json({ ok: false, error, ...extra }, { status });
 
+/**
+ * Postgres 23505 — the unique violation `datasets_name_ready_unique` raises.
+ *
+ * On the SQLSTATE, never the message, which is the server's to localize. Checked
+ * against a real Postgres rather than assumed: drizzle-orm/postgres-js wraps the
+ * failure in a `DrizzleQueryError` whose own `code` is undefined and whose
+ * `cause` is the `PostgresError` carrying "23505". Both are read because the
+ * wrapping is drizzle's business, not ours, and an unwrapped error is what a
+ * driver change would hand us.
+ */
+function isNameClash(err: unknown): boolean {
+  const e = err as { code?: unknown; cause?: { code?: unknown } } | null;
+  return e?.code === "23505" || e?.cause?.code === "23505";
+}
+
 type Body = {
   /** Identifies the SET of datasets this repo backs, e.g. "owner/name". */
   repo?: string;
@@ -142,34 +157,46 @@ export async function POST(req: Request) {
     }
   }
 
-  const createdIds: string[] = [];
-  try {
-    for (const m of missing) {
-      const id = crypto.randomUUID();
-      await db.insert(datasets).values({
-        id,
-        userId: auth.user.id,
-        name: m.name,
-        githubRepo: repoSlug,
-        githubBranch: branch,
-        // Nothing here pulls from GitHub — the archive came with the request —
-        // so a token would never be used and claiming otherwise would be a lie
-        // the config UI then shows.
-        githubUseToken: false,
-        repoDir: m.dir,
-        // Private by default: visibility is a deliberate act in the UI, never
-        // config-driven, and publish never changes it.
-        isPublic: false,
-        status: "ready",
-        readyAt: new Date(),
-      });
-      createdIds.push(id);
-    }
+  // The rows for the datasets this publish creates — BUILT, not written. They go
+  // into the database inside the same transaction as the model versions that
+  // reference them, so a publish either lands completely or leaves no trace.
+  //
+  // Writing them up front and deleting them if the compile failed was the
+  // obvious shape and the wrong one: the delete is a compensating action, and a
+  // compensating action only runs if the process lives long enough to run it. A
+  // timeout or a redeploy during a compile — which does network I/O and resolves
+  // schemas by running SQL, so it is the slow part — left `ready` rows with no
+  // model behind them. Those rows hold their names under
+  // `datasets_name_ready_unique`, so the next legitimate publish got a 409 with
+  // nothing on the instance able to release it.
+  const newRows = missing.map((m) => ({
+    id: crypto.randomUUID(),
+    userId: auth.user.id,
+    name: m.name,
+    githubRepo: repoSlug,
+    githubBranch: branch,
+    // Nothing here pulls from GitHub — the archive came with the request —
+    // so a token would never be used and claiming otherwise would be a lie
+    // the config UI then shows.
+    githubUseToken: false,
+    repoDir: m.dir,
+    // Private by default: visibility is a deliberate act in the UI, never
+    // config-driven, and publish never changes it.
+    isPublic: false,
+    // `ready` is honest here, unlike before: the row and its first model version
+    // commit together, so there is no instant at which this dataset exists
+    // without one.
+    status: "ready" as const,
+    readyAt: new Date(),
+    requiredGivens: [] as string[],
+  }));
+  const fresh = new Set(newRows.map((r) => r.id));
 
-    const targets = [...existing.filter((d) => publishes.some((p) => p.dir === (d.repoDir ?? null)))];
-    if (createdIds.length > 0) {
-      targets.push(...(await db.select().from(datasets).where(inArray(datasets.id, createdIds))));
-    }
+  try {
+    const targets = [
+      ...existing.filter((d) => publishes.some((p) => p.dir === (d.repoDir ?? null))),
+      ...newRows,
+    ];
 
     const ctx = contextFromArchive(files, {
       slug: repoSlug,
@@ -178,23 +205,21 @@ export async function POST(req: Request) {
       origin: `cli:${repoSlug}@${branch}`,
     });
 
-    // ONE call, so ONE transaction. `creating` rides on each target — it applies
-    // only to the rows this request made, because a dataset already here is the
-    // authority on what it is scoped by and a publish may not widen it
-    // (src/lib/tenancy.ts). Two calls would have been two transactions, and a
-    // repo that creates one dataset while refreshing another would half-land.
-    const fresh = new Set(createdIds);
+    // ONE call, so ONE transaction — now covering the creates as well as the
+    // writes. `creating` rides on each target: it applies only to the rows this
+    // request is making, because a dataset already here is the authority on what
+    // it is scoped by and a publish may not widen it (src/lib/tenancy.ts). Two
+    // calls would have been two transactions, and a repo that creates one
+    // dataset while refreshing another would half-land.
     const { refreshed, failed: allFailed } = await compileAndWrite(
       targets.map((t) => ({ ...t, creating: fresh.has(t.id) })),
       ctx,
+      newRows,
     );
 
     if (allFailed.length > 0) {
-      // Nothing was written for any dataset — including the rows just inserted,
-      // which are removed so the instance is exactly as it started.
-      if (createdIds.length > 0) {
-        await db.delete(datasets).where(inArray(datasets.id, createdIds));
-      }
+      // Nothing was written, and nothing was created — the inserts were in the
+      // transaction that never ran. There is nothing to undo.
       logger.info("repo push refused", {
         repo: repoSlug,
         branch,
@@ -214,7 +239,7 @@ export async function POST(req: Request) {
       properties: {
         method: "cli_repo_push",
         outcome: "success",
-        created_dataset: createdIds.length > 0,
+        created_dataset: newRows.length > 0,
         source_count: 0,
         file_count: files.size,
         dashboard_count: 0,
@@ -225,7 +250,7 @@ export async function POST(req: Request) {
       branch,
       credential: credentialLabel(auth.cred),
       datasets: published.map((p) => p.name),
-      created: createdIds.length,
+      created: newRows.length,
     });
     return NextResponse.json({
       ok: true,
@@ -238,8 +263,19 @@ export async function POST(req: Request) {
       })),
     });
   } catch (err) {
-    if (createdIds.length > 0) {
-      await db.delete(datasets).where(inArray(datasets.id, createdIds)).catch(() => {});
+    // No cleanup: everything this request writes is inside one transaction, so a
+    // throw anywhere above leaves the instance exactly as it was found.
+    //
+    // Two publishes racing to create the same name land here — the second one's
+    // transaction is rejected by `datasets_name_ready_unique` and rolls back
+    // whole, which is the right outcome reported badly, so name it.
+    if (isNameClash(err)) {
+      return bad(
+        `another publish claimed ${newRows.map((r) => `"${r.name}"`).join(", ")} first — ` +
+          `nothing was written; re-run to see which names are still free`,
+        409,
+        { kind: "request" },
+      );
     }
     // The message stays in the log: this route is reachable by any member with a
     // publish token, and a raw database error is not theirs to read.

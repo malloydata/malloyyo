@@ -58,7 +58,6 @@ import {
   discardWorkspace,
   materializeArchive,
   normalizeArchive,
-  type ArchiveEntry,
 } from "./repo-archive";
 import {
   CONFIG_NAMES,
@@ -72,6 +71,25 @@ import { qualifiedName } from "./repos";
 import { requirementForPublish } from "./tenancy";
 
 /** One directory of the repo, compiled. Nothing here has touched the database. */
+/**
+ * Postgres 23505 — the unique violation `datasets_repo_name_ready_unique` raises.
+ *
+ * On the SQLSTATE, never the message, which is the server's to localize.
+ * drizzle-orm/postgres-js wraps the failure in a `DrizzleQueryError` whose own
+ * `code` is undefined and whose `cause` is the `PostgresError` carrying "23505",
+ * so both are read: the wrapping is drizzle's business, not ours, and an
+ * unwrapped error is what a driver change would hand us.
+ *
+ * This existed on the old route and was lost when the insert moved inside
+ * `activate()` — two publishes planning the same new dataset both compile, and
+ * the loser's unique violation became an opaque 500 instead of "another publish
+ * claimed that name; re-run".
+ */
+function isNameClash(err: unknown): boolean {
+  const e = err as { code?: unknown; cause?: { code?: unknown } } | null;
+  return e?.code === "23505" || e?.cause?.code === "23505";
+}
+
 type CompiledDir = {
   dir: string;
   /** The directory's name as the layout reads it; "" for a root-entry repo. */
@@ -113,7 +131,7 @@ export type PublishResult =
     }
   | {
       ok: false;
-      kind: "archive" | "layout" | "compile" | "request" | "stale";
+      kind: "archive" | "layout" | "compile" | "request" | "stale" | "clash";
       error: string;
       /** Present once the revision was stored — it is the record of the attempt. */
       revisionId?: string;
@@ -401,68 +419,190 @@ export async function publishRevision(input: PublishInput): Promise<PublishResul
     };
   }
 
-  // ── 3. store, and commit ──────────────────────────────────────────────────
-  const revision = await storeRevision(input, archive);
-  logger.info("repo revision stored", {
-    repo: input.repo.slug,
-    revision: revision.revision,
-    bytes: archive.zip.length,
-    entries: archive.entries.length,
-    sha: revision.gitSha,
-  });
-
+  // ── 3. materialize, and read the shape ────────────────────────────────────
+  //
+  // BEFORE the store, so a REQUEST error costs nothing durable. A revision is a
+  // record of an attempt and its bytes are worth keeping when the CONTENT is at
+  // fault — a layout that cannot be published, a model that will not compile.
+  // But "you used the wrong flag for this layout" and "that dataset does not
+  // exist here yet" are decidable from the layout alone, and a CI loop hitting
+  // one of them would otherwise add up to 32MB to `repo_revisions.archive` every
+  // run, with nothing pruning it.
   const repoRoot = materializeArchive(archive.zip, input.repo.slug);
   try {
-    return await verifyAndActivate(input, revision, archive.entries, repoRoot);
-  } catch (err) {
-    // An unexpected throw anywhere above leaves the stored revision unverified
-    // and the repo serving what it served. The record of the attempt is already
-    // in the database; put the reason there too.
-    const msg = err instanceof Error ? err.message : String(err);
-    await recordFailure(revision.id, msg).catch(() => {});
-    logger.error("repo publish failed", { repo: input.repo.slug, revision: revision.revision, ...serializeErr(err) });
-    throw err;
+    const filePaths = archive.entries.filter((e) => !e.isDir).map((e) => e.path);
+    const shape = await readShape(input, repoRoot);
+    if ("refusal" in shape) {
+      logger.info("repo publish refused before storing anything", {
+        repo: input.repo.slug,
+        error: shape.refusal.error,
+      });
+      return shape.refusal;
+    }
+
+    const revision = await storeRevision(input, archive);
+    logger.info("repo revision stored", {
+      repo: input.repo.slug,
+      revision: revision.revision,
+      bytes: archive.zip.length,
+      entries: archive.entries.length,
+      sha: revision.gitSha,
+    });
+
+    try {
+      return await verifyAndActivate(input, revision, shape, repoRoot, filePaths);
+    } catch (err) {
+      // An unexpected throw leaves the stored revision unverified and the repo
+      // serving what it served. The record of the attempt is already in the
+      // database; put the reason there too.
+      const msg = err instanceof Error ? err.message : String(err);
+      await recordFailure(revision.id, msg).catch(() => {});
+      logger.error("repo publish failed", {
+        repo: input.repo.slug,
+        revision: revision.revision,
+        ...serializeErr(err),
+      });
+      throw err;
+    }
   } finally {
     discardWorkspace(repoRoot);
   }
 }
 
-async function verifyAndActivate(
+/**
+ * WHAT THE REPO PUBLISHES, and whether this request may proceed at all.
+ *
+ * Cheap and first: a filesystem walk and one SELECT. Everything it can refuse
+ * is a request error, so refusing here costs no stored archive — see the note in
+ * `publishRevision`. A LAYOUT problem is content, not request, so it is carried
+ * out as `layoutError` and recorded against the revision by the caller.
+ */
+type Shape = {
+  declared: Array<{ name: string; dir: string }>;
+  live: Dataset[];
+  byDir: Map<string, Dataset[]>;
+  /** Directories the repo publishes that no dataset here covers. */
+  unclaimed: Array<{ name: string; dir: string }>;
+  /** Live datasets whose directory the repo no longer has. */
+  unpublished: Array<{ id: string; name: string; dir: string }>;
+  /** The directories to compile: covered, or being created. */
+  toCompile: Array<{ name: string; dir: string }>;
+  /** Set when the layout rules refused. Nothing else in here is meaningful. */
+  layoutError?: string;
+};
+
+async function readShape(
   input: PublishInput,
-  revision: typeof repoRevisions.$inferSelect,
-  entries: ArchiveEntry[],
   repoRoot: string,
-): Promise<PublishResult> {
+): Promise<Shape | { refusal: PublishResult & { ok: false } }> {
   const label = input.repo.githubRepo
     ? `${input.repo.githubRepo}@${input.repo.githubBranch ?? "main"}`
     : input.repo.slug;
+  const empty: Shape = {
+    declared: [],
+    live: [],
+    byDir: new Map(),
+    unclaimed: [],
+    unpublished: [],
+    toCompile: [],
+  };
 
-  // ── 4. what does the repo publish? ────────────────────────────────────────
   // GIT DECIDED what is in the archive; the LAYOUT RULES decide what it
   // publishes, and they run over the materialized tree through the same
-  // injected-lister interface `malloyyo lint` uses on the author's disk. There
-  // is no skip list: the one that existed counted a dataset legitimately named
-  // `datasets/docs/` and then packed it with none of its files.
+  // injected-lister interface `malloyyo lint` uses on the author's disk.
+  //
+  // NO SKIP LIST ON THIS SIDE, and that is the honest scope of the claim: the
+  // server reads what the archive holds, and for a GitHub pull the archive is
+  // the zipball, which is git's own answer. The CLI still walks a filesystem
+  // with an extension allowlist (packages/cli/src/gather.ts), so a dataset
+  // directory holding only unlisted file types still arrives thin from that
+  // side. The specific bug is dead — the list that named `docs` counted a
+  // dataset legitimately called `datasets/docs/` and packed it with none of its
+  // files — but the mechanism is not, and saying "there is no skip list" of
+  // both halves would be the kind of false invariant comment that stops the
+  // next reader checking.
   const layout = await layoutFromListing(fsLister(repoRoot), label);
-  if (!layout.ok) {
-    await recordFailure(revision.id, layout.error);
-    return { ok: false, kind: "layout", error: layout.error, revisionId: revision.id };
-  }
+  if (!layout.ok) return { ...empty, layoutError: layout.error };
 
   if (layout.kind === "single" && input.refuseRootLayout) {
-    const error =
-      `${label} publishes a single dataset (index.malloy at its root), so it has no name of its ` +
-      `own here. Publish it with --dataset <name> instead.`;
-    await recordFailure(revision.id, error);
-    return { ok: false, kind: "request", error, revisionId: revision.id };
+    return {
+      refusal: {
+        ok: false,
+        kind: "request",
+        error:
+          `${label} publishes a single dataset (index.malloy at its root), so it has no name of ` +
+          `its own here. Publish it with --dataset <name> instead.`,
+      },
+    };
   }
 
   const declared =
     layout.kind === "single"
       ? [{ name: "", dir: "" }]
       : layout.datasets.map((d) => ({ name: d.name, dir: d.dir }));
+
+  // MEMBERSHIP IS THE FOREIGN KEY AND THE STATUS. Not a match on two text
+  // columns with no status filter, which against the production fork matched
+  // seven rows for one repo, none of them live — so one webhook push compiled
+  // the same model seven times and wrote seven versions nobody could see.
+  const live = await db
+    .select()
+    .from(datasets)
+    .where(and(eq(datasets.repoId, input.repo.id), eq(datasets.status, "ready")));
+  const byDir = new Map<string, Dataset[]>();
+  for (const d of live) byDir.set(d.repoDir, [...(byDir.get(d.repoDir) ?? []), d]);
+
+  const missing = declared.filter((d) => !byDir.has(d.dir));
+  if (missing.length > 0 && !input.createDatasets && (input.onMissing ?? "report") === "refuse") {
+    const names = missing.map((m) => m.name || (input.rootDatasetName ?? input.repo.slug));
+    return {
+      refusal: {
+        ok: false,
+        kind: "request",
+        error:
+          `${names.join(", ")}: not on this instance yet. ` +
+          `Pass --create-datasets to create ${missing.length > 1 ? "them" : "it"}.`,
+        missing: missing.map((m, i) => ({ name: names[i], dir: m.dir })),
+      },
+    };
+  }
+
+  return {
+    declared,
+    live,
+    byDir,
+    // Reported, not created. Which datasets exist is a deliberate act needing an
+    // owner and a free name, and a webhook has no business choosing either — but
+    // neither does it get to stop the repo refreshing over it.
+    unclaimed: input.createDatasets
+      ? []
+      : missing.map((m) => ({ name: m.name || input.repo.slug, dir: m.dir })),
+    // A directory that is GONE means the repo stopped publishing that dataset.
+    // It is not refreshed and not touched: saved queries, share links and
+    // history pointing at it are somebody's work, and a commit is not a
+    // decision to throw that away.
+    unpublished: live
+      .filter((d) => !declared.some((x) => x.dir === d.repoDir))
+      .map((d) => ({ id: d.id, name: d.name, dir: d.repoDir })),
+    toCompile: declared.filter((d) => input.createDatasets || byDir.has(d.dir)),
+  };
+}
+
+async function verifyAndActivate(
+  input: PublishInput,
+  revision: typeof repoRevisions.$inferSelect,
+  shape: Shape,
+  repoRoot: string,
+  filePaths: string[],
+): Promise<PublishResult> {
+  // ── 4. the shape, recorded ────────────────────────────────────────────────
+  if (shape.layoutError) {
+    await recordFailure(revision.id, shape.layoutError);
+    return { ok: false, kind: "layout", error: shape.layoutError, revisionId: revision.id };
+  }
+
+  const { declared, live, byDir, unclaimed, unpublished, toCompile } = shape;
   const allDirs = declared.map((d) => d.dir);
-  const filePaths = entries.filter((e) => !e.isDir).map((e) => e.path);
 
   await db
     .update(repoRevisions)
@@ -472,51 +612,7 @@ async function verifyAndActivate(
     })
     .where(eq(repoRevisions.id, revision.id));
 
-  // ── 5. which datasets ─────────────────────────────────────────────────────
-  // MEMBERSHIP IS THE FOREIGN KEY AND THE STATUS. Not a match on two text
-  // columns with no status filter, which against the production fork matched
-  // seven rows for one repo, none of them live — so one webhook push compiled
-  // the same model seven times and wrote seven versions nobody could see.
-  const live = await db
-    .select()
-    .from(datasets)
-    .where(and(eq(datasets.repoId, input.repo.id), eq(datasets.status, "ready")));
-
-  const byDir = new Map<string, Dataset[]>();
-  for (const d of live) byDir.set(d.repoDir, [...(byDir.get(d.repoDir) ?? []), d]);
-
-  const missing = declared.filter((d) => !byDir.has(d.dir));
-  if (missing.length > 0 && !input.createDatasets && (input.onMissing ?? "report") === "refuse") {
-    const names = missing.map((m) => m.name || (input.rootDatasetName ?? input.repo.slug));
-    const err =
-      `${names.join(", ")}: not on this instance yet. ` +
-      `Pass --create-datasets to create ${missing.length > 1 ? "them" : "it"}.`;
-    await recordFailure(revision.id, err);
-    return {
-      ok: false,
-      kind: "request",
-      error: err,
-      revisionId: revision.id,
-      missing: missing.map((m, i) => ({ name: names[i], dir: m.dir })),
-    };
-  }
-  // Reported, not created. Which datasets exist is a deliberate act needing an
-  // owner and a free name, and a webhook has no business choosing either — but
-  // neither does it get to stop the repo refreshing over it.
-  const unclaimed = input.createDatasets
-    ? []
-    : missing.map((m) => ({ name: m.name || input.repo.slug, dir: m.dir }));
-  const toCompile = declared.filter((d) => input.createDatasets || byDir.has(d.dir));
-
-  // A directory that is GONE means the repo stopped publishing that dataset. It
-  // is not refreshed and not touched: saved queries, share links and history
-  // pointing at it are somebody's work, and a commit is not a decision to throw
-  // that away.
-  const unpublished = live
-    .filter((d) => !declared.some((x) => x.dir === d.repoDir))
-    .map((d) => ({ id: d.id, name: d.name, dir: d.repoDir }));
-
-  // ── 6. compile ────────────────────────────────────────────────────────────
+  // ── 5. compile ────────────────────────────────────────────────────────────
   // THE UNIT OF COMPILE IS A DIRECTORY, the unit of write a dataset. Two
   // datasets may legitimately share a directory — same model, different
   // `required_givens` and roles — and compiling once for both is both cheaper
@@ -576,7 +672,7 @@ async function verifyAndActivate(
     return { ok: false, kind: "compile", error, revisionId: revision.id, failures };
   }
 
-  // ── 7. activate ───────────────────────────────────────────────────────────
+  // ── 6. activate ───────────────────────────────────────────────────────────
   const activated = await activate(input, revision, plans);
   if (!activated.ok) return activated;
 
@@ -769,6 +865,20 @@ async function activate(
     // revision stays, unverified, as the record of the attempt.
     const msg = err instanceof Error ? err.message : String(err);
     await recordFailure(revision.id, msg).catch(() => {});
+    if (isNameClash(err)) {
+      const names = plans
+        .filter((p) => p.create)
+        .map((p) => `"${p.create!.name}"`)
+        .join(", ");
+      return {
+        ok: false,
+        kind: "clash",
+        error:
+          `another publish claimed ${names || "a dataset name"} in this repo first — ` +
+          `nothing was activated; re-run to see which names are still free`,
+        revisionId: revision.id,
+      };
+    }
     throw err;
   }
 }

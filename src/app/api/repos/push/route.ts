@@ -166,12 +166,22 @@ export async function POST(req: Request) {
           dashboard_count: 0,
         },
       });
-      const status = result.kind === "request" ? 404 : result.kind === "stale" ? 409 : 400;
+      const status =
+        result.kind === "request"
+          ? 404
+          : result.kind === "stale" || result.kind === "clash"
+            ? 409
+            : 400;
       return bad(
         result.kind === "compile" ? `nothing was published — ${result.error}` : result.error,
         status,
         {
-          kind: result.kind === "layout" || result.kind === "archive" ? "compile" : result.kind,
+          kind:
+            result.kind === "layout" || result.kind === "archive"
+              ? "compile"
+              : result.kind === "clash"
+                ? "request"
+                : result.kind,
           ...(result.failures
             ? { failures: result.failures.map((f) => ({ name: f.name, error: f.error })) }
             : {}),

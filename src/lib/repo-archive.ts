@@ -211,9 +211,18 @@ async function readTarGz(gz: Buffer): Promise<Map<string, Uint8Array>> {
   // gunzipSync allocates the whole inflated stream, so cap it. gzip cannot be
   // read partially — this is the format's cost, and the reason the STORED
   // archive is a zip.
+  // `out` is an EAGER allocation, so sizing it at the bomb bound would spend
+  // 128MB on every CLI publish and then feed the trailing zeros to the tar
+  // reader. A model repo is text: 20x the compressed payload is a generous
+  // ceiling, still capped by the bound, and a repo that genuinely needs more
+  // gets a refusal that names the limit instead of a silent truncation.
+  const bound = Math.min(
+    ARCHIVE_LIMITS.maxTotalBytes,
+    Math.max(1024 * 1024, gz.length * 20),
+  );
   let plain: Uint8Array;
   try {
-    plain = gunzipSync(new Uint8Array(gz), { out: new Uint8Array(ARCHIVE_LIMITS.maxTotalBytes) });
+    plain = gunzipSync(new Uint8Array(gz), { out: new Uint8Array(bound) });
   } catch (err) {
     throw new ArchiveError(
       `could not decompress the repo archive: ${err instanceof Error ? err.message : String(err)}`,
@@ -385,7 +394,17 @@ export function materializeArchive(zip: Buffer, label = "repo"): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `malloyyo-${label.replace(/[^a-z0-9]+/gi, "-")}-`));
   const members = readZip(zip);
   let files = 0;
-  for (const [name, bytes] of members) {
+  // DIRECTORIES FIRST, and in path order. An archive holding both a file `a` and
+  // a directory entry `a/` is contradictory, and iterating in map order would
+  // decide which one wins by accident — or throw EEXIST out of `mkdirSync` as a
+  // 500. Sorted so the conflict is found deterministically, and reported as an
+  // ArchiveError, which keeps a hostile archive a 400.
+  const ordered = [...members].sort((a, b) => {
+    const dirA = a[0].endsWith("/") ? 0 : 1;
+    const dirB = b[0].endsWith("/") ? 0 : 1;
+    return dirA - dirB || a[0].localeCompare(b[0]);
+  });
+  for (const [name, bytes] of ordered) {
     const rel = name.endsWith("/") ? name.slice(0, -1) : name;
     // Checked again on the way out, not only on the way in: an archive stored
     // before this check existed must not be able to write outside the temp dir.
@@ -394,11 +413,26 @@ export function materializeArchive(zip: Buffer, label = "repo"): string {
     }
     const abs = path.join(dir, rel);
     if (name.endsWith("/")) {
-      fs.mkdirSync(abs, { recursive: true });
+      try {
+        fs.mkdirSync(abs, { recursive: true });
+      } catch (err) {
+        if ((err as { code?: string }).code === "EEXIST") {
+          throw new ArchiveError(`${name}: the archive holds this path as both a file and a directory`);
+        }
+        throw err;
+      }
       continue;
     }
-    fs.mkdirSync(path.dirname(abs), { recursive: true });
-    fs.writeFileSync(abs, bytes);
+    try {
+      fs.mkdirSync(path.dirname(abs), { recursive: true });
+      fs.writeFileSync(abs, bytes);
+    } catch (err) {
+      const code = (err as { code?: string }).code;
+      if (code === "EEXIST" || code === "ENOTDIR" || code === "EISDIR") {
+        throw new ArchiveError(`${name}: the archive holds this path as both a file and a directory`);
+      }
+      throw err;
+    }
     files += 1;
   }
   logger.debug("revision materialized", { dir, files, members: members.size });

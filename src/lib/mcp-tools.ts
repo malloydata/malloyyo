@@ -171,15 +171,22 @@ export async function latestModel(datasetId: string) {
  * single-dataset repo and every model that has no revision at all.
  */
 export async function modelFileMap(
-  model: { id: string; source: string; revisionId?: string | null; datasetId?: string },
+  /**
+   * A `malloy_models` row. `revisionId` and `datasetId` are REQUIRED, not
+   * optional-with-a-default: a call that omits them for a revision-backed model
+   * would silently get the repo ROOT's view, and the symptom is a compile error
+   * about a missing `index.malloy` rather than anything naming the mistake.
+   * Every caller holds the whole row anyway.
+   */
+  model: { id: string; source: string; revisionId: string | null; datasetId: string },
   /** The dataset's directory in the repo. Looked up from the model's dataset
-      when the caller does not hold it, so the six existing call sites did not
-      each have to grow a parameter they would sometimes get wrong. */
+      when the caller does not hold it, so the call sites did not each have to
+      grow a parameter they would sometimes get wrong. */
   repoDir?: string,
 ): Promise<Map<string, string>> {
   const { modelFilesFor } = await import("./repo-files");
   let dir = repoDir;
-  if (dir === undefined && model.revisionId && model.datasetId) {
+  if (dir === undefined && model.revisionId) {
     const [ds] = await db
       .select({ repoDir: datasets.repoDir })
       .from(datasets)

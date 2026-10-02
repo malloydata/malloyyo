@@ -31,7 +31,8 @@ import {
   type Repo,
   type User,
 } from "@/db";
-import { modelFileMap } from "@/lib/mcp-tools";
+import { buildHostedExploreSurface } from "@/lib/mcp-host";
+import { findByDatasetRef, modelFileMap } from "@/lib/mcp-tools";
 import { publishRevision } from "@/lib/repo-publish";
 import { qualifiedName, resolveDatasetRef } from "@/lib/repos";
 
@@ -499,7 +500,7 @@ test("a dataset cannot have two active models either", async () => {
 
 // ── credentials and content ─────────────────────────────────────────────────
 
-test("a repo's GitHub credential answer lives on the repo, and there is nowhere else to put one", async () => {
+test("a repo's GitHub credential answer lives on the repo", async () => {
   // `github_use_token` was stored once per DATASET. In the production fork one
   // repo had three rows with two different values and the refresh picked a
   // winner with `rows[0]` on a query with no ORDER BY — an intermittent,
@@ -510,11 +511,24 @@ test("a repo's GitHub credential answer lives on the repo, and there is nowhere 
           and column_name in ('github_use_token', 'github_repo', 'github_branch')
         order by table_name, column_name`,
   );
-  assert.deepEqual(
-    cols.map((c) => `${c.table_name}.${c.column_name}`),
-    ["repos.github_branch", "repos.github_repo", "repos.github_use_token"],
-    "only the repo carries them",
-  );
+  const named = cols.map((c) => `${c.table_name}.${c.column_name}`);
+  for (const col of ["repos.github_branch", "repos.github_repo", "repos.github_use_token"]) {
+    assert.ok(named.includes(col), `${col} exists`);
+  }
+
+  // THE DATASET COLUMNS ARE STILL THERE, and that is deliberate: a Vercel build
+  // applies the journal BEFORE promoting the new code, so dropping a column the
+  // currently live version still selects takes that version down for the length
+  // of the deploy. The drop is one command in the release after this one.
+  //
+  // So "there is nowhere else to put one" is not a schema fact yet, and
+  // asserting it here would be a false invariant. What makes it TRUE is
+  // src/lib/dead-columns.test.ts, which greps the source for any read of them —
+  // a schema check cannot tell "declared" from "used", and used is the thing
+  // that mattered.
+  assert.ok(named.includes("datasets.github_use_token"), "declared, pending the drop");
+  const repo = (await db.select().from(repos).where(eq(repos.slug, "fanout")))[0];
+  assert.equal(typeof repo.githubUseToken, "boolean", "and the repo is what is read");
 });
 
 test("an archive carrying malloy-config-local.json is REFUSED, and says to rotate", async () => {
@@ -922,4 +936,36 @@ test("serving one dataset INFLATES NOTHING of its siblings — the reason it is 
   const files = await modelFileMap(model, ds.repoDir);
   assert.deepEqual([...files.keys()].sort(), ["index.malloy", "malloy-config.json"]);
   assert.match(files.get("index.malloy") ?? "", /source: a is 1/);
+});
+
+test("a client is told the QUALIFIED name, so two same-named datasets stay addressable", async () => {
+  // The catalog used to advertise `ds.name`, which was fine while dataset names
+  // were globally unique. Now two repos can each publish a `sales`, and a
+  // catalog offering `model_ref: "sales"` twice would make BOTH unaddressable —
+  // `resolveDatasetRef` refuses an ambiguous bare name rather than guessing,
+  // which is right and would read to a client as "not found".
+  //
+  // `north` and `south` each published a `ledger` earlier in this file.
+  const surface = buildHostedExploreSurface(owner, "http://localhost:3000");
+  const listed = await surface.call("list_sources", {});
+  const text = JSON.stringify(listed);
+  assert.match(text, /north:ledger/, "the qualified ref is what a client sees");
+  assert.match(text, /south:ledger/);
+
+  // And the ref it was given resolves back to the right dataset.
+  for (const slug of ["north", "south"]) {
+    const found = await findByDatasetRef(owner.id, `${slug}:ledger`);
+    assert.ok(found, `${slug}:ledger resolves`);
+    const [repo] = await db.select().from(repos).where(eq(repos.slug, slug));
+    assert.equal(found.ds.repoId, repo.id);
+  }
+
+  // A saved client config from before the rewrite says `ledger`. The alias
+  // written in this file's earlier test is what keeps it working — and keeps it
+  // pointing at the dataset it always meant, not at whichever repo answers
+  // first.
+  const old = await findByDatasetRef(owner.id, "ledger");
+  assert.ok(old, "the old bare name still resolves");
+  const [north] = await db.select().from(repos).where(eq(repos.slug, "north"));
+  assert.equal(old.ds.repoId, north.id);
 });

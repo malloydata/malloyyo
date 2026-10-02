@@ -35,6 +35,56 @@ import { join } from "node:path";
 const ROOT = join(import.meta.dirname, "..", "..");
 const route = readFileSync(join(ROOT, "src", "app", "api", "repos", "push", "route.ts"), "utf8");
 const pipeline = readFileSync(join(ROOT, "src", "lib", "repo-publish.ts"), "utf8");
+const createRoute = readFileSync(join(ROOT, "src", "app", "api", "datasets", "route.ts"), "utf8");
+
+test("the ONE surviving delete is the create route's repo tidy-up, and it is guarded", () => {
+  // THE PIN THAT WAS MISSING. This file asserted "no deletes" against the push
+  // route, which never had one — while the compensating action that actually
+  // survives the rewrite lives in `POST /api/datasets`, in a file this test did
+  // not read. A pin aimed at the wrong file is worse than none: it reports green
+  // over the thing it was written to catch.
+  //
+  // That delete is allowed, and the two conditions that make it allowable are
+  // what is asserted:
+  //
+  //   1. it removes only a row THIS REQUEST INSERTED (`createdHere`). A reused
+  //      row is somebody else's, and `repo_revisions` cascades from `repos`, so
+  //      deleting one would destroy that repo's whole archive history over a
+  //      failed GitHub pull;
+  //   2. the route can RECOVER without it — an empty repo is reused — so the
+  //      delete is tidy-up and not correctness. That is the whole difference
+  //      from the `ready` dataset rows the old shape left behind, which held
+  //      their names under a unique index with nothing able to release them.
+  const deletes = [...createRoute.matchAll(/\bdb\s*\.delete\(\s*(\w+)\s*\)/g)].map((m) => m[1]);
+  assert.deepEqual(deletes, ["repos"], "one delete, and it is the repo row");
+  assert.match(createRoute, /const createdHere = !reusable;/);
+  assert.match(
+    createRoute,
+    /const tidyUp = async \(\) => \{\s*\n\s*if \(!createdHere\) return;/,
+    "and it is gated on having created the row",
+  );
+  // Every failure path goes through the gate, never straight to the delete.
+  const directDeletes = [...createRoute.matchAll(/await db\.delete\(repos\)/g)].length;
+  assert.equal(directDeletes, 1, "exactly one call site, inside tidyUp");
+  assert.equal([...createRoute.matchAll(/await tidyUp\(\)/g)].length, 3, "and three paths use it");
+  // The recovery half.
+  assert.match(createRoute, /const reusable =/);
+  assert.match(createRoute, /AN EMPTY REPO IS REUSED, not refused/);
+});
+
+test("…and no route writes a dataset row outside the activation", () => {
+  for (const [name, source] of [
+    ["repos/push", route],
+    ["datasets (create)", createRoute],
+  ] as const) {
+    assert.doesNotMatch(
+      source,
+      /db\s*\.?\s*insert\s*\(\s*datasets\s*\)/,
+      `${name}: dataset rows are created by the activation, not by a route`,
+    );
+    assert.doesNotMatch(source, /delete\s*\(\s*datasets\s*\)/, `${name}: nothing to undo`);
+  }
+});
 
 test("the route never writes or deletes a dataset row itself", () => {
   // Every dataset insert this request makes belongs to the activation
@@ -63,7 +113,13 @@ test("the activation transaction does no I/O — it only writes the database", (
   // availability. Everything slow already happened; its result is in memory.
   const from = pipeline.indexOf("async function activate(");
   assert.ok(from >= 0, "activate() is still the one mutation that makes a publish visible");
-  const body = pipeline.slice(from);
+  // BOUNDED to the function. `slice(from)` would silently widen to cover
+  // anything appended after it, so the check would keep passing while meaning
+  // something else.
+  const after = pipeline.indexOf("\nasync function ", from + 1);
+  const end = pipeline.indexOf("\nexport ", from + 1);
+  const stop = [after, end].filter((i) => i > 0).sort((a, b) => a - b)[0] ?? pipeline.length;
+  const body = pipeline.slice(from, stop);
   for (const forbidden of [
     "materializeArchive",
     "normalizeArchive",

@@ -139,6 +139,13 @@ compile each DIRECTORY → in its own workspace, with Malloy's own config walk
 activate               → one transaction, no I/O — or record why not
 ```
 
+**A request error costs nothing durable.** The store happens *after* the layout
+is read, so "you used the wrong flag" and "that dataset is not here yet" are
+refused without writing a revision. A CI loop hitting one of them would
+otherwise add up to 32MB of archive per run, with nothing pruning. A *content*
+failure — a bad layout, a model that will not compile — does get a stored
+revision, because the bytes that failed are worth keeping.
+
 **No compensating actions.** The old shape inserted `ready` dataset rows,
 compiled, and deleted them on failure. That passes every test you can write
 against a process that stays alive, and the compile is exactly the slow part a
@@ -221,12 +228,20 @@ not — a file-set assertion alone could not tell "excluded from the view" from
 
 ## Migration
 
-`0026_repos_first_class.sql` is additive and backfills.
-`0027_drop_dataset_github_columns.sql` drops the three old columns **as a
-separate entry**, because a Vercel build applies the journal *before* promoting
-the new code — so the drop must ship in the release after the one that stopped
-reading them (see `CLAUDE.md`, and `0014` for the archaeology of getting that
-wrong).
+`0026_repos_first_class.sql` is additive and backfills. **The three old dataset
+columns are not dropped in this release at all.** A Vercel build applies the
+journal *before* promoting the new code, so an entry that removes a column the
+currently live version still selects takes that version down for the length of
+the deploy — and the live version selects whole `datasets` rows in half a dozen
+places, so the outage would span the MCP query path, the dataset pages and every
+refresh. `0014` is the archaeology of getting that wrong.
+
+Splitting the drop into its own journal *entry* would not have helped: both
+entries would still be pending in the same deploy. So the columns stay in
+`src/db/schema.ts`, marked dead and read by nothing, and dropping them is one
+command (`drizzle-kit generate` after deleting three lines) in the release after
+this one. `src/lib/dead-columns.test.ts` is what stops anything reading them
+meanwhile — a comment saying "don't" would not.
 
 The backfill groups the distinct `(github_repo, github_branch)` pairs — exactly
 the set the old code treated as a repo — and chooses each disagreeing per-repo
@@ -243,22 +258,53 @@ exists or by its own backfill, so the migration cannot fail on data it did not
 choose. `test/repo-migration.test.ts` replays the journal to 0025, seeds the
 shapes the fork actually held, and checks all of it.
 
-## What is NOT in this
+## `--dataset x` is still repo-less, and that cost something
 
-- **`--dataset x` publishes stay repo-less.** `POST /api/datasets/:id/model/push`
-  sends a file list, not an archive, and still writes `malloy_model_files` rows
-  and no revision. The wire is untouched and so is the behaviour; unifying it
-  means synthesizing an archive and giving those datasets a repo, which changes
-  their public name.
+`POST /api/datasets/:id/model/push` sends a file list, not an archive, so it
+writes `malloy_model_files` rows and no revision. Keeping it is right — the wire
+is untouched and unifying it would change those datasets' public names — but
+"the behaviour is untouched" was not free, and a review found two places where
+it was false:
+
+- it did not set `malloy_models.active`, so any dataset that HAD an active row
+  (which the migration gives every dataset that existed) kept serving the
+  previous version while every push reported a new version number. Silent,
+  permanent, worse with each publish. It sets it now, and
+  `test/publish-flow.test.ts` seeds an active row explicitly to catch it — a
+  test that published twice through this route would find both rows inactive and
+  the `version desc` fallback would hide the bug.
+- `/api/sources` read `hasDevcontainer` off the revision only, which took the
+  "open in codespace" button away from every single-dataset CLI publish. The
+  file-row probe is back, for models with no revision.
+
+The lesson is the one in the gotchas: a model with two storage paths needs both
+exercised, and "the other path is unchanged" is a claim, not a fact.
+
+## What is NOT in this
 - **`compiled_model_def` is still filled lazily** on the request path, though the
   verify has a compiled model in hand and could store it eagerly.
 - **The archive lives in Postgres `bytea`**, capped at 32MB. Blob storage is the
   obvious next step and changes one module.
 - **Old revisions are never pruned.** Every publish keeps its archive.
 - **An empty repo can be left behind** if `POST /api/datasets` dies between
-  creating the repo row and pulling. It serves nothing and retrying the same
-  request reuses it, so the name is not permanently lost — but with no repo UI
+  creating the repo row and pulling. It serves nothing and retrying the *same*
+  request reuses it, so the name is not permanently lost — but a retry with a
+  different name trips the "already attached" check instead, and with no repo UI
   there is nothing that lists it.
+- **Repo ownership is derived by the migration** (the oldest live row's owner)
+  and there is no transfer endpoint. In a repo whose datasets had different
+  owners, every non-admin owner except the backfill winner loses the ability to
+  publish, fixable only with SQL. The old gate was per-dataset-owner; this is a
+  deliberate change and it needs a transfer path.
+- **A symlinked dataset directory still does not work** on the GitHub path. Git
+  stores the link, not the target, so the zipball delivers it as a regular file
+  and the layout rules see no dataset — a refusal rather than a half-publish,
+  but `malloyyo lint` on the author's disk follows the link and sees one. The one
+  shape where lint and the server still disagree.
+- **The CLI still has a skip list.** `gather.ts` walks the filesystem with an
+  extension allowlist, so a dataset directory holding only unlisted file types
+  arrives thin from that side. "Git decides" is true of the GitHub path and an
+  aspiration for the CLI one; the code says which half it means.
 - **No UI** for repos: no list, no rename, no "attach to GitHub" form. The
   dataset config page still posts its GitHub fields to
   `PATCH /api/datasets/:id`, which applies them to the repo.

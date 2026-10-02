@@ -94,13 +94,39 @@ WITH pairs AS (
 	-- The last path segment of whatever is stored. The three spellings
 	-- parseGitHubRepo accepted - a bare owner/name, an https URL, and an ssh
 	-- remote - all reduce to the same leaf.
-	SELECT p.*, regexp_replace(regexp_replace(btrim(p.github_repo), '\.git$', ''), '^.*[/:]', '') AS leaf
+	--
+	-- `canonical` is the owner/name form, and it is what goes in the column.
+	-- NORMALIZED rather than preserved verbatim: `findRepoForPublish` matches
+	-- `github_repo` exactly against what the CLI sends (`--repo owner/name`),
+	-- so a row left holding `https://github.com/acme/thing.git` could never be
+	-- found - the lookup misses, falls to the slug, sees a different
+	-- `github_repo`, and refuses with advice pointing at a flag the CLI does
+	-- not have. A permanent dead end for a repo that worked the day before.
+	SELECT p.*,
+		regexp_replace(regexp_replace(btrim(p.github_repo), '\.git$', ''), '^.*[/:]', '') AS leaf,
+		CASE
+			WHEN btrim(p.github_repo) ~ '^[^/:]+/[^/:]+$' THEN btrim(p.github_repo)
+			ELSE NULLIF(
+				regexp_replace(
+					regexp_replace(btrim(p.github_repo), '\.git$', ''),
+					'^(?:[a-z]+://)?(?:[^@/]+@)?[^/:]+[/:]+(.*/)?([^/]+/[^/]+)$',
+					'\2'
+				),
+				btrim(p.github_repo)
+			)
+		END AS canonical
 	FROM pairs p
 ), slugged AS (
 	SELECT n.*,
+		-- 'dataset', not 'repo'. This has to be character-for-character what
+		-- `nameToSlug` returns for the same input (packages/mcp-engine/src/repo-layout.ts),
+		-- because `findRepoForPublish` looks a repo up by the slug IT derives:
+		-- if the two disagree the lookup misses and a SECOND repo row is created
+		-- for the same GitHub repo. test/repo-migration.test.ts asserts the
+		-- equality over every seeded row rather than restating the rule.
 		COALESCE(
 			NULLIF(left(btrim(regexp_replace(lower(n.leaf), '[^a-z0-9]+', '_', 'g'), '_'), 48), ''),
-			'repo'
+			'dataset'
 		) AS base
 	FROM named n
 ), numbered AS (
@@ -118,16 +144,37 @@ WITH pairs AS (
 INSERT INTO repos (slug, owner_id, github_repo, github_branch, github_use_token, created_at, updated_at)
 SELECT
 	CASE WHEN rn = 1 THEN base ELSE base || '_' || rn END,
-	owner_id, github_repo, github_branch, github_use_token, created_at, now()
+	owner_id,
+	-- The canonical owner/name, falling back to what was stored when it is not
+	-- a GitHub-shaped value at all (which a refresh would fail on either way,
+	-- loudly, with the string the admin typed in the message).
+	COALESCE(canonical, github_repo),
+	github_branch, github_use_token, created_at, now()
 FROM numbered;--> statement-breakpoint
 -- Membership stops being a text match and becomes a foreign key. The branch
 -- coalesce mirrors what the old code did at read time (`githubBranch ?? main`),
 -- so a row whose branch was never set lands in the repo it was always refreshed
 -- as part of.
+--
+-- The join is on the CANONICAL form on both sides, because `repos.github_repo`
+-- was normalized above while the dataset rows still hold whatever was typed.
 UPDATE datasets d
 SET repo_id = r.id
 FROM repos r
-WHERE d.github_repo = r.github_repo
+WHERE COALESCE(
+		CASE
+			WHEN btrim(d.github_repo) ~ '^[^/:]+/[^/:]+$' THEN btrim(d.github_repo)
+			ELSE NULLIF(
+				regexp_replace(
+					regexp_replace(btrim(d.github_repo), '\.git$', ''),
+					'^(?:[a-z]+://)?(?:[^@/]+@)?[^/:]+[/:]+(.*/)?([^/]+/[^/]+)$',
+					'\2'
+				),
+				btrim(d.github_repo)
+			)
+		END,
+		d.github_repo
+	) = r.github_repo
 	AND COALESCE(NULLIF(btrim(d.github_branch), ''), 'main') = r.github_branch;--> statement-breakpoint
 -- '' is the repo root. NULL was, and a nullable column cannot be constrained by
 -- a partial unique index - two (repo_id, NULL) rows do not conflict in Postgres.
@@ -167,7 +214,7 @@ UPDATE malloy_models SET active = true WHERE id IN (SELECT id FROM latest);--> s
 -- -- CONSTRAINTS THAT DEPEND ON THE BACKFILL -----------------------------------
 -- The global name index goes; names are scoped to a repo now. Dropping an index
 -- only relaxes, so it is safe while the previous code is still live.
-DROP INDEX "datasets_name_ready_unique";--> statement-breakpoint
+DROP INDEX IF EXISTS "datasets_name_ready_unique";--> statement-breakpoint
 CREATE INDEX "datasets_repo_idx" ON "datasets" USING btree ("repo_id");--> statement-breakpoint
 CREATE INDEX "datasets_repo_dir_idx" ON "datasets" USING btree ("repo_id","repo_dir");--> statement-breakpoint
 -- Implied by the index just dropped: two live datasets could not share a name

@@ -19,7 +19,7 @@ import { NextResponse } from "next/server";
 import { z } from "zod";
 import { and, desc, eq, ne } from "drizzle-orm";
 import { nameToSlug as engineSlug } from "@malloyyo/mcp-engine";
-import { db, datasets, repoRevisions, repos, users } from "@/db";
+import { db, datasets, malloyModels, repoRevisions, repos, users } from "@/db";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
 import { canAuthor, datasetVisibleWhere } from "@/lib/roles";
@@ -132,12 +132,24 @@ export async function POST(req: Request) {
     );
   }
 
-  // The repo row goes in FIRST and on its own. It is not a compensating-action
-  // hazard the way a `ready` dataset row was: a repo with no active revision
-  // serves nothing, is listed as unpublished, and its next refresh fixes it. The
-  // dataset rows — the ones that hold names and are reachable — are created only
-  // inside the activation transaction, after every model compiled.
-  let repo;
+  // The repo row goes in FIRST and on its own, and the tidy-up below removes it
+  // only if THIS REQUEST CREATED IT. A reused row (see `reusable` above) is
+  // somebody else's: `repos → repo_revisions` is `ON DELETE cascade`, so
+  // deleting one would destroy that repo's whole stored archive history over a
+  // failed GitHub pull.
+  //
+  // Leaving a created-and-empty repo behind is not a compensating-action hazard
+  // the way a `ready` dataset row was: it serves nothing, holds no dataset name,
+  // and an identical retry reuses it. The delete is a courtesy.
+  // Only a row this request INSERTED may be removed again. `reusable` means we
+  // updated one that was already there.
+  const createdHere = !reusable;
+  let repo: typeof repos.$inferSelect;
+  const tidyUp = async () => {
+    if (!createdHere) return;
+    await db.delete(repos).where(eq(repos.id, repo.id)).catch(() => {});
+  };
+
   try {
     [repo] = reusable
       ? await db
@@ -185,7 +197,7 @@ export async function POST(req: Request) {
   try {
     const fetched = await fetchRepo(repo);
     if (!fetched.ok) {
-      await db.delete(repos).where(eq(repos.id, repo.id));
+      await tidyUp();
       telemetry("error");
       return NextResponse.json({ error: fetched.error }, { status: 502 });
     }
@@ -206,13 +218,14 @@ export async function POST(req: Request) {
     });
 
     if (!result.ok) {
-      // The repo is removed because NOTHING of it landed and nobody asked for an
-      // empty repo — this route's contract is "a repo with datasets, or an
-      // error". Safe to delete, unlike the dataset rows the old version deleted:
-      // the repo was created in this request, holds no name anyone can reach,
-      // and the revision rows cascade with it. (The revision's compile errors
-      // are in the response and the log, which is where this caller reads them.)
-      await db.delete(repos).where(eq(repos.id, repo.id));
+      // Removed because NOTHING of it landed and nobody asked for an empty repo
+      // — this route's contract is "a repo with datasets, or an error". Only a
+      // row this request created, though: `repo_revisions` cascades from
+      // `repos`, so deleting a REUSED row would throw away that repo's stored
+      // archive history. And unlike the dataset rows the old version deleted,
+      // leaving this one behind is survivable: it serves nothing and a retry
+      // reuses it, so this is tidy-up and not correctness.
+      await tidyUp();
       telemetry("error");
       logger.error("repo create failed", {
         repo: body.githubRepo,
@@ -229,13 +242,22 @@ export async function POST(req: Request) {
     telemetry("success");
     const created = result.datasets;
     if (created.length === 1) {
+      // `sources` is what the add-a-repo form prints back ("3 sources"), so it
+      // has to be the real list. It comes off the model the activation wrote
+      // rather than being threaded out of the pipeline, which would make every
+      // other caller carry it.
+      const [model] = await db
+        .select({ sources: malloyModels.sources })
+        .from(malloyModels)
+        .where(and(eq(malloyModels.datasetId, created[0].id), eq(malloyModels.active, true)))
+        .limit(1);
       return NextResponse.json({
         id: created[0].id,
         name: created[0].name,
         qualified: created[0].qualified,
         repo: repo.slug,
         status: "ready",
-        sources: [],
+        sources: model?.sources ?? [],
       });
     }
     return NextResponse.json({
@@ -249,7 +271,7 @@ export async function POST(req: Request) {
       })),
     });
   } catch (err) {
-    await db.delete(repos).where(eq(repos.id, repo.id)).catch(() => {});
+    await tidyUp();
     telemetry("error");
     logger.error("POST /api/datasets uncaught error", { repo: body.githubRepo, ...serializeErr(err) });
     return NextResponse.json(

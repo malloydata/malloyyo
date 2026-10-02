@@ -52,9 +52,18 @@ export const CONFIG_NAMES = ["malloy-config-local.json", "malloy-config.json"] a
  * did, so a repo that symlinked a dataset directory linted as empty and
  * published two datasets. `statSync` follows, which is the answer a compiler
  * gets when it opens the file, so it is the answer the layout rules should get
- * too. (A revision's archive cannot actually contain a working symlink — git
- * stores the link, not the target — so this matters for the rule being stated
- * once, not for a case that reaches here.)
+ * too.
+ *
+ * A SYMLINKED DATASET DIRECTORY STILL DOES NOT WORK SERVER-SIDE, and this
+ * function is not what fixes it. Git stores the link rather than the target, so
+ * GitHub's zipball delivers `datasets/sales` as a regular FILE whose contents
+ * are `../real/sales`; `materializeArchive` writes a file, and the layout rules
+ * see no dataset there. The failure is at least a refusal and not a silent
+ * half-publish — `datasets/` with no qualifying subdirectory is reported as
+ * such — but `malloyyo lint` on the author's disk follows the link and sees a
+ * dataset, so this is the one shape where lint and the server still disagree.
+ * Fixing it means teaching the materializer to re-create links, and it is not
+ * done; said here rather than left for someone to discover.
  */
 export function fsLister(root: string): DirLister {
   return async (p: string): Promise<DirEntry[]> => {
@@ -151,11 +160,13 @@ export function datasetView(
     const viewPath =
       base && repoPath.startsWith(`${base}/`) ? repoPath.slice(base.length + 1) : repoPath;
     if (!viewPath) continue;
+    // EVERY TIE IS REFUSED, so there is no tie-break to write. A previous
+    // version of this loop also carried a "the dataset's own file wins" clause,
+    // which could never run — the refusal below fires on any collision at all.
+    // An unreachable resolution rule reads as the behaviour, which is worse
+    // than not having one.
     if (files.has(viewPath)) collisions.push(viewPath);
-    // This dataset's own file wins a tie, which is also what the loop order
-    // cannot be relied on to give — so set unconditionally only when the
-    // incoming one is the re-rooted (nearer) one.
-    if (!files.has(viewPath) || repoPath.startsWith(`${base}/`)) files.set(viewPath, repoPath);
+    files.set(viewPath, repoPath);
   }
   if (collisions.length > 0) {
     return {

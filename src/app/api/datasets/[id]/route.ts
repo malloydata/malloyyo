@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import { datasetTitle } from "@malloyyo/mcp-engine";
 import { and, eq } from "drizzle-orm";
 import { db, datasets, malloyArtifacts, repoRevisions, repos } from "@/db";
+import { parseGitHubRepo } from "@/lib/github";
 import { latestModel, modelFileMap } from "@/lib/mcp-tools";
 import { qualifiedName, resolveDatasetRef } from "@/lib/repos";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
@@ -92,7 +93,10 @@ export async function GET(
     // every dataset row that any admin could edit one row at a time; one repo in
     // the production fork had three rows disagreeing about its credential, and
     // the refresh resolved it with `rows[0]` on an unordered query.
-    repo: repo ? { slug: repo.slug, title: repo.title, ownerId: repo.ownerId } : null,
+    // `id` rides along because the repo-scoped webhook URL is
+    // `/api/repos/<id>/webhook/github`, and without this nothing on the
+    // instance could print it.
+    repo: repo ? { id: repo.id, slug: repo.slug, title: repo.title, ownerId: repo.ownerId } : null,
     githubRepo: repo?.githubRepo ?? null,
     githubBranch: repo?.githubBranch ?? null,
     // Where this dataset lives in a multi-dataset repo; "" is the root. The
@@ -177,10 +181,42 @@ export async function PATCH(
       );
     }
     const patch: Record<string, unknown> = { updatedAt: new Date() };
-    if (body.githubRepo !== undefined) patch.githubRepo = body.githubRepo || null;
+    if (body.githubRepo !== undefined) {
+      const slug = body.githubRepo || null;
+      // Validated HERE, not at the next refresh. An unparseable value accepted
+      // now surfaces as a baffling pull failure later, to whoever presses the
+      // button rather than to whoever typed it.
+      if (slug) {
+        try {
+          parseGitHubRepo(slug);
+        } catch (err) {
+          return NextResponse.json({ error: String(err) }, { status: 400 });
+        }
+      }
+      patch.githubRepo = slug;
+    }
     if (body.githubBranch !== undefined) patch.githubBranch = body.githubBranch || null;
     if (body.githubUseToken !== undefined) patch.githubUseToken = body.githubUseToken;
-    [repo] = await db.update(repos).set(patch).where(eq(repos.id, repo.id)).returning();
+    try {
+      [repo] = await db.update(repos).set(patch).where(eq(repos.id, repo.id)).returning();
+    } catch (err) {
+      // `repos_github_unique`: two repos cannot be pointed at the same
+      // (repo, branch), or a webhook push would be ambiguous and two owners
+      // could overwrite each other's datasets from one commit.
+      const code = (err as { code?: string; cause?: { code?: string } })?.code
+        ?? (err as { cause?: { code?: string } })?.cause?.code;
+      if (code === "23505") {
+        return NextResponse.json(
+          {
+            error:
+              `another repo on this instance is already attached to that GitHub repo and branch. ` +
+              `Two cannot share one: a push would be ambiguous.`,
+          },
+          { status: 409 },
+        );
+      }
+      throw err;
+    }
   }
 
   const [updated] = await db.select().from(datasets).where(eq(datasets.id, id)).limit(1);

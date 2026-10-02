@@ -41,6 +41,7 @@ import {
   type User,
 } from "@/db";
 import { createApiToken } from "@/lib/api-tokens";
+import { latestModel } from "@/lib/mcp-tools";
 import { POST as pushRoute } from "@/app/api/datasets/[id]/model/push/route";
 import { GET as statusRoute } from "@/app/api/datasets/[id]/model/status/route";
 import { POST as repoPushRoute } from "@/app/api/repos/push/route";
@@ -441,6 +442,65 @@ test("--create-dataset on an existing dataset publishes a new version instead of
   const rows = await datasetRows(DS_MAIN);
   assert.equal(rows.length, 1, "the flag must be idempotent — no duplicate dataset");
   assert.equal((await models(rows[0].id)).length, 2);
+});
+
+test("a publish ACTIVATES what it wrote — or the instance serves the previous version forever", async () => {
+  // THE WORST BUG IN THE REWRITE, caught in review.
+  //
+  // The model a dataset serves is now STATED (`malloy_models.active`) rather
+  // than derived from `order by created_at desc limit 1`, which ties. This route
+  // was not setting it, and `latestModel` only falls back to the newest row when
+  // NO row is active — so any dataset with an active row kept serving it while
+  // every push here reported a new version number. Silent, permanent, and worse
+  // with every publish.
+  //
+  // And a dataset with an active row is not a corner case: 0026 set one for
+  // every dataset that existed at migration time. That is why this test seeds
+  // one explicitly instead of relying on a push to create it — a test that
+  // published twice through this route would have found both rows inactive and
+  // the `version desc` fallback would have returned the right answer.
+  const name = `pf_active_${RUN}`;
+  const ds = await seedDataset(name, admin.id);
+  const [old] = await db
+    .insert(malloyModels)
+    .values({
+      datasetId: ds.id,
+      version: 1,
+      source: "source: stale is 1",
+      generatedBy: "pretend-this-was-migrated",
+      active: true,
+    })
+    .returning();
+
+  const dir = makeProject(name);
+  const r = await runCli(["publish", "test", dir, "--token", token], dir);
+  assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`);
+  assert.match(r.stdout, /published version 2/);
+
+  const rows = await models(ds.id);
+  assert.equal(rows.length, 2);
+  const active = rows.filter((m) => m.active);
+  assert.equal(active.length, 1, "exactly one active model");
+  assert.equal(active[0].version, 2, "and it is the one just published");
+  assert.notEqual(active[0].id, old.id);
+  // Through the seam every read path uses, not just the column.
+  const served = await latestModel(ds.id);
+  assert.equal(served.id, active[0].id, "…which is what the instance serves");
+  assert.match(served.source, /Pet shop sales/);
+});
+
+test("…and a dataset created by that route is servable at once", async () => {
+  // The same bug in its second shape: `/api/sources` requires `active = true`
+  // with no fallback, so a dataset created entirely after the migration by
+  // `--dataset x` would have appeared in the catalogue with NO SOURCES.
+  const name = `pf_active_new_${RUN}`;
+  const dir = makeProject(name);
+  const r = await runCli(["publish", "test", dir, "--token", token, "--create-dataset"], dir);
+  assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`);
+  const [ds] = await datasetRows(name);
+  const rows = await models(ds.id);
+  assert.equal(rows.filter((m) => m.active).length, 1, "its first model is active");
+  assert.ok((await latestModel(ds.id)).sources, "and carries the sources the catalogue reads");
 });
 
 test("a plain publish keeps working against the dataset the flag created", async () => {

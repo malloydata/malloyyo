@@ -30,8 +30,15 @@ export function qualifiedName(repoSlug: string | null | undefined, name: string)
 /**
  * Split a ref that carries a qualifier. Null when it carries none.
  *
- * Strict: a ref with two qualifiers is not a nesting and is not half-parsed, so
- * an alias that happens to contain a colon still reaches the alias table.
+ * Strict about the shape: `a:b:c` is not a nesting, so it is not half-parsed and
+ * falls through to the alias table.
+ *
+ * A ref with exactly ONE colon is always read as `repo:dataset`, which means an
+ * alias containing one colon is unreachable. That is deliberate — the qualified
+ * form has to win or `<repo>:<name>` would be ambiguous with whatever anyone
+ * aliased — but it is a real limit: the migration only ever writes aliases from
+ * existing dataset NAMES, which `nameToSlug` has already stripped of colons, so
+ * nothing in the wild hits it.
  */
 export function splitQualified(ref: string): { repo: string; name: string } | null {
   const i = ref.indexOf(QUALIFIER);

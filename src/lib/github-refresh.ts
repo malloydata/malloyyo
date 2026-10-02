@@ -65,7 +65,12 @@ export async function fetchRepo(repo: Repo): Promise<RepoFetch> {
         `GitHub would not give ${repo.githubRepo}@${branch}. ` +
         (repo.githubUseToken
           ? `Check the repo exists on that branch and that GITHUB_TOKEN can read it.`
-          : `If it is private, turn on "use GITHUB_TOKEN" for this repo.`),
+          : // NOT "turn on the checkbox": there is no UI for the repo's
+            // credential flag, so naming one would send someone looking for a
+            // control that does not exist. The honest instruction is the one
+            // that works today.
+            `This repo is set not to send GITHUB_TOKEN, so a private repo would 404. ` +
+              `An admin can re-add it with "use GITHUB_TOKEN" to change that.`),
     };
   }
   const sha = await fetchGitHubCommitSha(owner, name, branch, { useToken: repo.githubUseToken });

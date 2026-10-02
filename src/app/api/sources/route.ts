@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: MIT
 
 import { NextResponse } from "next/server";
-import { eq, desc, and, ne } from "drizzle-orm";
-import { db, datasets, malloyModels, repoRevisions, repos, users } from "@/db";
+import { eq, desc, and, inArray, ne } from "drizzle-orm";
+import { db, datasets, malloyModelFiles, malloyModels, repoRevisions, repos, users } from "@/db";
+import { DEVCONTAINER_PATH } from "@/lib/github-source-link";
 import { qualifiedName } from "@/lib/repos";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
@@ -97,21 +98,31 @@ export async function GET() {
     sources: Array<{ source: string; description: string | null }>;
   }> = [];
 
-  // Names are unique only among READY datasets — datasets_name_ready_unique is
-  // partial — while this list includes everything not-failed. A creation stuck
-  // in `modeling` can therefore share a name with the live dataset, and since
-  // the name is now the key every caller joins and renders on, two rows with one
-  // name merge a card, duplicate a React key, and hide one of them. Keep the
-  // ready one; a half-built namesake is not what anyone means by that name.
+  // DE-DUPED BY THE QUALIFIED NAME, not the bare one.
+  //
+  // Names are unique only among READY datasets — the index is partial — while
+  // this list includes everything not-failed. A creation stuck in `modeling` can
+  // therefore share a name with the live dataset, and since the name is the key
+  // every caller joins and renders on, two rows with one name merge a card,
+  // duplicate a React key, and hide one. Keep the ready one; a half-built
+  // namesake is not what anyone means by that name.
+  //
+  // But the key has to be `<repo>:<name>`, because two repos may now each
+  // publish a `sales` and that is the entire point of the rewrite. Keying on the
+  // bare name here would have dropped one of them from the catalogue and the
+  // home page — the collision quietly re-introduced one layer up from the schema
+  // that was changed to allow it.
   const byName = new Map<string, (typeof dsList)[number]>();
   for (const ds of dsList) {
-    const held = byName.get(ds.name);
-    if (!held || (held.status !== "ready" && ds.status === "ready")) byName.set(ds.name, ds);
+    const key = qualifiedName(ds.repoSlug, ds.name);
+    const held = byName.get(key);
+    if (!held || (held.status !== "ready" && ds.status === "ready")) byName.set(key, ds);
   }
 
   // Model id → the index into `result` of the row it produced, so the dev
   // container lookup below is ONE query for the whole page rather than a second
   // per-dataset round trip on top of the one this loop already makes.
+  const rowForModel = new Map<string, number>();
 
   for (const ds of byName.values()) {
     const [latestModel] = await db
@@ -129,6 +140,7 @@ export async function GET() {
       .limit(1);
 
     const declared = normalizeSources(latestModel?.sources);
+    if (latestModel) rowForModel.set(latestModel.id, result.length);
     result.push({
       dataset: ds.name,
       // The public identity: `<repo>:<name>`, or the bare name for a dataset no
@@ -144,8 +156,12 @@ export async function GET() {
       // a non-default branch must not hand out links to the default one. Same
       // precedence as the repo above, so the two always describe one tree.
       githubBranch: ds.githubBranch ?? latestModel?.gitBranch ?? null,
-      // From the repo's live revision; false for a dataset no repo publishes,
-      // which reads as "no codespace" - which it is.
+      // From the repo's live revision when a repo publishes it. For a dataset
+      // no repo publishes — a Claude-authored one, or `--dataset x`, which
+      // still stores its files as rows — it is filled in below from those
+      // rows. Dropping that fallback took the "open in codespace" button away
+      // from every single-dataset CLI publish, which is a capability loss
+      // disguised as a cleanup.
       hasDevcontainer: ds.hasDevcontainer ?? false,
       // How this dataset takes a new version, which is the last step of any
       // advice about changing its repo: a configured github_repo is refreshed
@@ -160,6 +176,25 @@ export async function GET() {
           ? [{ source: ds.name, description: null }]
           : declared.map((src) => ({ source: src.name, description: src.description })),
     });
+  }
+
+  // The dev container for a model with no revision: still an ordinary stored
+  // file row, because `--dataset x` stores its files that way. ONE query for
+  // the whole page, as before.
+  const rowless = [...rowForModel.entries()]
+    .filter(([, i]) => !result[i].hasDevcontainer)
+    .map(([modelId]) => modelId);
+  if (rowless.length > 0) {
+    const withContainer = await db
+      .select({ modelId: malloyModelFiles.modelId })
+      .from(malloyModelFiles)
+      .where(
+        and(inArray(malloyModelFiles.modelId, rowless), eq(malloyModelFiles.path, DEVCONTAINER_PATH)),
+      );
+    for (const row of withContainer) {
+      const i = rowForModel.get(row.modelId);
+      if (i !== undefined) result[i].hasDevcontainer = true;
+    }
   }
 
   return NextResponse.json(result);

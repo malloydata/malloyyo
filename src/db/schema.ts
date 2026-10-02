@@ -408,6 +408,26 @@ export const datasets = pgTable(
     status: datasetStatus("status").notNull().default("pending"),
     statusError: text("status_error"),
     /**
+     * DEAD. Read by nothing; dropped by the NEXT release, not this one.
+     *
+     * Every fact these held now lives on `repos` — the slug, the branch, and the
+     * one answer about the credential — and `repo_id` below is the membership.
+     * They are still in the schema because a Vercel build applies the journal
+     * BEFORE promoting the new code, so an entry that drops a column the
+     * currently live version still selects takes that version down for the
+     * length of the deploy. The live version selects whole `datasets` rows in
+     * half a dozen places, so the outage would span the MCP query path, the
+     * dataset pages and every refresh. 0014 is the archaeology of getting this
+     * wrong.
+     *
+     * Dropping them is one command (`drizzle-kit generate` after deleting these
+     * three lines) in the release after this one. Until then,
+     * src/lib/dead-columns.test.ts is what stops anything reading them again.
+     */
+    githubRepo: text("github_repo"),
+    githubBranch: text("github_branch"),
+    githubUseToken: boolean("github_use_token").notNull().default(true),
+    /**
      * WHICH REPO PUBLISHES THIS DATASET. A real foreign key, which is the whole
      * rewrite in one column: membership used to be recomputed on every refresh by
      * matching two denormalized text columns, with no status filter — measured
@@ -424,10 +444,12 @@ export const datasets = pgTable(
      * `index.malloy` and its `dashboards/`, e.g. `datasets/finance`.
      *
      * `''` IS THE REPO ROOT — not null, deliberately. A nullable column cannot
-     * be constrained by a partial unique index (two `(repo_id, NULL)` rows do not
-     * conflict in Postgres), and `datasets_repo_dir_ready_unique` below is what
-     * makes "seven live rows for one directory" impossible rather than merely
-     * unexpected.
+     * be constrained by a partial unique index at all: two `(repo_id, NULL)`
+     * rows do not conflict in Postgres. That matters for
+     * `datasets_repo_name_ready_unique` below, which is partial on
+     * `repo_id is not null` — and it keeps the option of constraining this
+     * column open, which the index below deliberately does NOT take (see its
+     * note: two live datasets on one directory is a real configuration).
      *
      * `malloy-config.json` is NOT necessarily under here. The nearest one wins,
      * walking up to the repo root — which is `discoverConfig`'s rule, and what

@@ -29,6 +29,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import postgres from "postgres";
+import { repoSlugFromGitHub } from "@/lib/repo-names";
 
 const ROOT = join(import.meta.dirname, "..");
 const DRIZZLE = join(ROOT, "drizzle");
@@ -64,7 +65,7 @@ async function apply(tag: string): Promise<void> {
 
 const PRE = "0025_dataset_description";
 const MIGRATION = "0026_repos_first_class";
-const DROP = "0027_drop_dataset_github_columns";
+const PRE_REWRITE_LAST = MIGRATION;
 
 /**
  * The mess. Every row here is a shape the production fork actually had, or one
@@ -161,8 +162,8 @@ test("one repo per (github_repo, branch) pair, and no row invented", async () =>
   );
   assert.deepEqual(
     repos.map((r) => `${r.github_repo}@${r.github_branch}`),
-    ["acme/private@main", "acme/twig@dev", "acme/twig@main", "https://github.com/acme/Url-Repo.git@main"],
-    "the NULL branch coalesced to main, exactly as every read path did",
+    ["acme/Url-Repo@main", "acme/private@main", "acme/twig@dev", "acme/twig@main"],
+    "the NULL branch coalesced to main, and the URL form normalized to owner/name",
   );
 });
 
@@ -206,11 +207,63 @@ test("a slug collision is broken deterministically, not left to fail", async () 
   assert.deepEqual(again.map((r) => r.slug), ["twig_2", "twig"]);
 });
 
-test("a repo recorded as a URL still gets the repo's NAME as its slug", async () => {
-  const [repo] = await rows<{ slug: string }>(
-    `select slug from repos where github_repo like 'https://%'`,
+test("a repo recorded as a URL is NORMALIZED, so the CLI can ever find it", async () => {
+  // `findRepoForPublish` matches `github_repo` exactly against what the CLI
+  // sends (`--repo owner/name`). A row left holding
+  // `https://github.com/acme/Url-Repo.git` could never be found: the lookup
+  // misses, falls to the slug, sees a different `github_repo`, and refuses with
+  // advice pointing at a flag the CLI does not have. A permanent dead end for a
+  // repo that worked the day before.
+  const [repo] = await rows<{ slug: string; github_repo: string }>(
+    `select slug, github_repo from repos where slug = 'url_repo'`,
   );
-  assert.equal(repo.slug, "url_repo", "the last path segment, .git removed, slugified");
+  assert.equal(repo.github_repo, "acme/Url-Repo", "stored as owner/name");
+  assert.equal(repo.slug, "url_repo", "and named after the repo");
+  // And its datasets really did land in it, which the join has to do on the
+  // canonical form on both sides.
+  const [{ n }] = await rows<{ n: string }>(
+    `select count(*)::text as n from datasets where repo_id = (select id from repos where slug = 'url_repo')`,
+  );
+  assert.equal(n, "1");
+});
+
+test("the migration's slug is CHARACTER-FOR-CHARACTER the one the server derives", async () => {
+  // Not four hand-written expectations: the actual SQL, run, compared against
+  // the actual TypeScript. They had already diverged — the SQL fell back to
+  // `'repo'` on an empty leaf where `nameToSlug` returns `'dataset'`, so
+  // `owner/---` would have minted a repo the server then failed to find,
+  // creating a SECOND row for the same GitHub repo.
+  //
+  // Only the rows that did NOT collide: a collision is broken by `_2`, which is
+  // the migration's own business and has no TypeScript counterpart.
+  const repos = await rows<{ slug: string; github_repo: string }>(
+    `select slug, github_repo from repos
+      where slug not like '%\\_2' and slug not like '%\\_3'
+      order by slug`,
+  );
+  assert.ok(repos.length >= 3, "there are rows to compare");
+  for (const r of repos) {
+    assert.equal(r.slug, repoSlugFromGitHub(r.github_repo), `slug for ${r.github_repo}`);
+  }
+});
+
+test("…including a repo whose name slugifies to NOTHING", async () => {
+  // The divergence above, exercised directly. `'---'` has no alphanumerics, so
+  // both sides have to reach for the same fallback.
+  await client.unsafe(`
+    insert into datasets (user_id, name, status, github_repo, github_branch, github_use_token)
+    values ('11111111-1111-1111-1111-111111111111', 'odd', 'ready', 'acme/---', 'main', false)
+  `);
+  const [{ base }] = await rows<{ base: string }>(`
+    select COALESCE(
+      NULLIF(left(btrim(regexp_replace(lower(
+        regexp_replace(regexp_replace(btrim('acme/---'), '\\.git$', ''), '^.*[/:]', '')
+      ), '[^a-z0-9]+', '_', 'g'), '_'), 48), ''),
+      'dataset'
+    ) AS base
+  `);
+  assert.equal(base, repoSlugFromGitHub("acme/---"), "the SQL fallback and nameToSlug agree");
+  await client.unsafe(`delete from datasets where name = 'odd'`);
 });
 
 test("membership became a foreign key — including the dead rows, which is correct", async () => {
@@ -315,26 +368,19 @@ test("…so two repos can now hold a dataset of the same name, which they could 
   await client.unsafe(`delete from datasets where name = 'shared'`);
 });
 
-test("0027 drops the three columns that made a repo a query predicate", async () => {
-  await apply(DROP);
-  const left = await rows<{ column_name: string }>(
-    `select column_name from information_schema.columns
-      where table_schema = 'public' and table_name = 'datasets'
-        and column_name in ('github_repo', 'github_branch', 'github_use_token')`,
-  );
-  assert.deepEqual(left, []);
-  // And they are on the repo, once.
-  const onRepo = await rows<{ column_name: string }>(
-    `select column_name from information_schema.columns
-      where table_schema = 'public' and table_name = 'repos'
-        and column_name in ('github_repo', 'github_branch', 'github_use_token')
-      order by column_name`,
-  );
-  assert.deepEqual(onRepo.map((c) => c.column_name), [
-    "github_branch",
-    "github_repo",
-    "github_use_token",
-  ]);
+test("the three old columns are still THERE, and that is the point", () => {
+  // 0027 is NOT in this release. A Vercel build applies the journal before
+  // promoting the new code, so an entry dropping a column the currently live
+  // version still selects takes that version down for the length of the deploy
+  // — and the live version selects whole `datasets` rows in half a dozen
+  // places. The drop is one command in the release AFTER this one.
+  //
+  // What stops anything reading them meanwhile is
+  // src/lib/dead-columns.test.ts, which greps the source. This test only
+  // records the decision where someone looking at the migration will see it.
+  const entries = journal.map((e) => e.tag);
+  assert.ok(!entries.some((t) => t.includes("drop_dataset_github")), "no drop entry in this release");
+  assert.equal(entries[entries.length - 1], PRE_REWRITE_LAST, "0026 is the last entry");
 });
 
 test("a full journal replay reproduces the same schema as a staged one", async () => {
@@ -351,7 +397,7 @@ test("a full journal replay reproduces the same schema as a staged one", async (
       select 'idx:' || indexname || ':' || indexdef from pg_indexes where schemaname = 'public'
     ) t
   `);
-  await replayTo(DROP);
+  await replayTo(MIGRATION);
   const fresh = await rows<{ sig: string }>(`
     select coalesce(string_agg(sig, E'\\n' order by sig), '') as sig from (
       select table_name || '.' || column_name || ':' || data_type || ':' || is_nullable as sig

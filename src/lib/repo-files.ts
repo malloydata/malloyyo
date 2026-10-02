@@ -100,7 +100,19 @@ async function revisionIndex(revisionId: string): Promise<RevisionIndex | null> 
       return false;
     },
   });
-  const index: RevisionIndex = { zip, paths, dirs: (rev.datasets ?? []).map((d) => d.dir) };
+  // FAIL CLOSED on a revision that never recorded what it publishes. Defaulting
+  // to "no sibling directories" would widen every dataset's view to the whole
+  // repo, which is the leak `datasetView` exists to prevent — a dashboard bundle
+  // would ship one dataset's model to another's readers. Unreachable today
+  // (verification writes `datasets` before any compile), which is exactly why
+  // the default has to throw rather than be convenient.
+  if (!rev.datasets) {
+    throw new Error(
+      `revision ${revisionId} recorded no dataset layout, so a dataset's slice of it cannot be ` +
+        `determined — republish the repo`,
+    );
+  }
+  const index: RevisionIndex = { zip, paths, dirs: rev.datasets.map((d) => d.dir) };
   indexes.set(revisionId, index);
   logger.debug("revision indexed", { revisionId, paths: paths.length, bytes: zip.length });
   return index;
@@ -190,11 +202,17 @@ async function revisionConfig(
     if (bytes === undefined) throw new Error(`${rel} not in the revision`);
     return strFromU8(bytes);
   };
+  // NOT a blanket catch. `discoverConfigText` throws deliberately when a config
+  // file matched but would not parse, and the whole reason it does is that the
+  // alternative is compiling with no connections and reporting a baffling "no
+  // connection named" — which is just as true on the serving path as on the
+  // verify. Only the not-found case is swallowed, because a repo with no config
+  // at all is ordinary (DuckDB is the default world).
   const found = await discoverConfigText(
     readURL,
     new URL(`file:///${base ? `${base}/` : ""}`),
     new URL("file:///"),
-  ).catch(() => ({ text: undefined }));
+  );
   return found.text;
 }
 

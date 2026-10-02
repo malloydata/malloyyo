@@ -4,7 +4,9 @@
 import { NextResponse } from "next/server";
 import { datasetTitle } from "@malloyyo/mcp-engine";
 import { and, desc, eq } from "drizzle-orm";
-import { db, datasets, malloyModels, malloyModelFiles, malloyArtifacts } from "@/db";
+import { db, datasets, malloyArtifacts, repoRevisions, repos } from "@/db";
+import { latestModel, modelFileMap } from "@/lib/mcp-tools";
+import { qualifiedName, resolveDatasetRef } from "@/lib/repos";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
 import { captureTelemetry } from "@/lib/telemetry";
@@ -16,12 +18,18 @@ export async function GET(
   ctx: RouteContext<"/api/datasets/[id]">,
 ) {
   const { id } = await ctx.params;
-  // `id` may be a dataset uuid OR a name (the ready dataset with that name).
-  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id);
-  const [ds] = isUuid
-    ? await db.select().from(datasets).where(eq(datasets.id, id))
-    : await db.select().from(datasets).where(and(eq(datasets.name, id), eq(datasets.status, "ready")));
-  if (!ds) return NextResponse.json({ error: "not found" }, { status: 404 });
+  // A uuid, `repo:dataset`, an old bare name (pinned by an alias), or a bare
+  // name that is still unambiguous - one ordered rule, in src/lib/repos.ts, so
+  // every surface resolves a ref the same way.
+  const resolved = await resolveDatasetRef(id);
+  if (!resolved.ok) {
+    return NextResponse.json(
+      { error: resolved.ambiguous ? resolved.error : "not found" },
+      { status: resolved.ambiguous ? 409 : 404 },
+    );
+  }
+  const ds = resolved.dataset;
+  const repo = resolved.repo;
 
   let me;
   try { me = await getSessionUser(); } catch (err) {
@@ -38,17 +46,14 @@ export async function GET(
   // last-publish detail (incl. failure text) is management-only — don't expose to public viewers.
   const canManage = me ? isAdmin(me) || ds.userId === me.id : false;
 
-  const [model] = await db.select().from(malloyModels)
-    .where(eq(malloyModels.datasetId, ds.id))
-    .orderBy(desc(malloyModels.createdAt))
-    .limit(1);
-
+  // The model the dataset SERVES, and the files it serves with - which for a
+  // repo-backed model come out of its revision's zip rather than a per-file
+  // table (src/lib/repo-files.ts).
+  const model = await latestModel(ds.id);
   const files = model
-    ? await db
-        .select({ path: malloyModelFiles.path, content: malloyModelFiles.content })
-        .from(malloyModelFiles)
-        .where(eq(malloyModelFiles.modelId, model.id))
-        .orderBy(malloyModelFiles.path)
+    ? [...(await modelFileMap(model, ds.repoDir))]
+        .map(([path, content]) => ({ path, content }))
+        .sort((a, b) => a.path.localeCompare(b.path))
     : [];
 
   // Dashboard artifacts (manifest + Dashboard.tsx) shown alongside the model files.
@@ -65,6 +70,14 @@ export async function GET(
         .orderBy(malloyArtifacts.name)
     : [];
 
+  const [live] = repo
+    ? await db
+        .select()
+        .from(repoRevisions)
+        .where(and(eq(repoRevisions.repoId, repo.id), eq(repoRevisions.active, true)))
+        .limit(1)
+    : [];
+
   return NextResponse.json({
     id: ds.id, name: ds.name,
     status: ds.status, statusError: ds.statusError,
@@ -72,12 +85,21 @@ export async function GET(
     isPublic: ds.isPublic,
     // The label. `name` stays the identity — URLs, grants and publishes use it.
     title: datasetTitle(ds.name, ds.title),
-    githubRepo: ds.githubRepo ?? null,
-    githubBranch: ds.githubBranch ?? null,
-    // Where this dataset lives in a multi-dataset repo; null is the root. The
-    // "view source on GitHub" link needs it, because stored paths are re-rooted.
-    repoDir: ds.repoDir ?? null,
-    githubUseToken: ds.githubUseToken,
+    // The public identity. `name` stays the local one, which is what the repo's
+    // own directories and dashboards are written against.
+    qualified: qualifiedName(repo?.slug, ds.name),
+    // THE REPO'S, not the dataset's. These were two nullable text columns on
+    // every dataset row that any admin could edit one row at a time; one repo in
+    // the production fork had three rows disagreeing about its credential, and
+    // the refresh resolved it with `rows[0]` on an unordered query.
+    repo: repo ? { slug: repo.slug, title: repo.title, ownerId: repo.ownerId } : null,
+    githubRepo: repo?.githubRepo ?? null,
+    githubBranch: repo?.githubBranch ?? null,
+    // Where this dataset lives in a multi-dataset repo; "" is the root. The
+    // "view source on GitHub" link needs it, because served paths are re-rooted.
+    repoDir: ds.repoDir,
+    githubUseToken: repo?.githubUseToken ?? false,
+    revision: live ? { id: live.id, revision: live.revision, sha: live.gitSha, source: live.source } : null,
     isAdmin: me ? isAdmin(me) : false,
     dashboards,
     lastPublish:
@@ -120,15 +142,55 @@ export async function PATCH(
   if (!isAdmin(me)) return NextResponse.json({ error: "admin required" }, { status: 403 });
 
   const { id } = await ctx.params;
-  const body = await req.json() as { isPublic?: boolean; githubRepo?: string | null; githubBranch?: string | null; githubUseToken?: boolean };
-  const patch: Record<string, unknown> = {};
-  if (body.isPublic !== undefined) patch.isPublic = body.isPublic;
-  if (body.githubRepo !== undefined) patch.githubRepo = body.githubRepo ?? null;
-  if (body.githubBranch !== undefined) patch.githubBranch = body.githubBranch ?? null;
-  if (body.githubUseToken !== undefined) patch.githubUseToken = body.githubUseToken;
-  const [updated] = await db.update(datasets).set(patch).where(eq(datasets.id, id)).returning();
-  if (!updated) return NextResponse.json({ error: "not found" }, { status: 404 });
-  return NextResponse.json({ id: updated.id, isPublic: updated.isPublic, githubRepo: updated.githubRepo, githubBranch: updated.githubBranch });
+  const body = (await req.json()) as {
+    isPublic?: boolean;
+    githubRepo?: string | null;
+    githubBranch?: string | null;
+    githubUseToken?: boolean;
+  };
+
+  const [ds] = await db.select().from(datasets).where(eq(datasets.id, id)).limit(1);
+  if (!ds) return NextResponse.json({ error: "not found" }, { status: 404 });
+
+  if (body.isPublic !== undefined) {
+    await db.update(datasets).set({ isPublic: body.isPublic }).where(eq(datasets.id, id));
+  }
+
+  // THE GITHUB ATTACHMENT IS THE REPO'S. Writing it here per dataset is what
+  // made one repo in production carry three rows with two different credential
+  // answers - and the config form hardcoded `githubUseToken: true` on every save
+  // while the CLI publish path wrote `false`, so any repo touched by both had
+  // mixed values by construction. Accepted on this route because the config form
+  // still posts here, and applied to the repo, once.
+  const touchesRepo =
+    body.githubRepo !== undefined || body.githubBranch !== undefined || body.githubUseToken !== undefined;
+  let repo = ds.repoId ? (await db.select().from(repos).where(eq(repos.id, ds.repoId)).limit(1))[0] : undefined;
+  if (touchesRepo) {
+    if (!repo) {
+      return NextResponse.json(
+        {
+          error:
+            "no repo publishes this dataset, so there is no GitHub attachment to change. " +
+            "Add the repo on this instance instead.",
+        },
+        { status: 400 },
+      );
+    }
+    const patch: Record<string, unknown> = { updatedAt: new Date() };
+    if (body.githubRepo !== undefined) patch.githubRepo = body.githubRepo || null;
+    if (body.githubBranch !== undefined) patch.githubBranch = body.githubBranch || null;
+    if (body.githubUseToken !== undefined) patch.githubUseToken = body.githubUseToken;
+    [repo] = await db.update(repos).set(patch).where(eq(repos.id, repo.id)).returning();
+  }
+
+  const [updated] = await db.select().from(datasets).where(eq(datasets.id, id)).limit(1);
+  return NextResponse.json({
+    id: updated.id,
+    isPublic: updated.isPublic,
+    repo: repo?.slug ?? null,
+    githubRepo: repo?.githubRepo ?? null,
+    githubBranch: repo?.githubBranch ?? null,
+  });
 }
 
 export async function DELETE(

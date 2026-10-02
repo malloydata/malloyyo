@@ -306,18 +306,25 @@ export const isCustomDashboard = (dash: Pick<DashboardDetail, "source">): boolea
 
 /** A model's malloy-config.json, if it shipped one.
  *
- * The config travels as an ordinary model file — the CLI publish route stores it
- * under that path (api/datasets/[id]/model/push), and the GitHub refresh does the
- * same — so there is no column to add and no migration. Returns the raw text;
- * callers parse what they need (image-hosts.ts, and poolSizeFromConfig's reader
- * in @/lib/malloy, are both shaped that way). */
+ * Through the one file-map seam, because a repo-backed model's config is not a
+ * row: it is whichever file Malloy's own discovery picked when the model was
+ * compiled, out of the revision's zip (src/lib/repo-files.ts). Returns the raw
+ * text; callers parse what they need (image-hosts.ts, and poolSizeFromConfig's
+ * reader in @/lib/malloy, are both shaped that way). */
 export async function modelConfigJson(modelId: string): Promise<string | undefined> {
-  const [row] = await db
-    .select({ content: malloyModelFiles.content })
-    .from(malloyModelFiles)
-    .where(and(eq(malloyModelFiles.modelId, modelId), eq(malloyModelFiles.path, "malloy-config.json")))
+  const [model] = await db
+    .select({
+      id: malloyModels.id,
+      source: malloyModels.source,
+      revisionId: malloyModels.revisionId,
+      datasetId: malloyModels.datasetId,
+    })
+    .from(malloyModels)
+    .where(eq(malloyModels.id, modelId))
     .limit(1);
-  return row?.content;
+  if (!model) return undefined;
+  const { modelFileMap } = await import("@/lib/mcp-tools");
+  return (await modelFileMap(model)).get("malloy-config.json");
 }
 
 /**

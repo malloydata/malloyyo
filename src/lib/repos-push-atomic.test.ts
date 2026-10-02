@@ -1,18 +1,31 @@
 // Copyright (c) The Malloy Foundation
 // SPDX-License-Identifier: MIT
 
-// `POST /api/repos/push` creates datasets, and creating them is the step that
-// has to be atomic with the compile.
+// NO COMPENSATING ACTIONS, pinned at the mechanism.
 //
 // The shape that shipped first was insert-then-compile-then-delete-on-failure.
-// It passes every test you can write against a process that stays alive, and it
+// It passes every test you can write against a process that STAYS ALIVE, and it
 // is wrong for the one that does not: the delete is a compensating action, so a
 // timeout or a redeploy during the compile — network I/O plus schema resolution
 // that runs SQL, i.e. the slow part — left `ready` dataset rows with no model
-// behind them. Those rows hold their names under `datasets_name_ready_unique`,
-// so the rightful publish afterwards got a 409 and nothing on the instance could
-// release it. The window is not reachable from a test, so what is pinned here is
-// the mechanism that closes it.
+// behind them, holding their names under a unique index, and the rightful
+// publish afterwards got a permanent 409.
+//
+// This file is the carried-forward version of that pin, rewritten for the shape
+// that replaced it. THE WINDOW IS NOT REACHABLE FROM A TEST — it needs a dying
+// process — so what is asserted here is the mechanism that closes it, and that
+// is said plainly rather than dressed up as a behavioural test:
+//
+//   * the revision commits first and is INERT (`active` false), so there is
+//     nothing to undo if the process dies next;
+//   * the activation transaction contains no compile, no network and no
+//     archive — only database writes, all of which are in it;
+//   * dataset rows are created INSIDE that transaction, before the model
+//     versions that reference them.
+//
+// The behavioural half — a failed verification leaves the previous revision
+// serving, and the failed revision behind as a record — is in
+// test/repo-publish.test.ts against a real Postgres and a real compile.
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -21,48 +34,69 @@ import { join } from "node:path";
 
 const ROOT = join(import.meta.dirname, "..", "..");
 const route = readFileSync(join(ROOT, "src", "app", "api", "repos", "push", "route.ts"), "utf8");
-const refresh = readFileSync(join(ROOT, "src", "lib", "github-refresh.ts"), "utf8");
+const pipeline = readFileSync(join(ROOT, "src", "lib", "repo-publish.ts"), "utf8");
 
-test("the route never writes a dataset row itself", () => {
-  // Every insert this request makes belongs to compileAndWrite's transaction.
+test("the route never writes or deletes a dataset row itself", () => {
+  // Every dataset insert this request makes belongs to the activation
+  // transaction. A delete here would mean something had been committed early
+  // again — which is the whole bug.
   assert.doesNotMatch(
     route,
     /db\s*\.?\s*insert\s*\(\s*datasets\s*\)/,
-    "the rows are built and handed over, not written here",
+    "dataset rows are created by the activation, not by the route",
   );
+  assert.doesNotMatch(route, /delete\s*\(\s*datasets\s*\)/, "nothing to undo, so nothing undoes it");
 });
 
-test("…and never deletes one either, because there is nothing to undo", () => {
-  // A delete here would mean something had been committed early again.
-  assert.doesNotMatch(route, /delete\s*\(\s*datasets\s*\)/);
+test("a stored revision is inert: nothing in storeRevision activates it", () => {
+  const from = pipeline.indexOf("async function storeRevision(");
+  const to = pipeline.indexOf("async function recordFailure(");
+  assert.ok(from >= 0 && to > from, "storeRevision is still here, before recordFailure");
+  const body = pipeline.slice(from, to);
+  assert.doesNotMatch(body, /active:\s*true/, "the store must not activate — that is the point");
+  assert.doesNotMatch(body, /verifiedAt/, "and must not claim the revision verified");
 });
 
-test("the rows it builds are passed to compileAndWrite as the third argument", () => {
-  assert.match(route, /compileAndWrite\(/);
-  assert.match(route, /newRows,\s*\n\s*\)/, "handed over to be inserted in the transaction");
+test("the activation transaction does no I/O — it only writes the database", () => {
+  // If anything slow or fallible were in here, the transaction would be held
+  // open across it and "the repo's datasets move together" would cost
+  // availability. Everything slow already happened; its result is in memory.
+  const from = pipeline.indexOf("async function activate(");
+  assert.ok(from >= 0, "activate() is still the one mutation that makes a publish visible");
+  const body = pipeline.slice(from);
+  for (const forbidden of [
+    "materializeArchive",
+    "normalizeArchive",
+    "introspectModelWithReader",
+    "withReaderRuntime",
+    "compileDir",
+    "fetch(",
+    "readFileSync",
+  ]) {
+    assert.ok(!body.includes(forbidden), `activate() must not reach ${forbidden}`);
+  }
 });
 
-test("compileAndWrite inserts those rows INSIDE its transaction, before the versions", () => {
-  // Order matters as much as placement: malloyModels.datasetId is a foreign key,
-  // so the row has to exist in the transaction before the version referencing it.
-  const tx = /db\.transaction\(async \(tx\) => \{([\s\S]*?)\n  \}\);/.exec(refresh)?.[1];
-  assert.ok(tx, "compileAndWrite still writes in one transaction");
-  const insertAt = tx.indexOf("tx.insert(datasets)");
-  const writeAt = tx.indexOf("writeCompiled(");
-  assert.ok(insertAt >= 0, "the creates happen inside the transaction");
-  assert.ok(writeAt >= 0, "so do the model versions");
-  assert.ok(insertAt < writeAt, "creates first — the versions reference them");
-});
-
-test("a failed compile returns before the transaction opens", () => {
-  // Not merely "writes nothing": nothing is created either, which is only true
-  // while the inserts live inside that transaction.
-  const from = refresh.indexOf("export async function compileAndWrite(");
-  const to = refresh.indexOf("export async function refreshRepo(");
-  assert.ok(from >= 0 && to > from, "both functions are still here, in this order");
-  const body = refresh.slice(from, to);
-  const bail = body.indexOf("if (failed.length > 0) return");
+test("dataset rows are created inside the activation, before the versions that reference them", () => {
+  // Order matters as much as placement: malloy_models.dataset_id is a foreign
+  // key, so the row has to exist in the transaction before the version.
+  const from = pipeline.indexOf("async function activate(");
+  const body = pipeline.slice(from);
   const txAt = body.indexOf("db.transaction(");
-  assert.ok(bail >= 0 && txAt >= 0);
-  assert.ok(bail < txAt, "the all-or-nothing check precedes any write");
+  const insertDs = body.indexOf("tx\n            .insert(datasets)");
+  const insertModel = body.indexOf(".insert(malloyModels)");
+  assert.ok(txAt >= 0, "the activation is one transaction");
+  assert.ok(insertDs > txAt, "dataset creates happen inside it");
+  assert.ok(insertModel > insertDs, "and before the model versions that reference them");
+});
+
+test("verification failure records, and returns, without activating", () => {
+  // `recordFailure` writes `verify_error` and nothing else. A revision that
+  // failed stays stored: it is the record of the attempt, and it is inert.
+  const from = pipeline.indexOf("async function recordFailure(");
+  const to = pipeline.indexOf("async function compileDir(");
+  assert.ok(from >= 0 && to > from);
+  const body = pipeline.slice(from, to);
+  assert.match(body, /set\(\{\s*verifyError: error\s*\}\)/, "it records the reason");
+  assert.doesNotMatch(body, /delete\(/, "and removes nothing");
 });

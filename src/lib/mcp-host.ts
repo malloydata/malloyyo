@@ -43,6 +43,7 @@ import { isAdmin } from "./admin";
 import { logger, serializeErr } from "./logger";
 import {
   canReadDataset,
+  findByDatasetRef,
   latestModel,
   loadSharedQuery,
   modelFileMap,
@@ -137,11 +138,18 @@ async function visibleDatasets(userId: string): Promise<DatasetRow[]> {
 
 // Resolve a model_ref (= dataset name) to its latest model version, scoped to
 // what the user may see. Returns null for both "unknown" and "not visible".
+/**
+ * Resolve a dataset reference for the MCP surface.
+ *
+ * Through `findByDatasetRef`, which applies the one ordered rule in
+ * src/lib/repos.ts. It used to be `visibleDatasets(...).find(d => d.name === ref)`
+ * - fine while names were globally unique, and a silent wrong answer the moment
+ * two repos each publish a `sales`, because `.find` returns whichever row came
+ * back first.
+ */
 async function findModelByRef(userId: string, ref: string) {
-  const ds = (await visibleDatasets(userId)).find((d) => d.name === ref);
-  if (!ds) return null;
-  const model = await latestModel(ds.id);
-  return model ? { ds, model } : null;
+  const found = await findByDatasetRef(userId, ref);
+  return found ? { ds: found.ds, model: found.model } : null;
 }
 
 // Lease a pooled Runtime over one dataset's latest model and hand the engine a

@@ -4,28 +4,31 @@
 /**
  * `POST /api/repos/push` — publish a whole repo.
  *
- * The repo is the unit of publish, so it is also the unit of transfer: the CLI
- * packs the repo into the same archive GitHub hands us for a repo we pull, and
- * both arrive at one extractor and one compile-all-then-write-all
- * (src/lib/github-refresh.ts). Every dataset the repo publishes lands together
- * or none of them does.
+ * THE WIRE IS UNCHANGED. The CLI still sends `{repo, branch, archive,
+ * createDatasets, git}` with a base64 gzipped tar, and still gets back
+ * `{ok, repo, branch, datasets:[{name, version, created}]}`. An existing
+ * `malloyyo` binary cannot tell the difference. What changed is everything
+ * behind it: the archive is stored as a revision, verified, and activated by a
+ * pointer flip (src/lib/repo-publish.ts).
  *
- * The single-dataset path is untouched. `malloyyo publish --dataset x` still
- * posts to /api/datasets/x/model/push and still means one dataset, because every
- * repo that exists today is that shape and the flag has to keep meaning what it
- * meant.
+ * Two additive, optional fields a future CLI can send: `repoSlug` (name this
+ * repo explicitly, the way out of a slug collision) and `archiveFormat`. A zip
+ * is accepted today purely by sniffing its magic bytes, so a CLI that switches
+ * needs no flag and no coordination.
+ *
+ * WHAT THIS ROUTE DECIDES is only authority and identity — which repo, may you
+ * write to it, may you create it. The publish itself is the shared pipeline.
  */
 
 import { NextResponse } from "next/server";
-import { and, eq, inArray } from "drizzle-orm";
-import { db, datasets } from "@/db";
-import { credentialLabel, requireBearer } from "@/lib/bearer-auth";
-import { canAuthor } from "@/lib/roles";
+import { nameToSlug } from "@malloyyo/mcp-engine";
+import { db, repos } from "@/db";
 import { isAdmin } from "@/lib/admin";
-import { compileAndWrite, contextFromArchive } from "@/lib/github-refresh";
-import { extractTarGz, archiveLister } from "@/lib/tarball";
-import { layoutFromListing } from "@/lib/repo-layout";
+import { credentialLabel, requireBearer } from "@/lib/bearer-auth";
 import { logger, serializeErr } from "@/lib/logger";
+import { publishRevision } from "@/lib/repo-publish";
+import { findRepoForPublish, repoSlugFromGitHub } from "@/lib/repos";
+import { canAuthor } from "@/lib/roles";
 import { captureTelemetry } from "@/lib/telemetry";
 
 export const runtime = "nodejs";
@@ -33,29 +36,17 @@ export const runtime = "nodejs";
 const bad = (error: string, status: number, extra: Record<string, unknown> = {}) =>
   NextResponse.json({ ok: false, error, ...extra }, { status });
 
-/**
- * Postgres 23505 — the unique violation `datasets_name_ready_unique` raises.
- *
- * On the SQLSTATE, never the message, which is the server's to localize. Checked
- * against a real Postgres rather than assumed: drizzle-orm/postgres-js wraps the
- * failure in a `DrizzleQueryError` whose own `code` is undefined and whose
- * `cause` is the `PostgresError` carrying "23505". Both are read because the
- * wrapping is drizzle's business, not ours, and an unwrapped error is what a
- * driver change would hand us.
- */
-function isNameClash(err: unknown): boolean {
-  const e = err as { code?: unknown; cause?: { code?: unknown } } | null;
-  return e?.code === "23505" || e?.cause?.code === "23505";
-}
-
 type Body = {
-  /** Identifies the SET of datasets this repo backs, e.g. "owner/name". */
+  /** `owner/name`. Identifies the repo; does NOT attach it to GitHub. */
   repo?: string;
+  /** The author's local branch. Provenance on the revision, nothing more. */
   branch?: string;
-  /** base64 of a gzipped tar of the repo, repo-relative. */
+  /** base64 of the repo archive — a zip, or a gzipped tar from an older CLI. */
   archive?: string;
-  /** Create any dataset the repo publishes that does not exist yet. */
+  /** Create any dataset the repo publishes that does not exist here yet. */
   createDatasets?: boolean;
+  /** Name the repo explicitly. Optional; nothing sends it yet. */
+  repoSlug?: string;
   git?: { sha?: string | null; branch?: string | null; dirty?: boolean | null };
 };
 
@@ -64,222 +55,166 @@ export async function POST(req: Request) {
   if (!auth.ok) return bad(auth.error, auth.status);
 
   const body = (await req.json().catch(() => null)) as Body | null;
-  const repoSlug = typeof body?.repo === "string" ? body.repo.trim() : "";
+  const githubRepo = typeof body?.repo === "string" ? body.repo.trim() : "";
   const branch = (typeof body?.branch === "string" && body.branch.trim()) || "main";
-  if (!repoSlug) return bad("repo is required (e.g. --repo owner/name)", 400);
+  if (!githubRepo && !body?.repoSlug) return bad("repo is required (e.g. --repo owner/name)", 400);
   if (typeof body?.archive !== "string" || !body.archive) return bad("no archive in payload", 400);
 
-  let files: Map<string, string>;
-  try {
-    const extracted = extractTarGz(Buffer.from(body.archive, "base64"));
-    files = extracted.files;
-  } catch (err) {
-    return bad(`could not read the repo archive: ${err instanceof Error ? err.message : String(err)}`, 400);
-  }
-  if (files.size === 0) return bad("the repo archive contains no model files", 400);
+  const raw = Buffer.from(body.archive, "base64");
+  if (raw.length === 0) return bad("the repo archive is empty", 400);
 
-  // The same rules the server applies to a repo it pulls, over the archive.
-  const layout = await layoutFromListing(archiveLister(files), repoSlug);
-  if (!layout.ok) return bad(layout.error, 400, { kind: "compile" });
+  const found = await findRepoForPublish({ githubRepo, repoSlug: body.repoSlug });
+  if ("error" in found) return bad(found.error, 409, { kind: "request" });
 
-  const publishes =
-    layout.kind === "single"
-      ? [{ name: "", dir: null as string | null }]
-      : layout.datasets.map((d) => ({ name: d.name, dir: d.dir as string | null }));
-
-  // A single-dataset repo has no directory to name it, and this endpoint has no
-  // --dataset. Point the caller at the flag that does.
-  if (layout.kind === "single") {
-    return bad(
-      `${repoSlug} publishes a single dataset (index.malloy at its root), so it has no name of its own here. ` +
-        `Publish it with --dataset <name> instead.`,
-      400,
-      { kind: "request" },
-    );
-  }
-
-  const existing = await db
-    .select()
-    .from(datasets)
-    .where(and(eq(datasets.githubRepo, repoSlug), eq(datasets.githubBranch, branch)));
-  const byDir = new Map(existing.map((d) => [d.repoDir ?? null, d]));
-
-  // WHO MAY WRITE TO AN EXISTING DATASET: its owner, or an admin. The same gate
-  // /api/datasets/[id]/model/push has had all along — this route is a second
-  // publish path and shipped without it, so any member holding a publish token
-  // could overwrite a dataset they do not own.
-  //
-  // That is not defacement, it is code execution: the archive carries the repo's
-  // `malloy-config.json`, whose connection secrets are `{"env": …}` refs resolved
-  // against THIS SERVER's environment, and compiling resolves schemas by running
-  // SQL. It is the precise reach that got MALLOYYO_DEVELOPER deleted
-  // (src/lib/roles.ts).
-  const mine = (d: (typeof existing)[number]) => d.userId === auth.user.id;
-  const foreign = existing.filter(
-    (d) => publishes.some((p) => p.dir === (d.repoDir ?? null)) && !mine(d),
-  );
-  if (foreign.length > 0 && !isAdmin(auth.user)) {
-    return bad(
-      `that account doesn't own ${foreign.map((d) => `"${d.name}"`).join(", ")} and isn't an ` +
-        `admin on this instance — publishing is limited to a dataset's owner`,
-      403,
-      { kind: "request" },
-    );
-  }
-
-  const missing = publishes.filter((p) => !byDir.has(p.dir));
-  if (missing.length > 0 && !body.createDatasets) {
-    return bad(
-      `${missing.map((m) => m.name).join(", ")}: not on this instance yet. ` +
-        `Pass --create-datasets to create ${missing.length > 1 ? "them" : "it"}.`,
-      404,
-      { kind: "no-dataset", missing: missing.map((m) => m.name) },
-    );
-  }
-  if (missing.length > 0 && !canAuthor(auth.user)) {
-    return bad("creating a dataset is admin-only — ask an admin to create it", 403, { kind: "request" });
-  }
-
-  // Names are URLs: check every one BEFORE writing any, so a repo cannot
-  // half-land because its third directory collided.
-  if (missing.length > 0) {
-    const names = missing.map((m) => m.name);
-    const clashes = await db
-      .select({ name: datasets.name })
-      .from(datasets)
-      .where(and(inArray(datasets.name, names), eq(datasets.status, "ready")));
-    if (clashes.length > 0) {
+  let repo;
+  if ("repo" in found) {
+    repo = found.repo;
+    // WHO MAY PUBLISH TO A REPO: its owner, or an admin. The first
+    // implementation of this route shipped with no gate at all, because a repo
+    // had no owner to check — so any member holding a publish token could
+    // overwrite anyone's datasets. That is not defacement, it is code
+    // execution: the archive carries the repo's `malloy-config.json`, whose
+    // connection secrets are `{"env": …}` references resolved against THIS
+    // server's environment, and compiling resolves schemas by running SQL.
+    if (repo.ownerId !== auth.user.id && !isAdmin(auth.user)) {
       return bad(
-        `already on this instance under a different repo: ${clashes.map((c) => c.name).join(", ")}`,
+        `that account doesn't own the repo "${repo.slug}" and isn't an admin on this instance — ` +
+          `publishing is limited to a repo's owner`,
+        403,
+        { kind: "request" },
+      );
+    }
+  } else {
+    // Creating a repo names a codebase this server will compile, which is the
+    // same reach `POST /api/datasets` is admin-only for.
+    if (!canAuthor(auth.user)) {
+      return bad(
+        `"${githubRepo}" is not a repo on this instance yet, and creating one is admin-only — ` +
+          `ask an admin to add it`,
+        403,
+        { kind: "request" },
+      );
+    }
+    const slug = body.repoSlug ? nameToSlug(body.repoSlug) : repoSlugFromGitHub(githubRepo);
+    if (!slug) return bad(`could not make a repo name out of "${githubRepo}"`, 400, { kind: "request" });
+    try {
+      [repo] = await db
+        .insert(repos)
+        .values({
+          slug,
+          ownerId: auth.user.id,
+          // NOT ATTACHED TO GITHUB. The CLI sent a GitHub slug to say which
+          // repo this is, not to ask for a GitHub pull. The previous
+          // implementation could not tell those apart — one pair of columns
+          // meant both — so a CLI publish stamped the author's LOCAL branch
+          // onto every dataset it created, and the refresh button would then
+          // pull `github.com/<slug>@wip` over the top of what had just been
+          // pushed. Attaching is a separate, deliberate act.
+          githubRepo: null,
+          githubBranch: null,
+          githubUseToken: false,
+        })
+        .returning();
+    } catch (err) {
+      // Two publishes racing to create the same repo. The loser reports the
+      // right outcome instead of a database error.
+      logger.info("repo create raced", { slug, ...serializeErr(err) });
+      return bad(
+        `another publish created the repo "${slug}" first — run the publish again`,
         409,
         { kind: "request" },
       );
     }
   }
 
-  // The rows for the datasets this publish creates — BUILT, not written. They go
-  // into the database inside the same transaction as the model versions that
-  // reference them, so a publish either lands completely or leaves no trace.
-  //
-  // Writing them up front and deleting them if the compile failed was the
-  // obvious shape and the wrong one: the delete is a compensating action, and a
-  // compensating action only runs if the process lives long enough to run it. A
-  // timeout or a redeploy during a compile — which does network I/O and resolves
-  // schemas by running SQL, so it is the slow part — left `ready` rows with no
-  // model behind them. Those rows hold their names under
-  // `datasets_name_ready_unique`, so the next legitimate publish got a 409 with
-  // nothing on the instance able to release it.
-  const newRows = missing.map((m) => ({
-    id: crypto.randomUUID(),
-    userId: auth.user.id,
-    name: m.name,
-    githubRepo: repoSlug,
-    githubBranch: branch,
-    // Nothing here pulls from GitHub — the archive came with the request —
-    // so a token would never be used and claiming otherwise would be a lie
-    // the config UI then shows.
-    githubUseToken: false,
-    repoDir: m.dir,
-    // Private by default: visibility is a deliberate act in the UI, never
-    // config-driven, and publish never changes it.
-    isPublic: false,
-    // `ready` is honest here, unlike before: the row and its first model version
-    // commit together, so there is no instant at which this dataset exists
-    // without one.
-    status: "ready" as const,
-    readyAt: new Date(),
-    requiredGivens: [] as string[],
-  }));
-  const fresh = new Set(newRows.map((r) => r.id));
-
   try {
-    const targets = [
-      ...existing.filter((d) => publishes.some((p) => p.dir === (d.repoDir ?? null))),
-      ...newRows,
-    ];
-
-    const ctx = contextFromArchive(files, {
-      slug: repoSlug,
-      branch,
-      sha: body.git?.sha ?? null,
-      origin: `cli:${repoSlug}@${branch}`,
+    const result = await publishRevision({
+      repo,
+      raw,
+      source: "cli",
+      createdById: auth.user.id,
+      git: { sha: body.git?.sha ?? null, branch: body.git?.branch ?? branch, dirty: body.git?.dirty ?? null },
+      createDatasets: body.createDatasets ?? false,
+      // A dataset this publish creates belongs to the person who published it,
+      // not to whoever happens to own the repo — a repo's owner may be an admin
+      // who added it, and the publisher is who will maintain the dataset.
+      datasetOwnerId: auth.user.id,
+      // `--repo` is the multi-dataset flag; a root `index.malloy` is
+      // `--dataset <name>`'s business, and the refusal names it.
+      refuseRootLayout: true,
     });
 
-    // ONE call, so ONE transaction — now covering the creates as well as the
-    // writes. `creating` rides on each target: it applies only to the rows this
-    // request is making, because a dataset already here is the authority on what
-    // it is scoped by and a publish may not widen it (src/lib/tenancy.ts). Two
-    // calls would have been two transactions, and a repo that creates one
-    // dataset while refreshing another would half-land.
-    const { refreshed, failed: allFailed } = await compileAndWrite(
-      targets.map((t) => ({ ...t, creating: fresh.has(t.id) })),
-      ctx,
-      newRows,
-    );
-
-    if (allFailed.length > 0) {
-      // Nothing was written, and nothing was created — the inserts were in the
-      // transaction that never ran. There is nothing to undo.
+    if (!result.ok) {
       logger.info("repo push refused", {
-        repo: repoSlug,
-        branch,
+        repo: repo.slug,
         credential: credentialLabel(auth.cred),
-        failed: allFailed,
+        kind: result.kind,
+        revisionId: result.revisionId,
+        error: result.error,
       });
+      void captureTelemetry({
+        event: "model published",
+        properties: {
+          method: "cli_repo_push",
+          outcome: "error",
+          created_dataset: false,
+          source_count: 0,
+          file_count: 0,
+          dashboard_count: 0,
+        },
+      });
+      const status = result.kind === "request" ? 404 : result.kind === "stale" ? 409 : 400;
       return bad(
-        `nothing was published — ${allFailed.map((f) => `${f.name}: ${f.error}`).join("; ")}`,
-        400,
-        { kind: "compile", failures: allFailed },
+        result.kind === "compile" ? `nothing was published — ${result.error}` : result.error,
+        status,
+        {
+          kind: result.kind === "layout" || result.kind === "archive" ? "compile" : result.kind,
+          ...(result.failures
+            ? { failures: result.failures.map((f) => ({ name: f.name, error: f.error })) }
+            : {}),
+          ...(result.missing ? { missing: result.missing.map((m) => m.name) } : {}),
+        },
       );
     }
 
-    const published = refreshed;
     void captureTelemetry({
       event: "model published",
       properties: {
         method: "cli_repo_push",
         outcome: "success",
-        created_dataset: newRows.length > 0,
+        created_dataset: result.datasets.some((d) => d.created),
         source_count: 0,
-        file_count: files.size,
+        file_count: 0,
         dashboard_count: 0,
       },
     });
     logger.info("repo published", {
-      repo: repoSlug,
-      branch,
+      repo: repo.slug,
+      revision: result.revision,
+      unchanged: result.unchanged ?? false,
       credential: credentialLabel(auth.cred),
-      datasets: published.map((p) => p.name),
-      created: newRows.length,
+      datasets: result.datasets.map((d) => d.qualified),
     });
+
     return NextResponse.json({
       ok: true,
-      repo: repoSlug,
+      // The field the CLI prints, unchanged in meaning: what the caller named.
+      repo: githubRepo || repo.slug,
       branch,
-      datasets: published.map((p) => ({
-        name: p.name,
-        version: p.version,
-        created: fresh.has(p.id),
+      revision: result.revision,
+      datasets: result.datasets.map((d) => ({
+        name: d.name,
+        // Additive: the new public identity, for a CLI that wants to print it.
+        qualified: d.qualified,
+        version: d.version,
+        created: d.created,
       })),
+      ...(result.unclaimed.length > 0 ? { unclaimed: result.unclaimed.map((u) => u.name) } : {}),
     });
   } catch (err) {
-    // No cleanup: everything this request writes is inside one transaction, so a
-    // throw anywhere above leaves the instance exactly as it was found.
-    //
-    // Two publishes racing to create the same name land here — the second one's
-    // transaction is rejected by `datasets_name_ready_unique` and rolls back
-    // whole, which is the right outcome reported badly, so name it.
-    if (isNameClash(err)) {
-      return bad(
-        `another publish claimed ${newRows.map((r) => `"${r.name}"`).join(", ")} first — ` +
-          `nothing was written; re-run to see which names are still free`,
-        409,
-        { kind: "request" },
-      );
-    }
-    // The message stays in the log: this route is reachable by any member with a
-    // publish token, and a raw database error is not theirs to read.
-    logger.error("repo push failed", { repo: repoSlug, ...serializeErr(err) });
+    // Nothing partial survives a throw: the revision is stored and inert, and
+    // the activation is one transaction. There is nothing to clean up.
+    logger.error("repo push failed", { repo: repo.slug, ...serializeErr(err) });
     return bad("the publish could not be completed — the server log has the detail", 500, {
       kind: "persist",
     });

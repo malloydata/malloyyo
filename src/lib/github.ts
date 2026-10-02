@@ -131,6 +131,37 @@ export async function fetchGitHubTarball(
 }
 
 /**
+ * The whole repo as a ZIP, in one request.
+ *
+ * Preferred over the tarball above, because zip is what a revision is STORED as
+ * (src/db/schema.ts) and this way the bytes GitHub sends need no conversion:
+ * one request, one format, one reader. The reason for zip over `.tar.gz` is that
+ * gzip is a single stream and cannot be read partially, while a zip has a
+ * central directory with per-member offsets — so one dataset's files can be read
+ * without inflating the rest, and a member's uncompressed size is known before
+ * anything is inflated, which is what bounds a decompression bomb.
+ *
+ * Returns null when GitHub will not give it, so a caller can say why rather than
+ * throw a fetch error at someone reading a log.
+ */
+export async function fetchGitHubZipball(
+  owner: string,
+  repo: string,
+  ref: string,
+  opts: { useToken?: boolean } = {},
+): Promise<Buffer | null> {
+  const useToken = opts.useToken !== false;
+  const url = `https://api.github.com/repos/${owner}/${repo}/zipball/${encodeURIComponent(ref)}`;
+  const res = await githubFetch(url, githubHeaders(useToken, "application/vnd.github+json"));
+  if (!res.ok) return null;
+  try {
+    return Buffer.from(await res.arrayBuffer());
+  } catch {
+    return null;
+  }
+}
+
+/**
  * The commit a branch currently points at.
  *
  * Recorded on every model a repo refresh writes, which is what makes "these

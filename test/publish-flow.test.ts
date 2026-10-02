@@ -32,6 +32,7 @@ import {
   malloyModels,
   malloyModelFiles,
   malloyArtifacts,
+  repos,
   oauthClients,
   oauthAccessTokens,
   apiTokens,
@@ -1110,8 +1111,16 @@ test("a repo publishes every dataset it holds, in one request", async () => {
   for (const name of names) {
     const [ds] = await datasetRows(name);
     assert.ok(ds, `${name} was created`);
-    assert.equal(ds.githubRepo, REPO_SLUG, "…and belongs to the repo that published it");
+    // Membership is a FOREIGN KEY now, not a text match on two columns anyone
+    // could edit a row at a time.
+    assert.ok(ds.repoId, "…and belongs to a repo row");
     assert.equal(ds.repoDir, `datasets/${name}`, "…at its own directory");
+    // A CLI publish does NOT make the repo GitHub-refreshable. One pair of
+    // columns used to mean both "these belong together" and "GitHub backs
+    // this", so this path stamped the author's local branch and the refresh
+    // button would pull over the top of what had just been pushed.
+    const [repoRow] = await db.select().from(repos).where(eq(repos.id, ds.repoId!));
+    assert.equal(repoRow.githubRepo, null, "…and the repo is not attached to GitHub");
     assert.equal((await models(ds.id)).length, 1);
   }
 });

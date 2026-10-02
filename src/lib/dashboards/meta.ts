@@ -13,7 +13,7 @@
 // This module must NEVER import ./engine or @/lib/malloy (statically or lazily).
 
 import { and, eq, asc, desc, inArray } from "drizzle-orm";
-import { db, datasets, malloyArtifacts, malloyModels, malloyModelFiles, draftDashboards, users } from "@/db";
+import { db, datasets, malloyArtifacts, malloyModels, draftDashboards, users } from "@/db";
 import { visibleDatasetWhere, findByDatasetRef, latestModel } from "@/lib/mcp-tools";
 import { aboutFirst } from "./about";
 import { imageHostsFromConfig } from "./image-hosts";

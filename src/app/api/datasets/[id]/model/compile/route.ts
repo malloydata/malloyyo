@@ -3,7 +3,7 @@
 
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { desc, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { db, datasets } from "@/db";
 import { latestModel, modelFileMap } from "@/lib/mcp-tools";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";

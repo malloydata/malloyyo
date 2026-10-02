@@ -3,7 +3,7 @@
 
 import { NextResponse } from "next/server";
 import { datasetTitle } from "@malloyyo/mcp-engine";
-import { and, desc, eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db, datasets, malloyArtifacts, repoRevisions, repos } from "@/db";
 import { latestModel, modelFileMap } from "@/lib/mcp-tools";
 import { qualifiedName, resolveDatasetRef } from "@/lib/repos";

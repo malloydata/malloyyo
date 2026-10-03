@@ -1,0 +1,21 @@
+-- Delete datasets that never loaded.
+--
+-- A `failed` row is a creation that did not happen. It serves nothing, and
+-- because `datasets_name_ready_unique` is partial on `ready` it does not even
+-- hold its own name — so every retry left another one beside it. On the instance
+-- this was written against, one repo collected six in thirteen minutes that way
+-- (renamed between attempts), and 15 of 23 dataset rows were this debris.
+--
+-- They cannot come back: a create now publishes a revision first and makes its
+-- dataset rows inside that transaction, so a failure makes nothing at all.
+--
+-- `= 'failed'` and not `<> 'ready'`, deliberately. The other statuses — pending,
+-- ingesting, introspecting, modeling — are a creation IN FLIGHT, and this
+-- migration must not race one. `failed` is terminal.
+--
+-- Checked before writing this, against a fork of production: no saved query, no
+-- history row, no model version, no alias and no chat referred to any of them.
+-- Everything that points at a dataset cascades or nulls, so there is nothing to
+-- orphan either way; the check was to be sure nothing a person made was
+-- attached to one.
+DELETE FROM "datasets" WHERE "status" = 'failed';

@@ -53,7 +53,16 @@ export async function POST(_req: Request, ctx: { params: Promise<{ id: string }>
     );
   }
 
-  const result = await refreshRepo(repo.id);
+  // `create` adds a dataset for any directory the repo publishes that no dataset
+  // covers yet. Off by default, because creating datasets is not what "refresh"
+  // means and a webhook must never do it — but reachable, because a repo whose
+  // datasets were removed is otherwise inert: a plain refresh only refreshes
+  // what already exists, so it would succeed, publish nothing, and report every
+  // directory as unclaimed forever.
+  const url = new URL(_req.url);
+  const createDatasets = url.searchParams.get("create") === "1";
+
+  const result = await refreshRepo(repo.id, { createDatasets });
   void captureTelemetry({
     event: "model published",
     properties: {
@@ -62,7 +71,7 @@ export async function POST(_req: Request, ctx: { params: Promise<{ id: string }>
       // funnel in the analytics for no reason anybody reading them would want.
       method: "github_refresh",
       outcome: result.ok ? "success" : "error",
-      created_dataset: false,
+      created_dataset: createDatasets,
       source_count: 0,
       file_count: 0,
       dashboard_count: 0,
@@ -78,6 +87,9 @@ export async function POST(_req: Request, ctx: { params: Promise<{ id: string }>
   return NextResponse.json({
     ok: true,
     unchanged: result.unchanged ?? false,
+    // Directories the repo publishes that no dataset covers. Non-empty after a
+    // plain refresh is the signal to retry with `create`.
+    unclaimed: result.unclaimed?.map((u) => u.dir) ?? [],
     revision: result.revision,
     sha: result.sha,
     datasets: result.datasets.map((d) => d.qualified),

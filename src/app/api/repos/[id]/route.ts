@@ -15,7 +15,7 @@
  */
 
 import { NextResponse } from "next/server";
-import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, ne, sql } from "drizzle-orm";
 import { db, datasets, repos, repoRevisions, malloyModels } from "@/db";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
@@ -83,6 +83,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
       name: datasets.name,
       title: datasets.title,
       status: datasets.status,
+      statusError: datasets.statusError,
       repoDir: datasets.repoDir,
       createdAt: datasets.createdAt,
       isPublic: datasets.isPublic,
@@ -93,7 +94,16 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
       )`,
     })
     .from(datasets)
-    .where(eq(datasets.repoId, repo.id))
+    // A failed load is not a dataset. It is a creation that did not happen, and
+    // because the name index is partial on `ready` it does not even hold its own
+    // name — so a retry leaves another beside it. One repo here collected six in
+    // thirteen minutes that way. Listing them says six things exist when none do.
+    //
+    // They cannot recur: a create now publishes a revision first and makes the
+    // rows inside that transaction, so a failure makes nothing. These are
+    // historical, and the only reason not to delete them outright is that it is
+    // not this endpoint's business.
+    .where(and(eq(datasets.repoId, repo.id), ne(datasets.status, "failed")))
     .orderBy(asc(datasets.name));
 
   return NextResponse.json({

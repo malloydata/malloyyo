@@ -45,6 +45,7 @@ type RepoDetail = {
     qualified: string;
     displayTitle: string;
     status: string;
+    statusError: string | null;
     repoDir: string;
     entryFile: string;
     createdAt: string;
@@ -124,6 +125,7 @@ function GitHubSection({ repo, onChanged }: { repo: RepoDetail; onChanged: () =>
   const [useToken, setUseToken] = useState(repo.githubUseToken);
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+  const [unclaimed, setUnclaimed] = useState<string[]>([]);
 
   const dirty =
     ghRepo !== (repo.githubRepo ?? "") ||
@@ -145,19 +147,31 @@ function GitHubSection({ repo, onChanged }: { repo: RepoDetail; onChanged: () =>
     onChanged();
   }
 
-  async function refresh() {
-    setBusy("refresh");
+  async function refresh(create = false) {
+    setBusy(create ? "create" : "refresh");
     setMsg(null);
-    const res = await fetch(`/api/repos/${encodeURIComponent(repo.slug)}/refresh`, { method: "POST" });
+    const res = await fetch(
+      `/api/repos/${encodeURIComponent(repo.slug)}/refresh${create ? "?create=1" : ""}`,
+      { method: "POST" },
+    );
     const j = await res.json().catch(() => ({}));
     setBusy(null);
     if (!res.ok) return setMsg({ kind: "err", text: j.error ?? `HTTP ${res.status}` });
+
+    const n = (j.datasets ?? []).length;
+    const unclaimed: string[] = j.unclaimed ?? [];
     setMsg({
       kind: "ok",
       text: j.unchanged
         ? `already at revision ${j.revision} — nothing on GitHub has changed`
-        : `revision ${j.revision} is live (${(j.datasets ?? []).length} dataset(s))`,
+        : `revision ${j.revision} is live (${n} dataset${n === 1 ? "" : "s"})` +
+          // Saying this is the difference between "it worked" and knowing why a
+          // repo that pulled fine still serves nothing.
+          (unclaimed.length > 0
+            ? ` — ${unclaimed.length} director${unclaimed.length === 1 ? "y" : "ies"} no dataset covers: ${unclaimed.join(", ")}`
+            : ""),
     });
+    setUnclaimed(unclaimed);
     onChanged();
   }
 
@@ -204,13 +218,27 @@ function GitHubSection({ repo, onChanged }: { repo: RepoDetail; onChanged: () =>
           {busy === "save" ? "saving…" : "Save"}
         </button>
         <button
-          onClick={refresh}
+          onClick={() => refresh(false)}
           disabled={!repo.githubRepo || busy !== null}
           title={repo.githubRepo ? "Pull this repo from GitHub again" : "Attach a GitHub repo first"}
           className="text-xs px-2.5 py-1 rounded border border-gray-900 dark:border-gray-200 bg-gray-900 dark:bg-gray-100 text-white dark:text-gray-900 disabled:opacity-40"
         >
           {busy === "refresh" ? "refreshing…" : "Refresh from GitHub"}
         </button>
+        {/* Only once there is something to create. Creating datasets is not what
+            "refresh" means, so it is a separate, deliberate act — but a repo with
+            no datasets is inert without it: a plain refresh succeeds, publishes
+            nothing, and reports every directory unclaimed. */}
+        {(unclaimed.length > 0 || repo.datasets.length === 0) && repo.githubRepo && (
+          <button
+            onClick={() => refresh(true)}
+            disabled={busy !== null}
+            title="Pull again, and create a dataset for each directory no dataset covers"
+            className="text-xs px-2.5 py-1 rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950 disabled:opacity-40 hover:bg-gray-100 dark:hover:bg-gray-900"
+          >
+            {busy === "create" ? "creating…" : "Refresh and create missing datasets"}
+          </button>
+        )}
       </div>
 
       {msg && (
@@ -278,8 +306,19 @@ function DatasetsSection({ repo }: { repo: RepoDetail }) {
                   {d.legacyModels} old version{d.legacyModels === 1 ? "" : "s"}
                 </span>
               )}
+              {/* The reason is recorded on the row; showing the word without it
+                  left "failed" as something you could only explain with SQL.
+                  The pair in this repo failed on a BigQuery credential in
+                  August and have sat there since. */}
               {d.status !== "ready" && (
-                <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-gray-500">
+                <span
+                  title={d.statusError ?? `status: ${d.status}`}
+                  className={`text-[10px] px-1.5 py-0.5 rounded ${
+                    d.status === "failed"
+                      ? "bg-red-50 text-red-700 border border-red-200 dark:bg-red-900/30 dark:text-red-300 dark:border-red-800/60 cursor-help"
+                      : "bg-gray-100 dark:bg-gray-800 text-gray-500"
+                  }`}
+                >
                   {d.status}
                 </span>
               )}

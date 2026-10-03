@@ -969,3 +969,46 @@ test("a client is told the QUALIFIED name, so two same-named datasets stay addre
   const [north] = await db.select().from(repos).where(eq(repos.slug, "north"));
   assert.equal(old.ds.repoId, north.id);
 });
+
+test("an UN-converted repo converts on a refetch even when nothing changed", async () => {
+  // The question this answers: an instance upgrades, its datasets are still
+  // served from `malloy_models` rows, and the admin presses refresh on a repo
+  // GitHub has not touched since. Does the content-hash short-circuit skip it?
+  //
+  // It cannot: that short-circuit compares against the ACTIVE REVISION, and an
+  // un-converted repo has none. But "cannot" is a reading of an if-statement,
+  // and this is the path every existing instance takes exactly once.
+  const repo = await makeRepo("unconverted");
+  const content = multiRepo(["sales"]);
+
+  // Convert once so the dataset row exists, then put the repo back the way an
+  // un-converted one looks: no active revision at all.
+  const seed = await publishRevision({
+    repo, raw: content, source: "github", createdById: owner.id, createDatasets: true,
+  });
+  assert.ok(seed.ok, seed.ok ? "" : seed.error);
+  await db.update(repoRevisions).set({ active: false }).where(eq(repoRevisions.repoId, repo.id));
+
+  const noLive = await db
+    .select().from(repoRevisions)
+    .where(and(eq(repoRevisions.repoId, repo.id), eq(repoRevisions.active, true)));
+  assert.equal(noLive.length, 0, "the repo has no live revision, like an un-converted one");
+
+  // The refetch, with byte-identical content.
+  const again = await publishRevision({
+    repo, raw: content, source: "github", createdById: owner.id,
+  });
+  assert.ok(again.ok, again.ok ? "" : again.error);
+  assert.notEqual(again.unchanged, true, "it did NOT short-circuit as unchanged");
+
+  const [live] = await db
+    .select().from(repoRevisions)
+    .where(and(eq(repoRevisions.repoId, repo.id), eq(repoRevisions.active, true)));
+  assert.ok(live, "a revision is now live");
+  assert.ok(live.verifiedAt, "and verified");
+
+  for (const ds of await datasetsOf(repo.id)) {
+    const model = await activeModel(ds.id);
+    assert.equal(model?.revisionId, live.id, `${ds.name} is served from the revision`);
+  }
+});

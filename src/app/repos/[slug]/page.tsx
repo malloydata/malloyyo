@@ -46,6 +46,7 @@ type RepoDetail = {
     displayTitle: string;
     status: string;
     repoDir: string;
+    entryFile: string;
     createdAt: string;
     legacyModels: number;
   }>;
@@ -258,14 +259,14 @@ function DatasetsSection({ repo }: { repo: RepoDetail }) {
               </Link>
               <span className="block text-[11px] text-gray-500 dark:text-gray-400 font-mono truncate">
                 {d.qualified}
-                {/* The directory is what distinguishes datasets inside a repo —
-                    but rows that predate the repo model have none, and the name
-                    index is partial on `ready`, so a repo really can hold two
-                    failed rows that look identical. Say when there is no
-                    directory, and date them, or an admin is left staring at two
-                    of the same thing. */}
-                {d.repoDir ? ` · ${d.repoDir}` : " · no directory"}
-                {` · ${new Date(d.createdAt).toLocaleDateString()}`}
+                {/* The entry file, not the directory: a dataset at the repo
+                    root has no directory, and naming the file says what is
+                    actually there. Dated too, because the name index is partial
+                    on `ready` — so a repo really can hold two failed rows that
+                    are otherwise identical, and some do. Time and not just date:
+                    the pair this was written against was created fifteen minutes
+                    apart, so a date alone still showed two of the same thing. */}
+                {` · ${d.entryFile} · ${new Date(d.createdAt).toLocaleString()}`}
               </span>
             </span>
             <span className="flex items-center gap-2 flex-shrink-0">

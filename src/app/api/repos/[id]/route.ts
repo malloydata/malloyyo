@@ -21,7 +21,7 @@ import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
 import { parseGitHubRepo } from "@/lib/github";
 import { qualifiedName } from "@/lib/repos";
-import { datasetTitle } from "@malloyyo/mcp-engine";
+import { datasetTitle, repoPath } from "@malloyyo/mcp-engine";
 import { logger } from "@/lib/logger";
 
 export const runtime = "nodejs";
@@ -113,6 +113,10 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
       ...d,
       qualified: qualifiedName(repo.slug, d.name),
       displayTitle: datasetTitle(d.name, d.title),
+      // The file this dataset is, rather than the directory it is in. A dataset
+      // at the repo root has no directory to name, and "no directory" described
+      // an absence instead of the thing that is there.
+      entryFile: `./${repoPath(d.repoDir, "index.malloy")}`,
     })),
   });
 }

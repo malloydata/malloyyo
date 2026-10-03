@@ -36,10 +36,16 @@ export const runtime = "nodejs";
 const GitHubBody = z.object({
   githubRepo: z.string().min(1),
   githubBranch: z.string().min(1).default("main"),
-  /** The dataset name for a single-dataset repo; also the repo's name unless
-      `repoSlug` says otherwise. In a multi-dataset repo the DIRECTORIES name the
-      datasets, so this only names the repo. */
-  name: z.string().min(1).max(64),
+  /**
+   * OPTIONAL. The dataset name for a single-dataset repo.
+   *
+   * In a multi-dataset repo the DIRECTORIES name the datasets, so there is
+   * nothing for it to name and asking for it was asking someone to invent a
+   * value that would be ignored. For a single-dataset repo it defaults to the
+   * GitHub repo's own name — the same derivation the repo slug uses — which is
+   * what a person typed into this box anyway.
+   */
+  name: z.string().min(1).max(64).optional(),
   useToken: z.boolean().default(true),
   /** Name the repo explicitly. Optional — defaults to the GitHub repo's name. */
   repoSlug: z.string().min(1).max(64).optional(),
@@ -214,7 +220,7 @@ export async function POST(req: Request) {
       // A single-dataset repo has no directory to be named after, so the form's
       // `name` names it. The same field names the repo, which is why a repo and
       // its one dataset normally share a name.
-      rootDatasetName: nameToSlug(body.name),
+      rootDatasetName: nameToSlug(body.name ?? repoSlugFromGitHub(body.githubRepo)),
     });
 
     if (!result.ok) {

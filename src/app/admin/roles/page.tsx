@@ -233,9 +233,7 @@ export default async function AdminRolesPage() {
           <h2 className="text-sm font-medium">New arrivals get</h2>
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 max-w-2xl">
             Roles everyone gets on their first sign-in. If none of them opens a dataset, new
-            people see an empty instance until someone grants them access.{" "}
-            <code className="text-[11px]">MALLOYYO_ADMIN</code> is not offered here: it would
-            make an admin of everyone who signs in.
+            people see an empty instance until someone grants them access.
           </p>
         </div>
         <DefaultRoles

@@ -2,8 +2,8 @@
 import { Command } from "commander";
 import { resolve, relative, sep } from "node:path";
 import { resolveTarget, resolveInstance, resolvePublishTarget, type Target } from "./config.js";
-import { gatherDirectory, gatherDashboards, gatherRepoFiles, gitInfo } from "./gather.js";
-import { buildTarGz, layoutFromListing } from "@malloyyo/mcp-engine";
+import { gatherDirectory, gatherDashboards, gitArchiveZip, gitInfo } from "./gather.js";
+import { layoutFromListing } from "@malloyyo/mcp-engine";
 import { fsLister, repoRootOf } from "./repo.js";
 import {
   OLD_LAYOUT_NOTICE,
@@ -213,12 +213,13 @@ async function publishRepo(
     }
   }
 
-  // Everything the server could need, repo-relative. Which files those are is
-  // the same question `gatherDirectory` answers for one dataset, asked of the
-  // whole repo — the server then keeps each dataset's own transitive closure.
-  const files = gatherRepoFiles(root);
-  if (files.size === 0) throw new Error(`No model files found under ${root}`);
-  const archive = buildTarGz(files);
+  // What is in the repo is what GIT says is in the repo — not what a directory
+  // walk with a skip list decides. That walk silently dropped a dataset whose
+  // directory was called `docs/`, and uploaded the gitignored
+  // `malloy-config-local.json` where the real credentials live. Both stop being
+  // possible here rather than being patched one at a time.
+  const { zip: archive, fileCount } = gitArchiveZip(root);
+  if (fileCount === 0) throw new Error(`${root} has no files git tracks — nothing to publish`);
 
   const git = gitInfo(root);
   const provenance = git.sha
@@ -226,7 +227,7 @@ async function publishRepo(
     : "(no git)";
   console.log(`→ ${t.url}  repo=${opts.repo}${opts.createDatasets ? " (create missing)" : ""}`);
   console.log(`  ${datasetNames.length} dataset(s): ${datasetNames.join(", ")}`);
-  console.log(`  ${files.size} file(s), ${(archive.length / 1024).toFixed(0)}KB archive  ${provenance}`);
+  console.log(`  ${fileCount} file(s), ${(archive.length / 1024).toFixed(0)}KB archive  ${provenance}`);
 
   if (opts.dryRun) {
     console.log("dry run — not sending");

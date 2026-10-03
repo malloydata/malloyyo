@@ -52,6 +52,8 @@ export async function GET() {
       // dataset per page view (which with GITHUB_TOKEN unset spent a 60/hour
       // budget on the home page).
       hasDevcontainer: repoRevisions.hasDevcontainer,
+      /** Null when no revision is live — see `needsUpdate` below. */
+      liveRevisionId: repoRevisions.id,
       ownerName: users.name,
     })
     .from(datasets)
@@ -94,6 +96,16 @@ export async function GET() {
     githubBranch: string | null;
     hasDevcontainer: boolean;
     githubConnected: boolean;
+    /**
+     * Still served the old way: no live revision behind it.
+     *
+     * True for a dataset whose repo has never been refetched since the upgrade,
+     * and for one no repo publishes at all. Both are "the content lives in
+     * `malloy_models` rows rather than in a verified revision", which is what an
+     * admin needs to see and act on — by refreshing the repo, or for a dataset
+     * with no GitHub behind it, by republishing it into one.
+     */
+    needsUpdate: boolean;
     ownerName?: string | null;
     sources: Array<{ source: string; description: string | null }>;
   }> = [];
@@ -147,6 +159,7 @@ export async function GET() {
       // repo publishes. Additive - `dataset` keeps meaning what it meant.
       qualified: qualifiedName(ds.repoSlug, ds.name),
       repo: ds.repoSlug,
+      needsUpdate: ds.liveRevisionId === null,
       status: ds.status,
       isPublic: ds.isPublic,
       // "owner/repo" the model came from: the dataset's configured GitHub repo,

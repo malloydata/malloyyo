@@ -40,6 +40,14 @@ type SourceSummary = { source: string; description: string | null };
 // are joined on. No id reaches this file.
 type DatasetGroup = {
   dataset: string;
+  /** The repo that publishes it — the grouping key. Null for a dataset no repo
+      publishes, which after the repo rewrite means one that has not been
+      converted yet. */
+  repo: string | null;
+  /** `<repo>:<dataset>`, how it is addressed now. */
+  qualified: string;
+  /** Still served from per-file rows rather than a verified revision. */
+  needsUpdate: boolean;
   isPublic: boolean;
   status: string;
   githubRepo: string | null;
@@ -246,6 +254,36 @@ function shortAuthor(author: string): string {
     ...datasetGroups.map((g) => g.dataset).filter((n) => !favByDataset.has(n)),
   ];
 
+  /**
+   * The same datasets, under the repo that publishes them.
+   *
+   * A repo is the unit that is configured, refreshed and linked to GitHub, so
+   * rendering four datasets from one repo as four independent cards — each with
+   * its own identical octocat and its own gear onto the same settings — said the
+   * opposite of how it works.
+   *
+   * Order is inherited, not recomputed: the first time a repo's dataset appears
+   * in the recency order fixes where that repo sits, so the most-used thing stays
+   * at the top. A dataset no repo publishes keeps its own card, under a null key,
+   * because it genuinely is a thing on its own.
+   */
+  const repoSections: Array<{ repo: string | null; names: string[] }> = [];
+  {
+    const at = new Map<string | null, number>();
+    for (const name of orderedDatasetNames) {
+      const key = datasetByName.get(name)?.repo ?? null;
+      // Null groups never merge: each unconverted dataset is its own section.
+      const k = key === null ? `\u0000${name}` : key;
+      const seen = at.get(k);
+      if (seen === undefined) {
+        at.set(k, repoSections.length);
+        repoSections.push({ repo: key, names: [name] });
+      } else {
+        repoSections[seen]!.names.push(name);
+      }
+    }
+  }
+
   // claude.ai chats seeded via this instance's MCP tools — one per source, one
   // for a whole dataset.
   const claudeExploreUrl = (source: string) =>
@@ -380,8 +418,37 @@ function shortAuthor(author: string): string {
             ) : orderedDatasetNames.length === 0 ? (
               <p className="text-gray-500 dark:text-gray-400 text-xs">No sources yet.</p>
             ) : (
-              <div className="space-y-4">
-                {orderedDatasetNames.map((dsName) => {
+              <div className="space-y-6">
+                {repoSections.map((section) => {
+                  const head = section.repo
+                    ? datasetByName.get(section.names[0]!)
+                    : undefined;
+                  return (
+                  <div key={section.repo ?? `solo:${section.names[0]}`} className="space-y-2">
+                    {/* The REPO bar. Everything on it is a fact about the repo —
+                        where it came from, whether it opens as a codespace, and
+                        where it is configured — which used to be repeated on
+                        every dataset card and edited one row at a time. */}
+                    {section.repo && (
+                      <div className="flex items-center gap-2 px-1">
+                        <span className="text-sm font-semibold text-gray-700 dark:text-gray-300">{section.repo}</span>
+                        {head?.githubRepo && (
+                          <RepoLinks
+                            repo={head.githubRepo}
+                            branch={head.githubBranch}
+                            hasDevcontainer={head.hasDevcontainer}
+                            githubConnected={head.githubConnected}
+                            dataset={head.dataset}
+                          />
+                        )}
+                        {head?.needsUpdate && <NeedsUpdate />}
+                        <span className="text-[11px] text-gray-400 dark:text-gray-500">
+                          {section.names.length} dataset{section.names.length === 1 ? "" : "s"}
+                        </span>
+                      </div>
+                    )}
+                    <div className="space-y-4">
+                {section.names.map((dsName) => {
                   const g = datasetByName.get(dsName);
                   const { bySource, order } = groupBySource(favByDataset.get(dsName) ?? []);
                   const withQuestions = new Set(order.filter((k) => k !== ""));
@@ -416,7 +483,10 @@ function shortAuthor(author: string): string {
                           >
                             {g?.dataset ?? "dataset"}
                           </Link>
-                          {g?.githubRepo && (
+                          {/* Only for a dataset with no repo bar above it to
+                              carry them — otherwise these are the repo's, shown
+                              once rather than once per sibling. */}
+                          {!section.repo && g?.githubRepo && (
                             <RepoLinks
                               repo={g.githubRepo}
                               branch={g.githubBranch}
@@ -425,6 +495,7 @@ function shortAuthor(author: string): string {
                               dataset={g.dataset}
                             />
                           )}
+                          {!section.repo && g?.needsUpdate && <NeedsUpdate />}
                         </span>
                         <div className="flex items-center gap-2 flex-shrink-0">
                           {g && g.status !== "ready" && <StatusBadge status={g.status} />}
@@ -551,6 +622,10 @@ function shortAuthor(author: string): string {
                     </div>
                   );
                 })}
+                    </div>
+                  </div>
+                  );
+                })}
               </div>
             )}
           </section>
@@ -609,6 +684,26 @@ function shortAuthor(author: string): string {
 // Both links are built from the PARSED slug, so a model published from an ssh
 // remote (git@github.com:owner/repo.git — what `git remote get-url` returns for
 // most checkouts) links correctly instead of to github.com/git@github.com:owner….
+/**
+ * "Still served the old way."
+ *
+ * An instance that predates the repo model keeps serving from per-file rows
+ * until its repo is refetched from GitHub, which is a deliberate act — nothing
+ * converts on its own, because a conversion deletes the old copy and that should
+ * not ride along on a webhook. So the state has to be visible, or an admin has
+ * no way to know which repos they still owe a refresh.
+ */
+function NeedsUpdate() {
+  return (
+    <span
+      title="Still served from the old per-file storage. Refresh this repo from GitHub to move it onto a verified revision."
+      className="text-[10px] px-1.5 py-0.5 rounded border border-amber-300 text-amber-700 bg-amber-50 dark:border-amber-700/60 dark:text-amber-300 dark:bg-amber-900/30"
+    >
+      needs update
+    </span>
+  );
+}
+
 function RepoLinks({
   repo,
   branch,

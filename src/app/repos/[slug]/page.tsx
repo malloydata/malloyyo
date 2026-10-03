@@ -282,11 +282,13 @@ function DatasetsSection({ repo }: { repo: RepoDetail }) {
                   {d.status}
                 </span>
               )}
+              {/* No "config" link: a repo-backed dataset's config page now
+                  redirects straight back here, so it would be a loop. */}
               <Link
-                href={`/datasets/${encodeURIComponent(d.name)}/config`}
+                href={`/datasets/${encodeURIComponent(d.name)}`}
                 className="text-[11px] text-gray-500 hover:underline"
               >
-                config
+                open
               </Link>
             </span>
           </div>

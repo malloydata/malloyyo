@@ -16,6 +16,9 @@ type DatasetDetail = {
   isAdmin: boolean;
   githubRepo: string | null;
   githubBranch: string | null;
+  /** The repo that publishes this dataset, when one does. Null for a dataset
+      that predates the repo model or was made by `--dataset x`. */
+  repo: { id: string; slug: string; title: string | null } | null;
   dashboards: Array<{ name: string; title: string; manifest: Record<string, unknown>; source: string }>;
   lastPublish: {
     at: string;
@@ -141,7 +144,16 @@ export default function DatasetPage({
           <Link href="/" className="text-xs text-gray-500 dark:text-gray-400 hover:underline">← all datasets</Link>
           <h1 className="text-xl font-bold mt-2">{data.name}</h1>
         </div>
-        {data.isAdmin && (
+        {/* A dataset inside a repo is not configured here.
+            Its existence, its contents and where it is pulled from are all
+            decided by the repo, so visibility, delete and the GitHub settings
+            live on the repo's page. Showing them here offered one copy per
+            dataset of settings there is only one of, which is how a repo ended
+            up with rows disagreeing about its own credential.
+            Visibility is a role grant now (/admin/roles), and deleting one
+            dataset of a repo means nothing: the next publish recreates it from
+            the directory that is still there. */}
+        {data.isAdmin && !data.repo && (
           <div className="flex items-center gap-2">
             <VisibilityToggle datasetId={data.id} initialIsPublic={data.isPublic} />
             <DeleteButton datasetId={data.id} datasetName={data.name} />
@@ -149,10 +161,19 @@ export default function DatasetPage({
         )}
       </header>
 
-      {/* Top of the page: the repo this model comes from and the button that
-          pulls it again. It's the control people come here to use, so it leads
-          rather than sitting below the status/dashboards/model sections. */}
-      {data.isAdmin && data.githubRepo && (
+      {data.repo && (
+        <p className="text-xs text-gray-500 dark:text-gray-400">
+          Published by{" "}
+          <Link href={`/repos/${encodeURIComponent(data.repo.slug)}`} className="underline">
+            {data.repo.slug}
+          </Link>
+          , which is where its GitHub settings, refresh and visibility live.
+        </p>
+      )}
+
+      {/* Only for a dataset no repo publishes. For the rest this is the repo's,
+          and lives on the repo's page. */}
+      {data.isAdmin && !data.repo && data.githubRepo && (
         <GitHubConfig
           datasetId={data.id}
           initialRepo={data.githubRepo}

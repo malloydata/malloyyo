@@ -76,11 +76,10 @@ export default async function AdminRolesPage() {
         <div>
           <h2 className="text-sm font-medium">Roles</h2>
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 max-w-2xl">
-            A role decides which datasets someone may open. Everything a dataset publishes, a
-            holder gets — so if two groups need different sources, that is two datasets. The
-            two <code className="text-[11px]">MALLOYYO_</code> roles are built in and say what
-            someone may <em>do</em> here; the rest are yours, and are best named after groups of
-            people.
+            A role decides which datasets someone may open. It is all of a dataset or none of
+            it, so if two groups need different sources, make two datasets. The two{" "}
+            <code className="text-[11px]">MALLOYYO_</code> roles are built in. The rest are
+            yours, and usually name a group of people.
           </p>
         </div>
 
@@ -147,9 +146,8 @@ export default async function AdminRolesPage() {
         <div>
           <h2 className="text-sm font-medium">Who holds what</h2>
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 max-w-2xl">
-            Changing someone&rsquo;s roles takes effect on their next request. Removing the last
-            role that opens a dataset removes the dataset from their view entirely — it stops
-            being listed, not just refused.
+            Changes take effect on their next request. Take away the last role that opens a
+            dataset and it disappears from their view: not listed, not just refused.
           </p>
         </div>
         <div className={TABLE_WRAP}>
@@ -188,10 +186,9 @@ export default async function AdminRolesPage() {
         <div>
           <h2 className="text-sm font-medium">What each dataset is scoped by</h2>
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 max-w-2xl">
-            Rows inside a dataset, narrowed to whoever is asking. Tick one and every model
-            published here must declare it — a publish that does not is refused rather than
-            serving the data unscoped. Leave them clear for a dataset everyone with a role sees
-            in full.
+            Narrows the rows inside a dataset to whoever is asking. Tick one and every model
+            published here has to declare it; a publish that does not is refused. Leave them
+            clear and anyone with a role sees the whole dataset.
           </p>
         </div>
         <div className={TABLE_WRAP}>
@@ -235,10 +232,10 @@ export default async function AdminRolesPage() {
         <div>
           <h2 className="text-sm font-medium">New arrivals get</h2>
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 max-w-2xl">
-            Granted when someone is first admitted. Keep this narrow — with no
-            dataset-bearing role here, a new person can sign in and sees nothing until someone
-            grants them one deliberately. <code className="text-[11px]">MALLOYYO_ADMIN</code> is
-            not offered: on an open instance this list is applied to everyone who signs in.
+            Roles everyone gets on their first sign-in. If none of them opens a dataset, new
+            people see an empty instance until someone grants them access.{" "}
+            <code className="text-[11px]">MALLOYYO_ADMIN</code> is not offered here: it would
+            make an admin of everyone who signs in.
           </p>
         </div>
         <DefaultRoles

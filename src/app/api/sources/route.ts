@@ -25,13 +25,12 @@ export async function GET() {
   // /admin/roles visible here rather than only over MCP. Same predicate the run
   // paths use, so this list and what you may actually query cannot drift.
   // Signed out: public datasets only. An admin still sees the whole catalogue,
-  // because naming a dataset is not reading it — every path that returns ROWS
-  // goes through datasetVisibleWhere, which has no admin branch.
-  const where = admin
-    ? ne(datasets.status, "failed")
-    : me
-      ? datasetVisibleWhere(me.id)
-      : and(eq(datasets.isPublic, true), ne(datasets.status, "failed"));
+  // MALLOYYO_ADMIN opens every dataset, so listing and reading now give the same
+  // answer and this needs no special case of its own. It used to have one, under
+  // a comment saying the predicate had no admin branch — it does now.
+  const where = me
+    ? datasetVisibleWhere(me.id, admin)
+    : and(eq(datasets.isPublic, true), ne(datasets.status, "failed"));
 
   const dsList = await db
     .select({

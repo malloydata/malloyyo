@@ -29,11 +29,12 @@ import {
 
 // The datasets a user may query: their own or public, and ready. One home for
 // the predicate — the host's findModelByRef and findBySource both build on it.
-export function visibleDatasetWhere(userId: string) {
-  // Owner, public, or granted by a role — see src/lib/roles.ts. Kept as a
-  // re-export rather than inlined because every read path in the app funnels
-  // through this name, and one predicate is the only way that stays true.
-  return datasetVisibleWhere(userId);
+export function visibleDatasetWhere(userId: string, isAdmin = false) {
+  // Owner, public, granted by a role — or MALLOYYO_ADMIN, which opens every
+  // dataset. Kept as a re-export rather than inlined because every read path in
+  // the app funnels through this name, and one predicate is the only way that
+  // stays true.
+  return datasetVisibleWhere(userId, isAdmin);
 }
 
 // What a viewer may READ ABOUT a dataset: the questions asked of it, the Malloy

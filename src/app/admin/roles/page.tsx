@@ -10,7 +10,7 @@
 import { asc, desc, eq } from "drizzle-orm";
 import { db, datasets, givens as givensTable, roles as rolesTable, users } from "@/db";
 import { requireAdminPage } from "@/lib/admin";
-import { defaultRoles, isBuiltinRole, NEVER_A_DEFAULT, rolesOf } from "@/lib/roles";
+import { defaultRoles, isBuiltinRole, MALLOYYO_ADMIN, NEVER_A_DEFAULT, rolesOf } from "@/lib/roles";
 import { datasetTitle } from "@malloyyo/mcp-engine";
 import {
   DatasetGivens,
@@ -108,12 +108,23 @@ export default async function AdminRolesPage() {
                     )}
                   </td>
                   <td className={TD}>
-                    <RoleDatasets
-                      key={grantedFor(role.name).join(",")}
-                      name={role.name}
-                      all={allDatasets}
-                      granted={grantedFor(role.name)}
-                    />
+                    {/* MALLOYYO_ADMIN opens every dataset by itself
+                        (datasetVisibleWhere), so a row of checkboxes here was
+                        not a grant — ticking one changed nothing and leaving it
+                        unticked withheld nothing. Saying so is the honest
+                        control; offering a choice that does not exist is not. */}
+                    {role.name === MALLOYYO_ADMIN ? (
+                      <span className="text-xs text-gray-500 dark:text-gray-400">
+                        every dataset, including ones added later
+                      </span>
+                    ) : (
+                      <RoleDatasets
+                        key={grantedFor(role.name).join(",")}
+                        name={role.name}
+                        all={allDatasets}
+                        granted={grantedFor(role.name)}
+                      />
+                    )}
                   </td>
                   <td className={`${TD} text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap`}>
                     {holders(role.name)}

@@ -18,6 +18,7 @@
 // dev`).
 
 import fs from "node:fs";
+import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DATASETS_DIR, developSurface, type DevelopHost } from "@malloyyo/mcp-engine";
@@ -245,11 +246,35 @@ export function installDevcontainer(root: string): { wrote: boolean; note: strin
   };
 }
 
+/**
+ * A model repo is a git repo.
+ *
+ * Not a convention — a dependency. `malloyyo publish --repo` asks git what is in
+ * the repo rather than walking the directory, which is what makes a gitignored
+ * file structurally unable to leak. So a scaffold that is not a git repo cannot
+ * be published, and leaving someone to discover that at their first publish is a
+ * bad trade for one command here.
+ */
+function ensureGitRepo(root: string): string | null {
+  if (fs.existsSync(path.join(root, ".git"))) return null;
+  try {
+    execFileSync("git", ["init", "-q"], { cwd: root, stdio: ["ignore", "pipe", "pipe"] });
+    return "✓ git init — a repo publishes what git tracks";
+  } catch {
+    // Git missing is worth saying out loud, but not worth failing `init` over:
+    // everything else it writes is still useful.
+    return "• could not run `git init` — publishing a repo needs one, so run it yourself";
+  }
+}
+
 export async function initCmd(dir: string): Promise<void> {
   const root = path.resolve(dir);
   if (!fs.existsSync(root) || !fs.statSync(root).isDirectory()) {
     throw new Error(`not a directory: ${root}`);
   }
+
+  const gitNote = ensureGitRepo(root);
+  if (gitNote) console.log(gitNote);
 
   const mcpPath = path.join(root, ".mcp.json");
   if (fs.existsSync(mcpPath)) {

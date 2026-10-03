@@ -18,7 +18,7 @@
 import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type Server, type IncomingMessage } from "node:http";
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -1140,6 +1140,10 @@ const REPO_SLUG = `lloydtabb/repo_flow_${RUN}`;
 function makeRepo(names: string[], opts: { broken?: string } = {}): string {
   const dir = mkdtempSync(join(tmpdir(), "malloyyo-repo-"));
   projects.push(dir);
+  // `publish --repo` packs what GIT tracks, so a fixture has to be a git repo —
+  // the same requirement a real model repo already meets. No commit needed: the
+  // packer stages into a throwaway index, so uncommitted work publishes.
+  execFileSync("git", ["init", "-q"], { cwd: dir, stdio: ["ignore", "pipe", "pipe"] });
   writeFileSync(
     join(dir, "malloy-config.json"),
     JSON.stringify(

@@ -84,12 +84,12 @@ export function DashboardTree({
   // match behind a closed branch is the one thing a search must not do.
   const isOpen = (name: string) => flat || query.trim() !== "" || expanded.has(name);
 
-  const leaf = (dataset: string, d: TreeDashboard) => {
+  const leaf = (dataset: string, d: TreeDashboard, addr = dataset) => {
     const active = d.name === activeDashboard && dataset === currentDataset;
     return (
       <Link
-        key={`${dataset}/${d.name}`}
-        href={`/datasets/${encodeURIComponent(dataset)}/dashboard/${encodeURIComponent(d.name)}`}
+        key={`${addr}/${d.name}`}
+        href={`/datasets/${encodeURIComponent(addr)}/dashboard/${encodeURIComponent(d.name)}`}
         onClick={closeMenu}
         title={d.description}
         className={`flex items-center gap-2 rounded px-2 py-1 ${flat ? "" : "ml-4"} ${
@@ -119,16 +119,16 @@ export function DashboardTree({
       .sort((a, b) => Number(b.mine ?? false) - Number(a.mine ?? false));
     return (
       <>
-        {own.map((d) => leaf(ds.dataset, d))}
+        {own.map((d) => leaf(ds.dataset, d, ds.qualified ?? ds.dataset))}
         {user.length > 0 && (
           <p className={`${flat ? "" : "ml-4"} px-2 pt-1.5 pb-0.5 text-[10px] uppercase tracking-wide text-gray-400 dark:text-gray-500`}>
             user dashboards
           </p>
         )}
-        {user.map((d) => leaf(ds.dataset, d))}
+        {user.map((d) => leaf(ds.dataset, d, ds.qualified ?? ds.dataset))}
         {ds.dashboards.length === 0 && (
           <Link
-            href={`/datasets/${encodeURIComponent(ds.dataset)}`}
+            href={`/datasets/${encodeURIComponent(ds.qualified ?? ds.dataset)}`}
             onClick={closeMenu}
             className={`${flat ? "" : "ml-4"} block rounded px-2 py-1 text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800/60`}
           >

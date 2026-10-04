@@ -27,11 +27,24 @@ export async function GET(req: Request) {
   }
   const params = new URL(req.url).searchParams;
   if (params.get("tree")) {
-    const { datasets, byDataset } = await allDashboardsByDataset(user.id);
+    const { datasets: treeDatasets, byDataset } = await allDashboardsByDataset(user.id);
+    const treeOwners = treeDatasets.length
+      ? await db
+          .select({ id: datasets.id, name: datasets.name, repoSlug: repos.slug })
+          .from(datasets)
+          .leftJoin(repos, eq(datasets.repoId, repos.id))
+          .where(inArray(datasets.id, treeDatasets.map((d) => d.id)))
+      : [];
+    const qualifiedById = new Map(
+      treeOwners.map((o) => [o.id, o.repoSlug ? qualifiedName(o.repoSlug, o.name) : o.name]),
+    );
     return NextResponse.json(
-      datasets
+      treeDatasets
         .map((ds) => ({
           dataset: ds.name,
+          // What links address it by. Bare names are not unique across repos, so
+          // a tree built from them sent two datasets' dashboards to one of them.
+          qualified: qualifiedById.get(ds.id) ?? ds.name,
           title: datasetTitle(ds.name, ds.title),
           ...(ds.description ? { description: ds.description } : {}),
           dashboards: (byDataset.get(ds.id) ?? []).map((d) => wire(d, user.id)),

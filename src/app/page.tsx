@@ -571,7 +571,7 @@ function shortAuthor(author: string): string {
                           {modelDashboards(dashByDataset.get(dsName)!).length > 0 && (
                             <DashboardRow
                               label="dashboards"
-                              dataset={g?.dataset ?? dsName}
+                              dataset={g?.qualified ?? dsName}
                               items={modelDashboards(dashByDataset.get(dsName)!)}
                             />
                           )}
@@ -581,7 +581,7 @@ function shortAuthor(author: string): string {
                           {userDashboards(dashByDataset.get(dsName)!).length > 0 && (
                             <DashboardRow
                               label="user dashboards"
-                              dataset={g?.dataset ?? dsName}
+                              dataset={g?.qualified ?? dsName}
                               items={userDashboards(dashByDataset.get(dsName)!)}
                               collapseAfter={6}
                             />
@@ -602,7 +602,7 @@ function shortAuthor(author: string): string {
                                 {srcKey && (
                                   <div className="flex items-center gap-1.5 flex-shrink-0 text-[11px] text-gray-700 dark:text-gray-300">
                                     <Link
-                                      href={`/ltool?source=${encodeURIComponent(srcKey)}&dataset=${encodeURIComponent(g?.dataset ?? dsName)}`}
+                                      href={`/ltool?source=${encodeURIComponent(srcKey)}&dataset=${encodeURIComponent(g?.qualified ?? dsName)}`}
                                       title={`Write a Malloy query against ${srcKey}`}
                                       className={`inline-flex items-center gap-1 ${PILL}`}
                                     >
@@ -611,7 +611,7 @@ function shortAuthor(author: string): string {
                                     </Link>
                                     {chatEnabled && (
                                       <Link
-                                        href={`/chat?dataset=${encodeURIComponent(g?.dataset ?? dsName)}&source=${encodeURIComponent(srcKey)}`}
+                                        href={`/chat?dataset=${encodeURIComponent(g?.qualified ?? dsName)}&source=${encodeURIComponent(srcKey)}`}
                                         title={`Start a chat about ${srcKey}`}
                                         className={PILL}
                                       >

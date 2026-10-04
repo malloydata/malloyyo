@@ -20,6 +20,10 @@ export interface TreeDashboard {
 export interface TreeDataset {
   /** The dataset's NAME — its identity, and what links are built from. */
   dataset: string;
+  /** How this dataset is ADDRESSED — `<repo>:<name>`. Separate from `dataset`,
+      which is what the menu shows: the display name is not unique across repos
+      and links built from it went to whichever one happened to match. */
+  qualified?: string;
   /** What to show for it. Absent means derive it from the name. */
   title?: string;
   /** What it is — the model's `##"` doc string, shown on hover. */

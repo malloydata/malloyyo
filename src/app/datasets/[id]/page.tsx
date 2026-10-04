@@ -19,6 +19,7 @@ import { redirect } from "next/navigation";
 import { and, eq, inArray, isNull, isNotNull, sql } from "drizzle-orm";
 import { db, history, savedQueries } from "@/db";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
+import { decodeDatasetRef } from "@/lib/repos";
 import { findByDatasetRef, normalizeSources } from "@/lib/mcp-tools";
 import { listDashboards } from "@/lib/dashboards/meta";
 import { datasetLandingPath } from "@/lib/dataset-landing";
@@ -68,7 +69,12 @@ async function hasQuestions(datasetId: string): Promise<boolean> {
 }
 
 export default async function DatasetLandingPage({ params }: { params: Promise<{ id: string }> }) {
-  const { id: ref } = await params;
+  // Decoded ONCE, here at the boundary. `<repo>:<dataset>` puts a colon in the
+  // path and Next hands the param back percent-encoded, so every link this page
+  // builds from `ref` would re-encode an already-encoded string — which is how a
+  // dashboard link came out as `%253A`.
+  const { id: raw } = await params;
+  const ref = decodeDatasetRef(raw);
 
   let userId: string;
   try {

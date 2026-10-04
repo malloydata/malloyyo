@@ -59,8 +59,30 @@ async function repoOf(d: Dataset): Promise<Repo | null> {
  * by the predicate, not ordered against, which is what makes "at most one row
  * matches" true rather than likely.
  */
+/**
+ * A ref that arrived through a URL, percent-decoded.
+ *
+ * `<repo>:<dataset>` puts a colon in a path segment, and Next hands a dynamic
+ * route param back percent-ENCODED — so the page at `/datasets/[id]` saw
+ * `acme%3Asales` and resolved nothing, while the API route resolved the same
+ * name fine. The symptom was a qualified link bouncing to the config page as if
+ * the dataset did not exist.
+ *
+ * Safe to do unconditionally: repo slugs and dataset names are slugs, so a
+ * legitimate ref never contains a `%`, and a malformed escape is left alone
+ * rather than throwing.
+ */
+export function decodeDatasetRef(ref: string): string {
+  if (!ref.includes("%")) return ref;
+  try {
+    return decodeURIComponent(ref);
+  } catch {
+    return ref;
+  }
+}
+
 export async function resolveDatasetRef(ref: string): Promise<DatasetRef> {
-  const trimmed = ref.trim();
+  const trimmed = decodeDatasetRef(ref).trim();
   if (!trimmed) return { ok: false, error: "no dataset was named" };
 
   if (UUID_RE.test(trimmed)) {

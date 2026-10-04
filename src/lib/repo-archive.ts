@@ -42,8 +42,21 @@ import { logger } from "./logger";
 export const ARCHIVE_LIMITS = {
   /** The compressed payload. A model repo is text; this is already generous. */
   maxArchiveBytes: 32 * 1024 * 1024,
-  /** One file. A `.malloy` file this big is not a model. */
+  /**
+   * One SOURCE file — Malloy, config, JSX, markdown. A `.malloy` this big is not
+   * a model, it is a mistake, and catching it early beats compiling it.
+   */
   maxFileBytes: 8 * 1024 * 1024,
+  /**
+   * One DATA file, which is a different question.
+   *
+   * A model repo may commit the data it reads — `malloydata/malloyyo-auto-recalls`
+   * carries a 22.7MB `rows.csv` that its model does `table('rows.csv')` against —
+   * and 8MB was refusing an ordinary repo under a rule written about source text.
+   * The real bounds are the archive and total caps below; this only catches a
+   * single absurd file.
+   */
+  maxDataFileBytes: 64 * 1024 * 1024,
   /** Everything, inflated. The bomb bound. */
   maxTotalBytes: 128 * 1024 * 1024,
   /** Members. A repo with more paths than this is not a model repo. */
@@ -51,6 +64,27 @@ export const ARCHIVE_LIMITS = {
 } as const;
 
 export class ArchiveError extends Error {}
+
+/**
+ * Data, as against source.
+ *
+ * Only used to choose which size limit applies. Everything not listed is treated
+ * as source, so an unknown extension gets the tighter cap — the safe direction,
+ * since the tight cap refuses loudly and the loose one is what lets 60MB into
+ * the database.
+ */
+// `.json` is deliberately absent: in a model repo it is `malloy-config.json`,
+// which is source. `.ndjson`/`.jsonl` are the line-delimited data forms.
+const DATA_EXTENSIONS = new Set([".csv", ".tsv", ".parquet", ".ndjson", ".jsonl", ".txt", ".arrow"]);
+
+export function isDataFile(name: string): boolean {
+  const dot = name.lastIndexOf(".");
+  return dot !== -1 && DATA_EXTENSIONS.has(name.slice(dot).toLowerCase());
+}
+
+function fileCapFor(name: string): number {
+  return isDataFile(name) ? ARCHIVE_LIMITS.maxDataFileBytes : ARCHIVE_LIMITS.maxFileBytes;
+}
 
 /**
  * A fixed timestamp for every stored member.
@@ -178,10 +212,11 @@ function readZip(zip: Buffer): Map<string, Uint8Array> {
         if (count > ARCHIVE_LIMITS.maxEntries) {
           throw new ArchiveError(`the repo archive has more than ${ARCHIVE_LIMITS.maxEntries} entries`);
         }
-        if (file.originalSize !== undefined && file.originalSize > ARCHIVE_LIMITS.maxFileBytes) {
+        const cap = fileCapFor(file.name);
+        if (file.originalSize !== undefined && file.originalSize > cap) {
           throw new ArchiveError(
             `${file.name} is ${(file.originalSize / 1024 / 1024).toFixed(1)}MB, over the ` +
-              `${ARCHIVE_LIMITS.maxFileBytes / 1024 / 1024}MB per-file limit`,
+              `${cap / 1024 / 1024}MB limit for ${isDataFile(file.name) ? "a data file" : "a source file"}`,
           );
         }
         total += file.originalSize ?? 0;

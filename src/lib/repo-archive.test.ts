@@ -155,7 +155,38 @@ test("a per-file size limit is enforced from the central directory, before infla
   const big = "x".repeat(ARCHIVE_LIMITS.maxFileBytes + 1024);
   await assert.rejects(
     () => normalizeArchive(zip({ "index.malloy": "a", "huge.malloy": big })),
-    (err: unknown) => err instanceof ArchiveError && /per-file limit/.test((err as Error).message),
+    (err: unknown) => err instanceof ArchiveError && /limit for a source file/.test((err as Error).message),
+  );
+});
+
+test("…but DATA gets its own, larger limit, because a repo may commit what it reads", async () => {
+  // The source limit was written about `.malloy` text and applied to everything,
+  // so it refused `malloydata/malloyyo-auto-recalls` — an ordinary repo whose
+  // model does `table('rows.csv')` against a committed 22.7MB CSV. Measured: that
+  // repo is 5.1MB compressed and 22.7MB expanded, inside both the archive and
+  // total caps. Only this rule was turning it away.
+  const asBigAsThatCsv = "x".repeat(ARCHIVE_LIMITS.maxFileBytes * 3);
+  const out = await normalizeArchive(zip({ "index.malloy": "a", "rows.csv": asBigAsThatCsv }));
+  assert.ok(
+    out.entries.some((e) => e.path === "rows.csv"),
+    "the data file is carried",
+  );
+
+  // The looser cap is for data only. An unknown extension takes the tight one,
+  // which is the safe direction: the tight cap refuses loudly, the loose one is
+  // what lets tens of megabytes into the database.
+  await assert.rejects(
+    () => normalizeArchive(zip({ "index.malloy": "a", "mystery.bin": asBigAsThatCsv })),
+    (err: unknown) => err instanceof ArchiveError && /limit for a source file/.test((err as Error).message),
+  );
+
+  // And a data file can still be absurd.
+  await assert.rejects(
+    () =>
+      normalizeArchive(
+        zip({ "index.malloy": "a", "huge.csv": "x".repeat(ARCHIVE_LIMITS.maxDataFileBytes + 1024) }),
+      ),
+    (err: unknown) => err instanceof ArchiveError && /limit for a data file/.test((err as Error).message),
   );
 });
 

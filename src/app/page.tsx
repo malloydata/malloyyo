@@ -114,7 +114,7 @@ export default function HomePage() {
   const [sources, setSources] = useState<DatasetGroup[] | null>(null);
   const [favQueries, setFavQueries] = useState<FavQuery[]>([]);
   const [dashboards, setDashboards] = useState<
-    Array<DashboardChip & { dataset: string }>
+    Array<DashboardChip & { dataset: string; qualified: string }>
   >([]);
   // Claude connect-instructions modal — shown when clicking a source's Claude
   // button before the connector is linked. claudeTargetUrl is the explore chat
@@ -234,25 +234,48 @@ function shortAuthor(author: string): string {
   return name.length > 14 ? `${name.slice(0, 13)}…` : name;
 }
 
-// The catalogue arrives grouped; just index it for lookup by name.
+  // Indexed by QUALIFIED name, not bare.
+  //
+  // A dataset name is unique inside its repo and no further, so two repos may
+  // each publish an `imdb`. Keying this map — and every React key below — on the
+  // bare name collapsed them into one entry: one card rendered, the other
+  // silently dropped, and 43 duplicate-key errors in the console. This fork hit
+  // it for real, because one repo's GitHub name was RENAMED to another's and
+  // GitHub redirects the old name, so two repo rows now pull the same content.
   const datasetGroups: DatasetGroup[] = sources ?? [];
-  const datasetByName = new Map(datasetGroups.map((g) => [g.dataset, g]));
+  const datasetByQualified = new Map(datasetGroups.map((g) => [g.qualified, g]));
 
   // Dashboards grouped by dataset, for the per-dataset row below.
   const dashByDataset = new Map<string, DashboardChip[]>();
   for (const d of dashboards) {
-    let arr = dashByDataset.get(d.dataset);
-    if (!arr) { arr = []; dashByDataset.set(d.dataset, arr); }
+    // Keyed by the QUALIFIED name: two repos may each publish an `ecommerce`,
+    // and bucketing by the bare one put both their dashboards in one list, so
+    // every dashboard rendered twice under each.
+    let arr = dashByDataset.get(d.qualified);
+    if (!arr) { arr = []; dashByDataset.set(d.qualified, arr); }
     arr.push({ name: d.name, title: d.title, description: d.description, isDraft: d.isDraft, author: d.author, mine: d.mine });
   }
 
 
-  // Datasets to render: those with questions first (recency order), then any
-  // remaining datasets (their sources still show, just with no questions).
-  const orderedDatasetNames = [
-    ...datasetOrder,
-    ...datasetGroups.map((g) => g.dataset).filter((n) => !favByDataset.has(n)),
-  ];
+  // Datasets to render: those with questions first (recency order), then the
+  // rest. Ordered as objects rather than as names, because a name no longer
+  // identifies one.
+  //
+  // Favourites and dashboards still arrive keyed by BARE name — they predate
+  // repos and their APIs have not been threaded through yet — so the recency
+  // hint, and the questions attached to a card, are matched on that. When two
+  // repos share a dataset name both cards show the same questions. Wrong, but
+  // visibly and symmetrically wrong, which is better than one card vanishing.
+  const favPosition = new Map<string, number>();
+  datasetOrder.forEach((n, i) => {
+    if (!favPosition.has(n)) favPosition.set(n, i);
+  });
+  const orderedDatasets = [...datasetGroups].sort(
+    (a, b) =>
+      (favPosition.get(a.dataset) ?? Number.MAX_SAFE_INTEGER) -
+      (favPosition.get(b.dataset) ?? Number.MAX_SAFE_INTEGER),
+  );
+  const orderedDatasetNames = orderedDatasets.map((g) => g.qualified);
 
   /**
    * The same datasets, under the repo that publishes them.
@@ -271,7 +294,7 @@ function shortAuthor(author: string): string {
   {
     const at = new Map<string | null, number>();
     for (const name of orderedDatasetNames) {
-      const key = datasetByName.get(name)?.repo ?? null;
+      const key = datasetByQualified.get(name)?.repo ?? null;
       // Null groups never merge: each unconverted dataset is its own section.
       const k = key === null ? `\u0000${name}` : key;
       const seen = at.get(k);
@@ -421,7 +444,7 @@ function shortAuthor(author: string): string {
               <div className="space-y-6">
                 {repoSections.map((section) => {
                   const head = section.repo
-                    ? datasetByName.get(section.names[0]!)
+                    ? datasetByQualified.get(section.names[0]!)
                     : undefined;
                   return (
                   <div key={section.repo ?? `solo:${section.names[0]}`} className="space-y-2">
@@ -464,8 +487,9 @@ function shortAuthor(author: string): string {
                     )}
                     <div className="space-y-4">
                 {section.names.map((dsName) => {
-                  const g = datasetByName.get(dsName);
-                  const { bySource, order } = groupBySource(favByDataset.get(dsName) ?? []);
+                  // `dsName` is the QUALIFIED name — unique, and the React key.
+                  const g = datasetByQualified.get(dsName);
+                  const { bySource, order } = groupBySource(favByDataset.get(g?.dataset ?? dsName) ?? []);
                   const withQuestions = new Set(order.filter((k) => k !== ""));
                   // EVERY source gets a row. A source nobody has asked about yet
                   // is the one most worth advertising — it used to be a chip in a
@@ -492,7 +516,7 @@ function shortAuthor(author: string): string {
                               dataset without the home page having to know which
                               tier applies. See @/lib/dataset-landing. */}
                           <Link
-                            href={`/datasets/${encodeURIComponent(g?.dataset ?? dsName)}`}
+                            href={`/datasets/${encodeURIComponent(g?.qualified ?? dsName)}`}
                             title={`Open ${g?.dataset ?? "dataset"}`}
                             className="font-semibold truncate hover:underline"
                           >
@@ -528,7 +552,7 @@ function shortAuthor(author: string): string {
                             Explore in Claude
                           </button>
                           <Link
-                            href={`/datasets/${encodeURIComponent(g?.dataset ?? dsName)}/config`}
+                            href={`/datasets/${encodeURIComponent(g?.qualified ?? dsName)}/config`}
                             title="Configure dataset"
                             aria-label="Configure dataset"
                             className="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
@@ -623,7 +647,7 @@ function shortAuthor(author: string): string {
                                 {qs.length > 8 && (
                                   <li className="flex items-start gap-2">
                                     <span className="flex-shrink-0 w-[1ch]" aria-hidden />
-                                    <Link href={`/datasets/${encodeURIComponent(g?.dataset ?? dsName)}/questions`} className="text-[11px] text-gray-600 dark:text-gray-400 hover:underline">
+                                    <Link href={`/datasets/${encodeURIComponent(g?.qualified ?? dsName)}/questions`} className="text-[11px] text-gray-600 dark:text-gray-400 hover:underline">
                                       +{qs.length - 8} more →
                                     </Link>
                                   </li>

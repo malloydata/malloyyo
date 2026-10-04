@@ -7,6 +7,7 @@ import Link from "next/link";
 import { dashboardSourceUrl } from "@/lib/github-source-link";
 import { QueryIcon } from "@/components/QueryIcon";
 import { DashboardTree } from "@/components/DashboardTree";
+import { decodeDatasetRef } from "@/lib/repo-names";
 
 // The horizontal menu shared by a dataset's dashboard-style pages: the dashboard
 // views and the AI Q&A page. It reads like:
@@ -18,11 +19,30 @@ import { DashboardTree } from "@/components/DashboardTree";
 // dashboard — the ways into the data nobody built in advance.
 export function DatasetNav({
   datasetId,
+  datasetLabel,
+  datasetRef,
   activeDashboard,
   activeTitle,
   questionsActive = false,
 }: {
   datasetId: string;
+  /** What to CALL the dataset, resolved by the page that renders this.
+   *
+   *  Without it the label was `datasetName || datasetId`, where `datasetName`
+   *  arrives from a client fetch — so every dashboard page painted the raw
+   *  route param (`malloyyo_babynames%3Ababynames`, encoding and all) and
+   *  swapped it for "Babynames" a second later. The server already knows the
+   *  title; handing it over is what removes the flash, rather than hiding it
+   *  behind a spinner. */
+  datasetLabel?: string;
+  /** What to ADDRESS the dataset by in links — its qualified `repo:dataset`.
+   *
+   *  Separate from the label on purpose, because one variable was doing both
+   *  jobs and the links lost. `datasetName` holds the dataset's TITLE, so the
+   *  config link read `/datasets/Babynames/config` — a display string used as
+   *  an address. And the fallback was the already-encoded route param, which
+   *  `encodeURIComponent` then double-encoded into `%253A`. */
+  datasetRef?: string;
   /** The dashboard slug currently being viewed, if any. */
   activeDashboard?: string;
   /** Its title, for the tree's button — the page has already resolved it, and a
@@ -31,7 +51,9 @@ export function DatasetNav({
   /** True on the AI Q&A page. */
   questionsActive?: boolean;
 }) {
-  const [datasetName, setDatasetName] = useState("");
+  // Seeded from the server's answer when there is one, so the first paint is
+  // already correct and the fetch below only confirms it.
+  const [datasetName, setDatasetName] = useState(datasetLabel ?? "");
   // Git provenance, for the "view the source on GitHub" link.
   const [repo, setRepo] = useState<{
     datasetRepo: string | null;
@@ -50,6 +72,11 @@ export function DatasetNav({
   const [claudeConnected, setClaudeConnected] = useState(false);
   // Chat needs an ANTHROPIC_API_KEY; without one the pill would go nowhere.
   const [chatEnabled, setChatEnabled] = useState(false);
+
+  // The dataset's address, decided once. `datasetId` is the raw route param,
+  // which Next hands back percent-ENCODED, so it is decoded before anything
+  // re-encodes it for a URL.
+  const linkRef = datasetRef ?? decodeDatasetRef(datasetId);
 
   useEffect(() => {
     fetch(`/api/datasets/${datasetId}`)
@@ -129,7 +156,8 @@ export function DatasetNav({
         </svg>
       </Link>
       <DashboardTree
-        currentDataset={datasetName || datasetId}
+        currentDataset={linkRef}
+        currentLabel={datasetName || linkRef}
         activeDashboard={activeDashboard}
         activeLabel={questionsActive ? "AI Q&A" : activeTitle}
       />
@@ -140,7 +168,7 @@ export function DatasetNav({
           advance. The dashboards themselves are in the tree above. */}
       <div className="flex items-center gap-1 flex-wrap">
         <Link
-          href={`/datasets/${encodeURIComponent(datasetName || datasetId)}/questions`}
+          href={`/datasets/${encodeURIComponent(linkRef)}/questions`}
           title="Questions asked and answered on this dataset"
           className={`inline-flex items-center gap-1 ${pill(questionsActive)}`}
         >
@@ -156,7 +184,7 @@ export function DatasetNav({
             source is what makes this land on a query rather than a blank picker. */}
         <Link
           href={`/ltool?${new URLSearchParams({
-            dataset: datasetName || datasetId,
+            dataset: linkRef,
             ...(modelSources[0] ? { source: modelSources[0] } : {}),
           }).toString()}`}
           title="Write a Malloy query against this dataset in ltool"
@@ -171,7 +199,7 @@ export function DatasetNav({
         {chatEnabled && (
           <Link
             href={`/chat?${new URLSearchParams({
-              dataset: datasetName || datasetId,
+              dataset: linkRef,
               ...(modelSources[0] ? { source: modelSources[0] } : {}),
             }).toString()}`}
             title="Chat about this dataset"
@@ -203,7 +231,7 @@ export function DatasetNav({
           </a>
         )}
         <Link
-          href={`/datasets/${encodeURIComponent(datasetName || datasetId)}/config`}
+          href={`/datasets/${encodeURIComponent(linkRef)}/config`}
           title="Dataset configuration — model version, files, GitHub settings"
           className={`${pill(false)} inline-flex items-center gap-1.5`}
         >

@@ -15,14 +15,15 @@
  */
 
 import { NextResponse } from "next/server";
-import { and, asc, desc, eq, isNull, ne, sql } from "drizzle-orm";
-import { db, datasets, repos, repoRevisions, malloyModels } from "@/db";
+import { and, asc, count, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
+import { db, chats, datasets, draftDashboards, repos, repoRevisions, malloyModels, savedQueries } from "@/db";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
 import { parseGitHubRepo } from "@/lib/github";
 import { qualifiedName } from "@/lib/repos";
 import { datasetTitle, repoPath } from "@malloyyo/mcp-engine";
 import { logger } from "@/lib/logger";
+import { captureTelemetry } from "@/lib/telemetry";
 
 export const runtime = "nodejs";
 
@@ -35,6 +36,45 @@ async function load(ref: string) {
     .where(UUID.test(ref) ? eq(repos.id, ref) : eq(repos.slug, ref))
     .limit(1);
   return repo ?? null;
+}
+
+/**
+ * What removing this repo would destroy, counted before anybody confirms it.
+ *
+ * `DELETE FROM repos` is one statement because the foreign keys cascade the
+ * whole way down — datasets, their aliases, models, artifacts, model files,
+ * saved queries and drafts, plus every revision. That is convenient and it is
+ * also why the operation needs to show its work: "remove this repository"
+ * sounds like it unlinks a GitHub coordinate, and it actually deletes other
+ * people's saved queries.
+ *
+ * Chats are counted separately and NOT deleted. `chats.dataset` is a text name
+ * with no foreign key, so nothing cascades to them; they would be left pointing
+ * at a dataset that no longer exists. Deleting them anyway would throw away
+ * users' own question history, which is more than was asked for, so they are
+ * reported and left alone — see the note in the DELETE handler.
+ */
+async function removalImpact(repoId: string, datasetNames: string[]) {
+  const ids = (
+    await db.select({ id: datasets.id }).from(datasets).where(eq(datasets.repoId, repoId))
+  ).map((d) => d.id);
+
+  const one = async (q: Promise<{ n: number }[]>) => (await q)[0]?.n ?? 0;
+
+  const [revisions, saved, drafts, orphanedChats] = await Promise.all([
+    one(db.select({ n: count() }).from(repoRevisions).where(eq(repoRevisions.repoId, repoId))),
+    ids.length
+      ? one(db.select({ n: count() }).from(savedQueries).where(inArray(savedQueries.datasetId, ids)))
+      : Promise.resolve(0),
+    ids.length
+      ? one(db.select({ n: count() }).from(draftDashboards).where(inArray(draftDashboards.datasetId, ids)))
+      : Promise.resolve(0),
+    datasetNames.length
+      ? one(db.select({ n: count() }).from(chats).where(inArray(chats.dataset, datasetNames)))
+      : Promise.resolve(0),
+  ]);
+
+  return { datasets: ids.length, revisions, savedQueries: saved, drafts, orphanedChats };
 }
 
 export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> }) {
@@ -106,9 +146,15 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
     .where(and(eq(datasets.repoId, repo.id), ne(datasets.status, "failed")))
     .orderBy(asc(datasets.name));
 
+  // Counted on the detail read rather than behind its own endpoint: the page
+  // that offers the removal is this page, and a warning fetched separately is a
+  // warning that can fail to arrive while the button stays live.
+  const impact = await removalImpact(repo.id, members.map((d) => d.name));
+
   return NextResponse.json({
     id: repo.id,
     slug: repo.slug,
+    removalImpact: impact,
     title: repo.title,
     githubRepo: repo.githubRepo,
     githubBranch: repo.githubBranch,
@@ -205,5 +251,93 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
     githubRepo: updated.githubRepo,
     githubBranch: updated.githubBranch,
     githubUseToken: updated.githubUseToken,
+  });
+}
+
+/**
+ * `DELETE /api/repos/:id` — remove this repository from the server.
+ *
+ * Deletes the repo, every dataset it publishes, and everything hanging off
+ * those datasets: aliases, models, artifacts, model files, saved queries,
+ * drafts, and every stored revision. One statement does it, because the foreign
+ * keys cascade; see `removalImpact` for why that is worth being loud about.
+ *
+ * Guarded by `?confirm=<slug>` rather than by a bare DELETE. The destructive
+ * reach here is wide and nothing about it is recoverable — the revisions ARE
+ * the stored copies of the repo, so there is no "re-activate the old one"
+ * afterwards. Naming the thing is what makes a mis-aimed call (a stale tab, a
+ * script looping over slugs, a copied curl) fail instead of succeed. The slug
+ * is in the URL already, so this is deliberately redundant: that is the point.
+ *
+ * What survives, on purpose:
+ *  - `history` rows, whose `dataset_id` is ON DELETE SET NULL. The record that
+ *    a query ran is not the dataset's to take with it.
+ *  - `chats`, which reference a dataset by NAME with no foreign key. They end
+ *    up pointing at a name nothing resolves, which is why the count is
+ *    reported — but they are somebody's own questions, and removing a repo is
+ *    not consent to delete them.
+ */
+export async function DELETE(req: Request, ctx: { params: Promise<{ id: string }> }) {
+  let me;
+  try {
+    me = await getSessionUser();
+  } catch (err) {
+    if (err instanceof UnauthorizedError) return NextResponse.json({ error: "sign in required" }, { status: 401 });
+    throw err;
+  }
+  if (!isAdmin(me)) return NextResponse.json({ error: "admin required" }, { status: 403 });
+
+  const { id } = await ctx.params;
+  const repo = await load(id);
+  if (!repo) return NextResponse.json({ error: "not found" }, { status: 404 });
+
+  const confirm = new URL(req.url).searchParams.get("confirm");
+  if (confirm !== repo.slug) {
+    return NextResponse.json(
+      {
+        error: `removing a repository is not reversible — pass ?confirm=${repo.slug} to do it`,
+        slug: repo.slug,
+      },
+      { status: 400 },
+    );
+  }
+
+  // Read the members BEFORE the delete: afterwards there is nothing to count,
+  // and the response is the only record the caller gets of what went.
+  const members = await db
+    .select({ name: datasets.name })
+    .from(datasets)
+    .where(eq(datasets.repoId, repo.id));
+  const impact = await removalImpact(repo.id, members.map((d) => d.name));
+
+  await db.delete(repos).where(eq(repos.id, repo.id));
+
+  logger.warn("repo removed", {
+    repo: repo.slug,
+    by: me.id,
+    githubRepo: repo.githubRepo,
+    ...impact,
+  });
+  void captureTelemetry(
+    {
+      event: "repo removed",
+      properties: {
+        datasets: impact.datasets,
+        revisions: impact.revisions,
+        saved_queries: impact.savedQueries,
+        drafts: impact.drafts,
+        orphaned_chats: impact.orphanedChats,
+      },
+    },
+    me.id,
+  );
+
+  return NextResponse.json({
+    ok: true,
+    slug: repo.slug,
+    removed: impact,
+    // Said back explicitly, because it is the one thing the cascade did NOT
+    // handle and the admin may want to go deal with it.
+    orphanedChats: impact.orphanedChats,
   });
 }

@@ -18,6 +18,7 @@
 "use client";
 
 import { use, useCallback, useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 
 type RepoDetail = {
@@ -28,6 +29,17 @@ type RepoDetail = {
   githubUseToken: boolean;
   live: { revision: number; verifiedAt: string | null; gitSha: string | null } | null;
   needsUpdate: boolean;
+  /** What removing this repo would take with it, counted server-side so the
+      warning names real numbers instead of "and related data". */
+  removalImpact: {
+    datasets: number;
+    revisions: number;
+    savedQueries: number;
+    drafts: number;
+    /** Chats reference a dataset by NAME with no foreign key, so these are not
+        deleted — they are left pointing at a name nothing resolves. */
+    orphanedChats: number;
+  };
   history: Array<{
     id: string;
     revision: number;
@@ -115,6 +127,7 @@ export default function RepoPage({ params }: { params: Promise<{ slug: string }>
       <GitHubSection repo={data} onChanged={load} />
       <DatasetsSection repo={data} />
       <RevisionsSection repo={data} />
+      <RemoveSection repo={data} />
     </main>
   );
 }
@@ -378,6 +391,106 @@ function RevisionsSection({ repo }: { repo: RepoDetail }) {
             </div>
           ))}
         </div>
+      )}
+    </section>
+  );
+}
+
+/**
+ * Removing the repository from the server.
+ *
+ * Last on the page, and the only thing here that cannot be undone — the stored
+ * revisions ARE the copies of the repo, so there is nothing left to roll back
+ * to afterwards. Two things follow from that:
+ *
+ *  - It states what goes, with counts from the server. "Remove this repository"
+ *    reads like unlinking a GitHub coordinate, and it actually deletes datasets
+ *    and other people's saved queries. A warning that says "and related data"
+ *    is one the reader has to guess at.
+ *  - The button stays disabled until the slug is typed. Not theatre: this
+ *    instance holds `malloyyo_babyname` and `malloyyo_babynames`, and a repo
+ *    page is reached from a list of near-identical names.
+ */
+function RemoveSection({ repo }: { repo: RepoDetail }) {
+  const router = useRouter();
+  const [typed, setTyped] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const impact = repo.removalImpact;
+
+  const goes = [
+    [impact.datasets, "dataset"],
+    [impact.revisions, "stored revision"],
+    [impact.savedQueries, "saved query"],
+    [impact.drafts, "draft dashboard"],
+  ] as const;
+  const listed = goes.filter(([n]) => n > 0).map(([n, noun]) => `${n} ${noun}${n === 1 ? "" : "s"}`);
+
+  async function remove() {
+    setBusy(true);
+    setErr(null);
+    try {
+      const res = await fetch(
+        `/api/repos/${encodeURIComponent(repo.slug)}?confirm=${encodeURIComponent(repo.slug)}`,
+        { method: "DELETE" },
+      );
+      const json = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(json?.error ?? `HTTP ${res.status}`);
+      // Home, because this page's subject no longer exists — staying here would
+      // re-fetch it and render its own 404.
+      router.push("/");
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="flex flex-col gap-3 rounded border border-red-200 dark:border-red-900/60 bg-red-50/40 dark:bg-red-950/20 p-4">
+      <h2 className="text-sm font-medium text-red-800 dark:text-red-300">Remove from this server</h2>
+
+      <p className="text-xs text-gray-600 dark:text-gray-400 leading-relaxed">
+        Deletes <code className="text-[11px]">{repo.slug}</code> and everything it publishes
+        {listed.length > 0 ? <>: {listed.join(", ")}</> : null}. This cannot be undone — the stored
+        revisions are the only copies on this server, so there is nothing to roll back to. The repo
+        on GitHub is untouched, and publishing it again would start from revision 1.
+      </p>
+
+      {impact.orphanedChats > 0 && (
+        <p className="text-xs text-gray-600 dark:text-gray-400 leading-relaxed">
+          {impact.orphanedChats} chat{impact.orphanedChats === 1 ? "" : "s"} asked questions of{" "}
+          {impact.datasets === 1 ? "this dataset" : "these datasets"} and will be kept — they are
+          people&apos;s own question history, so removing a repo does not delete them. They will
+          refer to a dataset that no longer exists.
+        </p>
+      )}
+
+      <label className="flex flex-col gap-1">
+        <span className="text-xs text-gray-600 dark:text-gray-400">
+          Type <code className="text-[11px]">{repo.slug}</code> to confirm
+        </span>
+        <input
+          value={typed}
+          onChange={(e) => setTyped(e.target.value)}
+          placeholder={repo.slug}
+          autoComplete="off"
+          spellCheck={false}
+          className="w-full max-w-sm rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 px-2 py-1 font-mono text-xs"
+        />
+      </label>
+
+      <div>
+        <button
+          onClick={remove}
+          disabled={busy || typed !== repo.slug}
+          className="rounded bg-red-600 px-3 py-1.5 text-xs text-white hover:bg-red-700 disabled:opacity-40 disabled:hover:bg-red-600"
+        >
+          {busy ? "removing…" : "Remove this repository"}
+        </button>
+      </div>
+
+      {err && (
+        <pre className="whitespace-pre-wrap text-xs text-red-700 dark:text-red-400">{err}</pre>
       )}
     </section>
   );

@@ -53,6 +53,20 @@ export type TelemetryEvent =
     };
   }
   | { event: "dataset removed"; properties: Record<string, never> }
+  // Distinct from "dataset removed": removing a repo takes every dataset it
+  // publishes with it, so the counts are the event. Without them the analytics
+  // cannot tell a tidy-up of an empty repo from the deletion of four datasets
+  // and someone's saved queries.
+  | {
+      event: "repo removed";
+      properties: {
+        datasets: number;
+        revisions: number;
+        saved_queries: number;
+        drafts: number;
+        orphaned_chats: number;
+      };
+    }
   | { event: "query saved"; properties: { entrypoint: "ltool" } }
   | { event: "query favorite changed"; properties: { favorited: boolean } }
   | { event: "mcp tool called"; properties: { tool: McpToolName; outcome: TelemetryOutcome } };

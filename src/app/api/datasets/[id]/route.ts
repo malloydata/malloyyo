@@ -50,12 +50,34 @@ export async function GET(
   // The model the dataset SERVES, and the files it serves with - which for a
   // repo-backed model come out of its revision's zip rather than a per-file
   // table (src/lib/repo-files.ts).
+  //
+  // MANAGEMENT-ONLY, and not merely redacted — not fetched at all. Before this
+  // branch the per-file table held only the compiler's transitive `.malloy`
+  // closure, so "the files" and "the model" were nearly the same set and
+  // serving them to a public viewer cost little. A revision is the whole
+  // REPO: git decides membership (deliberately — gotcha #1), data files are
+  // allowed up to 64MB, and a dataset's view excludes only malloy-config*.json
+  // and its sibling dataset directories, which for a single-dataset repo
+  // excludes nothing at all.
+  //
+  // So this field had become an anonymous read of the backing repository.
+  // Measured on a public dataset with no credential: HTTP 200 and 24,001,878
+  // bytes, of which 23.7MB was a committed `rows.csv`, alongside `.mcp.json`,
+  // `.vscode/extensions.json` and `README.md`. A PRIVATE GitHub repo read with
+  // GITHUB_TOKEN can back a public dataset — `repos.github_use_token` is
+  // independent of a dataset's visibility — which made it an unauthenticated
+  // read of a private repo.
+  //
+  // Computing it lazily matters as much as hiding it: inflating those bytes
+  // into a JS string per request, for a caller who will not be shown them, is
+  // the same cost without the disclosure.
   const model = await latestModel(ds.id);
-  const files = model
-    ? [...(await modelFileMap(model, ds.repoDir))]
-        .map(([path, content]) => ({ path, content }))
-        .sort((a, b) => a.path.localeCompare(b.path))
-    : [];
+  const files =
+    model && canManage
+      ? [...(await modelFileMap(model, ds.repoDir))]
+          .map(([path, content]) => ({ path, content }))
+          .sort((a, b) => a.path.localeCompare(b.path))
+      : [];
 
   // Dashboard artifacts (manifest + Dashboard.tsx) shown alongside the model files.
   const dashboards = model
@@ -96,7 +118,16 @@ export async function GET(
     // `id` rides along because the repo-scoped webhook URL is
     // `/api/repos/<id>/webhook/github`, and without this nothing on the
     // instance could print it.
-    repo: repo ? { id: repo.id, slug: repo.slug, title: repo.title, ownerId: repo.ownerId } : null,
+    // `ownerId` is a user uuid and `id` is what the webhook URL is built from,
+    // so both are management-only; the slug and title are what a reader needs
+    // to know which repo publishes this dataset.
+    repo: repo
+      ? {
+          slug: repo.slug,
+          title: repo.title,
+          ...(canManage ? { id: repo.id, ownerId: repo.ownerId } : {}),
+        }
+      : null,
     githubRepo: repo?.githubRepo ?? null,
     githubBranch: repo?.githubBranch ?? null,
     // Where this dataset lives in a multi-dataset repo; "" is the root. The

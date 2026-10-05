@@ -260,7 +260,11 @@ function makeExploreHost(user: User, baseUrl: string): ExploreHost {
             name: d.name,
             title: d.title,
             description: d.description,
-            url: dashboardUrl(baseUrl, ds.name, d.name),
+            // `ds.ref`, like the three catalog refs above it. The bare name
+            // was the one spot this conversion missed, so two repos each
+            // publishing `orders` advertised correct model_refs and then
+            // IDENTICAL dashboard URLs.
+            url: dashboardUrl(baseUrl, ds.ref, d.name),
           }));
           if (dashboards.length) entry.dashboards = dashboards;
         } catch (err) {

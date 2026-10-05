@@ -25,6 +25,8 @@ import { and, desc, eq } from "drizzle-orm";
 import { modelArtifact, validateRestricted, type Problem } from "@malloyyo/mcp-engine";
 import { db, draftDashboards } from "@/db";
 import { findByDatasetRef, modelFileMap } from "@/lib/mcp-tools";
+import { resolveDatasetRef } from "@/lib/repos";
+import { qualifiedName } from "@/lib/repo-names";
 import { fileUrl, runNamedMalloyFiles, withModelRuntime } from "@/lib/malloy";
 import { newDatasetSlug } from "@/lib/slug";
 import { bundleDashboard } from "./bundle";
@@ -154,6 +156,15 @@ export async function saveDraftDashboard(
 
   const found = await findByDatasetRef(userId, datasetRef);
   if (!found) return { ok: false, error: `dataset '${datasetRef}' not found` };
+
+  // The qualified name, for the `url` this returns. `findByDatasetRef` answers
+  // with the dataset and its model but not the repo that publishes it, and the
+  // caller's own `datasetRef` may be any spelling — a uuid, an alias, a bare
+  // name — so neither is the address to hand back. `resolveDatasetRef` carries
+  // the repo, which is what makes the link unambiguous.
+  const owner = await resolveDatasetRef(datasetRef);
+  const qualified =
+    owner.ok && owner.repo ? qualifiedName(owner.repo.slug, found.ds.name) : found.ds.name;
   if (found.ds.status !== "ready") return { ok: false, error: "dataset not ready" };
 
   // Overwrite only your own. Checked before any compile work.
@@ -311,9 +322,12 @@ export async function saveDraftDashboard(
     ok: true,
     slug: row.slug,
     dashboard,
-    dataset: found.ds.name,
+    dataset: qualified,
     title,
-    url: `${origin.replace(/\/$/, "")}/datasets/${encodeURIComponent(found.ds.name)}/dashboard/${dashboard}`,
+    // Qualified: this URL is handed straight to a caller to open, and the bare
+    // name sent `save_draft_dashboard(dataset: "globex:orders")` a link to
+    // acme's dataset.
+    url: `${origin.replace(/\/$/, "")}/datasets/${encodeURIComponent(qualified)}/dashboard/${dashboard}`,
     tiles,
     component,
   };

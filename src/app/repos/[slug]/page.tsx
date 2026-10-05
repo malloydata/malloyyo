@@ -295,7 +295,13 @@ function DatasetsSection({ repo }: { repo: RepoDetail }) {
         {repo.datasets.map((d) => (
           <div key={d.id} className="flex items-center justify-between gap-3 px-3 py-2">
             <span className="min-w-0">
-              <Link href={`/datasets/${encodeURIComponent(d.name)}`} className="text-sm font-medium hover:underline">
+              {/* Qualified, like every other link to a dataset. This page
+                  prints `d.qualified` immediately below, so linking the bare
+                  name here meant the one surface that already knows the repo
+                  was throwing that away — and in an instance with two
+                  `orders`, "open" from one repo's page could land on the
+                  other's dataset. */}
+              <Link href={`/datasets/${encodeURIComponent(d.qualified)}`} className="text-sm font-medium hover:underline">
                 {d.displayTitle}
               </Link>
               <span className="block text-[11px] text-gray-500 dark:text-gray-400 font-mono truncate">
@@ -338,7 +344,7 @@ function DatasetsSection({ repo }: { repo: RepoDetail }) {
               {/* No "config" link: a repo-backed dataset's config page now
                   redirects straight back here, so it would be a loop. */}
               <Link
-                href={`/datasets/${encodeURIComponent(d.name)}`}
+                href={`/datasets/${encodeURIComponent(d.qualified)}`}
                 className="text-[11px] text-gray-500 hover:underline"
               >
                 open

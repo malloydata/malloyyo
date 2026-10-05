@@ -7,10 +7,15 @@
 -- an index that already exists or by its own backfill -- noted at each one.
 --
 -- The old dataset columns (`github_repo`, `github_branch`, `github_use_token`)
--- are deliberately NOT dropped here. 0027 does that, as a separate entry, so a
--- deployment can ship this one, promote the code that stopped reading them, and
--- only then drop -- the ordering CLAUDE.md calls for, since a Vercel build
--- migrates BEFORE the new code is promoted.
+-- are deliberately NOT dropped here, and NOT dropped anywhere in this release --
+-- do not read this paragraph as saying the drop has already shipped. A Vercel
+-- build migrates BEFORE the new code is promoted, so an entry dropping a column
+-- the live version still selects takes that version down for the length of the
+-- deploy; splitting the drop into its own entry does not help, because both
+-- entries would still be pending in the same deploy (docs/repo-model.md).
+-- The drop belongs to a LATER release, after the one that stopped reading them.
+-- What keeps anything from reading them meanwhile is src/lib/dead-columns.test.ts,
+-- and test/repo-migration.test.ts asserts no drop entry is in this journal.
 
 CREATE TYPE "public"."repo_revision_source" AS ENUM('cli', 'github');--> statement-breakpoint
 CREATE TABLE "repos" (
@@ -226,10 +231,56 @@ CREATE INDEX "malloy_models_revision_idx" ON "malloy_models" USING btree ("revis
 -- Implied by the backfill above: DISTINCT ON sets at most one row per dataset.
 CREATE UNIQUE INDEX "malloy_models_one_active" ON "malloy_models" USING btree ("dataset_id") WHERE active;--> statement-breakpoint
 CREATE INDEX "dataset_aliases_dataset_idx" ON "dataset_aliases" USING btree ("dataset_id");--> statement-breakpoint
--- Implied by the `rn` disambiguation in the backfill.
+-- NOT implied by the `rn` disambiguation in the backfill, which is why this
+-- block is here. `rn` numbers rows PARTITION BY base, so the name it generates
+-- (`base || '_' || rn`) is never compared against any OTHER partition's base --
+-- and those spaces overlap, because `nameToSlug` maps `twig-2` to `twig_2` just
+-- as it maps the second `twig` to `twig_2`. Three ordinary rows are enough:
+-- `acme/twig@main`, `acme/twig@dev`, `acme/twig-2@main` produce `twig`,
+-- `twig_2`, `twig_2`, and the index below then fails on data nobody chose --
+-- which is the one property the header of this file says it must not have. A
+-- failed entry rolls back and is never journalled, so a Vercel build fails
+-- (nothing deploys) and a long-running instance fails readiness until someone
+-- edits rows by hand.
+--
+-- Resolved by assignment rather than by a cleverer window: each remaining
+-- duplicate takes the first free `_n`, tested against the table as it stands, so
+-- the result is unique however the suffixes and the natural slugs overlap. The
+-- first row of each group keeps the name it already has, under the same ordering
+-- the backfill used -- default branch first, then oldest -- so which repo keeps
+-- the bare slug does not change.
+DO $$
+DECLARE
+	dup_row record;
+	candidate text;
+	n int;
+BEGIN
+	FOR dup_row IN
+		SELECT id, slug FROM (
+			SELECT id, slug, row_number() OVER (
+				PARTITION BY slug
+				ORDER BY (github_branch = 'main') DESC, created_at ASC, github_repo, github_branch
+			) AS dup
+			FROM repos
+		) ranked WHERE dup > 1 ORDER BY slug, dup
+	LOOP
+		n := 1;
+		LOOP
+			n := n + 1;
+			candidate := dup_row.slug || '_' || n;
+			EXIT WHEN NOT EXISTS (SELECT 1 FROM repos WHERE slug = candidate);
+		END LOOP;
+		UPDATE repos SET slug = candidate WHERE id = dup_row.id;
+		RAISE NOTICE 'repo slug % collided; renamed to %', dup_row.slug, candidate;
+	END LOOP;
+END $$;--> statement-breakpoint
 CREATE UNIQUE INDEX "repos_slug_unique" ON "repos" USING btree ("slug");--> statement-breakpoint
 -- Implied by the GROUP BY that built the rows.
-CREATE UNIQUE INDEX "repos_github_unique" ON "repos" USING btree ("github_repo","github_branch") WHERE github_repo is not null;--> statement-breakpoint
+-- Coalesced: a plain ("github_repo","github_branch") index does NOT forbid two
+-- rows at ('acme/x', NULL), because Postgres treats NULLs as distinct -- and the
+-- refresh path reads a NULL branch as 'main', so both would pull the same
+-- commit. See the note in src/db/schema.ts.
+CREATE UNIQUE INDEX "repos_github_unique" ON "repos" USING btree ("github_repo", coalesce("github_branch", 'main')) WHERE github_repo is not null;--> statement-breakpoint
 CREATE INDEX "repos_owner_idx" ON "repos" USING btree ("owner_id");--> statement-breakpoint
 CREATE UNIQUE INDEX "repo_revisions_repo_revision_unique" ON "repo_revisions" USING btree ("repo_id","revision");--> statement-breakpoint
 CREATE UNIQUE INDEX "repo_revisions_one_active" ON "repo_revisions" USING btree ("repo_id") WHERE active;--> statement-breakpoint

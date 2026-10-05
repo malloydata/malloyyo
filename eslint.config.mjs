@@ -34,6 +34,17 @@ const eslintConfig = defineConfig([
     "packages/cli/test/fixtures/**",
     // Generated at build time (react + renderer vendor bundle for dashboards).
     "public/dashboard-vendor.js",
+    // Its sibling, written by the same script (scripts/build-dashboard-vendor.mjs)
+    // and gitignored on the next line of .gitignore. Omitting it meant a minified
+    // vendor bundle was linted as source, which is why `server: lint` failed on a
+    // working tree that had run the build.
+    "public/mcp-app-sdk.js",
+    // Agent worktrees: a nested CHECKOUT of this repo, build output and all.
+    // `.next/**` above does not match a nested one, so a single leftover
+    // worktree contributed 1578 files and ~159k problems to `npm run lint` —
+    // enough to make preflight's lint step meaningless locally while telling CI
+    // (which never has one) nothing. Not our source to lint under any pattern.
+    ".claude/**",
   ]),
   {
     // Honor the `_`-prefix convention for deliberately-unused bindings

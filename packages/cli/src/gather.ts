@@ -2,8 +2,7 @@ import { readFileSync, existsSync, readdirSync, statSync, mkdtempSync, rmSync } 
 import { join, relative, sep, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
-import { keepsFile } from "@malloyyo/mcp-engine";
-import { SKIP_DIRS, isBundleOutput } from "./repo.js";
+import { SKIP_DIRS } from "./repo.js";
 import { makeRunner } from "./host.js";
 import { aboutPage } from "./discover.js";
 import type { ModelFile, GitInfo, DashboardPayload } from "./protocol.js";

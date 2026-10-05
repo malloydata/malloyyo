@@ -385,12 +385,24 @@ export async function publishRevision(input: PublishInput): Promise<PublishResul
   // A webhook storm, or a re-run of the same publish. Only the ACTIVE revision
   // short-circuits: a revision with these bytes that FAILED verification is
   // re-tried, because the failure may have been a warehouse that was down.
+  //
+  // And NOT when the caller asked for datasets to be created. The bytes being
+  // identical means the CONTENT has nothing new in it; it does not mean there
+  // is nothing to do, because what `createDatasets` acts on is the state of the
+  // `datasets` ROWS, which this comparison cannot see. Without the guard,
+  // pressing "Refresh and create missing datasets" on a repo sitting at the
+  // same commit returned `unchanged: true` with `unclaimed: []` — so the
+  // directory was never claimed, the page reported a successful refresh, and
+  // the empty `unclaimed` hid the evidence. The only escape was to push a
+  // commit to GitHub. A repo whose datasets were deleted was permanently
+  // inert, which is the exact state the `?create=1` flag exists to recover
+  // from, and the comment in its route said so while this made it impossible.
   const [live] = await db
     .select()
     .from(repoRevisions)
     .where(and(eq(repoRevisions.repoId, input.repo.id), eq(repoRevisions.active, true)))
     .limit(1);
-  if (live && live.archiveSha256 === archive.sha256) {
+  if (live && live.archiveSha256 === archive.sha256 && !input.createDatasets) {
     logger.info("repo publish: identical to the live revision", {
       repo: input.repo.slug,
       revision: live.revision,

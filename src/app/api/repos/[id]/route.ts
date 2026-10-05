@@ -15,7 +15,7 @@
  */
 
 import { NextResponse } from "next/server";
-import { and, asc, count, desc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import { db, chats, datasets, draftDashboards, repos, repoRevisions, malloyModels, savedQueries } from "@/db";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
@@ -53,8 +53,19 @@ async function load(ref: string) {
  * at a dataset that no longer exists. Deleting them anyway would throw away
  * users' own question history, which is more than was asked for, so they are
  * reported and left alone — see the note in the DELETE handler.
+ *
+ * That column holds BOTH spellings, which is why the count matches both. It is
+ * filled from the `?dataset=` parameter on the link that opened the chat, and
+ * those links were changed to carry the qualified `repo:dataset` — so rows
+ * written before that change hold a bare name and rows written after hold a
+ * qualified one. Matching bare names alone missed every recent chat; matching
+ * them at all is also ambiguous across repos, since two repos may each publish
+ * an `orders`, so the bare half of this count can over-report by including
+ * another repo's chats. Both halves are kept because both are real historical
+ * values, and the number is a warning rather than a deletion — but it is an
+ * estimate, and the response says so.
  */
-async function removalImpact(repoId: string, datasetNames: string[]) {
+async function removalImpact(repoId: string, repoSlug: string, datasetNames: string[]) {
   const ids = (
     await db.select({ id: datasets.id }).from(datasets).where(eq(datasets.repoId, repoId))
   ).map((d) => d.id);
@@ -70,7 +81,17 @@ async function removalImpact(repoId: string, datasetNames: string[]) {
       ? one(db.select({ n: count() }).from(draftDashboards).where(inArray(draftDashboards.datasetId, ids)))
       : Promise.resolve(0),
     datasetNames.length
-      ? one(db.select({ n: count() }).from(chats).where(inArray(chats.dataset, datasetNames)))
+      ? one(
+          db
+            .select({ n: count() })
+            .from(chats)
+            .where(
+              inArray(chats.dataset, [
+                ...datasetNames,
+                ...datasetNames.map((n) => qualifiedName(repoSlug, n)),
+              ]),
+            ),
+        )
       : Promise.resolve(0),
   ]);
 
@@ -149,7 +170,7 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
   // Counted on the detail read rather than behind its own endpoint: the page
   // that offers the removal is this page, and a warning fetched separately is a
   // warning that can fail to arrive while the button stays live.
-  const impact = await removalImpact(repo.id, members.map((d) => d.name));
+  const impact = await removalImpact(repo.id, repo.slug, members.map((d) => d.name));
 
   return NextResponse.json({
     id: repo.id,
@@ -217,6 +238,12 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
       // One repo per coordinate: two rows claiming the same branch of the same
       // GitHub repo is what made "which datasets are this repo" ambiguous before
       // repos were rows at all.
+      // Coalesced on BOTH sides, matching `repos_github_unique`. A blank branch
+      // is not a third value — the refresh path reads it as `main` — so
+      // attaching with the branch left empty must clash with an existing row on
+      // `main`. Comparing NULL to NULL found nothing, so the pre-check passed,
+      // the index did not catch it either (NULLs are distinct in Postgres), and
+      // two repos ended up pulling one commit.
       const branch = (body.githubBranch ?? repo.githubBranch)?.trim() || null;
       const [clash] = await db
         .select({ slug: repos.slug })
@@ -224,7 +251,7 @@ export async function PATCH(req: Request, ctx: { params: Promise<{ id: string }>
         .where(
           and(
             eq(repos.githubRepo, slug),
-            branch === null ? isNull(repos.githubBranch) : eq(repos.githubBranch, branch),
+            sql`coalesce(${repos.githubBranch}, 'main') = ${branch ?? "main"}`,
           ),
         )
         .limit(1);
@@ -308,7 +335,7 @@ export async function DELETE(req: Request, ctx: { params: Promise<{ id: string }
     .select({ name: datasets.name })
     .from(datasets)
     .where(eq(datasets.repoId, repo.id));
-  const impact = await removalImpact(repo.id, members.map((d) => d.name));
+  const impact = await removalImpact(repo.id, repo.slug, members.map((d) => d.name));
 
   await db.delete(repos).where(eq(repos.id, repo.id));
 

@@ -282,8 +282,17 @@ export const repos = pgTable(
     // One repo per GitHub (repo, branch). Two repos claiming the same one would
     // make a webhook push ambiguous and let two owners overwrite each other's
     // datasets from the same commit.
+    //
+    // COALESCED, because the plain two-column form did NOT enforce this and the
+    // sentence above was false. Postgres treats NULLs as distinct, so two rows
+    // holding ('acme/x', NULL) both satisfy a unique index on those columns --
+    // verified directly. Meanwhile `github-refresh.ts` reads the branch as
+    // `githubBranch ?? "main"`, so both of those rows refresh acme/x@main: the
+    // ambiguity this index exists to forbid, reachable by attaching a repo
+    // through a form that leaves the branch blank. `findRepoForPublish` then
+    // sees two attached repos and refuses EVERY CLI publish to either.
     uniqueIndex("repos_github_unique")
-      .on(t.githubRepo, t.githubBranch)
+      .on(t.githubRepo, sql`coalesce(${t.githubBranch}, 'main')`)
       .where(sql`github_repo is not null`),
     index("repos_owner_idx").on(t.ownerId),
   ],

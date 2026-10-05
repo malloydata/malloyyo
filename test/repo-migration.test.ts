@@ -68,6 +68,27 @@ const MIGRATION = "0026_repos_first_class";
 const PRE_REWRITE_LAST = MIGRATION;
 
 /**
+ * Journal entries added AFTER the rewrite, each one checked safe to apply
+ * before the new code is promoted — see the test at the bottom of this file for
+ * why that ordering is the hazard. Appending a tag here is the act of having
+ * checked it; the test fails until you do, which is the point.
+ *
+ *  - 0027_public_to_user_role — data only (UPDATE). Adds MALLOYYO_USER to
+ *    datasets already flagged `is_public`. The live version still reads
+ *    `is_public`, which is untouched, and the added role only grants what that
+ *    column already granted, so no deploy window can hide a dataset.
+ *  - 0028_drop_failed_datasets — data only (DELETE of `status = 'failed'`).
+ *    No schema change; the live version simply stops listing debris.
+ *
+ * Neither drops a column, which is the thing that cannot ride along in a
+ * build-time migration.
+ */
+const REVIEWED_AFTER_REWRITE = ["0027_public_to_user_role", "0028_drop_failed_datasets"];
+
+/** What the journal should currently end with. */
+const JOURNAL_TIP = REVIEWED_AFTER_REWRITE.at(-1) ?? PRE_REWRITE_LAST;
+
+/**
  * The mess. Every row here is a shape the production fork actually had, or one
  * the schema at 0025 permits and the backfill therefore has to survive.
  */
@@ -369,18 +390,27 @@ test("…so two repos can now hold a dataset of the same name, which they could 
 });
 
 test("the three old columns are still THERE, and that is the point", () => {
-  // 0027 is NOT in this release. A Vercel build applies the journal before
-  // promoting the new code, so an entry dropping a column the currently live
-  // version still selects takes that version down for the length of the deploy
-  // — and the live version selects whole `datasets` rows in half a dozen
-  // places. The drop is one command in the release AFTER this one.
+  // No entry in this release DROPS them. A Vercel build applies the journal
+  // before promoting the new code, so an entry dropping a column the currently
+  // live version still selects takes that version down for the length of the
+  // deploy — and the live version selects whole `datasets` rows in half a dozen
+  // places. The drop is one command in a LATER release.
   //
   // What stops anything reading them meanwhile is
   // src/lib/dead-columns.test.ts, which greps the source. This test only
   // records the decision where someone looking at the migration will see it.
+  //
+  // The tip assertion is a tripwire, not bookkeeping: it fails on ANY new
+  // journal entry so that whoever added it has to come here, decide whether it
+  // is safe to apply before promotion, and say so in REVIEWED_AFTER_REWRITE.
+  // It has already earned its keep once.
   const entries = journal.map((e) => e.tag);
   assert.ok(!entries.some((t) => t.includes("drop_dataset_github")), "no drop entry in this release");
-  assert.equal(entries[entries.length - 1], PRE_REWRITE_LAST, "0026 is the last entry");
+  assert.equal(
+    entries[entries.length - 1],
+    JOURNAL_TIP,
+    "a new journal entry was added — check it is safe to apply BEFORE the new code is promoted, then list it in REVIEWED_AFTER_REWRITE",
+  );
 });
 
 test("a full journal replay reproduces the same schema as a staged one", async () => {

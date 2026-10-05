@@ -59,6 +59,12 @@ export async function POST(_req: Request, ctx: { params: Promise<{ id: string }>
   // datasets were removed is otherwise inert: a plain refresh only refreshes
   // what already exists, so it would succeed, publish nothing, and report every
   // directory as unclaimed forever.
+  //
+  // That remedy only actually works because `publishRevision` exempts a
+  // create from its identical-bytes short-circuit. It did not at first, and
+  // this comment asserted a way out that the code had closed: the repo is
+  // still at the same commit, so the bytes matched, so the create returned
+  // "nothing has changed" and claimed nothing.
   const url = new URL(_req.url);
   const createDatasets = url.searchParams.get("create") === "1";
 

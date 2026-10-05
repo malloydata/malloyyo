@@ -275,12 +275,19 @@ async function readTarGz(gz: Buffer): Promise<Map<string, Uint8Array>> {
         stream.resume();
         return next();
       }
-      if (size > ARCHIVE_LIMITS.maxFileBytes) {
+      // `fileCapFor`, not the bare source cap: a data file gets the larger
+      // allowance here exactly as it does on the zip path. The two ingest
+      // paths disagreeing is the thing "normalized at the door" exists to
+      // prevent — and this is the still-supported path, so the repo the data
+      // cap was raised for (a committed 22.7MB rows.csv) was refused when
+      // published by an older CLI that sends gzipped tar.
+      const cap = fileCapFor(name);
+      if (size > cap) {
         stream.resume();
         return next(
           new ArchiveError(
             `${name} is ${(size / 1024 / 1024).toFixed(1)}MB, over the ` +
-              `${ARCHIVE_LIMITS.maxFileBytes / 1024 / 1024}MB per-file limit`,
+              `${cap / 1024 / 1024}MB per-file limit`,
           ),
         );
       }

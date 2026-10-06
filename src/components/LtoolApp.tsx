@@ -106,13 +106,17 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
     a blank heading rather than disappearing. */
 function groupSourcesByDataset(
   sources: SourceOption[],
-): Array<{ key: string; dataset: string; sources: SourceOption[] }> {
-  const groups = new Map<string, { key: string; dataset: string; sources: SourceOption[] }>();
+): Array<{ key: string; dataset: string; label: string; sources: SourceOption[] }> {
+  const groups = new Map<string, { key: string; dataset: string; label: string; sources: SourceOption[] }>();
   for (const s of sources) {
+    // Grouped and keyed by the ADDRESS, which is unique; rendered as the
+    // LABEL, which is not. Two repos each publishing an `orders` are two
+    // groups that may legitimately show the same heading — the address is what
+    // keeps them apart, and React keys on it.
     const key = s.dataset ?? "";
     let g = groups.get(key);
     if (!g) {
-      g = { key, dataset: s.dataset ?? "other", sources: [] };
+      g = { key, dataset: s.dataset ?? "other", label: s.datasetLabel ?? s.dataset ?? "other", sources: [] };
       groups.set(key, g);
     }
     g.sources.push(s);
@@ -200,7 +204,7 @@ function SourceFilterPicker({
             {groupSourcesByDataset(sources).map((group) => (
               <div key={group.key}>
                 <div className="px-2 pt-2 pb-0.5 text-[10px] uppercase tracking-wide text-gray-400 dark:text-gray-500 truncate">
-                  {group.dataset}
+                  {group.label}
                 </div>
                 {group.sources.map((s) => (
                   <button
@@ -406,7 +410,7 @@ function SourcePicker({
       {groupSourcesByDataset(sources).map((group) => (
         <div key={group.key} className="space-y-1.5">
           <p className="text-[10px] uppercase tracking-wide font-semibold text-gray-400 dark:text-gray-500">
-            {group.dataset}
+            {group.label}
           </p>
           <div className="space-y-1">
             {group.sources.map((s) => (
@@ -638,6 +642,8 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
             dataset: string;
             /** `repo:dataset` — optional so an older response still parses. */
             qualified?: string;
+            /** The dataset's display title — optional for the same reason. */
+            title?: string;
             sources?: Array<{ source: string; description?: string | null }>;
           }>,
         ) => {
@@ -660,6 +666,7 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
                 source: s.source,
                 description: s.description ?? null,
                 dataset: ds.qualified ?? ds.dataset,
+                datasetLabel: ds.title ?? ds.dataset,
               });
           }
         }

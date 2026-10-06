@@ -113,15 +113,24 @@ function JoinSection({ join, prefix }: { join: FieldNode; prefix?: string }) {
 export type SourceOption = {
   source: string;
   description: string | null;
-  /** The dataset this source belongs to — its NAME, which is what links carry
-      and what a reader recognises.
+  /** The dataset this source belongs to, as its ADDRESS — the qualified
+      `repo:dataset`, which is what gets run and what links carry.
    *
    * Optional only because a caller may not know it. Both pickers over this list
    * get EVERY dataset's sources (ltool hands the same array to its filter and to
    * the schema panel), so two entries can share a source name — two datasets may
    * each define an "orders" — and the dataset is what tells them apart. Both
-   * key their rows on dataset+source for that reason. */
+   * key their rows on dataset+source for that reason, so this has to be the
+   * unique one. */
   dataset?: string;
+  /** What to CALL that dataset in a heading — its title.
+   *
+   * Separate from `dataset` because one field cannot do both jobs, which is the
+   * mistake this pair exists to stop repeating. When `dataset` held the bare
+   * name the headings read nicely and the address was ambiguous; making it
+   * qualified fixed the address and put `malloyyo_babynames:babynames` in the
+   * UI. Falls back to the address when a caller has no title. */
+  datasetLabel?: string;
 };
 
 // A compact dropdown for switching which source's schema is shown. Each row is

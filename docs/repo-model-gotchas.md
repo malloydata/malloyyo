@@ -165,16 +165,25 @@ is the format choice that preserves the option.
 
 ## 10. Names are load-bearing
 
-Dataset names are globally unique per instance, and more things depend on that
-than it looks: `resolveDatasetByRef` (used by both the publish API and MCP) falls
-back to name lookup, `--dataset <name>` targets by name, role grants are arrays
-of names, and shareable query slugs and saved MCP client configs are out there in
-the world.
+Dataset names *were* globally unique per instance, and more things depended on
+that than it looked: `resolveDatasetByRef` (used by both the publish API and MCP)
+fell back to name lookup, `--dataset <name>` targeted by name, and shareable
+query slugs and saved MCP client configs are out there in the world. (Role grants
+are not in that list: they are role names on the dataset row, set by uuid.)
 
-Scoping names to a repo is the right fix for the collision — a repo brings N
-common nouns into one namespace, and two repos with a `sales/` directory cannot
-coexist today — but renaming every dataset is a migration with an alias path, not
-a rename.
+Names are now scoped to a repo and the address is the qualified `repo:dataset`,
+with `dataset_aliases` carrying the old bare names forward — the migration this
+gotcha asked for, shipped in #189.
+
+The lesson that outlived the fix is the one worth keeping: **a value that is both
+a label and an address will be used as the wrong one.** Scoping the names did not
+end it, it moved it. Afterwards, six places still used the bare name as an
+address — including `/api/history`, which answered "no questions yet" for every
+repo-backed dataset — and one UI heading started reading
+`malloyyo_babynames:babynames` because the field that fixed the address was also
+the field that was displayed. When you touch one of these, check which job each
+value is doing, and split them when it is both. `/api/favorited-queries` still
+keys by bare name, and says so.
 
 ## 11. Two smaller ones, for completeness
 

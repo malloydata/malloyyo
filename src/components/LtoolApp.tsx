@@ -106,13 +106,24 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
     a blank heading rather than disappearing. */
 function groupSourcesByDataset(
   sources: SourceOption[],
-): Array<{ key: string; dataset: string; sources: SourceOption[] }> {
-  const groups = new Map<string, { key: string; dataset: string; sources: SourceOption[] }>();
+): Array<{ key: string; label: string; sources: SourceOption[] }> {
+  const groups = new Map<string, { key: string; label: string; sources: SourceOption[] }>();
   for (const s of sources) {
+    // Grouped by the ADDRESS, which is unique, and rendered as the LABEL, which
+    // is not guaranteed to be: two datasets could carry the same title, and
+    // then two headings read alike. Accepted rather than solved — a repo that
+    // gains a dataset does it by changing its own layout, not by being run
+    // alongside a second repo publishing the same name, so the collision is an
+    // artifact of a test instance rather than a shape anyone migrates into.
+    //
+    // The address is NOT carried out of here. It was, as a `dataset` field no
+    // render site read, and that is the sort of spare value someone later
+    // reaches for to label something — which is the whole bug this pair of
+    // fields exists to prevent. `key` is the address and does the keying.
     const key = s.dataset ?? "";
     let g = groups.get(key);
     if (!g) {
-      g = { key, dataset: s.dataset ?? "other", sources: [] };
+      g = { key, label: s.datasetLabel ?? s.dataset ?? "other", sources: [] };
       groups.set(key, g);
     }
     g.sources.push(s);
@@ -200,7 +211,7 @@ function SourceFilterPicker({
             {groupSourcesByDataset(sources).map((group) => (
               <div key={group.key}>
                 <div className="px-2 pt-2 pb-0.5 text-[10px] uppercase tracking-wide text-gray-400 dark:text-gray-500 truncate">
-                  {group.dataset}
+                  {group.label}
                 </div>
                 {group.sources.map((s) => (
                   <button
@@ -406,7 +417,7 @@ function SourcePicker({
       {groupSourcesByDataset(sources).map((group) => (
         <div key={group.key} className="space-y-1.5">
           <p className="text-[10px] uppercase tracking-wide font-semibold text-gray-400 dark:text-gray-500">
-            {group.dataset}
+            {group.label}
           </p>
           <div className="space-y-1">
             {group.sources.map((s) => (
@@ -638,6 +649,8 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
             dataset: string;
             /** `repo:dataset` — optional so an older response still parses. */
             qualified?: string;
+            /** The dataset's display title — optional for the same reason. */
+            title?: string;
             sources?: Array<{ source: string; description?: string | null }>;
           }>,
         ) => {
@@ -660,6 +673,7 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
                 source: s.source,
                 description: s.description ?? null,
                 dataset: ds.qualified ?? ds.dataset,
+                datasetLabel: ds.title ?? ds.dataset,
               });
           }
         }

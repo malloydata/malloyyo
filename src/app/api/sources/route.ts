@@ -6,6 +6,7 @@ import { eq, desc, and, inArray, ne } from "drizzle-orm";
 import { db, datasets, malloyModelFiles, malloyModels, repoRevisions, repos, users } from "@/db";
 import { DEVCONTAINER_PATH } from "@/lib/github-source-link";
 import { qualifiedName } from "@/lib/repos";
+import { datasetTitle } from "@malloyyo/mcp-engine";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
 import { datasetVisibleWhere } from "@/lib/roles";
@@ -36,6 +37,7 @@ export async function GET() {
     .select({
       id: datasets.id,
       name: datasets.name,
+      title: datasets.title,
       status: datasets.status,
       isPublic: datasets.isPublic,
       repoDir: datasets.repoDir,
@@ -83,10 +85,13 @@ export async function GET() {
   // dataset id had to ride along as a join key.
   //
   // No dataset id: nothing outside the server needs one. Links address a dataset
-  // by NAME, which is unique per server (see findByDatasetRef), so the name is
-  // also the key the front page joins dashboards and questions on.
+  // by its QUALIFIED name, `repo:dataset` — the bare `dataset` below is unique
+  // only within its repo, so it is a display and grouping value and not an
+  // address. It used to be both, back when names were unique per server.
   const result: Array<{
     dataset: string;
+    /** The dataset's display title, already defaulted from its name. */
+    title: string;
     status: string;
     isPublic: boolean;
     qualified: string;
@@ -157,6 +162,11 @@ export async function GET() {
       // The public identity: `<repo>:<name>`, or the bare name for a dataset no
       // repo publishes. Additive - `dataset` keeps meaning what it meant.
       qualified: qualifiedName(ds.repoSlug, ds.name),
+      // What to CALL it. The qualified name is an address and reads like one;
+      // a picker heading wants the dataset's own title ("Babynames", not
+      // "malloyyo_babynames:babynames"), which is what every other surface
+      // shows. Same helper the home page uses, so the two agree.
+      title: datasetTitle(ds.name, ds.title),
       repo: ds.repoSlug,
       needsUpdate: ds.liveRevisionId === null,
       status: ds.status,

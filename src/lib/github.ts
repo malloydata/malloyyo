@@ -106,7 +106,10 @@ export class GitHubURLReader {
  * and an instance with no GITHUB_TOKEN has sixty an hour for everything — a
  * four-dataset repo spent all sixty on a single refresh, measured twice. The
  * archive is also what `malloyyo publish` sends, so both ways a repo arrives
- * reach the same extractor (src/lib/tarball.ts).
+ * reach the same extractor — `src/lib/repo-archive.ts`, which reads zip with
+ * fflate and gzipped tar with tar-stream. NOT `src/lib/tarball.ts`: that is the
+ * hand-rolled reader this replaced, it has no production consumer left, and
+ * following this pointer there was how a reader last learned the format twice.
  *
  * Returns null when GitHub will not give it, so a caller can fall back to
  * reading files one at a time rather than failing outright.

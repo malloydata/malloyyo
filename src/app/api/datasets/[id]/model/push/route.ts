@@ -129,8 +129,10 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
   // leaves nothing behind.
   const create = params.get("create") === "1";
 
-  // `id` may be a dataset uuid OR a readable name (the ready dataset with that name,
-  // unique per server) — so malloy-config.json can target by name instead of a slug.
+  // `id` may be a dataset uuid OR a readable ref — so malloy-config.json can
+  // target by name instead of a slug. `resolveDatasetByRef` takes a qualified
+  // `repo:dataset`, an alias, or a bare name, and REFUSES a bare name two repos
+  // both publish rather than picking one. It is not unique per server any more.
   const ds = await resolveDatasetByRef(id);
   if (!ds && !create) {
     return json(404, {

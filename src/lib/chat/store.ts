@@ -13,7 +13,7 @@
 
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import type Anthropic from "@anthropic-ai/sdk";
-import { db, chats, chatMessages, chatResults, datasets, type Chat } from "@/db";
+import { db, chats, chatMessages, chatResults, type Chat } from "@/db";
 import { resolveDatasetRef } from "@/lib/repos";
 
 /** Is the dataset this chat was held on one anyone may see?

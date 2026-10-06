@@ -53,9 +53,13 @@ export async function GET() {
 
   const rows = await db
     .select({
-      // By NAME, not id: the front page joins these against the source
-      // catalogue and the dashboard list, and a dataset name is unique per
-      // server — so the join needs no uuid and none reaches the browser.
+      // By NAME, not id — and that is a KNOWN DEFECT, not a design. A dataset
+      // name is unique only inside its repo now, so when two repos each publish
+      // an `orders` the front page's join puts both cards' favourites together
+      // (src/app/page.tsx says the same thing from the consuming side: wrong,
+      // but symmetrically wrong, which beats one card vanishing). This endpoint
+      // predates repos and has not been threaded through; it should return the
+      // qualified name. Do not read this as an invariant — it used to claim one.
       dataset: datasets.name,
       source: savedQueries.source,
       slug: savedQueries.slug,

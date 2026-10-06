@@ -35,9 +35,12 @@ type SourceSummary = { source: string; description: string | null };
 // source list carrying the dataset's fields on every row, and this file's first
 // job was to undo that; the regrouping went with it.
 //
-// A dataset is identified by NAME throughout: it is unique per server, it is
-// what every link carries, and it is the key the questions and dashboards below
-// are joined on. No id reaches this file.
+// Two spellings, doing two jobs. The QUALIFIED name (`repo:dataset`) is the
+// address: it is what every link below carries and what the questions and
+// dashboards are joined on, because a bare name is unique only inside its repo
+// and joining on one poured two repos' dashboards into a single bucket. The
+// bare name is display, under the repo heading that supplies the rest. No id
+// reaches this file.
 type DatasetGroup = {
   dataset: string;
   /** The repo that publishes it — the grouping key. Null for a dataset no repo

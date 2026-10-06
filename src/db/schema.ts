@@ -349,7 +349,13 @@ export const repoRevisions = pgTable(
     /** The repo, as a zip. See the note above. */
     archive: bytea("archive").notNull(),
     archiveBytes: integer("archive_bytes").notNull(),
-    /** sha256 of the zip. Lets a webhook storm recognise bytes it already has. */
+    /** NOT a hash of the zip, despite the column name: a hash over the sorted
+        FILE SET inside it (see `contentHash`, src/lib/repo-archive.ts). The
+        design turns on that difference — `git archive` stamps the commit time
+        into the container, so two commits of an identical tree produce
+        different zip bytes, and hashing the container would make every refetch
+        look like a change. Do not "correct" the code to match the name; it is
+        the name that is wrong. Lets a webhook storm recognise content it has. */
     archiveSha256: text("archive_sha256").notNull(),
     /**
      * What this revision DECLARES it publishes, from the layout rules — one

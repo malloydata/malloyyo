@@ -1,9 +1,8 @@
 # Roles and access
 
-> **Status: roles ship.** The role catalog, dataset grants, `$MALLOYYO_ROLES`
-> and row scoping all work today, managed at **Admin → Roles**. Multi-dataset
-> repos (the `datasets/` layout below) do NOT yet — that section describes
-> where this is going.
+> **Status: shipped.** The role catalog, dataset grants, `$MALLOYYO_ROLES`, row
+> scoping and multi-dataset repos all work today. Roles are managed at
+> **Admin → Roles**; `lloydtabb/malloyyo_examples` is a live multi-dataset repo.
 
 Two questions decide what anyone sees, and they are answered in different
 places:
@@ -178,6 +177,7 @@ datasets/
 lib/
   orders.malloy         shared definitions, imported by both
 malloy-config.json      connections, shared by all of them
+                        (a dataset may bring its own, which then replaces it)
 ```
 
 - **The directory name is the dataset name.** `datasets/finance/` publishes a
@@ -193,9 +193,18 @@ malloy-config.json      connections, shared by all of them
 - **Use one shape or the other.** A repo with both a top-level `index.malloy`
   and a `datasets/` directory is an error rather than a guess, so you never
   publish half of what you meant to.
-- **A change in `lib/` touches every dataset that imports it.** Publishing
-  compiles them all, so a shared edit that breaks the sales dataset fails before
-  anything ships rather than after.
+- **A change in `lib/` touches every dataset that imports it.** Adding the repo
+  compiles them all, and one webhook refreshes them all — so a shared edit that
+  breaks the sales dataset fails before anything ships, and the datasets in a
+  repo never sit at different commits.
+- **A repo lands whole or not at all.** Every dataset name is checked before any
+  is created, and if one fails to compile, none are. An instance missing one of
+  four datasets looks complete, and the missing one is the one nobody checks.
+- **Every directory under `datasets/` needs its own `index.malloy`.** One that
+  has none is an error naming it, not a directory quietly skipped. Shared code
+  goes in a sibling like `lib/`, not under `datasets/`.
+- **Local tooling takes the dataset directory.** `malloyyo dashboard dev -C
+  datasets/finance`, since that is where the model rooted.
 
 ### Imports carry givens
 

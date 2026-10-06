@@ -2,9 +2,10 @@
 // SPDX-License-Identifier: MIT
 
 import { NextResponse } from "next/server";
-import { eq, desc, and, ne, inArray } from "drizzle-orm";
-import { db, datasets, malloyModels, malloyModelFiles, users } from "@/db";
+import { eq, desc, and, inArray, ne } from "drizzle-orm";
+import { db, datasets, malloyModelFiles, malloyModels, repoRevisions, repos, users } from "@/db";
 import { DEVCONTAINER_PATH } from "@/lib/github-source-link";
+import { qualifiedName } from "@/lib/repos";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
 import { datasetVisibleWhere } from "@/lib/roles";
@@ -24,13 +25,12 @@ export async function GET() {
   // /admin/roles visible here rather than only over MCP. Same predicate the run
   // paths use, so this list and what you may actually query cannot drift.
   // Signed out: public datasets only. An admin still sees the whole catalogue,
-  // because naming a dataset is not reading it — every path that returns ROWS
-  // goes through datasetVisibleWhere, which has no admin branch.
-  const where = admin
-    ? ne(datasets.status, "failed")
-    : me
-      ? datasetVisibleWhere(me.id)
-      : and(eq(datasets.isPublic, true), ne(datasets.status, "failed"));
+  // MALLOYYO_ADMIN opens every dataset, so listing and reading now give the same
+  // answer and this needs no special case of its own. It used to have one, under
+  // a comment saying the predicate had no admin branch — it does now.
+  const where = me
+    ? datasetVisibleWhere(me.id, admin)
+    : and(eq(datasets.isPublic, true), ne(datasets.status, "failed"));
 
   const dsList = await db
     .select({
@@ -38,12 +38,30 @@ export async function GET() {
       name: datasets.name,
       status: datasets.status,
       isPublic: datasets.isPublic,
-      githubRepo: datasets.githubRepo,
-      githubBranch: datasets.githubBranch,
+      repoDir: datasets.repoDir,
+      // The GitHub attachment is the REPO's, which is the whole point of the
+      // rewrite: it used to be two nullable text columns on every dataset row,
+      // editable one row at a time, and one repo in production had three rows
+      // disagreeing about its credential.
+      repoSlug: repos.slug,
+      githubRepo: repos.githubRepo,
+      githubBranch: repos.githubBranch,
+      // Does the repo's LIVE revision carry a dev container? Recorded on the
+      // revision at verify time, so this is a join rather than a GitHub call per
+      // dataset per page view (which with GITHUB_TOKEN unset spent a 60/hour
+      // budget on the home page).
+      hasDevcontainer: repoRevisions.hasDevcontainer,
+      /** Null when no revision is live — see `needsUpdate` below. */
+      liveRevisionId: repoRevisions.id,
       ownerName: users.name,
     })
     .from(datasets)
     .leftJoin(users, eq(datasets.userId, users.id))
+    .leftJoin(repos, eq(datasets.repoId, repos.id))
+    .leftJoin(
+      repoRevisions,
+      and(eq(repoRevisions.repoId, repos.id), eq(repoRevisions.active, true)),
+    )
     .where(where)
     .orderBy(desc(datasets.createdAt))
     .limit(200);
@@ -71,24 +89,45 @@ export async function GET() {
     dataset: string;
     status: string;
     isPublic: boolean;
+    qualified: string;
+    repo: string | null;
     githubRepo: string | null;
     githubBranch: string | null;
     hasDevcontainer: boolean;
     githubConnected: boolean;
+    /**
+     * Still served the old way: no live revision behind it.
+     *
+     * True for a dataset whose repo has never been refetched since the upgrade,
+     * and for one no repo publishes at all. Both are "the content lives in
+     * `malloy_models` rows rather than in a verified revision", which is what an
+     * admin needs to see and act on — by refreshing the repo, or for a dataset
+     * with no GitHub behind it, by republishing it into one.
+     */
+    needsUpdate: boolean;
     ownerName?: string | null;
     sources: Array<{ source: string; description: string | null }>;
   }> = [];
 
-  // Names are unique only among READY datasets — datasets_name_ready_unique is
-  // partial — while this list includes everything not-failed. A creation stuck
-  // in `modeling` can therefore share a name with the live dataset, and since
-  // the name is now the key every caller joins and renders on, two rows with one
-  // name merge a card, duplicate a React key, and hide one of them. Keep the
-  // ready one; a half-built namesake is not what anyone means by that name.
+  // DE-DUPED BY THE QUALIFIED NAME, not the bare one.
+  //
+  // Names are unique only among READY datasets — the index is partial — while
+  // this list includes everything not-failed. A creation stuck in `modeling` can
+  // therefore share a name with the live dataset, and since the name is the key
+  // every caller joins and renders on, two rows with one name merge a card,
+  // duplicate a React key, and hide one. Keep the ready one; a half-built
+  // namesake is not what anyone means by that name.
+  //
+  // But the key has to be `<repo>:<name>`, because two repos may now each
+  // publish a `sales` and that is the entire point of the rewrite. Keying on the
+  // bare name here would have dropped one of them from the catalogue and the
+  // home page — the collision quietly re-introduced one layer up from the schema
+  // that was changed to allow it.
   const byName = new Map<string, (typeof dsList)[number]>();
   for (const ds of dsList) {
-    const held = byName.get(ds.name);
-    if (!held || (held.status !== "ready" && ds.status === "ready")) byName.set(ds.name, ds);
+    const key = qualifiedName(ds.repoSlug, ds.name);
+    const held = byName.get(key);
+    if (!held || (held.status !== "ready" && ds.status === "ready")) byName.set(key, ds);
   }
 
   // Model id → the index into `result` of the row it produced, so the dev
@@ -105,14 +144,21 @@ export async function GET() {
         gitBranch: malloyModels.gitBranch,
       })
       .from(malloyModels)
-      .where(eq(malloyModels.datasetId, ds.id))
-      .orderBy(desc(malloyModels.createdAt))
+      // `active`, not `order by created_at desc limit 1`: the model a dataset
+      // serves is stated by the activation, and two versions written in the same
+      // millisecond tie under that ordering.
+      .where(and(eq(malloyModels.datasetId, ds.id), eq(malloyModels.active, true)))
       .limit(1);
 
     const declared = normalizeSources(latestModel?.sources);
     if (latestModel) rowForModel.set(latestModel.id, result.length);
     result.push({
       dataset: ds.name,
+      // The public identity: `<repo>:<name>`, or the bare name for a dataset no
+      // repo publishes. Additive - `dataset` keeps meaning what it meant.
+      qualified: qualifiedName(ds.repoSlug, ds.name),
+      repo: ds.repoSlug,
+      needsUpdate: ds.liveRevisionId === null,
       status: ds.status,
       isPublic: ds.isPublic,
       // "owner/repo" the model came from: the dataset's configured GitHub repo,
@@ -122,9 +168,13 @@ export async function GET() {
       // a non-default branch must not hand out links to the default one. Same
       // precedence as the repo above, so the two always describe one tree.
       githubBranch: ds.githubBranch ?? latestModel?.gitBranch ?? null,
-      // Filled in below — false until the file lookup says otherwise, so a
-      // dataset with no model at all reads as "no codespace", which it is.
-      hasDevcontainer: false,
+      // From the repo's live revision when a repo publishes it. For a dataset
+      // no repo publishes — a Claude-authored one, or `--dataset x`, which
+      // still stores its files as rows — it is filled in below from those
+      // rows. Dropping that fallback took the "open in codespace" button away
+      // from every single-dataset CLI publish, which is a capability loss
+      // disguised as a cleanup.
+      hasDevcontainer: ds.hasDevcontainer ?? false,
       // How this dataset takes a new version, which is the last step of any
       // advice about changing its repo: a configured github_repo is refreshed
       // from the dataset's config page, everything else is `malloyyo publish`.
@@ -140,18 +190,18 @@ export async function GET() {
     });
   }
 
-  // Whether each model carries the repo's dev container — see DEVCONTAINER_PATH.
-  // Both publish paths store it as an ordinary model file precisely so this is a
-  // local row lookup instead of a GitHub call per dataset per page view.
-  if (rowForModel.size > 0) {
+  // The dev container for a model with no revision: still an ordinary stored
+  // file row, because `--dataset x` stores its files that way. ONE query for
+  // the whole page, as before.
+  const rowless = [...rowForModel.entries()]
+    .filter(([, i]) => !result[i].hasDevcontainer)
+    .map(([modelId]) => modelId);
+  if (rowless.length > 0) {
     const withContainer = await db
       .select({ modelId: malloyModelFiles.modelId })
       .from(malloyModelFiles)
       .where(
-        and(
-          inArray(malloyModelFiles.modelId, [...rowForModel.keys()]),
-          eq(malloyModelFiles.path, DEVCONTAINER_PATH),
-        ),
+        and(inArray(malloyModelFiles.modelId, rowless), eq(malloyModelFiles.path, DEVCONTAINER_PATH)),
       );
     for (const row of withContainer) {
       const i = rowForModel.get(row.modelId);

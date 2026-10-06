@@ -18,7 +18,7 @@
 import test, { before, after } from "node:test";
 import assert from "node:assert/strict";
 import { createServer, type Server, type IncomingMessage } from "node:http";
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -32,6 +32,7 @@ import {
   malloyModels,
   malloyModelFiles,
   malloyArtifacts,
+  repos,
   oauthClients,
   oauthAccessTokens,
   apiTokens,
@@ -40,8 +41,10 @@ import {
   type User,
 } from "@/db";
 import { createApiToken } from "@/lib/api-tokens";
+import { latestModel } from "@/lib/mcp-tools";
 import { POST as pushRoute } from "@/app/api/datasets/[id]/model/push/route";
 import { GET as statusRoute } from "@/app/api/datasets/[id]/model/status/route";
+import { POST as repoPushRoute } from "@/app/api/repos/push/route";
 import { GET as draftListRoute, POST as draftSaveRoute } from "@/app/api/datasets/[id]/drafts/route";
 import { GET as draftGetRoute, POST as draftPromoteRoute } from "@/app/api/datasets/[id]/drafts/[slug]/route";
 import { GET as whoamiRoute } from "@/app/api/cli/whoami/route";
@@ -82,6 +85,9 @@ const ROUTES: Array<{ method: string; pattern: RegExp; handler: Handler; params?
     handler: draftPromoteRoute,
     params: ["id", "slug"],
   },
+  // The repo IS the unit of publish, so it has a route of its own: one archive,
+  // every dataset in it, one transaction.
+  { method: "POST", pattern: /^\/api\/repos\/push$/, handler: repoPushRoute, params: [] },
   { method: "GET", pattern: /^\/api\/cli\/(whoami)$/, handler: whoamiRoute },
 ];
 
@@ -436,6 +442,65 @@ test("--create-dataset on an existing dataset publishes a new version instead of
   const rows = await datasetRows(DS_MAIN);
   assert.equal(rows.length, 1, "the flag must be idempotent — no duplicate dataset");
   assert.equal((await models(rows[0].id)).length, 2);
+});
+
+test("a publish ACTIVATES what it wrote — or the instance serves the previous version forever", async () => {
+  // THE WORST BUG IN THE REWRITE, caught in review.
+  //
+  // The model a dataset serves is now STATED (`malloy_models.active`) rather
+  // than derived from `order by created_at desc limit 1`, which ties. This route
+  // was not setting it, and `latestModel` only falls back to the newest row when
+  // NO row is active — so any dataset with an active row kept serving it while
+  // every push here reported a new version number. Silent, permanent, and worse
+  // with every publish.
+  //
+  // And a dataset with an active row is not a corner case: 0026 set one for
+  // every dataset that existed at migration time. That is why this test seeds
+  // one explicitly instead of relying on a push to create it — a test that
+  // published twice through this route would have found both rows inactive and
+  // the `version desc` fallback would have returned the right answer.
+  const name = `pf_active_${RUN}`;
+  const ds = await seedDataset(name, admin.id);
+  const [old] = await db
+    .insert(malloyModels)
+    .values({
+      datasetId: ds.id,
+      version: 1,
+      source: "source: stale is 1",
+      generatedBy: "pretend-this-was-migrated",
+      active: true,
+    })
+    .returning();
+
+  const dir = makeProject(name);
+  const r = await runCli(["publish", "test", dir, "--token", token], dir);
+  assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`);
+  assert.match(r.stdout, /published version 2/);
+
+  const rows = await models(ds.id);
+  assert.equal(rows.length, 2);
+  const active = rows.filter((m) => m.active);
+  assert.equal(active.length, 1, "exactly one active model");
+  assert.equal(active[0].version, 2, "and it is the one just published");
+  assert.notEqual(active[0].id, old.id);
+  // Through the seam every read path uses, not just the column.
+  const served = await latestModel(ds.id);
+  assert.equal(served.id, active[0].id, "…which is what the instance serves");
+  assert.match(served.source, /Pet shop sales/);
+});
+
+test("…and a dataset created by that route is servable at once", async () => {
+  // The same bug in its second shape: `/api/sources` requires `active = true`
+  // with no fallback, so a dataset created entirely after the migration by
+  // `--dataset x` would have appeared in the catalogue with NO SOURCES.
+  const name = `pf_active_new_${RUN}`;
+  const dir = makeProject(name);
+  const r = await runCli(["publish", "test", dir, "--token", token, "--create-dataset"], dir);
+  assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`);
+  const [ds] = await datasetRows(name);
+  const rows = await models(ds.id);
+  assert.equal(rows.filter((m) => m.active).length, 1, "its first model is active");
+  assert.ok((await latestModel(ds.id)).sources, "and carries the sources the catalogue reads");
 });
 
 test("a plain publish keeps working against the dataset the flag created", async () => {
@@ -1061,4 +1126,150 @@ test("a reserved given this server does not fill is refused at publish", async (
   assert.notEqual(r.code, 0);
   assert.match(`${r.stdout}${r.stderr}`, /reserved/);
   assert.equal((await datasetRows(name)).length, 0, "a refused publish creates no dataset");
+});
+
+// ── The repo is the unit of publish ─────────────────────────────────────────
+//
+// `malloyyo publish --repo` packs the whole repo and sends it as one archive —
+// the same shape GitHub hands the server for a repo it pulls — and every dataset
+// in it lands together or none does.
+
+const REPO_SLUG = `lloydtabb/repo_flow_${RUN}`;
+
+/** A repo with a `datasets/` directory: one directory per dataset. */
+function makeRepo(names: string[], opts: { broken?: string } = {}): string {
+  const dir = mkdtempSync(join(tmpdir(), "malloyyo-repo-"));
+  projects.push(dir);
+  // `publish --repo` packs what GIT tracks, so a fixture has to be a git repo —
+  // the same requirement a real model repo already meets. No commit needed: the
+  // packer stages into a throwaway index, so uncommitted work publishes.
+  execFileSync("git", ["init", "-q"], { cwd: dir, stdio: ["ignore", "pipe", "pipe"] });
+  writeFileSync(
+    join(dir, "malloy-config.json"),
+    JSON.stringify(
+      { connections: { duckdb: { is: "duckdb" } }, malloyyo: { targets: { test: { url: serverUrl } } } },
+      null,
+      2,
+    ),
+  );
+  for (const name of names) {
+    const d = join(dir, "datasets", name);
+    mkdirSync(d, { recursive: true });
+    writeFileSync(
+      join(d, "index.malloy"),
+      name === opts.broken ? "source: oops is no_such_source extend { }" : MODEL,
+    );
+  }
+  return dir;
+}
+
+test("a repo publishes every dataset it holds, in one request", async () => {
+  const names = [`rf_a_${RUN}`, `rf_b_${RUN}`];
+  const dir = makeRepo(names);
+  const r = await runCli(
+    ["publish", "-i", serverUrl, "--repo", REPO_SLUG, "--create-datasets", "--token", token],
+    dir,
+  );
+  assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`);
+
+  for (const name of names) {
+    const [ds] = await datasetRows(name);
+    assert.ok(ds, `${name} was created`);
+    // Membership is a FOREIGN KEY now, not a text match on two columns anyone
+    // could edit a row at a time.
+    assert.ok(ds.repoId, "…and belongs to a repo row");
+    assert.equal(ds.repoDir, `datasets/${name}`, "…at its own directory");
+    // A CLI publish does NOT make the repo GitHub-refreshable. One pair of
+    // columns used to mean both "these belong together" and "GitHub backs
+    // this", so this path stamped the author's local branch and the refresh
+    // button would pull over the top of what had just been pushed.
+    const [repoRow] = await db.select().from(repos).where(eq(repos.id, ds.repoId!));
+    assert.equal(repoRow.githubRepo, null, "…and the repo is not attached to GitHub");
+    assert.equal((await models(ds.id)).length, 1);
+  }
+});
+
+test("a repo with a broken dataset publishes NOTHING", async () => {
+  // The property atomicity exists for. The datasets that would have landed look
+  // healthy, and the one that did not is the one nobody checks.
+  const names = [`rf_c_${RUN}`, `rf_d_${RUN}`];
+  const good = makeRepo(names);
+  assert.equal(
+    (await runCli(
+      ["publish", "-i", serverUrl, "--repo", REPO_SLUG, "--create-datasets", "--token", token],
+      good,
+    )).code,
+    0,
+  );
+  const before = await Promise.all(names.map(async (n) => (await models((await datasetRows(n))[0].id)).length));
+
+  const broken = makeRepo(names, { broken: names[1] });
+  const r = await runCli(
+    ["publish", "-i", serverUrl, "--repo", REPO_SLUG, "--token", token, "--skip-lint"],
+    broken,
+  );
+  assert.notEqual(r.code, 0, "the publish must fail");
+
+  const after = await Promise.all(names.map(async (n) => (await models((await datasetRows(n))[0].id)).length));
+  assert.deepEqual(after, before, "no dataset gained a version — not even the one that compiled");
+});
+
+test("a repo that fails to compile while CREATING leaves no rows, and no name taken", async () => {
+  // The creation path's half of all-or-nothing.
+  //
+  // This test passes against the shape that had the bug, and that is the point
+  // worth writing down: the old code inserted the rows, compiled, and deleted
+  // them when the compile failed, which is indistinguishable from here because
+  // this process stays alive to run the delete. What it could not survive was a
+  // timeout or a redeploy mid-compile, leaving a `ready` row with no model
+  // holding its name under `datasets_name_ready_unique` forever. That window is
+  // not reachable from a test; src/lib/repos-push-atomic.test.ts pins the
+  // mechanism that closes it. This one pins the contract that mechanism serves.
+  const names = [`rf_x_${RUN}`, `rf_y_${RUN}`];
+  const broken = makeRepo(names, { broken: names[1] });
+  const bad = await runCli(
+    ["publish", "-i", serverUrl, "--repo", REPO_SLUG, "--create-datasets", "--token", token, "--skip-lint"],
+    broken,
+  );
+  assert.notEqual(bad.code, 0, "the publish must fail");
+
+  for (const name of names) {
+    assert.equal((await datasetRows(name)).length, 0, `${name} was not created`);
+  }
+
+  // And the names are still free — the symptom the old shape produced was a 409
+  // here, permanently, with nothing on the instance able to release it.
+  const good = makeRepo(names);
+  const ok = await runCli(
+    ["publish", "-i", serverUrl, "--repo", REPO_SLUG, "--create-datasets", "--token", token],
+    good,
+  );
+  assert.equal(ok.code, 0, `the same names publish cleanly afterwards:\n${ok.stdout}\n${ok.stderr}`);
+  for (const name of names) {
+    const [ds] = await datasetRows(name);
+    assert.ok(ds, `${name} exists now`);
+    assert.equal((await models(ds.id)).length, 1, "…with the model it was created with");
+  }
+});
+
+test("a dataset the instance does not have is refused until --create-datasets", async () => {
+  const dir = makeRepo([`rf_e_${RUN}`]);
+  const r = await runCli(["publish", "-i", serverUrl, "--repo", REPO_SLUG, "--token", token], dir);
+  assert.notEqual(r.code, 0);
+  assert.match(`${r.stdout}${r.stderr}`, /not on this instance yet/);
+  assert.equal((await datasetRows(`rf_e_${RUN}`)).length, 0, "and nothing was created");
+});
+
+test("--dataset and --repo each refuse the layout they cannot address", async () => {
+  // Backward compatibility is the requirement: --dataset still means one dataset,
+  // and says so plainly when the repo holds several.
+  const multi = makeRepo([`rf_f_${RUN}`, `rf_g_${RUN}`]);
+  const a = await runCli(["publish", "-i", serverUrl, "--dataset", "whatever", "--token", token], multi);
+  assert.notEqual(a.code, 0);
+  assert.match(`${a.stdout}${a.stderr}`, /--dataset cannot say which/);
+
+  const single = makeProject(`rf_h_${RUN}`);
+  const b = await runCli(["publish", "-i", serverUrl, "--repo", REPO_SLUG, "--token", token], single);
+  assert.notEqual(b.code, 0);
+  assert.match(`${b.stdout}${b.stderr}`, /--repo has nothing to name/);
 });

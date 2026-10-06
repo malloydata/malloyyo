@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { NextResponse } from "next/server";
-import { desc, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { db, datasets, malloyModels, malloyModelFiles, malloyArtifacts } from "@/db";
 import { credentialLabel, requireBearer } from "@/lib/bearer-auth";
 import { isAdmin } from "@/lib/admin";
@@ -298,15 +298,32 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
         .select({ version: malloyModels.version })
         .from(malloyModels)
         .where(eq(malloyModels.datasetId, target.id))
-        .orderBy(desc(malloyModels.createdAt))
+        .orderBy(desc(malloyModels.version), desc(malloyModels.createdAt))
         .limit(1);
       const nextVersion = (latest?.version ?? 0) + 1;
+
+      // THE MODEL A DATASET SERVES IS STATED, NOT ORDERED — and this route has
+      // to say so too, or it writes a version nobody serves.
+      //
+      // `latestModel` asks which row is `active` and only falls back to the
+      // newest when none is, so a dataset that HAS an active row (which 0026
+      // set for every dataset that existed at migration time) would keep
+      // serving it forever while every push here reported a new version
+      // number. Silent, permanent, and worse with every publish.
+      //
+      // Cleared before set, in this transaction: `malloy_models_one_active` is
+      // a unique index and Postgres checks it at the end of each statement.
+      await tx
+        .update(malloyModels)
+        .set({ active: false })
+        .where(and(eq(malloyModels.datasetId, target.id), eq(malloyModels.active, true)));
 
       const indexContent = fileMap.get(ENTRY) ?? "";
       const [model] = await tx
         .insert(malloyModels)
         .values({
           datasetId: target.id,
+          active: true,
           version: nextVersion,
           source: indexContent,
           generatedBy: generatedBy(git),
@@ -349,6 +366,12 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
           lastPublishSha: git.sha ?? null,
           lastPublishBranch: git.branch ?? null,
           lastPublishError: null,
+          // The model says what to CALL this dataset — the same `## dataset` tag
+          // and `##"` doc string the GitHub and `--repo` paths read. This path
+          // already had `result.meta` and ignored it, so a single-dataset
+          // publish left the title null while its siblings got theirs.
+          title: result.meta.title ?? null,
+          description: result.meta.description ?? null,
         })
         .where(eq(datasets.id, target.id));
 

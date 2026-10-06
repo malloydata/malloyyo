@@ -1,233 +1,117 @@
 // Copyright (c) The Malloy Foundation
 // SPDX-License-Identifier: MIT
 
-import { desc, eq } from "drizzle-orm";
-import { modelArtifact, type ArtifactInfo } from "@malloyyo/mcp-engine";
-import { db, datasets, malloyModels, malloyModelFiles, malloyArtifacts } from "@/db";
-import { GitHubURLReader, fetchGitHubFile, listGitHubDir, parseGitHubRepo } from "./github";
-import { DEVCONTAINER_PATH } from "./github-source-link";
-import { introspectModelWithReader, withReaderRuntime, fileUrl, type SourceInfo } from "./malloy";
-import { ABOUT_NAME, ABOUT_TITLE } from "@/lib/dashboards/about";
-import { artifactManifest } from "@/lib/dashboards/manifest";
-import { requirementForPublish } from "./tenancy";
-import { logger } from "./logger";
+/**
+ * PULLING A REPO FROM GITHUB.
+ *
+ * All that is left here is the GitHub binding: fetch the repo as a zip, read the
+ * head commit, and hand both to the one publish pipeline
+ * (src/lib/repo-publish.ts). A GitHub push and a `malloyyo publish` differ in
+ * how the bytes arrive and in nothing else.
+ *
+ * WHAT A REFRESH REFRESHES IS THE REPO'S OWN QUESTION. It used to be recomputed
+ * on every call by matching `(github_repo, github_branch)` against every dataset
+ * row, with no status filter — which against the production fork matched seven
+ * rows for one repo, none of them live. The credential came out of `rows[0]` on
+ * a query with no ORDER BY. Now the repo is a row: it has an id, an owner, a
+ * branch and one answer about its token.
+ *
+ * NOTHING HERE DESTROYS. Delete a dataset's directory and the repo simply stops
+ * publishing it: that dataset is not refreshed and nothing of it is removed.
+ * Saved queries, share links and history pointing at it are somebody's work, and
+ * a commit is not a decision to throw that away.
+ */
 
-export type RefreshResult =
-  | { ok: true; version: number; generatedBy: string; compiledAt: Date | null; sources: SourceInfo[]; fileCount: number; dashboardCount: number }
+import { eq } from "drizzle-orm";
+import { db, repos, type Repo } from "@/db";
+import { fetchGitHubCommitSha, fetchGitHubZipball, parseGitHubRepo } from "./github";
+import { logger } from "./logger";
+import { publishRevision, type PublishResult } from "./repo-publish";
+
+export type RepoFetch =
+  | { ok: true; zip: Buffer; sha: string | null; branch: string }
   | { ok: false; error: string };
 
-export async function refreshGitHubModel(
-  datasetId: string,
-  /** `creating`: this is the dataset's FIRST model, so it takes its scoping from
-      it. Only `POST /api/datasets` passes it. A later refresh must never widen
-      what a dataset is scoped by — see the requirement check below. */
-  opts: { creating?: boolean } = {},
-): Promise<RefreshResult> {
-  const [ds] = await db.select().from(datasets).where(eq(datasets.id, datasetId));
-  if (!ds) return { ok: false, error: "dataset not found" };
-  if (!ds.githubRepo) return { ok: false, error: "dataset has no github_repo configured" };
-  logger.info("refreshGitHubModel start", { datasetId, repo: ds.githubRepo, branch: ds.githubBranch ?? "main" });
-
-  const { owner, repo } = parseGitHubRepo(ds.githubRepo);
-  const branch = ds.githubBranch ?? "main";
-
-  const reader = new GitHubURLReader(owner, repo, branch, ds.githubUseToken);
-
-  // Fetch malloy-config.json from repo root — optional, absent in most repos.
-  let malloyConfig: string | undefined;
+/**
+ * The repo's bytes and its head commit.
+ *
+ * `github_use_token` comes off the REPO, which is the only place it is stored.
+ * One repo, one answer — not three dataset rows with two different values and a
+ * winner picked by row order, which for a private repo is an intermittent,
+ * unexplainable 404 that flips between refreshes.
+ */
+export async function fetchRepo(repo: Repo): Promise<RepoFetch> {
+  if (!repo.githubRepo) {
+    return {
+      ok: false,
+      error:
+        `${repo.slug} is not attached to GitHub. It was published with the CLI; ` +
+        `attach it to a GitHub repo to refresh it from a commit.`,
+    };
+  }
+  const branch = repo.githubBranch ?? "main";
+  let owner: string;
+  let name: string;
   try {
-    malloyConfig = await fetchGitHubFile(owner, repo, branch, "malloy-config.json", {
-      useToken: ds.githubUseToken,
+    ({ owner, repo: name } = parseGitHubRepo(repo.githubRepo));
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+  const zip = await fetchGitHubZipball(owner, name, branch, { useToken: repo.githubUseToken });
+  if (!zip) {
+    return {
+      ok: false,
+      error:
+        `GitHub would not give ${repo.githubRepo}@${branch}. ` +
+        (repo.githubUseToken
+          ? `Check the repo exists on that branch and that GITHUB_TOKEN can read it.`
+          : // NOT "turn on the checkbox": there is no UI for the repo's
+            // credential flag, so naming one would send someone looking for a
+            // control that does not exist. The honest instruction is the one
+            // that works today.
+            `This repo is set not to send GITHUB_TOKEN, so a private repo would 404. ` +
+              `An admin can re-add it with "use GITHUB_TOKEN" to change that.`),
+    };
+  }
+  const sha = await fetchGitHubCommitSha(owner, name, branch, { useToken: repo.githubUseToken });
+  return { ok: true, zip, sha, branch };
+}
+
+/**
+ * Refresh a repo from its configured branch: one new revision, verified inline,
+ * activated only if every dataset in it compiled.
+ *
+ * Identical bytes short-circuit, so a webhook storm does not mint fifty
+ * revisions of the same commit — but only against the LIVE revision. A stored
+ * revision with these bytes that failed to verify is retried, because the
+ * failure may have been a warehouse that was down rather than the model.
+ */
+export async function refreshRepo(
+  repoId: string,
+  opts: { createDatasets?: boolean } = {},
+): Promise<PublishResult> {
+  const [repo] = await db.select().from(repos).where(eq(repos.id, repoId)).limit(1);
+  if (!repo) return { ok: false, kind: "request", error: `no repo with id ${repoId}` };
+
+  const fetched = await fetchRepo(repo);
+  if (!fetched.ok) {
+    logger.error("repo refresh could not read the repo", {
+      repo: repo.slug,
+      github: repo.githubRepo,
+      error: fetched.error,
     });
-  } catch {
-    // Not present — fine.
+    return { ok: false, kind: "request", error: fetched.error };
   }
 
-  // The repo's dev container, fetched for its EXISTENCE rather than its content:
-  // stored as a model file so the app can tell whether this repo opens as a
-  // working codespace without asking GitHub again on every page view. Malloy
-  // never reads it, so a missing one is as ordinary as a missing config.
-  let devcontainer: string | undefined;
-  try {
-    devcontainer = await fetchGitHubFile(owner, repo, branch, DEVCONTAINER_PATH, {
-      useToken: ds.githubUseToken,
-    });
-  } catch {
-    // No dev container in this repo — the UI says so when someone asks for one.
-  }
-
-  const result = await introspectModelWithReader(reader, "index.malloy", malloyConfig);
-  if (!result.ok) {
-    logger.error("refreshGitHubModel introspection failed", { datasetId, repo: ds.githubRepo, error: result.error });
-    return { ok: false, error: result.error };
-  }
-
-  // The same rule the CLI push path applies, and it matters MORE here: a commit
-  // in a model repo refreshes without anyone holding a publish token, so this is
-  // where a model that stopped declaring what the dataset is scoped by would
-  // otherwise quietly serve it unscoped. A REFRESH never widens — the dataset's
-  // list wins — and only the create call (`POST /api/datasets`) passes
-  // `creating`.
-  const requirement = requirementForPublish(ds.requiredGivens ?? [], result.declaredGivens, {
-    creating: opts.creating,
+  return publishRevision({
+    repo,
+    raw: fetched.zip,
+    source: "github",
+    // A webhook has no user. A refresh clicked in the UI could pass one, but the
+    // revision's author is not an authorization input anywhere, so leaving it
+    // null for every pull keeps "who published this" honest.
+    createdById: null,
+    git: { sha: fetched.sha, branch: fetched.branch, dirty: false },
+    createDatasets: opts.createDatasets ?? false,
   });
-  if (!requirement.ok) {
-    logger.error("refreshGitHubModel refused", { datasetId, repo: ds.githubRepo, error: requirement.error });
-    return { ok: false, error: requirement.error };
-  }
-
-  // Record it, or the dataset is created scoped by NOTHING while looking scoped.
-  // `leaseScope` finalizes exactly `required_givens`, so an empty list means core
-  // locks no name and a caller can pass `MALLOYYO_EMAIL` themselves. The engine
-  // strips reserved names regardless, but a dataset whose requirement is missing
-  // also has no usage gate — a query over an unfiltered source would pass — so
-  // the list has to be right, not just defended downstream. The CLI path does
-  // this inside its create transaction; here the row already exists.
-  if (opts.creating && requirement.required.length > 0) {
-    await db
-      .update(datasets)
-      .set({ requiredGivens: requirement.required })
-      .where(eq(datasets.id, datasetId));
-    logger.info("dataset scoped by its first model", { datasetId, requiredGivens: requirement.required });
-  }
-
-  // Structure v2: each dashboard is a `dashboards/<name>.malloy` compiled as its
-  // OWN entry. List the directory, then compile each file through the SAME
-  // on-demand `reader` — which fetches the dashboard file AND its transitive
-  // imports into `reader.fetched`, so they're stored below with the model. This
-  // is the server-side equivalent of the CLI's per-file `artifactForFile`
-  // discovery. Non-fatal: a broken dashboard never fails the model refresh.
-  const dashboards: Array<{ base: string; artifact: ArtifactInfo }> = [];
-  // Needed twice: to compile each dashboard below, and to tell whether the repo
-  // has a dashboards/index.malloy when deciding about the About page.
-  let bases: string[] = [];
-  try {
-    const entries = await listGitHubDir(owner, repo, branch, "dashboards", { useToken: ds.githubUseToken });
-    bases = entries
-      .filter((e) => e.type === "file" && e.name.endsWith(".malloy"))
-      .map((e) => e.name.slice(0, -".malloy".length))
-      .sort();
-    if (bases.length) {
-      type EngineRuntime = Parameters<typeof modelArtifact>[0];
-      const found = await withReaderRuntime(reader, malloyConfig, async (runtime) => {
-        const out: Array<{ base: string; artifact: ArtifactInfo }> = [];
-        for (const base of bases) {
-          const r = await modelArtifact(runtime as unknown as EngineRuntime, fileUrl(`dashboards/${base}.malloy`), base);
-          if (r.ok && r.artifact) out.push({ base, artifact: r.artifact });
-        }
-        return out;
-      });
-      dashboards.push(...found);
-    }
-  } catch (e) {
-    logger.warn("refreshGitHubModel dashboard discovery failed (non-fatal)", { datasetId, error: e instanceof Error ? e.message : String(e) });
-  }
-
-  const [latest] = await db
-    .select({ version: malloyModels.version })
-    .from(malloyModels)
-    .where(eq(malloyModels.datasetId, ds.id))
-    .orderBy(desc(malloyModels.createdAt))
-    .limit(1);
-  const nextVersion = (latest?.version ?? 0) + 1;
-
-  const indexContent = reader.fetched.get("index.malloy") ?? "";
-  const [created] = await db
-    .insert(malloyModels)
-    .values({
-      datasetId: ds.id,
-      version: nextVersion,
-      source: indexContent,
-      generatedBy: `github:${ds.githubRepo}@${branch}`,
-      compiledAt: new Date(),
-      sources: result.sources,
-    })
-    .returning();
-
-  const allFiles = new Map(reader.fetched);
-  if (malloyConfig) allFiles.set("malloy-config.json", malloyConfig);
-  if (devcontainer) allFiles.set(DEVCONTAINER_PATH, devcontainer);
-
-  if (allFiles.size > 0) {
-    await db.insert(malloyModelFiles).values(
-      Array.from(allFiles.entries()).map(([path, content]) => ({
-        modelId: created.id,
-        path,
-        content,
-      })),
-    );
-  }
-
-  // Store the discovered v2 dashboards: a manifest carrying `entryFile` + `tiles`
-  // + `dashboard_columns` (so the server runs each against its own file), plus
-  // the optional flat component `dashboards/<name>.jsx|tsx` in `source`. Matches
-  // what the CLI publish path produces. Non-fatal.
-  let dashboardCount = 0;
-  try {
-    const rows: Array<typeof malloyArtifacts.$inferInsert> = [];
-    for (const { base, artifact: a } of dashboards) {
-      let source = "";
-      for (const ext of ["jsx", "tsx"]) {
-        try {
-          source = await fetchGitHubFile(owner, repo, branch, `dashboards/${base}.${ext}`, { useToken: ds.githubUseToken });
-          break;
-        } catch {
-          // no component with this extension — try the next / render the default
-        }
-      }
-      const manifest = artifactManifest(base, a);
-      rows.push({ modelId: created.id, name: a.name || base, title: a.title, manifest, source });
-    }
-    // The written front door: `dashboards/index.jsx|tsx` with no `index.malloy`.
-    // It runs no query, so it is not in `dashboards` above (that loop walks
-    // .malloy files) — but it is a real artifact, and the one the reader should
-    // land on. Stored with a manifest of just a title: no entryFile, no query,
-    // no tiles, which is what marks it as rendering no data.
-    // Guarded on the RESOLVED artifact names, not on the .malloy filenames: a
-    // `## artifact { name="index" }` tag on any other file resolves to the same
-    // name, and malloy_artifacts has no unique (model_id, name) — two rows would
-    // both insert, and getDashboard's unordered `.limit(1)` would then serve
-    // whichever Postgres happened to return.
-    // Two guards, because there are two ways "index" can already be taken and
-    // each misses the other. By FILE: a `dashboards/index.malloy` tagged
-    // `name="overview"` publishes as `overview` while index.jsx is its
-    // component — no row is called `index`, but the About page must not exist
-    // (the CLI's aboutPage() agrees, and would produce nothing here). By NAME: a
-    // tag on some other file can resolve to `index`, and malloy_artifacts has no
-    // unique (model_id, name).
-    if (!bases.includes(ABOUT_NAME) && !rows.some((r) => r.name === ABOUT_NAME)) {
-      for (const ext of ["jsx", "tsx"]) {
-        try {
-          const source = await fetchGitHubFile(owner, repo, branch, `dashboards/${ABOUT_NAME}.${ext}`, {
-            useToken: ds.githubUseToken,
-          });
-          rows.unshift({
-            modelId: created.id,
-            name: ABOUT_NAME,
-            title: ABOUT_TITLE,
-            manifest: { title: ABOUT_TITLE },
-            source,
-          });
-          break;
-        } catch {
-          // no landing page with this extension — try the next, else there is none
-        }
-      }
-    }
-    if (rows.length > 0) await db.insert(malloyArtifacts).values(rows);
-    dashboardCount = rows.length;
-  } catch (e) {
-    logger.warn("refreshGitHubModel dashboard ingestion failed (non-fatal)", { datasetId, error: e instanceof Error ? e.message : String(e) });
-  }
-
-  logger.info("refreshGitHubModel ok", { datasetId, repo: ds.githubRepo, version: created.version, sourceCount: result.sources.length, fileCount: reader.fetched.size, dashboardCount });
-  return {
-    ok: true,
-    version: created.version,
-    generatedBy: created.generatedBy,
-    compiledAt: created.compiledAt,
-    sources: result.sources,
-    fileCount: reader.fetched.size,
-    dashboardCount,
-  };
 }

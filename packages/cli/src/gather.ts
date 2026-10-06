@@ -1,11 +1,11 @@
-import { readFileSync, existsSync, readdirSync, statSync } from "node:fs";
-import { join, relative, sep } from "node:path";
+import { readFileSync, existsSync, readdirSync, statSync, mkdtempSync, rmSync } from "node:fs";
+import { join, relative, sep, dirname } from "node:path";
+import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
+import { SKIP_DIRS } from "./repo.js";
 import { makeRunner } from "./host.js";
 import { aboutPage } from "./discover.js";
 import type { ModelFile, GitInfo, DashboardPayload } from "./protocol.js";
-
-const SKIP_DIRS = new Set(["node_modules", ".git"]);
 
 /** What `malloyyo init` writes, and the only dev container GitHub finds without
     being told where to look (a `devcontainer_path=` URL parameter can name
@@ -162,5 +162,86 @@ export function gitInfo(dir: string): GitInfo {
     };
   } catch {
     return {};
+  }
+}
+
+/**
+ * Every file in the repo the server could need, repo-relative.
+ *
+ * `gatherDirectory` answers this for ONE dataset and returns only `.malloy`,
+ * because the old wire format carried dashboards separately. A repo archive
+ * carries the repo, so the components come along in it — and the server keeps
+ * each dataset's own transitive closure out of what it is sent, so sending a
+ * little more than one dataset needs costs nothing.
+ *
+ * Still not everything: a model repo may hold committed data or built docs, and
+ * those are neither compiled nor stored. The extension list is the extractor's
+ * OWN (`keepsFile`), not a copy of it — the copy had already drifted, dropping
+ * .sql/.csv/.txt that a GitHub pull kept, so the same repo carried different
+ * files depending on which way it arrived.
+ */
+
+/**
+ * The repo, as git sees it, packed as a zip.
+ *
+ * Replaces a hand-written directory walk with a skip list. Both halves of that
+ * walk went wrong in ways that cost real data (docs/repo-model-gotchas.md §1):
+ * the skip list matched by basename at every depth, so a dataset legitimately
+ * named `datasets/docs/` was counted in the CLI's own output and uploaded with
+ * none of its files; and because it read the filesystem rather than git, it
+ * packed `malloy-config-local.json` — Malloy's local override, where the real
+ * credentials live, and which is gitignored precisely because it holds them.
+ *
+ * Asking git removes both failures at once rather than patching each. What is in
+ * the repo is what git says is in the repo; an ignored file cannot leak because
+ * it was never a candidate.
+ *
+ * UNCOMMITTED WORK STILL PUBLISHES. That matters — `gitInfo` reports `dirty` and
+ * the publish line prints it, so iterating against a staging instance without
+ * committing is a supported workflow, and `git archive HEAD` would have silently
+ * published something else. So this stages into a THROWAWAY index: read HEAD,
+ * add everything git would add (which honours .gitignore and picks up files not
+ * yet committed), write that tree, and archive it. `GIT_INDEX_FILE` keeps all of
+ * that out of the author's real index — running this never changes what they
+ * have staged.
+ */
+export function gitArchiveZip(dir: string): { zip: Buffer; fileCount: number } {
+  const tmpIndex = join(
+    mkdtempSync(join(tmpdir(), "malloyyo-index-")),
+    "index",
+  );
+  const git = (args: string[], encoding: "utf8" | "buffer" = "utf8") =>
+    execFileSync("git", args, {
+      cwd: dir,
+      env: { ...process.env, GIT_INDEX_FILE: tmpIndex },
+      maxBuffer: 256 * 1024 * 1024,
+      ...(encoding === "utf8" ? { encoding: "utf8" as const } : {}),
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+  try {
+    try {
+      git(["rev-parse", "--is-inside-work-tree"]);
+    } catch {
+      throw new Error(
+        `${dir} is not a git repository.\n` +
+          `A repo publishes what git tracks, so there has to be a git repo to ask. ` +
+          `Run \`git init\` and commit, or publish from the repo's own directory.`,
+      );
+    }
+    // A repo with no commits yet is ordinary — `malloyyo init` leaves one — so an
+    // empty starting index is the right answer, not an error.
+    try {
+      git(["read-tree", "HEAD"]);
+    } catch {
+      /* no HEAD yet */
+    }
+    git(["add", "-A"]);
+    const tree = (git(["write-tree"]) as string).trim();
+    const fileCount = ((git(["ls-files"]) as string).trim().match(/\n/g)?.length ?? -1) + 1;
+    const zip = git(["archive", "--format=zip", tree], "buffer") as unknown as Buffer;
+    return { zip, fileCount };
+  } finally {
+    rmSync(dirname(tmpIndex), { recursive: true, force: true });
   }
 }

@@ -233,6 +233,14 @@ npx tsx --test test/roster.test.ts
 echo "→ running lent-capabilities test (disable mirror + roster facts)"
 npx tsx --test test/lent-capabilities.test.ts
 
+echo "→ running repo-migration test (the 0026 backfill, over the mess it will find)"
+reset_schema
+npx tsx --test test/repo-migration.test.ts
+
+echo "→ running repo-publish test (the repo model: store, verify, activate)"
+reset_schema
+npx tsx --test test/repo-publish.test.ts
+
 echo "→ running hosted-explore test"
 reset_schema
 npx tsx --test test/hosted-explore.test.ts

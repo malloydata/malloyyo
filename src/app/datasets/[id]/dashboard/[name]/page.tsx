@@ -12,6 +12,9 @@
 //     renderer — that only ever runs here, in the trusted page.
 import { redirect, notFound } from "next/navigation";
 import { DatasetNav } from "@/components/DatasetNav";
+import { resolveDatasetRef } from "@/lib/repos";
+import { qualifiedName } from "@/lib/repo-names";
+import { datasetTitle } from "@malloyyo/mcp-engine";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { signInPath } from "@/lib/auth-paths";
 // Only DB-backed helpers here (no Malloy/DuckDB) — a page render function can't
@@ -44,9 +47,22 @@ export default async function DashboardViewPage({
   const dash = await getDashboard(user.id, id, name);
   if (!dash) notFound();
 
+  // Resolved here so the nav paints the dataset's real name and builds correct
+  // links on the FIRST render. It used to show the raw route param until a
+  // client fetch replaced it.
+  const ref = await resolveDatasetRef(id);
+  const navLabel = ref.ok ? datasetTitle(ref.dataset.name, ref.dataset.title) : undefined;
+  const navRef = ref.ok && ref.repo ? qualifiedName(ref.repo.slug, ref.dataset.name) : ref.ok ? ref.dataset.name : undefined;
+
   return (
     <main className="w-full px-6 py-5">
-      <DatasetNav datasetId={id} activeDashboard={name} activeTitle={dash.title} />
+      <DatasetNav
+        datasetId={id}
+        datasetLabel={navLabel}
+        datasetRef={navRef}
+        activeDashboard={name}
+        activeTitle={dash.title}
+      />
       {isCustomDashboard(dash) ? (
         <CustomDashboardFrame key={`${id}/${name}`} id={id} name={name} />
       ) : (

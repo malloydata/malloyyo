@@ -1,9 +1,17 @@
 #!/usr/bin/env node
 import { Command } from "commander";
-import { resolve } from "node:path";
+import { resolve, relative, sep } from "node:path";
 import { resolveTarget, resolveInstance, resolvePublishTarget, type Target } from "./config.js";
-import { gatherDirectory, gatherDashboards, gitInfo } from "./gather.js";
-import { lintDashboards, printLintReport } from "./lint.js";
+import { gatherDirectory, gatherDashboards, gitArchiveZip, gitInfo } from "./gather.js";
+import { layoutFromListing } from "@malloyyo/mcp-engine";
+import { fsLister, repoRootOf } from "./repo.js";
+import {
+  OLD_LAYOUT_NOTICE,
+  lintDashboards,
+  lintRepo,
+  printLintReport,
+  printRepoLintReport,
+} from "./lint.js";
 import { missingEnvRefs, missingEnvHint } from "./shared/env-refs.js";
 import {
   getAccessToken,
@@ -135,7 +143,23 @@ function requestFailed(
  * Named after the flags it explains, since `--instance`/`--dataset` are the part of this
  * command that isn't guessable from the argument list alone.
  */
-const PUBLISH_HELP = `Target resolution:
+const PUBLISH_HELP = `One dataset, or several:
+  The repo's shape decides, so you don't declare it:
+
+    index.malloy                    one dataset
+    dashboards/                     publish --dataset movies
+                                    --create-dataset to make it
+
+    datasets/finance/index.malloy   one dataset per directory
+    datasets/sales/index.malloy     publish --repo owner/name
+    malloy-config.json              --create-datasets to make them
+
+  Use the wrong flag for your layout and the error says which to use.
+
+  A repo publishes as a unit: every dataset is linted, and the server writes
+  all of them or none. \`malloyyo lint\` shows what yours publishes.
+
+Target resolution:
   The instance and dataset normally come from the \`malloyyo\` block in
   malloy-config.json. Either can be overridden, and giving BOTH means the
   config is never read — so a repo with no targets (or none for this
@@ -148,6 +172,94 @@ const PUBLISH_HELP = `Target resolution:
   \`malloyyo login <url>\`, or set \$MALLOYYO_TOKEN (mint one at
   <url>/settings/tokens — that is what CI wants), or pass --token.`;
 
+type PublishRepoOptions = {
+  token?: string;
+  dryRun?: boolean;
+  skipLint?: boolean;
+  createDatasets?: boolean;
+  repo?: string;
+  instance?: string;
+};
+
+/**
+ * Publish a multi-dataset repo — every dataset in it, as one unit.
+ *
+ * The repo is packed into the same archive GitHub hands the server for a repo it
+ * pulls, so there is one ingestion path on the other side rather than a
+ * GitHub-shaped one and a CLI-shaped one that agree until they do not. The
+ * server compiles all of them and writes them in one transaction, or writes
+ * none: a repo that half-lands leaves an instance that looks complete and is
+ * missing the dataset nobody checks.
+ */
+async function publishRepo(
+  root: string,
+  datasetNames: string[],
+  target: string | undefined,
+  opts: PublishRepoOptions,
+): Promise<void> {
+  const t = resolvePublishTarget(root, target, { instance: opts.instance, dataset: opts.repo });
+  const bearer = await getAccessToken(t, { tokenFlag: opts.token });
+
+  if (!opts.skipLint) {
+    // The whole repo, so a broken dashboard in ANY dataset stops the publish.
+    const linted = await lintRepo(root);
+    console.log("dashboards:");
+    printRepoLintReport(linted);
+    if (!linted.ok) {
+      throw new Error(
+        "dashboard lint failed — fix the above, or pass --skip-lint" +
+          missingEnvHint(missingEnvRefs(gatherDirectory(root).config), "this shell"),
+      );
+    }
+  }
+
+  // What is in the repo is what GIT says is in the repo — not what a directory
+  // walk with a skip list decides. That walk silently dropped a dataset whose
+  // directory was called `docs/`, and uploaded the gitignored
+  // `malloy-config-local.json` where the real credentials live. Both stop being
+  // possible here rather than being patched one at a time.
+  const { zip: archive, fileCount } = gitArchiveZip(root);
+  if (fileCount === 0) throw new Error(`${root} has no files git tracks — nothing to publish`);
+
+  const git = gitInfo(root);
+  const provenance = git.sha
+    ? `${git.branch}@${shortSha(git.sha)}${git.dirty ? " (dirty)" : ""}`
+    : "(no git)";
+  console.log(`→ ${t.url}  repo=${opts.repo}${opts.createDatasets ? " (create missing)" : ""}`);
+  console.log(`  ${datasetNames.length} dataset(s): ${datasetNames.join(", ")}`);
+  console.log(`  ${fileCount} file(s), ${(archive.length / 1024).toFixed(0)}KB archive  ${provenance}`);
+
+  if (opts.dryRun) {
+    console.log("dry run — not sending");
+    return;
+  }
+
+  const res = await apiFetch(`${t.url}/api/repos/push`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${bearer}` },
+    body: JSON.stringify({
+      repo: opts.repo,
+      branch: git.branch ?? "main",
+      archive: archive.toString("base64"),
+      createDatasets: opts.createDatasets ?? false,
+      git,
+    }),
+  });
+  const out = (await res.json().catch(() => null)) as {
+    ok?: boolean;
+    error?: string;
+    datasets?: { name: string; version: number; created?: boolean }[];
+  } | null;
+
+  if (!res.ok || !out?.ok) {
+    throw new Error(out?.error ?? `publish failed (${res.status})`);
+  }
+  for (const d of out.datasets ?? []) {
+    console.log(`  ✓ ${d.name}  v${d.version}${d.created ? "  (created)" : ""}`);
+  }
+  console.log(`published ${out.datasets?.length ?? 0} dataset(s) to ${t.url}`);
+}
+
 async function publish(
   target: string | undefined,
   dir: string,
@@ -156,15 +268,90 @@ async function publish(
     dryRun?: boolean;
     skipLint?: boolean;
     createDataset?: boolean;
+    createDatasets?: boolean;
+    repo?: string;
     instance?: string;
     dataset?: string;
   },
 ): Promise<void> {
   const root = resolve(dir);
+
+  // A URL typed where a target NAME goes. It is the obvious thing to type and
+  // the obvious intent, and failing it with `Unknown target "http://…"` sends
+  // someone looking for a config problem they do not have. `-i` is the flag
+  // that takes a URL, so put it there.
+  if (target && /^https?:\/\//i.test(target)) {
+    opts = { ...opts, instance: opts.instance ?? target };
+    target = undefined;
+  }
+
+  // Which shape is this repo? The answer decides which flags mean anything, so
+  // it is read from the repo rather than from what the caller typed — a repo
+  // that grew a `datasets/` directory should say so, not publish its root.
+  //
+  // A LISTING, not a lint: the lint compiles every dataset, and `--skip-lint`
+  // exists to not pay for that. Reading the layout through `lintRepo` here made
+  // the flag suppress only the printing.
+  const layout = await layoutFromListing(fsLister(root), root);
+  if (!layout.ok) throw new Error(layout.error);
+  // Two separate questions: which flags this layout accepts, and whether to nag
+  // about converting. A dataset directory pointed at directly reads as the
+  // single-dataset shape, and its repo is already converted.
+  const oldLayout = layout.kind === "single" && repoRootOf(root) === root;
+
+  if (layout.kind !== "single") {
+    const names = layout.datasets.map((d) => d.name);
+    if (opts.dataset) {
+      throw new Error(
+        `${root} publishes ${names.length} datasets (${names.join(", ")}), so --dataset cannot say which.\n` +
+          `Publish the repo instead:  malloyyo publish --repo <owner/name>` +
+          (opts.createDataset ? " --create-datasets" : ""),
+      );
+    }
+    if (!opts.repo) {
+      throw new Error(
+        `${root} publishes ${names.length} datasets, and a repo is published as one unit.\n` +
+          `Name it:  malloyyo publish --repo <owner/name>`,
+      );
+    }
+    return publishRepo(root, names, target, opts as PublishRepoOptions);
+  }
+  // FIRST, because this one is about WHERE you are standing and the next is about
+  // which flag you typed. The other order made the two refusals a loop: pointed
+  // at a dataset directory, `--repo` was refused with "use --dataset", and
+  // `--dataset` was refused with "publish the repo instead".
+  //
+  // A dataset of a repo is not independently publishable, and allowing it fails
+  // in the worst available shape: the model compiles here, because the config
+  // search walks up to the repo's `malloy-config.json` — but only the files UNDER
+  // this directory are uploaded, so the server receives a model with no
+  // connections at all. Lint passes, publish ships something broken.
+  const repoRoot = repoRootOf(root);
+  if (repoRoot !== root) {
+    const rel = relative(repoRoot, root).split(sep).join("/");
+    throw new Error(
+      `${rel} is one dataset of the repo above it, and a repo publishes as one unit.\n` +
+        `Publish the repo:  cd ${repoRoot} && malloyyo publish --repo <owner/name>`,
+    );
+  }
+  if (opts.repo) {
+    throw new Error(
+      `${root} publishes a single dataset (index.malloy at its root), so --repo has nothing to name.\n` +
+        `Use --dataset <name>.`,
+    );
+  }
+  if (opts.createDatasets) {
+    throw new Error("--create-datasets is for a repo with a datasets/ directory; use --create-dataset.");
+  }
+
   const t = resolvePublishTarget(root, target, {
     instance: opts.instance,
     dataset: opts.dataset,
   });
+  // Transitional — see OLD_LAYOUT_NOTICE. AFTER the target resolves: printing
+  // it first buried the actual error under five lines of layout advice.
+  if (oldLayout) console.log(`\n${OLD_LAYOUT_NOTICE}\n`);
+
   const source = tokenSource(t, { tokenFlag: opts.token });
   const bearer = await getAccessToken(t, { tokenFlag: opts.token });
 
@@ -175,7 +362,7 @@ async function publish(
 
   // Lint dashboards before sending — a broken dashboard shouldn't reach the server.
   if (!opts.skipLint) {
-    const report = await lintDashboards(root);
+    const report = await lintDashboards(root, { repoRoot: repoRootOf(root) });
     if (report.dashboards.length > 0) {
       console.log("dashboards:");
       printLintReport(report);
@@ -334,23 +521,49 @@ program
   .option("--dry-run", "gather and report what would be sent, but don't POST")
   .option("--skip-lint", "skip the pre-publish dashboard lint")
   .option("--create-dataset", "create the target dataset if it doesn't exist yet (private)")
+  .option(
+    "--repo <owner/name>",
+    "publish a repo with a datasets/ directory — every dataset in it, as one unit",
+  )
+  .option("--create-datasets", "with --repo: create any dataset the repo publishes that doesn't exist yet")
   .description('push the Malloy model in <dir> (default ".") to <target>')
   .addHelpText("after", `\n${PUBLISH_HELP}\n`)
   .action(publish);
 
 program
   .command("lint")
-  .argument("[dir]", "directory to lint", ".")
-  .description("validate ./dashboards against the model (manifest, query, givens, Dashboard.tsx)")
+  .argument("[dir]", "repo (or dataset directory) to lint", ".")
+  .description("validate the whole repo: its layout, and every dataset's dashboards")
   .action(async (dir: string) => {
     const root = resolve(dir);
-    const report = await lintDashboards(root);
-    if (report.dashboards.length === 0) {
-      console.log("no dashboards to lint");
+    // THE REPO, not a directory. A repo publishes as a unit, and for a
+    // GitHub-backed one it refreshes on a trigger — so this is the last moment a
+    // human sees an error, and it has to have looked at all of it. Pointing this
+    // at a single dataset directory still works: that directory is a repo shape
+    // of its own.
+    const repo = await lintRepo(root);
+    if (repo.empty) {
+      // A repo `malloyyo init` just made. Nothing is wrong with it yet.
+      console.log("no datasets yet — run `claude` here and ask it to add one.");
       return;
     }
-    printLintReport(report);
-    if (!report.ok) {
+    if (repo.layoutError) {
+      console.error(`✗ ${repo.layoutError}`);
+      process.exit(1);
+    }
+    const total = repo.datasets.reduce((n, d) => n + d.report.dashboards.length, 0);
+    if (total === 0) {
+      console.log(
+        repo.datasets.length > 1
+          ? `${repo.datasets.length} datasets, no dashboards to lint`
+          : "no dashboards to lint",
+      );
+      if (repo.oldLayout) console.log(`\n${OLD_LAYOUT_NOTICE}`);
+      return;
+    }
+    printRepoLintReport(repo);
+    if (repo.oldLayout) console.log(`\n${OLD_LAYOUT_NOTICE}`);
+    if (!repo.ok) {
       // Same diagnosis publish gives: an unset {env:…} secret surfaces here as a
       // connection error with no hint of which variable is missing.
       const hint = missingEnvHint(missingEnvRefs(gatherDirectory(root).config), "this shell");
@@ -393,8 +606,8 @@ program
   .command("init")
   .argument("[dir]", "model repo to set up", ".")
   .description(
-    "set up a model repo: write .mcp.json so `cd <repo> && claude` opens in " +
-      "author mode, and scaffold index.malloy if missing",
+    "set up an empty model repo: .mcp.json so `cd <repo> && claude` opens in " +
+      "author mode, plus malloy-config.json and datasets/. Ask claude to add datasets.",
   )
   .action(initCmd);
 

@@ -149,11 +149,26 @@ export function datasetRoleOverlap(userId: string) {
   return sql`${datasets.roles} && (select coalesce(${users.roles}, '{}'::text[]) from ${users} where ${users.id} = ${userId}::uuid)`;
 }
 
-export function datasetVisibleWhere(userId: string) {
-  return and(
-    or(eq(datasets.userId, userId), eq(datasets.isPublic, true), datasetRoleOverlap(userId)),
-    eq(datasets.status, "ready"),
-  );
+/**
+ * Which datasets this person may read.
+ *
+ * `isAdmin` is passed rather than derived in SQL, and that is deliberate: the
+ * canonical answer folds in the legacy `role`/`is_admin` columns and
+ * `APP_ADMIN_EMAILS` (see `rolesOf`), so a query that only checked
+ * `users.roles` would miss an admin whose authority comes from the env var and
+ * silently show them nothing.
+ *
+ * MALLOYYO_ADMIN opens every dataset. This reverses what this file used to argue
+ * — that administering an instance is not a reason to read its data — and the
+ * reversal is deliberate: with per-dataset ownership gone, nothing else lets the
+ * person who publishes a repo see what they just published, and nobody could
+ * grant the first role on a dataset nobody can see.
+ */
+export function datasetVisibleWhere(userId: string, isAdmin = false) {
+  const reach = isAdmin
+    ? sql`true`
+    : or(eq(datasets.userId, userId), eq(datasets.isPublic, true), datasetRoleOverlap(userId));
+  return and(reach, eq(datasets.status, "ready"));
 }
 
 /**

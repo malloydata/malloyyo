@@ -14,6 +14,18 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
     contents-API calls, and GitHub intermittently returns spurious 400s and
     secondary-rate-limit 403/429s under that load — retry those; 401 (auth) and
     404 (missing) are definitive. */
+/** The headers every GitHub call sends. One place, because this was written
+    five times and a change applied to four of them is a bug that shows up on
+    exactly one code path. */
+function githubHeaders(useToken: boolean, accept = "application/vnd.github+json"): Record<string, string> {
+  const headers: Record<string, string> = {
+    Accept: accept,
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+  if (useToken && env.GITHUB_TOKEN) headers["Authorization"] = `Bearer ${env.GITHUB_TOKEN}`;
+  return headers;
+}
+
 async function githubFetch(url: string, headers: Record<string, string>): Promise<Response> {
   for (let attempt = 0; ; attempt++) {
     let res: Response;
@@ -38,11 +50,7 @@ export async function fetchGitHubFile(
 ): Promise<string> {
   const useToken = opts.useToken !== false;
   const url = `https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${branch}`;
-  const headers: Record<string, string> = {
-    Accept: "application/vnd.github.raw+json",
-    "X-GitHub-Api-Version": "2022-11-28",
-  };
-  if (useToken && env.GITHUB_TOKEN) headers["Authorization"] = `Bearer ${env.GITHUB_TOKEN}`;
+  const headers = githubHeaders(useToken, "application/vnd.github.raw+json");
 
   const res = await githubFetch(url, headers);
   if (!res.ok) {
@@ -91,6 +99,145 @@ export class GitHubURLReader {
   }
 }
 
+/**
+ * The whole repo, in ONE request.
+ *
+ * This is how a repo should be read. The contents API costs a request per file,
+ * and an instance with no GITHUB_TOKEN has sixty an hour for everything — a
+ * four-dataset repo spent all sixty on a single refresh, measured twice. The
+ * archive is also what `malloyyo publish` sends, so both ways a repo arrives
+ * reach the same extractor (src/lib/tarball.ts).
+ *
+ * Returns null when GitHub will not give it, so a caller can fall back to
+ * reading files one at a time rather than failing outright.
+ */
+export async function fetchGitHubTarball(
+  owner: string,
+  repo: string,
+  ref: string,
+  opts: { useToken?: boolean } = {},
+): Promise<Buffer | null> {
+  const useToken = opts.useToken !== false;
+  const url = `https://api.github.com/repos/${owner}/${repo}/tarball/${encodeURIComponent(ref)}`;
+  const headers = githubHeaders(useToken, "application/vnd.github+json");
+
+  const res = await githubFetch(url, headers);
+  if (!res.ok) return null;
+  try {
+    return Buffer.from(await res.arrayBuffer());
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The whole repo as a ZIP, in one request.
+ *
+ * Preferred over the tarball above, because zip is what a revision is STORED as
+ * (src/db/schema.ts) and this way the bytes GitHub sends need no conversion:
+ * one request, one format, one reader. The reason for zip over `.tar.gz` is that
+ * gzip is a single stream and cannot be read partially, while a zip has a
+ * central directory with per-member offsets — so one dataset's files can be read
+ * without inflating the rest, and a member's uncompressed size is known before
+ * anything is inflated, which is what bounds a decompression bomb.
+ *
+ * Returns null when GitHub will not give it, so a caller can say why rather than
+ * throw a fetch error at someone reading a log.
+ */
+export async function fetchGitHubZipball(
+  owner: string,
+  repo: string,
+  ref: string,
+  opts: { useToken?: boolean } = {},
+): Promise<Buffer | null> {
+  const useToken = opts.useToken !== false;
+  const url = `https://api.github.com/repos/${owner}/${repo}/zipball/${encodeURIComponent(ref)}`;
+  const res = await githubFetch(url, githubHeaders(useToken, "application/vnd.github+json"));
+  if (!res.ok) return null;
+  try {
+    return Buffer.from(await res.arrayBuffer());
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The commit a branch currently points at.
+ *
+ * Recorded on every model a repo refresh writes, which is what makes "these
+ * four datasets are at the same commit" a checkable fact rather than an
+ * intention. Before this, a GitHub-backed model recorded only
+ * `github:owner/repo@branch` — the branch, never which commit of it — so a repo
+ * whose datasets had drifted apart looked exactly like one that had not.
+ *
+ * Null when it cannot be read: a refresh should not fail for want of a label.
+ */
+export async function fetchGitHubCommitSha(
+  owner: string,
+  repo: string,
+  branch: string,
+  opts: { useToken?: boolean } = {},
+): Promise<string | null> {
+  const useToken = opts.useToken !== false;
+  const url = `https://api.github.com/repos/${owner}/${repo}/commits/${encodeURIComponent(branch)}`;
+  const headers = githubHeaders(useToken, "application/vnd.github+json");
+  const res = await githubFetch(url, headers);
+  if (!res.ok) return null;
+  const body = (await res.json()) as { sha?: string };
+  return typeof body.sha === "string" ? body.sha : null;
+}
+
+/**
+ * Every path in the repo, in ONE request (the git trees API, recursive).
+ *
+ * The Contents API costs a request per directory, and discovering a
+ * multi-dataset repo walks the root, `datasets/`, and each dataset inside it —
+ * so a four-dataset repo spent six requests before reading a single model. An
+ * instance with no GITHUB_TOKEN has sixty requests an hour for everything, and
+ * adding one repo could spend most of them.
+ *
+ * Returns null when the tree cannot be read (a rate limit, a missing branch, or
+ * GitHub's `truncated` flag on a repo too large to return whole), so callers
+ * fall back to walking directories rather than treating "no tree" as "no files".
+ */
+export async function listGitHubTree(
+  owner: string,
+  repo: string,
+  branch: string,
+  opts: { useToken?: boolean } = {},
+): Promise<GitHubDirEntry[] | null> {
+  const useToken = opts.useToken !== false;
+  const url = `https://api.github.com/repos/${owner}/${repo}/git/trees/${encodeURIComponent(branch)}?recursive=1`;
+  const headers = githubHeaders(useToken, "application/vnd.github+json");
+
+  const res = await githubFetch(url, headers);
+  if (!res.ok) return null;
+  const body = (await res.json()) as { tree?: { path: string; type: string }[]; truncated?: boolean };
+  // A truncated tree is a PARTIAL answer, and a partial answer here reads as
+  // "that dataset directory does not exist" — the one shape of wrong that
+  // silently publishes less than the author wrote.
+  if (body.truncated || !Array.isArray(body.tree)) return null;
+  return body.tree.map((e) => ({
+    name: e.path.split("/").pop() ?? e.path,
+    path: e.path,
+    type: e.type === "tree" ? ("dir" as const) : ("file" as const),
+  }));
+}
+
+/** A `listGitHubDir`-shaped view over a whole-repo tree: the direct children of
+    `path` ("" being the root). Lets the layout rules run against one fetch. */
+export function dirFromTree(tree: GitHubDirEntry[], path: string): GitHubDirEntry[] {
+  const prefix = path ? `${path.replace(/\/+$/, "")}/` : "";
+  const out: GitHubDirEntry[] = [];
+  for (const e of tree) {
+    if (!e.path.startsWith(prefix)) continue;
+    const rest = e.path.slice(prefix.length);
+    if (!rest || rest.includes("/")) continue; // not a direct child
+    out.push(e);
+  }
+  return out;
+}
+
 export interface GitHubDirEntry {
   name: string;
   path: string;
@@ -111,11 +258,7 @@ export async function listGitHubDir(
 ): Promise<GitHubDirEntry[]> {
   const useToken = opts.useToken !== false;
   const url = `https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${branch}`;
-  const headers: Record<string, string> = {
-    Accept: "application/vnd.github+json",
-    "X-GitHub-Api-Version": "2022-11-28",
-  };
-  if (useToken && env.GITHUB_TOKEN) headers["Authorization"] = `Bearer ${env.GITHUB_TOKEN}`;
+  const headers = githubHeaders(useToken, "application/vnd.github+json");
 
   const res = await githubFetch(url, headers);
   if (res.status === 404) return [];

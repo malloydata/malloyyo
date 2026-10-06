@@ -14,23 +14,32 @@
 import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import type Anthropic from "@anthropic-ai/sdk";
 import { db, chats, chatMessages, chatResults, datasets, type Chat } from "@/db";
+import { resolveDatasetRef } from "@/lib/repos";
 
-/** Is this dataset NAME one anyone may see?
+/** Is the dataset this chat was held on one anyone may see?
  *
- *  Pinned to `status = 'ready'` because that is the row the chat's queries
- *  actually ran against — findByDatasetRef resolves through visibleDatasetWhere,
- *  which pins it too — and because `name` is unique only AMONG ready rows. A
- *  failed or stale namesake is an expected state (POST /api/datasets only
- *  rejects a clash against a ready row), so without the pin an unordered
- *  single-row select could answer with a public leftover for a private dataset,
- *  or the reverse. */
-async function datasetIsPublic(name: string): Promise<boolean> {
-  const [ds] = await db
-    .select({ isPublic: datasets.isPublic })
-    .from(datasets)
-    .where(and(eq(datasets.name, name), eq(datasets.status, "ready")))
-    .limit(1);
-  return ds?.isPublic === true;
+ *  Resolved through `resolveDatasetRef`, not by a select on `datasets.name`.
+ *  `chats.dataset` is whatever the link that opened the chat put in
+ *  `?dataset=`, and those links now carry the qualified `repo:dataset` — so the
+ *  column holds BOTH spellings and a name match saw only the older half.
+ *
+ *  Both directions were wrong. A chat started from the home page on
+ *  `acme:orders` matched nothing, so sharing it was refused with "that is a
+ *  private dataset" about a public one, and an already-published chat became
+ *  unreadable to everyone but its owner. The other direction is worse: for a
+ *  bare `orders` with two ready rows — one repo's public, another's private —
+ *  the select was unordered and unscoped, so a PRIVATE chat's publishability
+ *  could be decided by the public namesake's flag, and `readableChat` would
+ *  then serve its messages to every signed-in user. The old comment claimed
+ *  the `status = 'ready'` pin prevented exactly that; once names stopped being
+ *  unique per server, it did not.
+ *
+ *  A ref that no longer resolves — an ambiguous bare name, or a deleted
+ *  dataset — is not public, which is the safe answer for a sharing gate. */
+async function datasetIsPublic(ref: string): Promise<boolean> {
+  const resolved = await resolveDatasetRef(ref);
+  if (!resolved.ok) return false;
+  return resolved.dataset.isPublic === true;
 }
 
 /** The chat if this user owns it, else null. Absent and not-yours look the same

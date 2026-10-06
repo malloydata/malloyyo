@@ -74,6 +74,34 @@ export { run, executeMaterialized, DEFAULT_ROW_LIMIT, type RunOptions } from './
 export { jsonRows } from './rows';
 export { validateRestricted, runRestricted } from './restricted';
 export {
+  datasetTitle,
+  readDatasetMeta,
+  titleFromName,
+  type DatasetMeta,
+} from './dataset-meta';
+export { filterTree, type TreeDashboard, type TreeDataset } from './dashboard-tree';
+export {
+  ArchiveURLReader,
+  archiveLister,
+  keepsFile,
+  KEEP_EXTENSIONS,
+  archiveEntries,
+  buildTarGz,
+  extractTarGz,
+  type Tarball,
+} from './tarball';
+export {
+  DATASETS_DIR,
+  ENTRY_FILE,
+  layoutFromListing,
+  nameToSlug,
+  repoPath,
+  type DirEntry,
+  type DirLister,
+  type DiscoveredDataset,
+  type RepoLayout,
+} from './repo-layout';
+export {
   declaredGivenNames,
   unreferencedGivens,
   unreferencedGivensMessage,

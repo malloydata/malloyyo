@@ -40,6 +40,14 @@ type SourceSummary = { source: string; description: string | null };
 // are joined on. No id reaches this file.
 type DatasetGroup = {
   dataset: string;
+  /** The repo that publishes it — the grouping key. Null for a dataset no repo
+      publishes, which after the repo rewrite means one that has not been
+      converted yet. */
+  repo: string | null;
+  /** `<repo>:<dataset>`, how it is addressed now. */
+  qualified: string;
+  /** Still served from per-file rows rather than a verified revision. */
+  needsUpdate: boolean;
   isPublic: boolean;
   status: string;
   githubRepo: string | null;
@@ -106,7 +114,7 @@ export default function HomePage() {
   const [sources, setSources] = useState<DatasetGroup[] | null>(null);
   const [favQueries, setFavQueries] = useState<FavQuery[]>([]);
   const [dashboards, setDashboards] = useState<
-    Array<DashboardChip & { dataset: string }>
+    Array<DashboardChip & { dataset: string; qualified: string }>
   >([]);
   // Claude connect-instructions modal — shown when clicking a source's Claude
   // button before the connector is linked. claudeTargetUrl is the explore chat
@@ -226,25 +234,78 @@ function shortAuthor(author: string): string {
   return name.length > 14 ? `${name.slice(0, 13)}…` : name;
 }
 
-// The catalogue arrives grouped; just index it for lookup by name.
+  // Indexed by QUALIFIED name, not bare.
+  //
+  // A dataset name is unique inside its repo and no further, so two repos may
+  // each publish an `imdb`. Keying this map — and every React key below — on the
+  // bare name collapsed them into one entry: one card rendered, the other
+  // silently dropped, and 43 duplicate-key errors in the console. This fork hit
+  // it for real, because one repo's GitHub name was RENAMED to another's and
+  // GitHub redirects the old name, so two repo rows now pull the same content.
   const datasetGroups: DatasetGroup[] = sources ?? [];
-  const datasetByName = new Map(datasetGroups.map((g) => [g.dataset, g]));
+  const datasetByQualified = new Map(datasetGroups.map((g) => [g.qualified, g]));
 
   // Dashboards grouped by dataset, for the per-dataset row below.
   const dashByDataset = new Map<string, DashboardChip[]>();
   for (const d of dashboards) {
-    let arr = dashByDataset.get(d.dataset);
-    if (!arr) { arr = []; dashByDataset.set(d.dataset, arr); }
+    // Keyed by the QUALIFIED name: two repos may each publish an `ecommerce`,
+    // and bucketing by the bare one put both their dashboards in one list, so
+    // every dashboard rendered twice under each.
+    let arr = dashByDataset.get(d.qualified);
+    if (!arr) { arr = []; dashByDataset.set(d.qualified, arr); }
     arr.push({ name: d.name, title: d.title, description: d.description, isDraft: d.isDraft, author: d.author, mine: d.mine });
   }
 
 
-  // Datasets to render: those with questions first (recency order), then any
-  // remaining datasets (their sources still show, just with no questions).
-  const orderedDatasetNames = [
-    ...datasetOrder,
-    ...datasetGroups.map((g) => g.dataset).filter((n) => !favByDataset.has(n)),
-  ];
+  // Datasets to render: those with questions first (recency order), then the
+  // rest. Ordered as objects rather than as names, because a name no longer
+  // identifies one.
+  //
+  // Favourites and dashboards still arrive keyed by BARE name — they predate
+  // repos and their APIs have not been threaded through yet — so the recency
+  // hint, and the questions attached to a card, are matched on that. When two
+  // repos share a dataset name both cards show the same questions. Wrong, but
+  // visibly and symmetrically wrong, which is better than one card vanishing.
+  const favPosition = new Map<string, number>();
+  datasetOrder.forEach((n, i) => {
+    if (!favPosition.has(n)) favPosition.set(n, i);
+  });
+  const orderedDatasets = [...datasetGroups].sort(
+    (a, b) =>
+      (favPosition.get(a.dataset) ?? Number.MAX_SAFE_INTEGER) -
+      (favPosition.get(b.dataset) ?? Number.MAX_SAFE_INTEGER),
+  );
+  const orderedDatasetNames = orderedDatasets.map((g) => g.qualified);
+
+  /**
+   * The same datasets, under the repo that publishes them.
+   *
+   * A repo is the unit that is configured, refreshed and linked to GitHub, so
+   * rendering four datasets from one repo as four independent cards — each with
+   * its own identical octocat and its own gear onto the same settings — said the
+   * opposite of how it works.
+   *
+   * Order is inherited, not recomputed: the first time a repo's dataset appears
+   * in the recency order fixes where that repo sits, so the most-used thing stays
+   * at the top. A dataset no repo publishes keeps its own card, under a null key,
+   * because it genuinely is a thing on its own.
+   */
+  const repoSections: Array<{ repo: string | null; names: string[] }> = [];
+  {
+    const at = new Map<string | null, number>();
+    for (const name of orderedDatasetNames) {
+      const key = datasetByQualified.get(name)?.repo ?? null;
+      // Null groups never merge: each unconverted dataset is its own section.
+      const k = key === null ? `\u0000${name}` : key;
+      const seen = at.get(k);
+      if (seen === undefined) {
+        at.set(k, repoSections.length);
+        repoSections.push({ repo: key, names: [name] });
+      } else {
+        repoSections[seen]!.names.push(name);
+      }
+    }
+  }
 
   // claude.ai chats seeded via this instance's MCP tools — one per source, one
   // for a whole dataset.
@@ -380,10 +441,55 @@ function shortAuthor(author: string): string {
             ) : orderedDatasetNames.length === 0 ? (
               <p className="text-gray-500 dark:text-gray-400 text-xs">No sources yet.</p>
             ) : (
-              <div className="space-y-4">
-                {orderedDatasetNames.map((dsName) => {
-                  const g = datasetByName.get(dsName);
-                  const { bySource, order } = groupBySource(favByDataset.get(dsName) ?? []);
+              <div className="space-y-6">
+                {repoSections.map((section) => {
+                  const head = section.repo
+                    ? datasetByQualified.get(section.names[0]!)
+                    : undefined;
+                  return (
+                  <div key={section.repo ?? `solo:${section.names[0]}`} className="space-y-2">
+                    {/* The REPO bar. Everything on it is a fact about the repo —
+                        where it came from, whether it opens as a codespace, and
+                        where it is configured — which used to be repeated on
+                        every dataset card and edited one row at a time. */}
+                    {section.repo && (
+                      <div className="flex items-center gap-2 px-1">
+                        <span className="text-sm font-semibold text-gray-700 dark:text-gray-300">{section.repo}</span>
+                        {head?.githubRepo && (
+                          <RepoLinks
+                            repo={head.githubRepo}
+                            branch={head.githubBranch}
+                            hasDevcontainer={head.hasDevcontainer}
+                            githubConnected={head.githubConnected}
+                            dataset={head.dataset}
+                          />
+                        )}
+                        {head?.needsUpdate && <NeedsUpdate />}
+                        <span className="text-[11px] text-gray-400 dark:text-gray-500">
+                          {section.names.length} dataset{section.names.length === 1 ? "" : "s"}
+                        </span>
+                        {/* Repo settings live on the repo. The gear on each
+                            dataset card used to lead here by another name, which
+                            is why four datasets offered four copies of one set of
+                            settings. */}
+                        <Link
+                          href={`/repos/${encodeURIComponent(section.repo)}`}
+                          title={`Configure ${section.repo}`}
+                          aria-label={`Configure ${section.repo}`}
+                          className="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
+                        >
+                          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                            <circle cx="12" cy="12" r="3" />
+                            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                          </svg>
+                        </Link>
+                      </div>
+                    )}
+                    <div className="space-y-4">
+                {section.names.map((dsName) => {
+                  // `dsName` is the QUALIFIED name — unique, and the React key.
+                  const g = datasetByQualified.get(dsName);
+                  const { bySource, order } = groupBySource(favByDataset.get(g?.dataset ?? dsName) ?? []);
                   const withQuestions = new Set(order.filter((k) => k !== ""));
                   // EVERY source gets a row. A source nobody has asked about yet
                   // is the one most worth advertising — it used to be a chip in a
@@ -410,13 +516,16 @@ function shortAuthor(author: string): string {
                               dataset without the home page having to know which
                               tier applies. See @/lib/dataset-landing. */}
                           <Link
-                            href={`/datasets/${encodeURIComponent(g?.dataset ?? dsName)}`}
+                            href={`/datasets/${encodeURIComponent(g?.qualified ?? dsName)}`}
                             title={`Open ${g?.dataset ?? "dataset"}`}
                             className="font-semibold truncate hover:underline"
                           >
                             {g?.dataset ?? "dataset"}
                           </Link>
-                          {g?.githubRepo && (
+                          {/* Only for a dataset with no repo bar above it to
+                              carry them — otherwise these are the repo's, shown
+                              once rather than once per sibling. */}
+                          {!section.repo && g?.githubRepo && (
                             <RepoLinks
                               repo={g.githubRepo}
                               branch={g.githubBranch}
@@ -425,6 +534,7 @@ function shortAuthor(author: string): string {
                               dataset={g.dataset}
                             />
                           )}
+                          {!section.repo && g?.needsUpdate && <NeedsUpdate />}
                         </span>
                         <div className="flex items-center gap-2 flex-shrink-0">
                           {g && g.status !== "ready" && <StatusBadge status={g.status} />}
@@ -442,7 +552,7 @@ function shortAuthor(author: string): string {
                             Explore in Claude
                           </button>
                           <Link
-                            href={`/datasets/${encodeURIComponent(g?.dataset ?? dsName)}/config`}
+                            href={`/datasets/${encodeURIComponent(g?.qualified ?? dsName)}/config`}
                             title="Configure dataset"
                             aria-label="Configure dataset"
                             className="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200"
@@ -461,7 +571,7 @@ function shortAuthor(author: string): string {
                           {modelDashboards(dashByDataset.get(dsName)!).length > 0 && (
                             <DashboardRow
                               label="dashboards"
-                              dataset={g?.dataset ?? dsName}
+                              dataset={g?.qualified ?? dsName}
                               items={modelDashboards(dashByDataset.get(dsName)!)}
                             />
                           )}
@@ -471,7 +581,7 @@ function shortAuthor(author: string): string {
                           {userDashboards(dashByDataset.get(dsName)!).length > 0 && (
                             <DashboardRow
                               label="user dashboards"
-                              dataset={g?.dataset ?? dsName}
+                              dataset={g?.qualified ?? dsName}
                               items={userDashboards(dashByDataset.get(dsName)!)}
                               collapseAfter={6}
                             />
@@ -492,7 +602,7 @@ function shortAuthor(author: string): string {
                                 {srcKey && (
                                   <div className="flex items-center gap-1.5 flex-shrink-0 text-[11px] text-gray-700 dark:text-gray-300">
                                     <Link
-                                      href={`/ltool?source=${encodeURIComponent(srcKey)}&dataset=${encodeURIComponent(g?.dataset ?? dsName)}`}
+                                      href={`/ltool?source=${encodeURIComponent(srcKey)}&dataset=${encodeURIComponent(g?.qualified ?? dsName)}`}
                                       title={`Write a Malloy query against ${srcKey}`}
                                       className={`inline-flex items-center gap-1 ${PILL}`}
                                     >
@@ -501,7 +611,7 @@ function shortAuthor(author: string): string {
                                     </Link>
                                     {chatEnabled && (
                                       <Link
-                                        href={`/chat?dataset=${encodeURIComponent(g?.dataset ?? dsName)}&source=${encodeURIComponent(srcKey)}`}
+                                        href={`/chat?dataset=${encodeURIComponent(g?.qualified ?? dsName)}&source=${encodeURIComponent(srcKey)}`}
                                         title={`Start a chat about ${srcKey}`}
                                         className={PILL}
                                       >
@@ -537,7 +647,7 @@ function shortAuthor(author: string): string {
                                 {qs.length > 8 && (
                                   <li className="flex items-start gap-2">
                                     <span className="flex-shrink-0 w-[1ch]" aria-hidden />
-                                    <Link href={`/datasets/${encodeURIComponent(g?.dataset ?? dsName)}/questions`} className="text-[11px] text-gray-600 dark:text-gray-400 hover:underline">
+                                    <Link href={`/datasets/${encodeURIComponent(g?.qualified ?? dsName)}/questions`} className="text-[11px] text-gray-600 dark:text-gray-400 hover:underline">
                                       +{qs.length - 8} more →
                                     </Link>
                                   </li>
@@ -549,6 +659,10 @@ function shortAuthor(author: string): string {
 
                       </div>
                     </div>
+                  );
+                })}
+                    </div>
+                  </div>
                   );
                 })}
               </div>
@@ -609,6 +723,26 @@ function shortAuthor(author: string): string {
 // Both links are built from the PARSED slug, so a model published from an ssh
 // remote (git@github.com:owner/repo.git — what `git remote get-url` returns for
 // most checkouts) links correctly instead of to github.com/git@github.com:owner….
+/**
+ * "Still served the old way."
+ *
+ * An instance that predates the repo model keeps serving from per-file rows
+ * until its repo is refetched from GitHub, which is a deliberate act — nothing
+ * converts on its own, because a conversion deletes the old copy and that should
+ * not ride along on a webhook. So the state has to be visible, or an admin has
+ * no way to know which repos they still owe a refresh.
+ */
+function NeedsUpdate() {
+  return (
+    <span
+      title="Still served from the old per-file storage. Refresh this repo from GitHub to move it onto a verified revision."
+      className="text-[10px] px-1.5 py-0.5 rounded border border-amber-300 text-amber-700 bg-amber-50 dark:border-amber-700/60 dark:text-amber-300 dark:bg-amber-900/30"
+    >
+      needs update
+    </span>
+  );
+}
+
 function RepoLinks({
   repo,
   branch,

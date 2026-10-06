@@ -1,72 +1,55 @@
 // Copyright (c) The Malloy Foundation
 // SPDX-License-Identifier: MIT
 
+/**
+ * `POST /api/datasets/:id/webhook/github` — the hook URL that already exists.
+ *
+ * A webhook belongs to a repo, and `/api/repos/:id/webhook/github` is where it
+ * belongs. This route stays because these URLs are configured in people's GitHub
+ * repositories right now, and a rewrite is not a reason to break them: it finds
+ * the dataset's repo and does exactly what the repo-scoped route does.
+ */
+
 import { NextResponse, after } from "next/server";
 import { eq } from "drizzle-orm";
 import { db, datasets } from "@/db";
-import { refreshGitHubModel } from "@/lib/github-refresh";
-import { logger, serializeErr } from "@/lib/logger";
 import { verifyGitHubSignature } from "@/lib/github-webhook";
-import { captureTelemetry } from "@/lib/telemetry";
+import { handleRepoPush } from "@/lib/repo-webhook";
+import { repoById } from "@/lib/repos";
+import { logger } from "@/lib/logger";
 
 export const runtime = "nodejs";
 
-// Public endpoint — no session auth. GitHub calls this on push events to
-// refresh the Malloy model. Authentication is the HMAC signature when
+// Public endpoint — no session auth. Authentication is the HMAC signature when
 // GITHUB_WEBHOOK_SECRET is configured; otherwise the dataset UUID in the URL.
-export async function POST(
-  req: Request,
-  ctx: { params: Promise<{ id: string }> },
-) {
+export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const { id } = await ctx.params;
 
   // Read the body before touching the database: an unsigned caller should not
-  // be able to make us do work, and the raw text is what the HMAC covers (a
-  // parse-then-restringify would change the bytes and never match).
+  // be able to make us do work, and the raw text is what the HMAC covers.
   const rawBody = await req.text();
   if (!verifyGitHubSignature(rawBody, req.headers.get("x-hub-signature-256"))) {
     logger.warn("webhook signature rejected", { datasetId: id });
     return NextResponse.json({ ok: false, error: "invalid signature" }, { status: 401 });
   }
 
-  const [ds] = await db.select({ id: datasets.id, githubRepo: datasets.githubRepo }).from(datasets).where(eq(datasets.id, id));
-  if (!ds?.githubRepo) {
-    // Return 200 anyway so GitHub doesn't retry endlessly.
-    return NextResponse.json({ ok: false, error: "dataset not found or has no github_repo" });
+  const [ds] = await db
+    .select({ id: datasets.id, repoId: datasets.repoId })
+    .from(datasets)
+    .where(eq(datasets.id, id));
+  // 200 anyway so GitHub does not retry endlessly.
+  if (!ds?.repoId) {
+    return NextResponse.json({ ok: false, error: "dataset not found, or no repo publishes it" });
+  }
+  const repo = await repoById(ds.repoId);
+  if (!repo) return NextResponse.json({ ok: false, error: "this dataset's repo is gone" });
+  if (!repo.githubRepo) {
+    return NextResponse.json({ ok: false, error: `the repo "${repo.slug}" is not attached to GitHub` });
   }
 
-  // Run refresh after the response is sent so GitHub gets a quick 200.
-  // `after()` uses waitUntil so Vercel keeps the function alive until done.
-  after(
-    refreshGitHubModel(id)
-      .then((result) =>
-        captureTelemetry({
-          event: "model published",
-          properties: {
-            method: "github_webhook",
-            outcome: result.ok ? "success" : "error",
-            created_dataset: false,
-            source_count: result.ok ? result.sources.length : 0,
-            file_count: result.ok ? result.fileCount : 0,
-            dashboard_count: result.ok ? result.dashboardCount : 0,
-          },
-        }),
-      )
-      .catch((err) => {
-        void captureTelemetry({
-          event: "model published",
-          properties: {
-            method: "github_webhook",
-            outcome: "error",
-            created_dataset: false,
-            source_count: 0,
-            file_count: 0,
-            dashboard_count: 0,
-          },
-        });
-        logger.error("webhook refresh failed", { datasetId: id, ...serializeErr(err) });
-      }),
-  );
-
-  return NextResponse.json({ ok: true, message: "refresh triggered" });
+  // A push refreshes the REPO, not the dataset whose id happens to be in the
+  // URL: the commit that changed `datasets/finance/` may equally have changed a
+  // `lib/` every other dataset imports, and they all move together or none do.
+  after(handleRepoPush(repo.id, repo.slug));
+  return NextResponse.json({ ok: true, repo: repo.slug, message: "refresh triggered" });
 }

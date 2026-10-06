@@ -3,8 +3,9 @@
 
 import { NextResponse } from "next/server";
 import { z } from "zod";
-import { desc, eq } from "drizzle-orm";
-import { db, datasets, malloyModels, malloyModelFiles } from "@/db";
+import { eq } from "drizzle-orm";
+import { db, datasets } from "@/db";
+import { latestModel, modelFileMap } from "@/lib/mcp-tools";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
 import { compileMalloy, compileMalloyFiles } from "@/lib/malloy";
@@ -28,17 +29,15 @@ export async function POST(
   const [ds] = await db.select().from(datasets).where(eq(datasets.id, id));
   if (!ds) return NextResponse.json({ error: "not found" }, { status: 404 });
 
-  const [model] = await db.select().from(malloyModels)
-    .where(eq(malloyModels.datasetId, id))
-    .orderBy(desc(malloyModels.createdAt))
-    .limit(1);
-
+  // The model the dataset SERVES, and the files it serves with - which for a
+  // repo-backed model come out of its revision's zip (src/lib/repo-files.ts),
+  // not a per-file table.
+  const model = await latestModel(id);
   const files = model
-    ? await db.select({ path: malloyModelFiles.path, content: malloyModelFiles.content })
-        .from(malloyModelFiles).where(eq(malloyModelFiles.modelId, model.id))
+    ? [...(await modelFileMap(model, ds.repoDir))].map(([path, content]) => ({ path, content }))
     : [];
 
-  // Multi-file GitHub model: compile stored files with a probe using the first known source.
+  // Multi-file model: compile the stored files with a probe on the first source.
   if (files.length > 0 && model) {
     const rawSource = (model.sources as Array<string | { name: string }> | null)?.[0];
     const firstSource = typeof rawSource === "string" ? rawSource : (rawSource?.name ?? ds.name);

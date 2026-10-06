@@ -13,7 +13,8 @@
 // This module must NEVER import ./engine or @/lib/malloy (statically or lazily).
 
 import { and, eq, asc, desc, inArray } from "drizzle-orm";
-import { db, datasets, malloyArtifacts, malloyModels, malloyModelFiles, draftDashboards, users } from "@/db";
+import { db, datasets, malloyArtifacts, malloyModels, draftDashboards, repos, users } from "@/db";
+import { qualifiedName } from "@/lib/repo-names";
 import { visibleDatasetWhere, findByDatasetRef, latestModel } from "@/lib/mcp-tools";
 import { aboutFirst } from "./about";
 import { imageHostsFromConfig } from "./image-hosts";
@@ -130,7 +131,7 @@ export async function listAllDashboards(userId: string): Promise<DashboardSummar
 }
 
 /**
- * Every visible dataset and its dashboards — in FOUR queries, whatever the
+ * Every visible dataset and its dashboards — in THREE queries, whatever the
  * instance holds.
  *
  * The obvious loop (per dataset: latest model, its artifacts, its drafts) is
@@ -138,18 +139,50 @@ export async function listAllDashboards(userId: string): Promise<DashboardSummar
  * also drags every model's full Malloy source across the wire to read an id.
  * On a 23-dataset instance that measured **6 seconds**, which is not a menu.
  *
+ * Round trips are the whole cost here — the queries themselves are indexed
+ * lookups returning a few kilobytes, so what is left is latency times the
+ * number of times we pay it. Two things follow, and both are easy to undo by
+ * accident:
+ *
+ *  - The repo is JOINED, not fetched afterwards. The qualified name is what
+ *    every link in the menu addresses, and resolving it in a second pass over
+ *    the same dataset ids is a whole extra round trip for a column this query
+ *    is already positioned to read.
+ *  - The artifact select is NARROW. `select()` on that table takes `source`,
+ *    which is each dashboard's entire Dashboard.tsx — 277KB on the dev fork to
+ *    build a 4.5KB menu, and it grows with every dashboard anybody writes.
+ *    Only the name, the title and the manifest's description are ever read.
+ *
  * Datasets with NO dashboards are kept: the nav tree lists them too, so you can
  * reach a dataset that has nothing built on it yet.
  */
 export async function allDashboardsByDataset(userId: string): Promise<{
-  datasets: { id: string; name: string }[];
+  datasets: {
+    id: string;
+    name: string;
+    title: string | null;
+    description: string | null;
+    /** How links address it: `repo:dataset`, or the bare name with no repo. */
+    qualified: string;
+  }[];
   byDataset: Map<string, DashboardSummary[]>;
 }> {
-  const dsList = await db
-    .select({ id: datasets.id, name: datasets.name })
+  const rawList = await db
+    .select({
+      id: datasets.id,
+      name: datasets.name,
+      title: datasets.title,
+      description: datasets.description,
+      repoSlug: repos.slug,
+    })
     .from(datasets)
+    .leftJoin(repos, eq(datasets.repoId, repos.id))
     .where(visibleDatasetWhere(userId))
     .orderBy(desc(datasets.createdAt));
+  const dsList = rawList.map(({ repoSlug, ...ds }) => ({
+    ...ds,
+    qualified: repoSlug ? qualifiedName(repoSlug, ds.name) : ds.name,
+  }));
   const byDataset = new Map<string, DashboardSummary[]>(dsList.map((ds) => [ds.id, []]));
   if (dsList.length === 0) return { datasets: dsList, byDataset };
 
@@ -167,7 +200,12 @@ export async function allDashboardsByDataset(userId: string): Promise<{
 
   if (current.length > 0) {
     const arts = await db
-      .select()
+      .select({
+        modelId: malloyArtifacts.modelId,
+        name: malloyArtifacts.name,
+        title: malloyArtifacts.title,
+        manifest: malloyArtifacts.manifest,
+      })
       .from(malloyArtifacts)
       .where(inArray(malloyArtifacts.modelId, [...datasetOfModel.keys()]))
       .orderBy(asc(malloyArtifacts.name));
@@ -306,18 +344,25 @@ export const isCustomDashboard = (dash: Pick<DashboardDetail, "source">): boolea
 
 /** A model's malloy-config.json, if it shipped one.
  *
- * The config travels as an ordinary model file — the CLI publish route stores it
- * under that path (api/datasets/[id]/model/push), and the GitHub refresh does the
- * same — so there is no column to add and no migration. Returns the raw text;
- * callers parse what they need (image-hosts.ts, and poolSizeFromConfig's reader
- * in @/lib/malloy, are both shaped that way). */
+ * Through the one file-map seam, because a repo-backed model's config is not a
+ * row: it is whichever file Malloy's own discovery picked when the model was
+ * compiled, out of the revision's zip (src/lib/repo-files.ts). Returns the raw
+ * text; callers parse what they need (image-hosts.ts, and poolSizeFromConfig's
+ * reader in @/lib/malloy, are both shaped that way). */
 export async function modelConfigJson(modelId: string): Promise<string | undefined> {
-  const [row] = await db
-    .select({ content: malloyModelFiles.content })
-    .from(malloyModelFiles)
-    .where(and(eq(malloyModelFiles.modelId, modelId), eq(malloyModelFiles.path, "malloy-config.json")))
+  const [model] = await db
+    .select({
+      id: malloyModels.id,
+      source: malloyModels.source,
+      revisionId: malloyModels.revisionId,
+      datasetId: malloyModels.datasetId,
+    })
+    .from(malloyModels)
+    .where(eq(malloyModels.id, modelId))
     .limit(1);
-  return row?.content;
+  if (!model) return undefined;
+  const { modelFileMap } = await import("@/lib/mcp-tools");
+  return (await modelFileMap(model)).get("malloy-config.json");
 }
 
 /**

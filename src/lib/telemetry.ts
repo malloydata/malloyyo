@@ -18,7 +18,14 @@ const POSTHOG_PROJECT_TOKEN = "phc_BAR8UTgMWRi3gbpqgcQDYyngn5joRKGifU9GWJV9KA6R"
 
 export type QueryEntrypoint = "mcp" | "ltool" | "dashboard" | "ask" | "chat";
 export type TelemetryOutcome = "success" | "error";
-export type ModelPublishMethod = "github_create" | "github_refresh" | "github_webhook" | "cli_push";
+export type ModelPublishMethod =
+  | "github_create"
+  | "github_refresh"
+  | "github_webhook"
+  | "cli_push"
+  /** A whole repo published at once — `malloyyo publish --repo`, several
+      datasets in one transaction. Distinct from `cli_push`, which is one. */
+  | "cli_repo_push";
 export type McpToolName = "list_sources" | "describe_source" | "open_share_link" | "yo_help" | "other";
 
 export type TelemetryEvent =
@@ -46,6 +53,20 @@ export type TelemetryEvent =
     };
   }
   | { event: "dataset removed"; properties: Record<string, never> }
+  // Distinct from "dataset removed": removing a repo takes every dataset it
+  // publishes with it, so the counts are the event. Without them the analytics
+  // cannot tell a tidy-up of an empty repo from the deletion of four datasets
+  // and someone's saved queries.
+  | {
+      event: "repo removed";
+      properties: {
+        datasets: number;
+        revisions: number;
+        saved_queries: number;
+        drafts: number;
+        orphaned_chats: number;
+      };
+    }
   | { event: "query saved"; properties: { entrypoint: "ltool" } }
   | { event: "query favorite changed"; properties: { favorited: boolean } }
   | { event: "mcp tool called"; properties: { tool: McpToolName; outcome: TelemetryOutcome } };

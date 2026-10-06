@@ -17,7 +17,7 @@
 // the model_ref a query resolved to, recording is a direct dataset lookup.
 
 import { desc, eq } from "drizzle-orm";
-import { db, datasets, type User } from "@/db";
+import { db, datasets, repos, type User } from "@/db";
 import {
   compile,
   exploreSurface,
@@ -38,11 +38,13 @@ type QueryRunResult = WithHostOnly<RunResult & { model_ref?: string }>;
 import { listDashboardsForModel } from "./dashboards";
 import { withModelRuntime } from "./malloy";
 import { leaseScope } from "./tenancy";
+import { qualifiedName } from "./repo-names";
 import { rolesOf } from "./roles";
 import { isAdmin } from "./admin";
 import { logger, serializeErr } from "./logger";
 import {
   canReadDataset,
+  findByDatasetRef,
   latestModel,
   loadSharedQuery,
   modelFileMap,
@@ -122,26 +124,61 @@ function dashboardUrl(baseUrl: string, modelRef: string, name: string): string {
   return `${base}/datasets/${encodeURIComponent(modelRef)}/dashboard/${encodeURIComponent(name)}`;
 }
 
-type DatasetRow = { id: string; name: string; requiredGivens: string[] };
+type DatasetRow = {
+  id: string;
+  name: string;
+  /** The repo that publishes it, or null for one no repo does. */
+  repoSlug: string | null;
+  /**
+   * HOW A CLIENT NAMES IT: `<repo>:<name>`, or the bare name when no repo
+   * publishes it.
+   *
+   * The catalog used to advertise `ds.name`, which was fine while dataset names
+   * were globally unique. Now two repos can each publish a `sales`, and a
+   * catalog that offered `model_ref: "sales"` twice would make both of them
+   * unaddressable — `resolveDatasetRef` refuses an ambiguous bare name rather
+   * than guessing, which is correct and would read as "not found".
+   *
+   * Old refs keep working: a saved client config saying `sales` resolves through
+   * the alias the migration wrote.
+   */
+  ref: string;
+  requiredGivens: string[];
+};
 
 // Datasets this user may query — via the shared visibility predicate.
 async function visibleDatasets(userId: string): Promise<DatasetRow[]> {
-  return db
+  const rows = await db
     // requiredGivens rides along: every lease needs it, and a second lookup per
-    // query to fetch one column would be a query per query.
-    .select({ id: datasets.id, name: datasets.name, requiredGivens: datasets.requiredGivens })
+    // query to fetch one column would be a query per query. So does the repo's
+    // slug, which is what a client's `model_ref` is built from.
+    .select({
+      id: datasets.id,
+      name: datasets.name,
+      repoSlug: repos.slug,
+      requiredGivens: datasets.requiredGivens,
+    })
     .from(datasets)
+    .leftJoin(repos, eq(datasets.repoId, repos.id))
     .where(visibleDatasetWhere(userId))
     .orderBy(desc(datasets.createdAt));
+  return rows.map((r) => ({ ...r, ref: qualifiedName(r.repoSlug, r.name) }));
 }
 
 // Resolve a model_ref (= dataset name) to its latest model version, scoped to
 // what the user may see. Returns null for both "unknown" and "not visible".
+/**
+ * Resolve a dataset reference for the MCP surface.
+ *
+ * Through `findByDatasetRef`, which applies the one ordered rule in
+ * src/lib/repos.ts. It used to be `visibleDatasets(...).find(d => d.name === ref)`
+ * - fine while names were globally unique, and a silent wrong answer the moment
+ * two repos each publish a `sales`, because `.find` returns whichever row came
+ * back first.
+ */
 async function findModelByRef(userId: string, ref: string) {
-  const ds = (await visibleDatasets(userId)).find((d) => d.name === ref);
-  if (!ds) return null;
-  const model = await latestModel(ds.id);
-  return model ? { ds, model } : null;
+  const found = await findByDatasetRef(userId, ref);
+  return found ? { ds: found.ds, model: found.model } : null;
 }
 
 // Lease a pooled Runtime over one dataset's latest model and hand the engine a
@@ -149,7 +186,7 @@ async function findModelByRef(userId: string, ref: string) {
 // readSource (for location-slicing) comes from withModelRuntime, keyed exactly
 // as the runtime keys files, so the host doesn't re-derive that map.
 async function leaseDataset<T>(
-  model: { id: string; source: string },
+  model: { id: string; source: string; revisionId: string | null; datasetId: string },
   fn: (m: BoundModel) => Promise<T>,
   scoped?: { required: readonly string[]; user: { email: string | null; roles: string[] } },
 ): Promise<T> {
@@ -195,11 +232,11 @@ function makeExploreHost(user: User, baseUrl: string): ExploreHost {
           entry = await leaseDataset(model, async (m) => {
             const compiled = await compile(m.runtime, m.entry, { exportedOnly: true });
             return compiled.ok && compiled.model
-              ? modelCatalogEntry(ds.name, compiled.model)
-              : { model_ref: ds.name };
+              ? modelCatalogEntry(ds.ref, compiled.model)
+              : { model_ref: ds.ref };
           });
         } catch {
-          entry = { model_ref: ds.name }; // a model that won't compile lists as a bare ref
+          entry = { model_ref: ds.ref }; // a model that won't compile lists as a bare ref
         }
         // A dashboard is part of what a model offers, so it belongs in the same
         // listing as the sources — an agent should not need a second tool, or
@@ -223,7 +260,11 @@ function makeExploreHost(user: User, baseUrl: string): ExploreHost {
             name: d.name,
             title: d.title,
             description: d.description,
-            url: dashboardUrl(baseUrl, ds.name, d.name),
+            // `ds.ref`, like the three catalog refs above it. The bare name
+            // was the one spot this conversion missed, so two repos each
+            // publishing `orders` advertised correct model_refs and then
+            // IDENTICAL dashboard URLs.
+            url: dashboardUrl(baseUrl, ds.ref, d.name),
           }));
           if (dashboards.length) entry.dashboards = dashboards;
         } catch (err) {

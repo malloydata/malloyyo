@@ -5,6 +5,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { filterTree, type TreeDashboard, type TreeDataset } from "@/lib/dashboard-tree";
+import { useDashboardTree } from "@/components/use-dashboard-tree";
 
 /**
  * One control for "which dashboard am I looking at, and what else is there" —
@@ -23,31 +24,36 @@ import { filterTree, type TreeDashboard, type TreeDataset } from "@/lib/dashboar
 
 export function DashboardTree({
   currentDataset,
+  currentLabel,
   activeDashboard,
   activeLabel,
 }: {
-  /** The dataset being viewed — its branch opens first. */
+  /** The dataset being viewed, QUALIFIED (`repo:dataset`) — its branch opens
+   *  first, bolds, and owns the highlighted leaf.
+   *
+   *  Qualified rather than bare, because bare names are not unique: this
+   *  instance has a `babynames` in two repos, and matching on the bare name
+   *  expanded and bolded BOTH of them while React warned about the duplicate
+   *  key. It is an identity, so it is never rendered — see `currentLabel`. */
   currentDataset: string;
+  /** What to CALL that dataset on the button. Separate from the identity above,
+   *  which used to be rendered directly — so the caller had to pass a human
+   *  title and every identity comparison then failed against the bare name the
+   *  tree carries. */
+  currentLabel?: string;
   /** The dashboard slug being viewed, if any: the highlighted leaf. */
   activeDashboard?: string;
   /** What to show beside the dataset name on the button. */
   activeLabel?: string;
 }) {
   const [open, setOpen] = useState(false);
-  const [tree, setTree] = useState<TreeDataset[] | null>(null);
-  const [failed, setFailed] = useState(false);
   const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
-  // Fetched when it is first opened, not on mount: this walks every visible
-  // dataset, and a dashboard page should not wait on a menu nobody clicked.
-  useEffect(() => {
-    if (!open || tree) return;
-    fetch("/api/dashboards?tree=1")
-      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
-      .then((rows: TreeDataset[]) => setTree(Array.isArray(rows) ? rows : []))
-      .catch(() => setFailed(true));
-  }, [open, tree]);
+  // Cached across remounts and navigations, prewarmed on idle, refreshed behind
+  // the reader — see use-dashboard-tree.ts for why, and for why that cache is
+  // deliberately not in sessionStorage.
+  const { tree, failed, clearFailure } = useDashboardTree(open);
 
   // Opening starts on the dataset you are looking at; closing forgets the
   // search, so the next open is the whole tree again. Both in the handlers
@@ -58,7 +64,7 @@ export function DashboardTree({
     // Latching that flag meant one blip — a restarting dev server, a dropped
     // connection — left the menu reading "couldn't load" for the rest of the
     // page's life, the reopen's successful fetch landing behind it unseen.
-    setFailed(false);
+    clearFailure();
     setOpen(true);
   };
   const closeMenu = () => {
@@ -83,13 +89,16 @@ export function DashboardTree({
   // While searching, everything that survived the filter is open — hiding a
   // match behind a closed branch is the one thing a search must not do.
   const isOpen = (name: string) => flat || query.trim() !== "" || expanded.has(name);
+  // One dataset, one identity. `qualified` is what links address and what
+  // `currentDataset` is compared against; the bare name is display only.
+  const addrOf = (ds: TreeDataset) => ds.qualified ?? ds.dataset;
 
-  const leaf = (dataset: string, d: TreeDashboard) => {
+  const leaf = (dataset: string, d: TreeDashboard, addr = dataset) => {
     const active = d.name === activeDashboard && dataset === currentDataset;
     return (
       <Link
-        key={`${dataset}/${d.name}`}
-        href={`/datasets/${encodeURIComponent(dataset)}/dashboard/${encodeURIComponent(d.name)}`}
+        key={`${addr}/${d.name}`}
+        href={`/datasets/${encodeURIComponent(addr)}/dashboard/${encodeURIComponent(d.name)}`}
         onClick={closeMenu}
         title={d.description}
         className={`flex items-center gap-2 rounded px-2 py-1 ${flat ? "" : "ml-4"} ${
@@ -119,16 +128,16 @@ export function DashboardTree({
       .sort((a, b) => Number(b.mine ?? false) - Number(a.mine ?? false));
     return (
       <>
-        {own.map((d) => leaf(ds.dataset, d))}
+        {own.map((d) => leaf(addrOf(ds), d))}
         {user.length > 0 && (
           <p className={`${flat ? "" : "ml-4"} px-2 pt-1.5 pb-0.5 text-[10px] uppercase tracking-wide text-gray-400 dark:text-gray-500`}>
             user dashboards
           </p>
         )}
-        {user.map((d) => leaf(ds.dataset, d))}
+        {user.map((d) => leaf(addrOf(ds), d))}
         {ds.dashboards.length === 0 && (
           <Link
-            href={`/datasets/${encodeURIComponent(ds.dataset)}`}
+            href={`/datasets/${encodeURIComponent(addrOf(ds))}`}
             onClick={closeMenu}
             className={`${flat ? "" : "ml-4"} block rounded px-2 py-1 text-gray-400 dark:text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-800/60`}
           >
@@ -148,7 +157,7 @@ export function DashboardTree({
         className="flex max-w-[60vw] items-center gap-1.5 rounded-md px-1.5 py-1 hover:bg-white dark:hover:bg-gray-800"
         title="All datasets and dashboards"
       >
-        <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">{currentDataset || "dataset"}</span>
+        <span className="text-sm font-semibold text-gray-900 dark:text-gray-100">{currentLabel || currentDataset || "dataset"}</span>
         {activeLabel && (
           <>
             <span className="text-gray-300 dark:text-gray-600">/</span>
@@ -189,20 +198,20 @@ export function DashboardTree({
               ) : (
                 shown.map((ds) =>
                   flat ? (
-                    <div key={ds.dataset}>{group(ds)}</div>
+                    <div key={addrOf(ds)}>{group(ds)}</div>
                   ) : (
-                    <div key={ds.dataset}>
+                    <div key={addrOf(ds)}>
                       <div className="flex items-center">
                         <button
                           onClick={() =>
                             setExpanded((prev) => {
                               const next = new Set(prev);
-                              if (next.has(ds.dataset)) next.delete(ds.dataset);
-                              else next.add(ds.dataset);
+                              if (next.has(addrOf(ds))) next.delete(addrOf(ds));
+                              else next.add(addrOf(ds));
                               return next;
                             })
                           }
-                          aria-expanded={isOpen(ds.dataset)}
+                          aria-expanded={isOpen(addrOf(ds))}
                           className="flex min-w-0 flex-1 items-center gap-1 rounded px-1.5 py-1 text-left hover:bg-gray-100 dark:hover:bg-gray-800/60"
                         >
                           <svg
@@ -215,25 +224,27 @@ export function DashboardTree({
                             strokeLinecap="round"
                             strokeLinejoin="round"
                             aria-hidden
-                            className={`shrink-0 text-gray-400 transition-transform ${isOpen(ds.dataset) ? "rotate-90" : ""}`}
+                            className={`shrink-0 text-gray-400 transition-transform ${isOpen(addrOf(ds)) ? "rotate-90" : ""}`}
                           >
                             <path d="M9 6l6 6-6 6" />
                           </svg>
                           <span
                             className={`truncate ${
-                              ds.dataset === currentDataset
+                              addrOf(ds) === currentDataset
                                 ? "font-semibold text-gray-900 dark:text-gray-100"
                                 : "text-gray-700 dark:text-gray-300"
                             }`}
                           >
-                            {ds.dataset}
+                            <span title={ds.description ? `${ds.dataset} — ${ds.description}` : ds.dataset}>
+                              {ds.title ?? ds.dataset}
+                            </span>
                           </span>
                           <span className="ml-auto shrink-0 pl-2 text-[10px] text-gray-400">
                             {ds.dashboards.length || ""}
                           </span>
                         </button>
                       </div>
-                      {isOpen(ds.dataset) && group(ds)}
+                      {isOpen(addrOf(ds)) && group(ds)}
                     </div>
                   ),
                 )

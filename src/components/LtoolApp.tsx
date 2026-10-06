@@ -632,7 +632,15 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
   useEffect(() => {
     fetch("/api/sources")
       .then((r) => r.json())
-      .then((d: Array<{ dataset: string; sources?: Array<{ source: string; description?: string | null }> }>) => {
+      .then(
+        (
+          d: Array<{
+            dataset: string;
+            /** `repo:dataset` — optional so an older response still parses. */
+            qualified?: string;
+            sources?: Array<{ source: string; description?: string | null }>;
+          }>,
+        ) => {
         if (!Array.isArray(d)) return;
         // Flattened FROM the grouped catalogue, carrying each source's dataset so
         // the picker can group it back and tell two same-named sources apart —
@@ -640,7 +648,19 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
         const opts: SourceOption[] = [];
         for (const ds of d) {
           for (const s of ds.sources ?? []) {
-            if (s.source) opts.push({ source: s.source, description: s.description ?? null, dataset: ds.dataset });
+            // The QUALIFIED name. This field is both the group heading and the
+            // address the picked source is run against (`openScratch` ->
+            // `selected.dataset` -> POST /api/run -> findByDatasetRef), and the
+            // bare name is not an address: with two repos each publishing
+            // `orders`, picking the source under the second heading ran the
+            // query against the first repo's data. Qualified reads as the
+            // heading too, which is what disambiguates the two groups.
+            if (s.source)
+              opts.push({
+                source: s.source,
+                description: s.description ?? null,
+                dataset: ds.qualified ?? ds.dataset,
+              });
           }
         }
         setSources(opts);

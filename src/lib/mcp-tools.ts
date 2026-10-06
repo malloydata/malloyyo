@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { eq, and, desc, count } from "drizzle-orm";
-import { db, datasets, malloyModels, malloyModelFiles, savedQueries, history, favorites } from "@/db";
+import { db, datasets, malloyModels, savedQueries, history, favorites } from "@/db";
 import type { SourceInfo } from "./malloy";
 // NOTE: `runRestrictedMalloyFiles` (and everything under ./malloy) pulls in
 // @malloydata/db-duckdb → @duckdb/node-api, whose native libduckdb.so loads at
@@ -29,11 +29,12 @@ import {
 
 // The datasets a user may query: their own or public, and ready. One home for
 // the predicate — the host's findModelByRef and findBySource both build on it.
-export function visibleDatasetWhere(userId: string) {
-  // Owner, public, or granted by a role — see src/lib/roles.ts. Kept as a
-  // re-export rather than inlined because every read path in the app funnels
-  // through this name, and one predicate is the only way that stays true.
-  return datasetVisibleWhere(userId);
+export function visibleDatasetWhere(userId: string, isAdmin = false) {
+  // Owner, public, granted by a role — or MALLOYYO_ADMIN, which opens every
+  // dataset. Kept as a re-export rather than inlined because every read path in
+  // the app funnels through this name, and one predicate is the only way that
+  // stays true.
+  return datasetVisibleWhere(userId, isAdmin);
 }
 
 // What a viewer may READ ABOUT a dataset: the questions asked of it, the Malloy
@@ -101,63 +102,103 @@ export async function findByDatasetId(userId: string, datasetId: string) {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** Resolve a dataset by id (uuid) OR by name — the ready dataset with that name,
-    which is unique on the server. Lets URLs use the readable name while old
-    uuid links keep working. */
+/**
+ * Resolve a dataset a USER may query, by the ordered rule in src/lib/repos.ts.
+ *
+ * Resolution and visibility are separate steps on purpose: resolving by name has
+ * to give the same answer for everyone, or two people following the same share
+ * link reach different datasets. So the ref is resolved first and the viewer's
+ * visibility is applied to the answer.
+ */
 export async function findByDatasetRef(userId: string, ref: string) {
-  if (UUID_RE.test(ref)) return findByDatasetId(userId, ref);
-  // No status tiebreaker needed here, though the catalogue endpoint needs one:
-  // visibleDatasetWhere already restricts to `ready`, and the unique index on
-  // `name` is partial on exactly that status — so at most one row can match. A
-  // half-built namesake is excluded by the WHERE, not ordered against.
-  const [ds] = await db
+  const { resolveDatasetRef } = await import("./repos");
+  const r = await resolveDatasetRef(ref);
+  if (!r.ok) return null;
+  const [visible] = await db
     .select()
     .from(datasets)
-    .where(and(visibleDatasetWhere(userId), eq(datasets.name, ref)))
+    .where(and(visibleDatasetWhere(userId), eq(datasets.id, r.dataset.id)))
     .limit(1);
-  if (!ds) return null;
-  const model = await latestModel(ds.id);
+  if (!visible) return null;
+  const model = await latestModel(visible.id);
   if (!model) return null;
-  return { ds, model, description: null as string | null };
+  return { ds: visible, model, description: null as string | null };
 }
 
-/** Admin-scoped dataset resolution for the publish API (push/status): by id (uuid)
-    OR by name — the ready dataset with that name, which is unique per server
-    (`datasets_name_ready_unique`). NOT user-scoped: the caller has already
-    authorized with an admin bearer. Lets `malloy-config.json` target a dataset by
-    its readable name instead of a per-instance slug. Returns the dataset row or null. */
+/**
+ * Dataset resolution for the publish API (push/status), by the ordered rule in
+ * src/lib/repos.ts: a uuid, then `repo:dataset`, then an ALIAS (every
+ * pre-existing name, pinned), then a repo-less name, then a bare name unique
+ * across repos - and an ambiguous bare name is refused, never guessed.
+ *
+ * NOT user-scoped: the caller has already authorized with a publish bearer, and
+ * the route applies the owner gate itself.
+ */
 export async function resolveDatasetByRef(ref: string) {
-  if (UUID_RE.test(ref)) {
-    const [ds] = await db.select().from(datasets).where(eq(datasets.id, ref)).limit(1);
-    return ds ?? null;
-  }
-  const [ds] = await db
-    .select()
-    .from(datasets)
-    .where(and(eq(datasets.name, ref), eq(datasets.status, "ready")))
-    .limit(1);
-  return ds ?? null;
+  const { resolveDatasetRef } = await import("./repos");
+  const r = await resolveDatasetRef(ref);
+  return r.ok ? r.dataset : null;
 }
+
 
 export async function latestModel(datasetId: string) {
+  const [active] = await db
+    .select()
+    .from(malloyModels)
+    .where(and(eq(malloyModels.datasetId, datasetId), eq(malloyModels.active, true)))
+    .limit(1);
+  if (active) return active;
   const [row] = await db
     .select()
     .from(malloyModels)
     .where(eq(malloyModels.datasetId, datasetId))
-    .orderBy(desc(malloyModels.createdAt))
+    .orderBy(desc(malloyModels.version), desc(malloyModels.createdAt))
     .limit(1);
   return row;
 }
 
-export async function modelFileMap(model: { id: string; source: string }): Promise<Map<string, string>> {
-  const files = await db
-    .select({ path: malloyModelFiles.path, content: malloyModelFiles.content })
-    .from(malloyModelFiles)
-    .where(eq(malloyModelFiles.modelId, model.id));
-  if (files.length > 0) {
-    return new Map(files.map((f) => [f.path, f.content]));
+/**
+ * THE FILES A MODEL IS SERVED FROM.
+ *
+ * For a revision-backed model these come out of the revision's zip, derived by
+ * the same `datasetView` rule the compile workspace was built from - so there is
+ * one record of the repo's bytes rather than a zip and a per-file table that can
+ * disagree. For everything else (a Claude-authored model, a single-dataset
+ * `--dataset x` push) the stored rows are still the record, so nothing
+ * historical had to be rewritten.
+ *
+ * `repoDir` is needed to pick the dataset's slice of the repo. Callers that hold
+ * the dataset row pass it; the default is the repo root, which is every
+ * single-dataset repo and every model that has no revision at all.
+ */
+export async function modelFileMap(
+  /**
+   * A `malloy_models` row. `revisionId` and `datasetId` are REQUIRED, not
+   * optional-with-a-default: a call that omits them for a revision-backed model
+   * would silently get the repo ROOT's view, and the symptom is a compile error
+   * about a missing `index.malloy` rather than anything naming the mistake.
+   * Every caller holds the whole row anyway.
+   */
+  model: { id: string; source: string; revisionId: string | null; datasetId: string },
+  /** The dataset's directory in the repo. Looked up from the model's dataset
+      when the caller does not hold it, so the call sites did not each have to
+      grow a parameter they would sometimes get wrong. */
+  repoDir?: string,
+): Promise<Map<string, string>> {
+  const { modelFilesFor } = await import("./repo-files");
+  let dir = repoDir;
+  if (dir === undefined && model.revisionId) {
+    const [ds] = await db
+      .select({ repoDir: datasets.repoDir })
+      .from(datasets)
+      .where(eq(datasets.id, model.datasetId))
+      .limit(1);
+    dir = ds?.repoDir ?? "";
   }
-  return new Map([["index.malloy", model.source]]);
+  return modelFilesFor(
+    { id: model.id, source: model.source, revisionId: model.revisionId ?? null },
+    dir ?? "",
+  );
 }
 
 // Time-window sessionization: consecutive activity by one user rolls into a

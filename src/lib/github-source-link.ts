@@ -54,19 +54,6 @@ function clean(slug: string): string | null {
 export const DEVCONTAINER_PATH = ".devcontainer/devcontainer.json";
 
 /**
- * Whether a published model carries a dev container — i.e. whether a codespace
- * opened on this repo comes up with the Malloyyo tooling installed.
- *
- * False for a model published BEFORE this file was ingested, which is
- * indistinguishable from a repo that genuinely has none. That is deliberate:
- * both are fixed the same way (run `malloyyo init`, commit, publish), so the UI
- * can say one thing to both without lying to either.
- */
-export function hasDevcontainer(files?: { path: string }[] | null): boolean {
-  return (files ?? []).some((f) => f.path === DEVCONTAINER_PATH);
-}
-
-/**
  * "Open this repo in a codespace" — the link that RESUMES the viewer's existing
  * codespace for that branch if they have one, and creates one otherwise.
  *
@@ -105,6 +92,15 @@ export type SourceLinkInput = {
   /** datasets.github_repo / github_branch (the pull path). */
   datasetRepo?: string | null;
   datasetBranch?: string | null;
+  /**
+   * datasets.repo_dir — where this dataset lives in a multi-dataset repo.
+   *
+   * Stored file paths are re-rooted at that directory (src/lib/repo-layout.ts),
+   * which is what keeps the runtime's "a model is rooted at index.malloy"
+   * invariant true for every dataset. A github.com link is the one thing that
+   * needs the real repo path back, so it is put back here and nowhere else.
+   */
+  datasetDir?: string | null;
   /** malloy_models.git_* (the CLI-push path). */
   gitRepo?: string | null;
   gitBranch?: string | null;
@@ -159,7 +155,9 @@ export function dashboardSourceUrl(input: SourceLinkInput): string | null {
     input.datasetBranch ||
     "main";
 
-  const encodedPath = path.split("/").map(encodeURIComponent).join("/");
+  const dir = (input.datasetDir ?? "").replace(/^\/+|\/+$/g, "");
+  const repoRelative = dir ? `${dir}/${path}` : path;
+  const encodedPath = repoRelative.split("/").map(encodeURIComponent).join("/");
   return `https://github.com/${slug}/blob/${encodeURIComponent(ref)}/${encodedPath}`;
 }
 

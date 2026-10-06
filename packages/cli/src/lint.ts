@@ -23,6 +23,9 @@ export interface DashboardLint {
 export interface LintReport {
   ok: boolean;
   dashboards: DashboardLint[];
+  /** What this dataset is CALLED, when `lintDashboards` was told which dataset
+      it is linting. Read off the same compile the lint already did. */
+  datasetTitle?: string;
 }
 
 /** Backtick-quote a field name unless it's a plain identifier — the same rule
@@ -58,11 +61,31 @@ function landingPageErrors(dir: string, file: string): string[] {
   }
 }
 
-export async function lintDashboards(root: string): Promise<LintReport> {
+export async function lintDashboards(
+  root: string,
+  opts: {
+    /** The repo root, when `root` is a dataset directory inside one: the config
+        search may walk up to it, because `malloy-config.json` lives there and its
+        connections belong to every dataset. */
+    repoRoot?: string;
+    /** The dataset this directory publishes, when it is one of several. Reads
+        its display title off the compile the lint is already doing. */
+    datasetName?: string;
+  } = {},
+): Promise<LintReport> {
   const abs = resolve(root);
-  const runner = await makeRunner(abs);
+  const runner = await makeRunner(abs, opts);
   try {
-    return await runLint(abs, runner);
+    const report = await runLint(abs, runner);
+    if (!opts.datasetName) return report;
+    let declared: string | undefined;
+    try {
+      declared = (await runner.datasetMeta()).title;
+    } catch {
+      // A model that does not compile has no title to read; the name still
+      // derives one, and the lint failure is the thing worth reporting.
+    }
+    return { ...report, datasetTitle: datasetTitle(opts.datasetName, declared) };
   } finally {
     // Close the shared connections so the CLI process exits promptly.
     await runner.dispose();
@@ -239,5 +262,111 @@ export function printLintReport(report: LintReport): void {
     console.log(`  ${hasErr ? "✗" : "⚠"} ${d.name}`);
     for (const e of d.errors) console.log(`      ${e}`);
     for (const w of d.warnings) console.log(`      warning: ${w}`);
+  }
+}
+
+// ── The repo ────────────────────────────────────────────────────────────────
+//
+// A repo is the unit you validate, because it is the unit that publishes. One
+// dataset or several, `malloyyo lint` answers for all of it — and it answers the
+// LAYOUT question too, using the same rules the server uses (they live in the
+// engine, over an injected lister). A repo that lints clean here is one the
+// server will accept; that equivalence is the whole point of sharing the rules
+// rather than writing a second copy that agrees today.
+//
+// This matters more than it looks, because a GitHub-backed repo refreshes on a
+// TRIGGER. Nobody is watching a push the way they watch a publish, so the last
+// moment a human sees an error is here.
+
+import { datasetTitle, layoutFromListing } from "@malloyyo/mcp-engine";
+import { fsLister, repoRootOf } from "./repo.js";
+
+/**
+ * What `lint` and `publish` say when they meet a repo built the old way.
+ *
+ * TRANSITIONAL. This constant, the two places that print it, and
+ * `yo_help("repo/convert-single-dataset")` are the whole of the single-dataset
+ * deprecation — delete those three and nothing else knows about it.
+ */
+export const OLD_LAYOUT_NOTICE = [
+  "This repo has index.malloy at its root — the old single-dataset layout.",
+  "Repos now publish one dataset per directory under datasets/.",
+  "",
+  "It still works. To convert it, run `claude` here and ask it to convert this",
+  'repo to the datasets/ layout, or read yo_help("repo/convert-single-dataset").',
+].join("\n");
+
+export interface RepoLintReport {
+  ok: boolean;
+  /** The repo is the old single-dataset shape. Transitional — see
+      OLD_LAYOUT_NOTICE. */
+  oldLayout?: boolean;
+  /** The repo's shape is wrong — nothing could be linted. */
+  layoutError?: string;
+  /** The shape is not wrong, just unwritten: `datasets/` with nothing in it yet.
+      A repo `malloyyo init` just made. */
+  empty?: boolean;
+  /** One entry per dataset the repo publishes. `dir` is "" for a single-dataset
+      repo, whose one dataset is the repo root. */
+  datasets: { name: string; dir: string; title: string; report: LintReport }[];
+}
+
+/**
+ * Lint every dataset the repo publishes.
+ *
+ * Layout problems are lint errors, not surprises for later: a repo with both a
+ * root `index.malloy` and a `datasets/` directory, or a `datasets/` subdirectory
+ * with no entry file, fails HERE — on a laptop, with the directory named — rather
+ * than on a server whose logs the author cannot read.
+ */
+export async function lintRepo(root: string): Promise<RepoLintReport> {
+  const abs = resolve(root);
+  // `lint datasets/sales` lints that one dataset — but its connections still
+  // come from the repo's `malloy-config.json`, one level above it.
+  const repoRoot = repoRootOf(abs);
+  const layout = await layoutFromListing(fsLister(abs), abs);
+  if (!layout.ok) {
+    return { ok: false, layoutError: layout.error, datasets: [], ...(layout.empty ? { empty: true } : {}) };
+  }
+
+  // What to lint comes from the LAYOUT: one unnamed dataset at the root, or one
+  // per directory. Whether to nag about converting is a different question — a
+  // dataset directory pointed at directly reads as the single-dataset shape, and
+  // its repo is already converted.
+  const targets =
+    layout.kind === "single"
+      ? [{ name: "", dir: "" }]
+      : layout.datasets.map((d) => ({ name: d.name, dir: d.dir }));
+  const oldLayout = layout.kind === "single" && repoRoot === abs;
+
+  const datasets: RepoLintReport["datasets"] = [];
+  for (const t of targets) {
+    const root = t.dir ? join(abs, t.dir) : abs;
+    const report = await lintDashboards(root, {
+      repoRoot,
+      ...(t.name ? { datasetName: t.name } : {}),
+    });
+    datasets.push({ name: t.name, dir: t.dir, title: report.datasetTitle ?? "", report });
+  }
+  return { ok: datasets.every((d) => d.report.ok), datasets, oldLayout };
+}
+
+/** Print a repo lint, naming each dataset when there is more than one. */
+export function printRepoLintReport(repo: RepoLintReport): void {
+  if (repo.layoutError) {
+    console.log(`  ✗ ${repo.layoutError}`);
+    return;
+  }
+  const many = repo.datasets.length > 1;
+  for (const d of repo.datasets) {
+    // Directory, the NAME it publishes as, and the title it will be shown
+    // under. The name is not always the directory — `the-look` publishes as
+    // `the_look` — and finding that out at publish time is too late.
+    if (many) {
+      const asName = d.dir.split("/").pop() === d.name ? "" : `  →  ${d.name}`;
+      console.log(`  ${d.dir}${asName}   “${d.title}”`);
+    }
+    if (d.report.dashboards.length === 0 && many) console.log("    (no dashboards)");
+    printLintReport(d.report);
   }
 }

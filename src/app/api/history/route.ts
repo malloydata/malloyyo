@@ -6,6 +6,7 @@ import { eq, desc, and, isNull, isNotNull, inArray, or, sql } from "drizzle-orm"
 import { db, datasets, history, savedQueries, users } from "@/db";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
+import { resolveDatasetRef } from "@/lib/repos";
 import { canReadDataset } from "@/lib/mcp-tools";
 import { RUN_LABELS } from "@/lib/tool-names";
 
@@ -159,13 +160,25 @@ async function datasetQuestions(
   viewerId: string,
   admin: boolean,
 ): Promise<DatasetQuestion[]> {
-  // The route param may be a dataset UUID or its name (same as /api/datasets/[id])
-  // — history/saved_queries key on the UUID, so resolve a name first.
-  const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(idOrName);
-  const cols = { id: datasets.id, isPublic: datasets.isPublic, userId: datasets.userId };
-  const [ds] = isUuid
-    ? await db.select(cols).from(datasets).where(eq(datasets.id, idOrName))
-    : await db.select(cols).from(datasets).where(and(eq(datasets.name, idOrName), eq(datasets.status, "ready")));
+  // Resolved the way every other surface resolves one — `resolveDatasetRef`
+  // takes a uuid, a qualified `repo:dataset`, an alias or a bare name — rather
+  // than by a select of its own.
+  //
+  // The select this replaces matched `datasets.name`, which holds the BARE
+  // name, so a qualified ref matched zero rows and this answered `[]`. That is
+  // not theoretical: the home page and DatasetNav both link Q&A with the
+  // qualified ref now, and the questions page passes it straight through, so
+  // every repo-backed dataset's AI Q&A page read "no questions yet" however
+  // many had been asked. The bare-name branch was also unordered and unscoped,
+  // so with two repos each publishing `orders` it answered with whichever row
+  // came back first — and checked visibility against that same wrong row.
+  const ref = await resolveDatasetRef(idOrName);
+  if (!ref.ok) return [];
+  const [ds] = await db
+    .select({ id: datasets.id, isPublic: datasets.isPublic, userId: datasets.userId })
+    .from(datasets)
+    .where(eq(datasets.id, ref.dataset.id))
+    .limit(1);
   if (!ds) return [];
   // Dataset names are readable and guessable, and this route took one from the
   // query string and answered with every question ever asked of it. The page

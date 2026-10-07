@@ -68,9 +68,12 @@ export type DashboardRunResult =
  * This lets one wire field carry either, which is what a panel needs — it has
  * a single `run` call, not two.
  */
-export function isMalloyText(s: string): boolean {
-  return /^\s*run\s*:/.test(s);
-}
+// The run-routing decision and its allow-list live in `./run-plan`, a leaf
+// module with no database import, so their test can assert on a pure
+// conditional without a live environment. Re-exported here because that is
+// where callers have always found them.
+export { declaredRuns, isMalloyText, planDashboardRun, type DashboardRunPlan } from "./run-plan";
+import { planDashboardRun } from "./run-plan";
 
 /**
  * A dashboard query's problems, as a sentence its author can act on.
@@ -120,14 +123,8 @@ export async function runDashboard(
   const manifest = a.manifest;
   const entryFile = typeof manifest.entryFile === "string" ? manifest.entryFile : "index.malloy";
 
-  // One field, two meanings: `query` carrying `run:` IS Malloy text. Callers
-  // that still set `malloy` explicitly keep working.
-  const malloyText =
-    typeof req.malloy === "string"
-      ? req.malloy
-      : typeof req.query === "string" && isMalloyText(req.query)
-        ? req.query
-        : null;
+  const plan = planDashboardRun(manifest, req);
+  const malloyText = plan.kind === "restricted" ? plan.text : null;
 
   // Tiles AND ad-hoc text compile against the dashboard's own file, as the
   // CLI dev server does (packages/cli/src/dashboard.ts): a suggest query or a
@@ -163,8 +160,8 @@ export async function runDashboard(
   // Single run-expression — a custom component's `<Panel query=…>`, one of a
   // composite dashboard's tiles, or a v1 dashboard's stored query. Runs against
   // the dashboard's own entry.
-  const runExpr = req.query ?? manifest.query;
-  if (typeof runExpr !== "string") return { ok: false, error: "dashboard manifest has no query" };
+  if (plan.kind !== "declared") return { ok: false, error: "dashboard manifest has no query" };
+  const runExpr = plan.run;
   try {
     const res = await runNamedMalloyFiles(files, entryFile, runExpr, givens ?? {}, {
       scope,

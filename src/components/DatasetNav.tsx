@@ -8,6 +8,7 @@ import { dashboardSourceUrl } from "@/lib/github-source-link";
 import { QueryIcon } from "@/components/QueryIcon";
 import { DashboardTree } from "@/components/DashboardTree";
 import { decodeDatasetRef } from "@/lib/repo-names";
+import { ClaudeConnectDialog } from "@/components/ClaudeConnectDialog";
 
 // The horizontal menu shared by a dataset's dashboard-style pages: the dashboard
 // views and the AI Q&A page. It reads like:
@@ -70,6 +71,9 @@ export function DatasetNav({
   const [modelSources, setModelSources] = useState<string[]>([]);
   const [instanceName, setInstanceName] = useState("Malloyyo");
   const [claudeConnected, setClaudeConnected] = useState(false);
+  // The seeded chat to continue to once the setup dialog is dismissed; set
+  // (and the dialog shown) when the connector isn't linked yet.
+  const [claudeSetupUrl, setClaudeSetupUrl] = useState<string | null>(null);
   // Chat needs an ANTHROPIC_API_KEY; without one the pill would go nowhere.
   const [chatEnabled, setChatEnabled] = useState(false);
 
@@ -115,14 +119,15 @@ export function DatasetNav({
   }, []);
 
   // Seed a new Claude chat on this dataset (matches the home page's link). When
-  // the connector isn't linked yet, send them to set it up.
+  // the connector isn't linked yet, show the setup steps first: claude.ai's
+  // Connectors page alone has no entry for this instance and doesn't say the
+  // address to add is this origin + /mcp.
   const onExploreClaude = () => {
-    const url = claudeConnected
-      ? `https://claude.ai/new?q=${encodeURIComponent(
-          `Using the ${instanceName} Malloy tools, explore the "${datasetName || "dataset"}" dataset on ${instanceName} — list its sources and help me analyze it.`,
-        )}`
-      : "https://claude.ai/customize/connectors";
-    window.open(url, "_blank", "noopener,noreferrer");
+    const url = `https://claude.ai/new?q=${encodeURIComponent(
+      `Using the ${instanceName} Malloy tools, explore the "${datasetName || "dataset"}" dataset on ${instanceName} — list its sources and help me analyze it.`,
+    )}`;
+    if (claudeConnected) window.open(url, "_blank", "noopener,noreferrer");
+    else setClaudeSetupUrl(url);
   };
 
   // The dashboard's own .malloy on GitHub — the demo point being that a
@@ -253,6 +258,13 @@ export function DatasetNav({
           </svg>
         </button>
       </div>
+      {claudeSetupUrl && (
+        <ClaudeConnectDialog
+          instanceName={instanceName}
+          continueUrl={claudeSetupUrl}
+          onClose={() => setClaudeSetupUrl(null)}
+        />
+      )}
     </nav>
   );
 }

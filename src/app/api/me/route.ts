@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { NextResponse } from "next/server";
-import { db, users, oauthAccessTokens, oauthRefreshTokens } from "@/db";
+import { db, users, oauthAccessTokens, oauthRefreshTokens, oauthClients } from "@/db";
 import { eq, and, isNull, gt } from "drizzle-orm";
 import { isAdmin } from "@/lib/admin";
 import { getSettings } from "@/lib/settings";
@@ -12,26 +12,31 @@ import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { askConfig, askEnabled } from "@/lib/ask";
 import { hostedSignIn } from "@/lib/hosted-auth-integration";
 import { signInPath, signOutPath } from "@/lib/auth-paths";
+import { isClaudeAiClient } from "@/lib/claude-client";
 
 export const runtime = "nodejs";
 
-// Has this user ever completed the MCP OAuth flow and still holds a live
-// token? Used by the ltool "Explore further with Claude" button to decide
-// whether to show connection setup instructions first.
+// Has this user connected claude.ai to this instance — completed the MCP OAuth
+// flow FROM claude.ai (web, Desktop and mobile share the one connector and the
+// one callback) and still holding a live token? Decides whether the "Explore in
+// Claude" buttons open a seeded chat or show connection setup first. Grants
+// from other clients don't count: the malloyyo CLI's login and Claude Code use
+// the same OAuth tables, and a user with only those has no connector in
+// claude.ai, so a seeded chat there finds no tools. See isClaudeAiClient.
 async function hasActiveClaudeConnection(userId: string): Promise<boolean> {
   const now = new Date();
-  const [acc] = await db
-    .select({ h: oauthAccessTokens.tokenHash })
+  const live = await db
+    .selectDistinct({ redirectUris: oauthClients.redirectUris })
     .from(oauthAccessTokens)
-    .where(and(eq(oauthAccessTokens.userId, userId), isNull(oauthAccessTokens.revokedAt), gt(oauthAccessTokens.expiresAt, now)))
-    .limit(1);
-  if (acc) return true;
-  const [ref] = await db
-    .select({ id: oauthRefreshTokens.id })
+    .innerJoin(oauthClients, eq(oauthClients.id, oauthAccessTokens.clientId))
+    .where(and(eq(oauthAccessTokens.userId, userId), isNull(oauthAccessTokens.revokedAt), gt(oauthAccessTokens.expiresAt, now)));
+  if (live.some((c) => isClaudeAiClient(c.redirectUris))) return true;
+  const refreshable = await db
+    .selectDistinct({ redirectUris: oauthClients.redirectUris })
     .from(oauthRefreshTokens)
-    .where(and(eq(oauthRefreshTokens.userId, userId), isNull(oauthRefreshTokens.revokedAt), gt(oauthRefreshTokens.expiresAt, now)))
-    .limit(1);
-  return !!ref;
+    .innerJoin(oauthClients, eq(oauthClients.id, oauthRefreshTokens.clientId))
+    .where(and(eq(oauthRefreshTokens.userId, userId), isNull(oauthRefreshTokens.revokedAt), gt(oauthRefreshTokens.expiresAt, now)));
+  return refreshable.some((c) => isClaudeAiClient(c.redirectUris));
 }
 
 export async function GET() {

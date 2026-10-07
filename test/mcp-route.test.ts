@@ -17,8 +17,9 @@ import test, { before } from "node:test";
 import assert from "node:assert/strict";
 import { Client, StreamableHTTPClientTransport } from "@modelcontextprotocol/client";
 import { eq } from "drizzle-orm";
-import { db, users, datasets, malloyModels, malloyModelFiles, malloyArtifacts, apiTokens } from "@/db";
+import { db, users, datasets, malloyModels, malloyModelFiles, malloyArtifacts, apiTokens, oauthClients } from "@/db";
 import { createApiToken, hashApiToken } from "@/lib/api-tokens";
+import { issueTokenPair } from "@/lib/oauth/tokens";
 import { listDashboardsAndDrafts } from "@/lib/dashboards";
 import { DELETE, GET, POST } from "@/app/mcp/route";
 
@@ -278,11 +279,46 @@ test("show_dashboard refuses a dashboard that doesn't exist, naming the ones tha
   }
 });
 
-test("issue_cli_token: a query-only, hour-long token for THIS server's URL, that works", async () => {
+test("issue_cli_token: an API token may not mint another API token", async () => {
+  // This test used to assert the OPPOSITE — that an API-token caller gets a
+  // token, and that the minted token then opens /mcp. Both are true of the code
+  // it was written against, and together they are a chain with no end: each
+  // minted token can mint the next, so the hour-long life stops bounding
+  // anything and access no longer depends on the credential that granted it.
+  // Renewing an hour has to mean going back to what issued it.
   const client = await connect(mcpToken, { mode: { pin: "2026-07-28" } });
   try {
     const r = await client.callTool({ name: "issue_cli_token", arguments: {} });
-    assert.notEqual(r.isError, true);
+    assert.equal(r.isError, true, "an api-token caller is refused");
+    const out = r.structuredContent as { ok: boolean; error: string };
+    assert.equal(out.ok, false);
+    // The refusal names the two ways a person can get one, because the caller
+    // is an agent relaying this to someone who can act on it.
+    assert.match(out.error, /malloyyo login|settings\/tokens/);
+  } finally {
+    await client.close();
+  }
+});
+
+test("issue_cli_token: a query-only, hour-long token for THIS server's URL, that works", async () => {
+  // An OAuth connection — a claude.ai connector, or `malloyyo login` — is what
+  // the tool is for, and what still gets a token.
+  const clientId = `test-client-${Date.now()}`;
+  await db.insert(oauthClients).values({
+    id: clientId,
+    name: "route test client",
+    redirectUris: ["http://localhost:3000/cb"],
+    tokenEndpointAuthMethod: "none",
+    grantTypes: ["authorization_code"],
+    responseTypes: ["code"],
+    scope: "mcp",
+  });
+  const pair = await issueTokenPair({ clientId, userId, scope: "mcp", resource: null });
+
+  const client = await connect(pair.accessToken, { mode: { pin: "2026-07-28" } });
+  try {
+    const r = await client.callTool({ name: "issue_cli_token", arguments: {} });
+    assert.notEqual(r.isError, true, JSON.stringify(r.content));
     const out = r.structuredContent as { url: string; token: string; expires_at: string; login: string };
     assert.equal(out.url, "http://localhost:3000", "the URL the client reached us at");
     assert.equal(out.login, "malloyyo login http://localhost:3000 --token-stdin");

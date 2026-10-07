@@ -33,7 +33,7 @@ import { getDashboard, listDashboards, visibleImageHosts } from "@/lib/dashboard
 import { saveDraftDashboard } from "@/lib/dashboards/draft";
 import { createApiToken } from "@/lib/api-tokens";
 import { runDashboard } from "@/lib/dashboards/engine";
-import { bearerToken, credentialLabel, resolveBearer } from "@/lib/bearer-auth";
+import { bearerToken, credentialLabel, resolveBearer, type Credential } from "@/lib/bearer-auth";
 import { corsPreflight, withCors } from "@/lib/oauth/cors";
 import { originFromRequest } from "@/lib/oauth/base-url";
 import { logger } from "@/lib/logger";
@@ -57,6 +57,12 @@ interface RequestScope {
   log: Log;
   /** The URL this client reached us at — what the CLI must use too. */
   origin: string;
+  /** What kind of credential is calling.
+   *
+   *  Carried because one tool must refuse one of them: an API token may not
+   *  mint another API token. Without this the scope could not tell, and a
+   *  minted token could mint its successor indefinitely. */
+  credentialKind: Credential["kind"];
 }
 
 type Json = Record<string, unknown>;
@@ -148,6 +154,24 @@ function registerAuthoringTools(server: McpServer, scope: RequestScope): void {
       inputSchema: fromJsonSchema<Json>({ type: "object", properties: {} }),
     },
     logged(scope, ISSUE_CLI_TOKEN_TOOL, async () => {
+      // An API token may not mint another API token.
+      //
+      // Both credential kinds can reach /mcp, so without this a minted token
+      // could call this tool and mint its successor, and that one the next —
+      // a chain with no end, each link a fresh hour, derived from a credential
+      // whose own lifetime no longer constrains it. The hour is only a bound if
+      // renewing it requires going back to the thing that granted it.
+      //
+      // OAuth is where the hour comes from, so OAuth is who may ask. A CLI that
+      // holds a token and wants another has somewhere to go: `malloyyo login`,
+      // or /settings/tokens, both of which involve the person.
+      if (scope.credentialKind === "api-token") {
+        const why =
+          `${ISSUE_CLI_TOKEN_TOOL} is for a connected client (an OAuth connection) and not for an ` +
+          `API token: a token cannot mint another token. Run \`malloyyo login ${origin}\` or create ` +
+          `one at ${origin}/settings/tokens.`;
+        return { content: text(why), structuredContent: { ok: false, error: why }, isError: true };
+      }
       const expiresAt = new Date(Date.now() + CLI_TOKEN_TTL_MS);
       const created = await createApiToken({
         userId,
@@ -483,6 +507,7 @@ async function serve(req: Request): Promise<Response> {
     hosted,
     log,
     origin: originFromRequest(req),
+    credentialKind: auth.cred.kind,
   };
   const res = await handler.fetch(req, {
     authInfo: { token: raw, clientId: credentialLabel(auth.cred), scopes: ["mcp"], extra: { scope } },

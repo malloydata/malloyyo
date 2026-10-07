@@ -62,10 +62,13 @@ Nothing else — no chart library, no icon set, no CSS framework, no `fetch`.
 Use inline `style` objects, plain HTML, and `VegaChart` (see
 `yo_help dashboards/vega-charts`) for charts.
 
-`useQuery` returns `{ rows, result, loading, error }`. `rows` is an array of
-plain objects. Numbers can arrive as BigInt or decimal objects, so wrap them
-with `Number()` before `.toLocaleString()` or arithmetic, and format dates in
-Malloy rather than in JavaScript.
+`useQuery` returns `{ rows, result, loading, error, truncated }`. `rows` is an
+array of plain objects, at most 5,000 of them: `truncated` is true when that
+limit cut the result, so aggregate in Malloy (or say so on the chart) rather
+than plotting a prefix as if it were the whole answer. Numbers can arrive as
+BigInt or decimal objects, so wrap them with `Number()` before
+`.toLocaleString()` or arithmetic, and format dates in Malloy rather than in
+JavaScript.
 
 ## Presentation
 

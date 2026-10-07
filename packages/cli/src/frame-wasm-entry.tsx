@@ -16,6 +16,7 @@ import * as duckdb from "@duckdb/duckdb-wasm";
 import { DuckDBWASMConnection } from "@malloydata/db-duckdb/wasm";
 import { API, SingleConnectionRuntime } from "@malloydata/malloy";
 import { mountStatic } from "./frame-runtime/index";
+import { staticRunReply } from "./frame-runtime/run-result";
 import { givensFromSearch, shareSearch, urlStateFromSearch } from "./shared/givens-url";
 import { jsonRows } from "./shared/json-rows";
 
@@ -114,7 +115,7 @@ const ROW_LIMIT = 5000;
 /** The host contract, served locally. `query` names a model-published query (or
     a `source -> view` path); `malloy` is query text the runtime builds itself
     (the given typeahead). Shape matches the dev server's: {ok, rows,
-    stable_result, problems[]}. */
+    stable_result, truncated, problems[]}. */
 async function run(req: { query?: string; malloy?: string }, givens: Record<string, unknown>) {
   try {
     const runtime: any = await getRuntime();
@@ -122,13 +123,10 @@ async function run(req: { query?: string; malloy?: string }, givens: Record<stri
     const text = req.malloy != null ? asRun(req.malloy) : asRun(req.query as string);
     const result = await model.loadQuery(text).run({ rowLimit: ROW_LIMIT, givens: givens ?? {} });
     // Same shaping the engine does (mcp-engine/src/run.ts): plain rows for
-    // components that draw themselves, plus the interfaces-format result the
-    // Malloy renderer needs for DefaultDashboard / <Panel>.
-    return {
-      ok: true,
-      rows: jsonRows(result),
-      stable_result: API.util.wrapResult(result),
-    };
+    // components that draw themselves, the interfaces-format result the Malloy
+    // renderer needs for DefaultDashboard / <Panel>, and whether ROW_LIMIT
+    // cut the rows.
+    return staticRunReply(jsonRows(result), API.util.wrapResult(result), ROW_LIMIT);
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);
     return { ok: false, problems: [{ message: msg }] };

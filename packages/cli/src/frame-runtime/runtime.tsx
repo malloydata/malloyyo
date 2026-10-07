@@ -30,6 +30,7 @@ import { filters } from "./filters";
 // with the hosted app's ltool result view — see drill.ts.
 import { drillFieldNames, humanizeSlug, markDrillableCells, resolveDrill } from "./drill";
 import { combineTiles } from "./combine";
+import { normalizeRunMessage } from "./run-result";
 
 export { filters };
 
@@ -102,14 +103,7 @@ export function setHost(h) {
 // The host resolves the request; the result shape is normalized across hosts
 // (dev server: {stable_result, problems[]}; hosted: {stableResult, error}).
 export function runQuery(req, givens) {
-  return Promise.resolve(host.run(req, givens)).then((m) => ({
-    ok: !!m.ok,
-    rows: m.rows || [],
-    result: m.stable_result ?? m.stableResult,
-    error: m.ok
-      ? undefined
-      : String(m.error ?? (m.problems || []).map((p) => p.message).join("; ") ?? "query failed"),
-  }));
+  return Promise.resolve(host.run(req, givens)).then(normalizeRunMessage);
 }
 
 // Query text → what the server compiles; see ./run-text. IMPORTED, not just
@@ -218,7 +212,8 @@ export function useUrlState(key, initial) {
 }
 
 // ── queries as hooks ────────────────────────────────────────────────
-/** Run a query and get plain data back: { rows, result, loading, error }.
+/** Run a query and get plain data back: { rows, result, loading, error,
+    truncated } — `truncated` is true when the host's row limit cut the result.
     req: { query?: string, malloy?: string, givens?: object }. For charting
     with your own components — Panel is the same thing plus Malloy's renderer. */
 export function useQuery(req) {
@@ -233,7 +228,7 @@ export function useQuery(req) {
     setState((s) => ({ ...s, loading: true }));
     runQuery(wire, givens).then((m) => {
       if (cancelled) return;
-      if (m.ok) setState({ rows: m.rows, result: m.result, loading: false });
+      if (m.ok) setState({ rows: m.rows, result: m.result, truncated: m.truncated, loading: false });
       else {
         // A component that ignores `error` would otherwise render an empty
         // chart with nothing anywhere saying why.

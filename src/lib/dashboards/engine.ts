@@ -57,7 +57,7 @@ function tileName(runExpr: string): string {
 }
 
 export type DashboardRunResult =
-  | { ok: true; stableResult: unknown; rows?: unknown[]; rowCount: number }
+  | { ok: true; stableResult: unknown; rows?: unknown[]; rowCount: number; truncated: boolean }
   | { ok: false; error: string };
 
 /**
@@ -157,7 +157,10 @@ export async function runDashboard(
       scope,
     );
     if (!out.ok) return { ok: false, error: explainProblems(out.problems ?? []) };
-    return { ok: true, stableResult: out.stable_result, rows: out.rows, rowCount: out.row_count ?? 0 };
+    // Hitting maxRows is the only sign rows were cut (the engine's own rule):
+    // say so, or a chart over the first maxRows looks like the whole answer.
+    const rowCount = out.row_count ?? 0;
+    return { ok: true, stableResult: out.stable_result, rows: out.rows, rowCount, truncated: rowCount >= maxRows };
   }
 
   // Single run-expression — a custom component's `<Panel query=…>`, one of a
@@ -172,7 +175,7 @@ export async function runDashboard(
       rowLimit: maxRows,
       cacheKey,
     });
-    return { ok: true, stableResult: res.stableResult, rows: res.rows, rowCount: res.rowCount };
+    return { ok: true, stableResult: res.stableResult, rows: res.rows, rowCount: res.rowCount, truncated: res.rowCount >= maxRows };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }

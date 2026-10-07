@@ -20,7 +20,8 @@ import React, { useEffect, useMemo, useRef } from "react";
 import { parse, View, loader } from "vega";
 import { expressionInterpreter } from "vega-interpreter";
 import { compile } from "vega-lite";
-import { useQuery } from "./runtime";
+import { TruncationNote, useQuery } from "./runtime";
+import { truncationNote } from "./run-result";
 
 // A loader that refuses every fetch — belt-and-suspenders with sanitizeSpec's
 // url stripping. Nothing in a dashboard chart should ever hit the network.
@@ -157,7 +158,15 @@ export function VegaChart({ spec, data, query, malloy, givens, style }) {
 
 function VegaChartQuery({ spec, query, malloy, givens, style }) {
   const req = malloy ? { malloy, givens } : { query, givens };
-  const { rows, loading, error } = useQuery(req);
+  const { rows, loading, error, truncated } = useQuery(req);
   if (error) return <pre style={{ color: "crimson", whiteSpace: "pre-wrap" }}>{error}</pre>;
-  return <VegaChartInner spec={spec} rows={rows} loading={loading} style={style} />;
+  const chart = <VegaChartInner spec={spec} rows={rows} loading={loading} style={style} />;
+  if (!truncated || loading) return chart;
+  // A chart of the first N rows looks complete — say it isn't.
+  return (
+    <>
+      {chart}
+      <TruncationNote title={truncated.hint}>{truncationNote(rows.length)}</TruncationNote>
+    </>
+  );
 }

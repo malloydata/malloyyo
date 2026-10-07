@@ -30,6 +30,7 @@ import { filters } from "./filters";
 // with the hosted app's ltool result view — see drill.ts.
 import { drillFieldNames, humanizeSlug, markDrillableCells, resolveDrill } from "./drill";
 import { combineTiles } from "./combine";
+import { normalizeRunMessage, truncationNote } from "./run-result";
 
 export { filters };
 
@@ -100,16 +101,10 @@ export function setHost(h) {
 // runs one { query } per tile and combines the results client-side (see
 // CompositeDashboard), so there's no single "run the whole dashboard" request.
 // The host resolves the request; the result shape is normalized across hosts
-// (dev server: {stable_result, problems[]}; hosted: {stableResult, error}).
+// (dev server: {stable_result, problems[]}; hosted: {stableResult, error}) —
+// see ./run-result.
 export function runQuery(req, givens) {
-  return Promise.resolve(host.run(req, givens)).then((m) => ({
-    ok: !!m.ok,
-    rows: m.rows || [],
-    result: m.stable_result ?? m.stableResult,
-    error: m.ok
-      ? undefined
-      : String(m.error ?? (m.problems || []).map((p) => p.message).join("; ") ?? "query failed"),
-  }));
+  return Promise.resolve(host.run(req, givens)).then(normalizeRunMessage);
 }
 
 // Query text → what the server compiles; see ./run-text. IMPORTED, not just
@@ -218,7 +213,9 @@ export function useUrlState(key, initial) {
 }
 
 // ── queries as hooks ────────────────────────────────────────────────
-/** Run a query and get plain data back: { rows, result, loading, error }.
+/** Run a query and get plain data back: { rows, result, loading, error,
+    truncated }. `truncated` is null, or { reason, hint } when the host's row
+    limit cut the result — `rows` is then a prefix of the answer.
     req: { query?: string, malloy?: string, givens?: object }. For charting
     with your own components — Panel is the same thing plus Malloy's renderer. */
 export function useQuery(req) {
@@ -233,8 +230,13 @@ export function useQuery(req) {
     setState((s) => ({ ...s, loading: true }));
     runQuery(wire, givens).then((m) => {
       if (cancelled) return;
-      if (m.ok) setState({ rows: m.rows, result: m.result, loading: false });
-      else {
+      if (m.ok) {
+        // A chart of the first N rows looks complete. Panel says so on the
+        // page; a custom component has to read `truncated` — this is the
+        // author's reminder that it is there.
+        if (m.truncated) console.warn("dashboard query was cut:", m.truncated.hint, wire);
+        setState({ rows: m.rows, result: m.result, truncated: m.truncated, loading: false });
+      } else {
         // A component that ignores `error` would otherwise render an empty
         // chart with nothing anywhere saying why.
         console.error("dashboard query failed:", m.error, wire);
@@ -375,6 +377,7 @@ export function Panel({ query, malloy, dashboard, result: presetResult, givens, 
   const result = hasPreset ? presetResult : live.result;
   const loading = hasPreset ? false : live.loading;
   const error = hasPreset ? undefined : live.error;
+  const truncated = hasPreset ? null : live.truncated;
   const ref = useRef(null);
   // Drill: a dimension declared `# drill { to=[<slug>|self, …] }` makes clicking
   // its cell navigate to another dashboard (slug) and/or filter in place (self),
@@ -527,8 +530,21 @@ export function Panel({ query, malloy, dashboard, result: presetResult, givens, 
           ...style,
         }}
       />
+      {truncated && !loading && (
+        <TruncationNote title={truncated.hint}>{truncationNote(live.rows.length)}</TruncationNote>
+      )}
       {menu && <DrillMenu menu={menu} onClose={() => setMenu(null)} />}
     </>
+  );
+}
+
+// Said under a result the row limit cut, so a prefix doesn't pass for the whole
+// answer. The tooltip is the engine's hint, for whoever can change the query.
+export function TruncationNote({ title, children }) {
+  return (
+    <div title={title} style={{ marginTop: 6, fontSize: 12, color: "var(--dash-muted, #6b7280)" }}>
+      {children}
+    </div>
   );
 }
 
@@ -587,6 +603,7 @@ export function CompositeDashboard({ givens, style }) {
   // load time) with a "Show incomplete" button that renders whatever HAS loaded —
   // so a slow or hung tile is diagnosable, not an endless spinner.
   const dataRef = useRef({}); // run -> full result (loaded tiles)
+  const cutRef = useRef({}); // run -> { rows, hint } for tiles the row limit cut
   const startsRef = useRef({}); // run -> perf.now() when the query fired
   const [states, setStates] = useState({}); // run -> { status:'pending'|'ok'|'error', ms?, error? }
   const [combined, setCombined] = useState(null); // the rendered dashboard; set once (all-done or forced)
@@ -612,6 +629,7 @@ export function CompositeDashboard({ givens, style }) {
   useEffect(() => {
     let cancelled = false;
     dataRef.current = {};
+    cutRef.current = {};
     startsRef.current = {};
     setStates(Object.fromEntries(specs.map((t) => [t.run, { status: "pending" }])));
     setCombined(null);
@@ -623,6 +641,7 @@ export function CompositeDashboard({ givens, style }) {
         const ms = Math.round(performance.now() - (startsRef.current[t.run] ?? performance.now()));
         if (m.ok && m.result) {
           dataRef.current[t.run] = m.result;
+          if (m.truncated) cutRef.current[t.run] = { rows: m.rows.length, hint: m.truncated.hint };
           setStates((s) => ({ ...s, [t.run]: { status: "ok", ms } }));
         } else {
           setStates((s) => ({ ...s, [t.run]: { status: "error", ms, error: m.error || "query failed" } }));
@@ -652,6 +671,9 @@ export function CompositeDashboard({ givens, style }) {
   const failedTiles = specs
     .filter((t) => statusOf(t) === "error")
     .map((t) => ({ name: tileName(t), message: states[t.run].error }));
+  const cutTiles = specs
+    .filter((t) => statusOf(t) === "ok" && cutRef.current[t.run])
+    .map((t) => ({ name: tileName(t), ...cutRef.current[t.run] }));
 
   // "Show incomplete" → render whatever has loaded now.
   const showIncomplete = () => {
@@ -695,6 +717,11 @@ export function CompositeDashboard({ givens, style }) {
             own minHeight floor. (An earlier flex:1/minHeight:0 here collapsed the
             Panel to ~0px once DefaultDashboard stopped being a 100vh column.) */}
         <Panel result={combined} style={{ maxHeight: "none" }} />
+        {cutTiles.map((c) => (
+          <TruncationNote key={c.name} title={c.hint}>
+            {c.name}: {truncationNote(c.rows)}
+          </TruncationNote>
+        ))}
       </div>
     );
   }

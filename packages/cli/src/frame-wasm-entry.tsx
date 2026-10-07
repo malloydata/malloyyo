@@ -18,6 +18,7 @@ import { API, SingleConnectionRuntime } from "@malloydata/malloy";
 import { mountStatic } from "./frame-runtime/index";
 import { givensFromSearch, shareSearch, urlStateFromSearch } from "./shared/givens-url";
 import { jsonRows } from "./shared/json-rows";
+import { rowLimitTruncation } from "./shared/row-limit";
 
 const info = window.__DASHBOARD__ || {};
 const MODEL_FILES = window.__MODEL_FILES__ || {};
@@ -114,7 +115,7 @@ const ROW_LIMIT = 5000;
 /** The host contract, served locally. `query` names a model-published query (or
     a `source -> view` path); `malloy` is query text the runtime builds itself
     (the given typeahead). Shape matches the dev server's: {ok, rows,
-    stable_result, problems[]}. */
+    stable_result, truncated?, problems[]}. */
 async function run(req: { query?: string; malloy?: string }, givens: Record<string, unknown>) {
   try {
     const runtime: any = await getRuntime();
@@ -122,12 +123,15 @@ async function run(req: { query?: string; malloy?: string }, givens: Record<stri
     const text = req.malloy != null ? asRun(req.malloy) : asRun(req.query as string);
     const result = await model.loadQuery(text).run({ rowLimit: ROW_LIMIT, givens: givens ?? {} });
     // Same shaping the engine does (mcp-engine/src/run.ts): plain rows for
-    // components that draw themselves, plus the interfaces-format result the
-    // Malloy renderer needs for DefaultDashboard / <Panel>.
+    // components that draw themselves, the interfaces-format result the
+    // Malloy renderer needs for DefaultDashboard / <Panel>, and the engine's
+    // notice when ROW_LIMIT cut the rows.
+    const rows = jsonRows(result);
     return {
       ok: true,
-      rows: jsonRows(result),
+      rows,
       stable_result: API.util.wrapResult(result),
+      truncated: rows.length >= ROW_LIMIT ? rowLimitTruncation(ROW_LIMIT) : undefined,
     };
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : String(e);

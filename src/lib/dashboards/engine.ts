@@ -18,9 +18,11 @@
 import { eq } from "drizzle-orm";
 import {
   dashboardGivenSpecs,
+  rowLimitTruncation,
   runRestricted,
   type DashboardGivenSpec,
   type DashboardGivenSpecsResult,
+  type TruncationInfo,
 } from "@malloyyo/mcp-engine";
 import { db, malloyModels } from "@/db";
 import { findByDatasetRef, modelFileMap } from "@/lib/mcp-tools";
@@ -57,7 +59,15 @@ function tileName(runExpr: string): string {
 }
 
 export type DashboardRunResult =
-  | { ok: true; stableResult: unknown; rows?: unknown[]; rowCount: number }
+  | {
+      ok: true;
+      stableResult: unknown;
+      rows?: unknown[];
+      rowCount: number;
+      /** Set when maxRows cut the result — the engine's own notice, so a
+          dashboard says so instead of drawing a prefix as the whole answer. */
+      truncated?: TruncationInfo;
+    }
   | { ok: false; error: string };
 
 /**
@@ -154,7 +164,13 @@ export async function runDashboard(
       scope,
     );
     if (!out.ok) return { ok: false, error: explainProblems(out.problems ?? []) };
-    return { ok: true, stableResult: out.stable_result, rows: out.rows, rowCount: out.row_count ?? 0 };
+    return {
+      ok: true,
+      stableResult: out.stable_result,
+      rows: out.rows,
+      rowCount: out.row_count ?? 0,
+      truncated: out.truncated,
+    };
   }
 
   // Single run-expression — a custom component's `<Panel query=…>`, one of a
@@ -169,7 +185,13 @@ export async function runDashboard(
       rowLimit: maxRows,
       cacheKey,
     });
-    return { ok: true, stableResult: res.stableResult, rows: res.rows, rowCount: res.rowCount };
+    return {
+      ok: true,
+      stableResult: res.stableResult,
+      rows: res.rows,
+      rowCount: res.rowCount,
+      truncated: res.rowCount >= maxRows ? rowLimitTruncation(maxRows) : undefined,
+    };
   } catch (e) {
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }

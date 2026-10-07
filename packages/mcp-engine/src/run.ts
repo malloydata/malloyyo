@@ -15,6 +15,7 @@ import {
 import { API, MalloyError } from '@malloydata/malloy';
 import { codeProblem, errorProblem, mapProblems } from './problems';
 import { jsonRows } from './rows';
+import { rowLimitTruncation } from './truncation';
 import type { Problem, RunResult } from './types';
 
 export const DEFAULT_ROW_LIMIT = 10_000;
@@ -119,15 +120,7 @@ export async function executeMaterialized(
       total_time_ms: t2 - t0,
       problems: loadProblems,
     };
-    if (rows.length === rowLimit) {
-      out.truncated = {
-        reason: 'row_limit',
-        hint:
-          `Result hit the ${rowLimit}-row limit; more rows may exist. ` +
-          'Aggregate, filter, or do top-N in Malloy rather than fetching ' +
-          'rows to post-process.',
-      };
-    }
+    if (rows.length === rowLimit) out.truncated = rowLimitTruncation(rowLimit);
     if (opts.stableResult) out.stable_result = API.util.wrapResult(results);
     return out;
   } catch (e) {

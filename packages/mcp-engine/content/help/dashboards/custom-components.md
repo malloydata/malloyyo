@@ -51,8 +51,10 @@ From `@malloyyo/dashboard` (also handed to the component as props):
   rows — see `yo_help dashboards/vega-charts`)
 - **Hooks**: `useGiven(name)` → {value, set, spec};
   `useOptions(name, typed?)` → {options, loading} (typeahead);
-  `useQuery({query|malloy, givens})` → {rows, loading, error} — plain rows
-  for your own visuals;
+  `useQuery({query|malloy, givens})` → {rows, loading, error, truncated} —
+  plain rows for your own visuals; `truncated` is null, or {reason, hint}
+  when the 5,000-row limit cut the result (aggregate in Malloy, or say so on
+  the chart — `<VegaChart>` and tag-only dashboards already do);
   `useUrlState(key, initial)` → [value, setValue] — shareable view-state (below)
 - **Helpers**: `filters.oneOf/contains/between/atLeast/…` build
   filter-expression strings with correct escaping; temporal:

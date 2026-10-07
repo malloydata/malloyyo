@@ -71,6 +71,7 @@ export {
 } from './project';
 export { modelCatalogEntry } from './catalog';
 export { run, executeMaterialized, DEFAULT_ROW_LIMIT, type RunOptions } from './run';
+export { rowLimitTruncation } from './truncation';
 export { jsonRows } from './rows';
 export { validateRestricted, runRestricted } from './restricted';
 export {

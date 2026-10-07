@@ -15,8 +15,9 @@ import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import type Anthropic from "@anthropic-ai/sdk";
 import { db, chats, chatMessages, chatResults, type Chat } from "@/db";
 import { resolveDatasetRef } from "@/lib/repos";
+import { shareabilityOf, type ChatShareability } from "./shareability";
 
-/** Is the dataset this chat was held on one anyone may see?
+/** How `chats.dataset` is resolved, and why it is not a name match.
  *
  *  Resolved through `resolveDatasetRef`, not by a select on `datasets.name`.
  *  `chats.dataset` is whatever the link that opened the chat put in
@@ -35,12 +36,16 @@ import { resolveDatasetRef } from "@/lib/repos";
  *  unique per server, it did not.
  *
  *  A ref that no longer resolves — an ambiguous bare name, or a deleted
- *  dataset — is not public, which is the safe answer for a sharing gate. */
-async function datasetIsPublic(ref: string): Promise<boolean> {
+ *  dataset — shares nothing, which is the safe answer for a sharing gate.
+ *
+ *  What makes a dataset's chats shareable is `shareabilityOf`; this function is
+ *  only the lookup. */
+async function datasetSharesChats(ref: string): Promise<ChatShareability> {
   const resolved = await resolveDatasetRef(ref);
-  if (!resolved.ok) return false;
-  return resolved.dataset.isPublic === true;
+  if (!resolved.ok) return { ok: false, reason: "unresolvable" };
+  return shareabilityOf(resolved.dataset);
 }
+
 
 /** The chat if this user owns it, else null. Absent and not-yours look the same
     on purpose — a probe must not be able to tell them apart. */
@@ -69,13 +74,16 @@ export async function readableChat(
   // claim made at one moment, and the dataset can be made private afterwards —
   // at which point this chat's stored ROWS would go on being served to everyone
   // signed in, which is precisely what publishing is gated on preventing.
-  return (await datasetIsPublic(row.dataset)) ? { chat: row, mine: false } : null;
+  // Re-checked on every read against the SAME predicate the publish gate uses,
+  // so the two cannot drift: a dataset made private, or newly row-scoped, stops
+  // serving this chat's rows immediately rather than at the next publish.
+  return (await datasetSharesChats(row.dataset)).ok ? { chat: row, mine: false } : null;
 }
 
-/** Whether this chat may be published: its dataset must be public. Exported so
-    the route asks the same question the reader path answers. */
-export async function chatIsPublishable(chat: Chat): Promise<boolean> {
-  return datasetIsPublic(chat.dataset);
+/** Whether this chat may be published. Exported so the route asks the same
+    question the reader path answers, and gets the reason to explain it. */
+export async function chatIsPublishable(chat: Chat): Promise<ChatShareability> {
+  return datasetSharesChats(chat.dataset);
 }
 
 /** Publish or unpublish. Owner only — a reader of a public chat cannot pass it

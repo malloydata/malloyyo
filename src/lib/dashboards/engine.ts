@@ -18,10 +18,15 @@
 import { eq } from "drizzle-orm";
 import {
   dashboardGivenSpecs,
+  declaredGivenSpecs,
+  describeSource,
+  projectDescription,
   runRestricted,
   type DashboardGivenSpec,
   type DashboardGivenSpecsResult,
+  type ExploreDescription,
 } from "@malloyyo/mcp-engine";
+import { askEnabled } from "@/lib/ask";
 import { db, malloyModels } from "@/db";
 import { findByDatasetRef, modelFileMap } from "@/lib/mcp-tools";
 import { runNamedMalloyFiles, withModelRuntime, fileUrl } from "@/lib/malloy";
@@ -276,12 +281,25 @@ export async function dashboardViewData(
   // that does not exist, and the failure would be swallowed — paying a full
   // model compile per load to learn nothing.
   const noData = rendersNoData(dash.manifest);
+  const exploreSource = typeof dash.manifest.explore === "string" ? dash.manifest.explore : null;
   const composite =
-    !noData && Array.isArray(dash.manifest.tiles) ? await dashboardTileSpecs(userId, datasetId, name) : null;
+    !noData && !exploreSource && Array.isArray(dash.manifest.tiles)
+      ? await dashboardTileSpecs(userId, datasetId, name)
+      : null;
   let givenSpecs: unknown[] = [];
   let tileSpecs: unknown[] | undefined;
+  let explore: { source: string; description: ExploreDescription; write_filter: boolean } | undefined;
   if (noData) {
     // nothing to resolve
+  } else if (exploreSource) {
+    // EXPLORER: no query to introspect. The frame needs the source's schema
+    // (described as the explore MCP surface describes it) and EVERY given in
+    // the dashboard file's scope as its controls.
+    const ex = await exploreViewData(dash, exploreSource);
+    if (ex.ok) {
+      givenSpecs = ex.givens;
+      explore = { source: exploreSource, description: ex.description, write_filter: askEnabled() };
+    }
   } else if (composite) {
     if (composite.ok) {
       givenSpecs = composite.union;
@@ -301,8 +319,35 @@ export async function dashboardViewData(
     description: dash.manifest.description,
     givens: dash.manifest.givens,
     autorun: dash.manifest.autorun,
+    explore,
   };
   return { dash, info, givenSpecs, imageHosts: imageHostsFromConfig(await modelConfigJson(dash.modelId)) };
+}
+
+/** An explorer's view data: the described source (public members only, the
+    explore projection) and the declared givens, both resolved in the dashboard
+    file's own scope. */
+async function exploreViewData(
+  dash: DashboardDetail,
+  source: string,
+): Promise<
+  | { ok: true; description: ExploreDescription; givens: DashboardGivenSpec[] }
+  | { ok: false; error: string }
+> {
+  const { files, cacheKey } = await dashboardFiles(dash);
+  const entryFile = typeof dash.manifest.entryFile === "string" ? dash.manifest.entryFile : "index.malloy";
+  const entry = fileUrl(entryFile);
+  type EngineRuntime = Parameters<typeof describeSource>[0];
+  return withModelRuntime(files, cacheKey, async (runtime) => {
+    const rt = runtime as unknown as EngineRuntime;
+    const d = await describeSource(rt, entry, source);
+    if (!d.ok || !d.description) {
+      return { ok: false, error: explainProblems(d.problems) };
+    }
+    const g = await declaredGivenSpecs(rt, entry);
+    const givens = g.ok ? g.givens.filter((x) => !isReservedGiven(x.name)) : [];
+    return { ok: true, description: projectDescription(d.description, "explore"), givens };
+  });
 }
 
 export type DashboardGivensResult =

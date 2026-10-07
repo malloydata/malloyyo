@@ -38,9 +38,18 @@ export {
 } from "./ui";
 export { VegaChart } from "./vega-chart";
 
-import { mount, setHost } from "./runtime";
+import { mount, setHost, dashboardInfo } from "./runtime";
 import { Controls, Given, Select, Search, MultiSelect, Range, Checkbox, TimeRange, DefaultDashboard } from "./ui";
 import { VegaChart } from "./vega-chart";
+import { ExplorerDashboard } from "./explore-ui";
+
+/** The runtime's own dashboard for a tag-only artifact: the EXPLORER (a query
+    builder over `dashboardInfo().explore.source`) when the host injected an
+    explore schema, else DefaultDashboard (title + controls + the one query).
+    Read at mount time — the host sets the globals before mounting. */
+function runtimeDashboard(): unknown {
+  return (dashboardInfo() as { explore?: unknown }).explore ? ExplorerDashboard : DefaultDashboard;
+}
 
 const WIDGETS = { Controls, Given, Select, Search, MultiSelect, Range, Checkbox, TimeRange, VegaChart };
 
@@ -48,7 +57,7 @@ const WIDGETS = { Controls, Given, Select, Search, MultiSelect, Range, Checkbox,
     components in its props. A null Dashboard falls back to DefaultDashboard, but
     tag-only dashboards no longer reach the iframe — they use mountInPage. */
 export function mountDashboard(Dashboard: unknown): void {
-  mount(Dashboard ?? DefaultDashboard, WIDGETS);
+  mount(Dashboard ?? runtimeDashboard(), WIDGETS);
 }
 
 /** Trusted-page entry (TAG-ONLY dashboards, NO iframe): mount DefaultDashboard —
@@ -60,6 +69,16 @@ export function mountInPage(opts: {
   run: (req: { query?: string; malloy?: string }, givens: Record<string, unknown>) => Promise<unknown>;
   navigate: (dashboard: string, givens: Record<string, unknown>) => void;
   syncGivens: (givens: Record<string, unknown>) => void;
+  /** Explorer tier-2 filter help: a description → a filter expression, or a
+      problem. Optional; a host without a model (static site, no key) omits it
+      and the explorer's filter boxes stay parser-only. */
+  writeFilter?: (req: {
+    field: string;
+    type: string;
+    description: string;
+    values?: string[];
+    source?: string;
+  }) => Promise<{ ok: true; text: string; note?: string } | { ok: false; error: string; note?: string }>;
   /** Mirror useUrlState view-state into the URL as `~key` params. Optional: a
       host that omits it simply has no shareable view-state (tag-only
       dashboards run no custom code, so none exists). */
@@ -70,11 +89,12 @@ export function mountInPage(opts: {
     navigate: opts.navigate,
     syncGivens: opts.syncGivens,
     syncUrlState: opts.syncUrlState,
+    writeFilter: opts.writeFilter,
   });
   // bodyReset:false — the dashboard is one element in the app shell, so it must
   // not restyle <body> (the iframe host DOES own the whole document, so it keeps
   // the reset). Returns the React root so the caller can unmount() on teardown.
-  return mount(DefaultDashboard, WIDGETS, opts.root, { bodyReset: false });
+  return mount(runtimeDashboard(), WIDGETS, opts.root, { bodyReset: false });
 }
 
 /** Static-site entry (`malloyyo dashboard bundle`): like mountInPage, but mounts
@@ -101,5 +121,5 @@ export function mountStatic(
     syncGivens: opts.syncGivens,
     syncUrlState: opts.syncUrlState,
   });
-  return mount(Dashboard ?? DefaultDashboard, WIDGETS, opts.root, { bodyReset: false });
+  return mount(Dashboard ?? runtimeDashboard(), WIDGETS, opts.root, { bodyReset: false });
 }

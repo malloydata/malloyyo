@@ -1,0 +1,16 @@
+##! experimental.givens
+import "../index.malloy"
+
+#" Orders at a glance
+# artifact { title="Orders overview" } dashboard {columns=6}
+query: overview is orders -> {
+  where: state ~ $STATE, ordered_on ~ $PERIOD
+  # colspan=2
+  aggregate: order_count, total_dollars, avg_order
+  # colspan=3
+  nest:
+    # break
+    # line_chart
+    trend is by_month
+    top_categories
+}

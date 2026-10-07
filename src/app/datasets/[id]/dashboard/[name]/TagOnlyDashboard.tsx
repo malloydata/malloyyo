@@ -102,6 +102,18 @@ export function TagOnlyDashboard({ id, name }: { id: string; name: string }) {
           // Mirror committed givens into the URL (replaceState — no history
           // spam) as `?$NAME=…`, skipping empties. Same contract
           // CustomDashboardFrame applies to the iframe's messages.
+          // Explorer tier-2 filter help, offered when the view data says the
+          // instance can (Ask is configured). Same route shape as the dev server's.
+          writeFilter: (view.info as { explore?: { write_filter?: boolean } }).explore?.write_filter
+            ? (req: unknown) =>
+                fetch("/api/dashboards/write-filter", {
+                  method: "POST",
+                  headers: { "content-type": "application/json" },
+                  body: JSON.stringify(req),
+                })
+                  .then((r) => r.json())
+                  .catch((err) => ({ ok: false, error: String(err) }))
+            : undefined,
           syncGivens: (givens: Record<string, unknown>) => {
             const u = new URL(window.location.href);
             u.search = "";

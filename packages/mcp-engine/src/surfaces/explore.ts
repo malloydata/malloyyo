@@ -360,13 +360,13 @@ function listSourcesTool(host: ExploreHost): ToolDef {
       for (const e of entries) {
         const m: ListedModel = {};
         if (e.description) m.description = e.description;
-        if (e.instructions) m.instructions = e.instructions;
         if (e.sources?.length) {
           const sources: Record<string, ListedSource> = Object.create(null);
           for (const s of e.sources) {
+            // Descriptions only — instructions are describe_source's (see
+            // ListedSource).
             const o: ListedSource = {};
             if (s.description) o.description = s.description;
-            if (s.instructions) o.instructions = s.instructions;
             if (s.must_quote) o.must_quote = true;
             sources[s.source_ref] = o;
           }

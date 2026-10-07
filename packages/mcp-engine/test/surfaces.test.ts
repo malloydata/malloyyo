@@ -238,7 +238,10 @@ test('explore: list_sources lists sources with their annotations (no queries)', 
   const carriers = flights.sources!['carriers'];
   assert.equal(carriers?.description, 'Reference table of airline carriers.', 'source description carried');
   const flightsSrc = flights.sources!['flights'];
-  assert.match(flightsSrc?.instructions ?? '', /Grain is one row per flight/, 'agent instructions carried');
+  // Instructions are describe_source's: the listing carries what it takes to
+  // choose a source, and a catalog of well-documented sources stays small.
+  assert.equal(flightsSrc?.instructions, undefined, 'agent instructions left to describe_source');
+  assert.equal((flights as { description?: string }).description, 'Test flights model.', "the model's ##\" is listed");
   // Named queries are deferred out of the MVP listing.
   assert.equal(flights.queries, undefined, 'no queries key in list_sources today');
 });

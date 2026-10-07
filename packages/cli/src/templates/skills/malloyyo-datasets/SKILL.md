@@ -28,6 +28,9 @@ Two things to get right before you touch files:
 
   `##"` is the MODEL's doc string; a single `#"` would attach to the next
   declaration instead. Title derives from the name when absent.
+- **Document each exported source** with a one-sentence `#"` (what it answers)
+  and `#(agent)` lines for how to query it. The short ones are read on every
+  question, so keep them short — `yo_help("develop/documenting-models")`.
 - **`malloy-config.json` can be at the repo root** (shared by every dataset) or
   **in a dataset** (its own, replacing the root's). Nearest one wins.
 

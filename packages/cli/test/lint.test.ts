@@ -92,3 +92,17 @@ test('lint v2: a landing page alone is publishable, and a broken one still fails
   // Not the orphan message — that was the wrong diagnosis for this file.
   assert.doesNotMatch(d!.errors[0], /no matching/);
 });
+
+test('lint: an undocumented index.malloy is warned about, not failed', async () => {
+  // The fixture's model has no `##"` and its one exported source no `#"` —
+  // so list_sources would show a reader nothing to choose by.
+  const report = await lintDashboards(FIXTURE);
+  const index = report.dashboards.find((d) => d.name === 'index.malloy');
+  assert.ok(index, 'index.malloy reported');
+  assert.deepEqual(index!.errors, [], 'missing descriptions are not errors');
+  assert.ok(index!.warnings.some((w) => /no ##" description/.test(w)), 'model description missing');
+  assert.ok(
+    index!.warnings.some((w) => /source 'sales' has no #" description/.test(w)),
+    'source description missing, by name',
+  );
+});

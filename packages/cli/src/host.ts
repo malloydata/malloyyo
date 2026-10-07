@@ -32,6 +32,9 @@ import {
   type RunResult,
   readDatasetMeta,
   type DatasetMeta,
+  catalogDocWarnings,
+  compile,
+  modelCatalogEntry,
 } from "@malloyyo/mcp-engine";
 import { initConnections, withConnectionDiagnostics } from "./connections.js";
 import {
@@ -203,6 +206,11 @@ export interface ModelRunner {
       CLI reports it so an author sees what their dataset will be called before
       they publish it. */
   datasetMeta(): Promise<DatasetMeta>;
+  /** What `list_sources` will say about the descriptions this model publishes
+      — read off the same exportedOnly compile and catalog projection the
+      server lists it with. Empty when the model does not compile (lint
+      reports that failure on its own). */
+  catalogWarnings(): Promise<string[]>;
   /** Close the shared connections for good (release sockets/file locks, drop
       the schema cache). Call at end of a short-lived command (e.g. `lint`) so
       the process can exit promptly; long-lived hosts can rely on process exit. */
@@ -366,6 +374,13 @@ export async function makeRunner(
         // reports the compile failure, which is the useful message.
         return {};
       }
+    },
+    catalogWarnings: async () => {
+      if (!fs.existsSync(path.join(abs, ENTRY))) return [];
+      return lease(async (runtime, entry) => {
+        const compiled = await compile(runtime, entry, { exportedOnly: true });
+        return compiled.ok && compiled.model ? catalogDocWarnings(modelCatalogEntry(ENTRY, compiled.model)) : [];
+      }).catch(() => []);
     },
     async dispose() {
       clearIdleTimer();

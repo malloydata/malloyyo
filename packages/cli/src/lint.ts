@@ -99,7 +99,11 @@ async function runLint(abs: string, runner: ModelRunner): Promise<LintReport> {
   // independent of whether any dashboard imports it.
   if (runner.entryExists()) {
     const arts = await runner.artifacts();
-    if (!arts.ok) dashboards.push({ name: "index.malloy", errors: [arts.error], warnings: [] });
+    // Its descriptions are what list_sources shows a reader choosing a source:
+    // missing ones and long ones are warnings, never errors.
+    const warnings = await runner.catalogWarnings();
+    const errors = arts.ok ? [] : [arts.error];
+    if (errors.length || warnings.length) dashboards.push({ name: "index.malloy", errors, warnings });
   }
 
   const dir = join(abs, "dashboards");

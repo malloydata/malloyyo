@@ -260,6 +260,7 @@
       ]
     }
   ],
+  "description": "Test flights model.",
   "annotations": [
     {
       "route": "\"",

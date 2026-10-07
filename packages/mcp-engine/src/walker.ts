@@ -572,6 +572,7 @@ function walkModel(model: Model, rootUri: string, opts: CompileOptions,
   }
 
   const out: ModelInfo = { entry: rootUri, sources, queries, runs };
+  applyDocs(out, model.annotations);
   const modelAnnotations = annotationList(model.annotations);
   if (modelAnnotations.length > 0) out.annotations = modelAnnotations;
   const givens: GivenInfo[] = [];

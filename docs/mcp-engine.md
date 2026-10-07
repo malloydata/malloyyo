@@ -496,7 +496,7 @@ ambiguous across the catalog).
 
 | explore | develop |
 |---|---|
-| `list_sources` — only when `host.list` exists; lists exported sources + their annotations | `compile_file (path, expand?, emit_run_sql?)` — compile-and-inspect; IS describe here |
+| `list_sources` — only when `host.list` exists; lists each model (its `##"`) and its exported sources with their `#"` descriptions — instructions are `describe_source`'s | `compile_file (path, expand?, emit_run_sql?)` — compile-and-inspect; IS describe here |
 | `describe_source (source, model_ref?)` — the source + its join closure | `compile (source, base_path?)` — inline draft |
 | `query (source, malloy, model_ref?, question?, givens?, execute?, max_rows?)` | `query` — `queryTool`, keyed by `model_ref` (= a model file path) |
 | `yo_help (topic?)` *(shared)* | `prettify`, `yo_help` *(shared)* |

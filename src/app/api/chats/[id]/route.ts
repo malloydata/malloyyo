@@ -21,6 +21,26 @@ import {
 
 export const runtime = "nodejs";
 
+/** Why this chat cannot be shared, in the words of the person who tried.
+ *
+ *  `row-scoped` is the case worth spelling out: the dataset IS public, so
+ *  being told it is private would send the author off to change a setting that
+ *  is already correct. What makes the chat unshareable is that it carries rows
+ *  only they were meant to see. */
+function shareRefusal(dataset: string, reason: "unresolvable" | "not-public" | "row-scoped"): string {
+  switch (reason) {
+    case "row-scoped":
+      return (
+        `'${dataset}' shows each person only their own rows, and a shared chat would hand ` +
+        `yours to everyone who opens it. Share the query instead — each reader runs it as themselves.`
+      );
+    case "not-public":
+      return `'${dataset}' is a private dataset — a chat on it cannot be shared.`;
+    case "unresolvable":
+      return `'${dataset}' is no longer a dataset on this server, so a chat on it cannot be shared.`;
+  }
+}
+
 type Ctx = { params: Promise<{ id: string }> };
 
 async function requireUser() {
@@ -82,11 +102,12 @@ export async function PATCH(req: Request, ctx: Ctx) {
   if (body.isPublic) {
     const owned = await readableChat(id, user.id);
     if (!owned?.mine) return NextResponse.json({ error: "not found" }, { status: 404 });
-    if (!(await chatIsPublishable(owned.chat))) {
-      return NextResponse.json(
-        { error: `'${owned.chat.dataset}' is a private dataset — a chat on it cannot be shared.` },
-        { status: 400 },
-      );
+    // `.ok`, not the object: this used to be `if (!(await chatIsPublishable(…)))`
+    // against a boolean, and a truthy result object would make that condition
+    // permanently false — the gate open, and the types happy.
+    const share = await chatIsPublishable(owned.chat);
+    if (!share.ok) {
+      return NextResponse.json({ error: shareRefusal(owned.chat.dataset, share.reason) }, { status: 400 });
     }
   }
 

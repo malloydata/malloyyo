@@ -65,8 +65,8 @@ Use inline `style` objects, plain HTML, and `VegaChart` (see
 `useQuery` returns `{ rows, result, loading, error, truncated }`. `rows` is
 an array of plain objects, at most 5,000 of them; `truncated` is null, or
 `{ reason, hint }` when that limit cut the result. Aggregate in Malloy rather
-than plotting a prefix as if it were the whole answer — `<Panel>` and
-`<VegaChart>` note a cut result on the page, a custom component must do it
+than plotting a prefix as if it were the whole answer — `<VegaChart>` notes a
+cut result on the page; anything you draw from `rows` yourself must say so
 itself. Numbers can arrive as BigInt or decimal objects, so wrap them
 with `Number()` before `.toLocaleString()` or arithmetic, and format dates in
 Malloy rather than in JavaScript.

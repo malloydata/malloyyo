@@ -30,7 +30,7 @@ import { qualifiedName } from "@/lib/repo-names";
 import { fileUrl, runNamedMalloyFiles, withModelRuntime } from "@/lib/malloy";
 import { newDatasetSlug } from "@/lib/slug";
 import { bundleDashboard } from "./bundle";
-import { explainProblems } from "./engine";
+import { declaredRuns, explainProblems } from "./engine";
 import { artifactManifest } from "./manifest";
 import { DRAFT_PREFIX } from "./meta";
 
@@ -234,6 +234,39 @@ export async function saveDraftDashboard(
     }
     manifest = artifactManifest(name, art.artifact);
     title = String(art.artifact.title ?? name);
+
+    // 2b. Every run-expression the tag declares, under the same gate as the
+    //     body — because the gate above cannot see them.
+    //
+    //     `## artifact { tiles=[…] }` is an ANNOTATION, which is a comment to
+    //     the compiler. So step 1 validating the draft's body says nothing
+    //     about the strings inside that tag, and those strings are what step 5
+    //     runs and what every later view compiles. A draft is writable by any
+    //     member who can see the dataset, so they are request text with a
+    //     manifest's reach unless they are checked here.
+    //
+    //     Validated against the draft's own entry rather than index.malloy: a
+    //     tile may legitimately name a source the draft file defines. That
+    //     composes safely, because the body it builds on passed step 1 and so
+    //     only builds on what the model publishes.
+    const declared = declaredRuns(manifest);
+    for (const run of declared) {
+      const tileGate = await withModelRuntime(files, undefined, (runtime) =>
+        validateRestricted(runtime as unknown as EngineRuntime, fileUrl(entryFile), `run: ${run}`),
+      );
+      const bad = tileGate.ok
+        ? []
+        : tileGate.problems.filter((p) => p.severity === "error" && !isNoQueriesProblem(p));
+      if (bad.length > 0) {
+        return {
+          ok: false,
+          error:
+            `a dashboard query in dashboards/${name}.malloy failed the restricted check ` +
+            "(it may only build on what the model publishes)",
+          problems: bad,
+        };
+      }
+    }
   }
 
   // 3. The component compiles (esbuild-wasm). A failure is reported, not fatal:

@@ -20,8 +20,11 @@ import {
   collectDrillTargets,
   dashboardGivenSpecs,
   declaredGivenNames,
+  declaredGivenSpecs,
+  describeSource,
   modelArtifact,
   prepareSource,
+  projectDescription,
   run,
   runRestricted,
   validateRestricted,
@@ -29,6 +32,7 @@ import {
   type ArtifactsResult,
   type DashboardGivenSpec,
   type DashboardGivenSpecsResult,
+  type ExploreDescription,
   type RunResult,
   readDatasetMeta,
   type DatasetMeta,
@@ -41,6 +45,9 @@ import {
 } from "./server-givens.js";
 
 export type ValidateResult = { ok: true } | { ok: false; error: string };
+export type DescribeInResult =
+  | { ok: true; description: ExploreDescription }
+  | { ok: false; error: string };
 
 // The dashboard control contract, read from the MODEL's given: declarations —
 // shared with the hosted serving path via mcp-engine so the two can't drift.
@@ -163,6 +170,13 @@ export interface ModelRunner {
   /** Same, compiled against a specific `entryFile` (a dashboard's own file) —
       lint validates each tile against the dashboard file that declares it. */
   validateIn(entryFile: string, runExpr: string, givens?: Record<string, unknown>): Promise<ValidateResult>;
+  /** The explorer's schema: the named source, described as the explore MCP
+      surface describes it (public members only, name-keyed, join closure),
+      compiled against `entryFile` (the explorer dashboard's own file, so the
+      source it imports is in scope). */
+  describeIn(entryFile: string, source: string): Promise<DescribeInResult>;
+  /** Every given declared in `entryFile`'s scope — an explorer's controls. */
+  declaredGivensIn(entryFile: string): Promise<GivenSpecsResult>;
   /** The given specs a dashboard's run-expression transitively references —
       read from the model's `given:` declarations (types, defaults, doc
       comments, tags). */
@@ -453,6 +467,22 @@ export async function makeRunner(
     },
     validateIn(entryFile, runExpr, givens) {
       return leaseIn(entryFile, (runtime, entry) => validateQuery(runtime, entry, runExpr, givens));
+    },
+    declaredGivensIn(entryFile) {
+      return leaseIn(entryFile, (runtime, entry) => declaredGivenSpecs(runtime, entry));
+    },
+    describeIn(entryFile, source) {
+      return leaseIn(entryFile, async (runtime, entry) => {
+        const d = await describeSource(runtime, entry, source);
+        if (!d.ok || !d.description) {
+          const msg = d.problems
+            .filter((p) => p.severity === "error")
+            .map((p) => p.message)
+            .join("; ");
+          return { ok: false as const, error: msg || `cannot describe source '${source}'` };
+        }
+        return { ok: true as const, description: projectDescription(d.description, "explore") };
+      });
     },
   };
 }

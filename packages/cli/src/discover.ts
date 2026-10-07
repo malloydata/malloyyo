@@ -44,6 +44,9 @@ export interface Dashboard {
   tiles?: string[];
   /** Composite only: pass-through to the dashboard nest's `columns`. */
   dashboard_columns?: number;
+  /** Explorer: the source the builder composes queries over
+      (`## artifact { explore="<source>" }`); `query` is "" and no tiles. */
+  explore?: string;
   /** Per-dashboard given defaults from the tag's `givens { … }` block. */
   givens?: Record<string, string | number | boolean>;
   /** `# artifact { autorun=false }` → stage control changes behind an Apply
@@ -189,5 +192,5 @@ export function aboutPage(root: string): Dashboard | null {
 /** True for a dashboard that renders no data — the About page today. Callers use
     it to skip given introspection and query compilation, both of which need a
     query that by definition isn't there. */
-export const rendersNoData = (d: Pick<Dashboard, "query" | "tiles">): boolean =>
-  !d.query && (!d.tiles || d.tiles.length === 0);
+export const rendersNoData = (d: Pick<Dashboard, "query" | "tiles" | "explore">): boolean =>
+  !d.query && (!d.tiles || d.tiles.length === 0) && !d.explore;

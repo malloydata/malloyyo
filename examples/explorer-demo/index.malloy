@@ -1,0 +1,56 @@
+##! experimental.givens
+
+// A small synthetic order book, self-contained (no external data), built to
+// exercise an explorer: a time column, a few string/number dimensions, a
+// join_one to a lookup table, and a handful of measures.
+given:
+  # label="State"
+  STATE :: filter<string> is f''
+  # label="Ordered"
+  PERIOD :: filter<date> is f''
+
+source: states is duckdb.sql("""
+  SELECT * FROM (VALUES
+    ('CA','California','West'), ('NY','New York','Northeast'),
+    ('TX','Texas','South'),     ('WA','Washington','West'),
+    ('IL','Illinois','Midwest'),('FL','Florida','South')
+  ) AS t(code, state_name, region)
+""") extend { primary_key: code }
+
+source: orders is duckdb.sql("""
+  WITH r AS (SELECT range AS i FROM range(1, 2001))
+  SELECT
+    i AS order_id,
+    (DATE '2025-01-01' + CAST((i * 37) % 640 AS INTEGER)) AS ordered_on,
+    (['CA','NY','TX','WA','IL','FL'])[1 + (i * 7) % 6] AS state,
+    (['electronics','books','garden','toys','apparel'])[1 + (i * 11) % 5] AS category,
+    (['web','store','phone'])[1 + (i * 13) % 3] AS channel,
+    ROUND(5 + ((i * 97) % 500) + ((i * 13) % 7) / 10.0, 2) AS amount,
+    1 + (i * 3) % 5 AS quantity,
+    (i % 9) = 0 AS returned
+  FROM r
+""") extend {
+  primary_key: order_id
+  join_one: st is states with state
+
+  #" Count of orders
+  measure: order_count is count()
+  #" Sum of order amounts in dollars
+  measure: total_dollars is amount.sum()
+  #" Average order amount
+  measure: avg_order is amount.avg()
+  measure: units is quantity.sum()
+  measure: return_rate is count() { where: returned } / count()
+
+  #" Orders by month, with dollars
+  view: by_month is {
+    group_by: ordered_on.month
+    aggregate: order_count, total_dollars
+  }
+  #" Top categories by dollars
+  view: top_categories is {
+    group_by: category
+    aggregate: total_dollars, order_count
+    order_by: total_dollars desc
+  }
+}

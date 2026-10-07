@@ -174,7 +174,14 @@ async function runLint(abs: string, runner: ModelRunner): Promise<LintReport> {
     // Composite → its tiles; single-query artifact → its one run-expression.
     // Both get compiled/introspected the same way below.
     const tiles = art.tiles ?? (art.query ? [art.query] : []);
-    if (tiles.length === 0) errors.push(`\`# artifact\` declares neither a query nor tiles`);
+    // An EXPLORER declares a source instead: it must describe (exist, compile,
+    // be nameable from this file). Its "query" is whatever the user builds.
+    if (art.explore) {
+      const d = await runner.describeIn(entryFile, art.explore);
+      if (!d.ok) errors.push(`explore="${art.explore}": ${d.error}`);
+    } else if (tiles.length === 0) {
+      errors.push(`\`# artifact\` declares neither a query, tiles, nor explore`);
+    }
     // Each tile must compile against THIS dashboard file's scope.
     for (const tile of tiles) {
       const v = await runner.validateIn(entryFile, tile, {});

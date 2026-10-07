@@ -13,6 +13,7 @@ import type { ArtifactInfo } from "@malloyyo/mcp-engine";
 export function artifactManifest(base: string, a: ArtifactInfo): Record<string, unknown> {
   const manifest: Record<string, unknown> = { title: a.title, entryFile: `dashboards/${base}.malloy` };
   if (a.tiles) manifest.tiles = a.tiles;
+  if (a.explore) manifest.explore = a.explore;
   // Single-query artifact (no tiles): persist its run-expression — the app
   // needs manifest.query to run/introspect it.
   else if (a.query) manifest.query = a.query;

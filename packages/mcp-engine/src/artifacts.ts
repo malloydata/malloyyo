@@ -39,6 +39,13 @@ export interface ArtifactInfo {
   /** Composite only: pass-through to the dashboard nest's `columns`; omitted
       lets the renderer choose. `## artifact { dashboard_columns=3 }`. */
   dashboard_columns?: number;
+  /** EXPLORER dashboard: `## artifact { explore="<source>" }`. A dashboard with
+      no query of its own — the runtime renders a query BUILDER over the named
+      source (dimensions / measures / views / joins), a Run button, and the
+      result; the generated Malloy runs as restricted text like any ad-hoc
+      dashboard query. When set, `query` is "" and `tiles` is absent. The
+      source must be nameable from the dashboard file (an import brings it). */
+  explore?: string;
   /** For a view artifact: the source that holds the view. Absent for a
       top-level `query:` artifact. */
   source?: string;
@@ -147,6 +154,20 @@ export function readArtifactTag(ident: ArtifactIdent, q: Tagged): ArtifactInfo |
   const title =
     nested?.text('title') ?? tag.text('title') ?? description?.split('\n')[0] ?? ident.defaultName;
 
+  // Explorer: `explore="<source>"`. No query, no tiles — the runtime builds the
+  // query interactively over the named source. Only meaningful at the model
+  // site (`## artifact`, a dashboard file of its own), but read uniformly.
+  const explore = nested?.text('explore') ?? tag.text('explore');
+  if (explore && explore.trim()) {
+    const info: ArtifactInfo = { name, query: '', title, explore: explore.trim() };
+    if (description) info.description = description;
+    const autorunText = nested?.text('autorun') ?? tag.text('autorun');
+    if (autorunText === 'false') info.autorun = false;
+    const givens = readGivens(tag);
+    if (givens) info.givens = givens;
+    return info;
+  }
+
   // Composite: `tiles=[…]`. Each tile resolves to a run-expression (bare views
   // scoped to the declaring source).
   const rawTiles = nested?.textArray('tiles') ?? tag.textArray('tiles');
@@ -224,7 +245,8 @@ export async function artifactQueries(runtime: Runtime, entry: URL): Promise<Art
     // A model-level artifact is a dashboard when it has tiles (composite) OR a
     // run-expression (a single-tile `tiles=[X]` normalized to single-query). A
     // bare `## artifact` (no tiles, empty query) isn't a dashboard.
-    if (modelComposite && (modelComposite.tiles || modelComposite.query)) artifacts.push(modelComposite);
+    if (modelComposite && (modelComposite.tiles || modelComposite.query || modelComposite.explore))
+      artifacts.push(modelComposite);
     // Top-level `query: … # artifact` declarations.
     for (const queryName of model.queries().named) {
       const pq = model.getPreparedQueryByName(queryName) as unknown as Tagged;
@@ -312,7 +334,8 @@ export async function modelArtifact(
     //    `tiles=[X]` normalized to single-query (query set, no tiles). A bare
     //    `## artifact` (no tiles, empty query) is not a dashboard.
     const composite = readArtifactTag({ runExpr: '', defaultName }, model);
-    if (composite && (composite.tiles || composite.query)) return { ok: true, artifact: composite };
+    if (composite && (composite.tiles || composite.query || composite.explore))
+      return { ok: true, artifact: composite };
     // 2 & 3. A single tagged declaration IS the dashboard, defined inline in this
     //    file — either a top-level `query: … # artifact`, or a `view: … # artifact`
     //    inside a source the file defines/extends. It stays a SINGLE-QUERY artifact

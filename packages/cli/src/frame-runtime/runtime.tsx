@@ -118,6 +118,12 @@ export function runQuery(req, givens) {
 import { asRunText } from "./run-text";
 export { asRunText };
 
+/** Explorer tier-2 filter help, when the host offers it (else undefined): a
+    description → { ok, text, note } through the host's model. */
+export function hostWriteFilter() {
+  return typeof host.writeFilter === "function" ? host.writeFilter : undefined;
+}
+
 /** Run restricted Malloy text, resolve to the result rows (array of objects). */
 export function runData(malloy, givens) {
   return runQuery({ malloy: asRunText(malloy) }, givens ?? {}).then((m) => {

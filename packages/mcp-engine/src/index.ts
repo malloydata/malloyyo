@@ -111,6 +111,7 @@ export {
 } from './host-givens';
 export {
   dashboardGivenSpecs,
+  declaredGivenSpecs,
   describeGivenSpec,
   type DashboardGivenSpec,
   type DashboardGivenSpecsResult,
@@ -173,3 +174,12 @@ export { guidance, assembleInstructions } from './guidance';
 // Prompt surfaces — the typed tree over the text in content/prompts/**.md
 // (tool titles/descriptions + server instructions).
 export { prompts } from './prompts';
+
+// ── explorer: description → filter expression (host makes the model call) ──
+export {
+  writeFilterPrompt,
+  parseWriteFilterAnswer,
+  filterLanguageReference,
+  type WriteFilterRequest,
+  type WriteFilterAnswer,
+} from './write-filter';

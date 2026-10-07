@@ -57,6 +57,17 @@ mountInPage({
     location.href = givensToUrl(dashboard, givens);
   },
   syncGivens: (givens) => history.replaceState(null, "", givensToUrl(name, givens)),
+  // Explorer tier-2 filter help; present only when the shell advertised it.
+  writeFilter: info.explore && info.explore.write_filter
+    ? (req) =>
+        fetch("api/write-filter", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(req),
+        })
+          .then((r) => r.json())
+          .catch((e) => ({ ok: false, error: String(e) }))
+    : undefined,
   syncUrlState: (state) => {
     lastUrlState = state;
     history.replaceState(null, "", shareUrl(name));

@@ -41,7 +41,8 @@ export function rendersNoData(manifest: Record<string, unknown>): boolean {
   const tiles = manifest.tiles;
   const hasTiles = Array.isArray(tiles) && tiles.length > 0;
   const hasQuery = typeof manifest.query === "string" && manifest.query !== "";
-  return !hasTiles && !hasQuery;
+  const hasExplore = typeof manifest.explore === "string" && manifest.explore !== "";
+  return !hasTiles && !hasQuery && !hasExplore;
 }
 
 /**

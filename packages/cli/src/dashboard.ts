@@ -25,6 +25,17 @@ import fs from "node:fs";
 import path from "node:path";
 import * as esbuild from "esbuild";
 import { type GivenSpec, type TileSpec } from "./host.js";
+import type { ExploreDescription } from "@malloyyo/mcp-engine";
+import { writeFilter, writeFilterEnabled } from "./write-filter.js";
+
+/** What an EXPLORER dashboard's frame gets instead of a query: the source to
+    build queries over and its described schema (the builder's field tree). */
+export interface ExploreInfo {
+  source: string;
+  description: ExploreDescription;
+  /** Whether this host can turn a description into a filter (tier 2). */
+  write_filter?: boolean;
+}
 import { discoverRepoDashboards, navTree, type RepoDashboard } from "./repo.js";
 import { initConnections } from "./connections.js";
 import { givensFromSearch, urlStateFromSearch } from "./shared/givens-url.js";
@@ -219,6 +230,7 @@ function inPageShell(
   initialGivens: Record<string, string>,
   initialUrlState: Record<string, string>,
   tileSpecs?: TileSpec[],
+  explore?: ExploreInfo,
 ): string {
   const info = {
     name: dash.slug,
@@ -230,6 +242,9 @@ function inPageShell(
     dashboard_columns: dash.dashboard_columns,
     givens: dash.givens,
     autorun: dash.autorun,
+    // Explorer: the source name + its described schema; the runtime mounts
+    // ExplorerDashboard instead of DefaultDashboard when this is set.
+    explore,
   };
   return html(
     navHtml(dash, all) +
@@ -426,12 +441,32 @@ export async function serveDashboard(opts: {
       by the sandboxed /frame route and the in-page tag-only shell. */
   async function resolveGivens(
     dash: RepoDashboard,
-  ): Promise<{ ok: true; union: GivenSpec[]; tiles?: TileSpec[] } | { ok: false; error: string }> {
+  ): Promise<
+    | { ok: true; union: GivenSpec[]; tiles?: TileSpec[]; explore?: ExploreInfo }
+    | { ok: false; error: string }
+  > {
     // The About page runs no query, so there is nothing to introspect and no
     // entry file to compile. Asking anyway would compile the model to answer a
     // question about a query that does not exist, then report its absence as a
     // "model error" printed over the page the author wrote.
     if (rendersNoData(dash)) return { ok: true, union: [] };
+    // An EXPLORER has no query to introspect givens from; what the frame needs
+    // instead is the source's schema (the builder's field tree), described the
+    // way the explore MCP surface describes it. Per load, like given specs, so a
+    // model edit shows up on reload.
+    if (dash.explore && dash.entryFile) {
+      const d = await dash.runner.describeIn(dash.entryFile, dash.explore);
+      if (!d.ok) return { ok: false, error: d.error };
+      // Its controls are EVERY given in scope — the user's query may reference
+      // any of them, and seeing/setting them before a run is part of the point.
+      const g = await dash.runner.declaredGivensIn(dash.entryFile);
+      if (!g.ok) return { ok: false, error: g.error };
+      return {
+        ok: true,
+        union: g.givens,
+        explore: { source: dash.explore, description: d.description, write_filter: writeFilterEnabled() },
+      };
+    }
     if (dash.tiles && dash.entryFile) {
       const t = await dash.runner.dashboardTiles(dash.entryFile, dash.tiles);
       return { ok: true, union: t.union, tiles: t.tiles };
@@ -528,7 +563,7 @@ export async function serveDashboard(opts: {
               html(`<pre style="color:crimson;padding:16px">model error: ${esc(g.error)}</pre>`, dash.title));
           }
           return send(200, "text/html; charset=utf-8",
-            inPageShell(dash, dashboards, g.union, givensFromUrl(url), urlStateFromUrl(url), g.tiles),
+            inPageShell(dash, dashboards, g.union, givensFromUrl(url), urlStateFromUrl(url), g.tiles, g.explore),
             { "cache-control": "no-store" });
         }
         return send(200, "text/html; charset=utf-8",
@@ -541,6 +576,21 @@ export async function serveDashboard(opts: {
       if (url.pathname === "/inpage.js") {
         return send(200, "application/javascript; charset=utf-8", await inPageBundle(),
           { "cache-control": "no-store" });
+      }
+      // Explorer tier-2 filter help (description → filter expression). Only
+      // wired when the dev server has an ANTHROPIC_API_KEY; the shell tells the
+      // frame via info.explore.write_filter so the UI offers it only then.
+      if (url.pathname === "/api/write-filter" && req.method === "POST") {
+        if (!writeFilterEnabled()) return send(404, "application/json", JSON.stringify({ ok: false, error: "write-filter is not enabled (no ANTHROPIC_API_KEY)" }));
+        const body = JSON.parse(await readBody(req));
+        const out = await writeFilter({
+          field: String(body.field ?? ""),
+          type: String(body.type ?? "string"),
+          description: String(body.description ?? ""),
+          values: Array.isArray(body.values) ? body.values.map(String) : undefined,
+          source: body.source ? String(body.source) : undefined,
+        });
+        return send(200, "application/json", JSON.stringify(out));
       }
       if (url.pathname === "/api/run" && req.method === "POST") {
         const { d, query, malloy, givens } = JSON.parse(await readBody(req));

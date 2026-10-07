@@ -166,3 +166,25 @@ export async function dashboardGivenSpecs(
     return { ok: false, error: e instanceof Error ? e.message : String(e) };
   }
 }
+
+/**
+ * EVERY given declared in the entry's model scope — what an EXPLORER offers
+ * as controls, since it has no query to say which givens it references (the
+ * user's query may reference any of them; a bare import brings the model's
+ * declarations into the dashboard file's scope). Host-finalized givens are
+ * already absent from `model.givens`. Never throws on user input.
+ */
+export async function declaredGivenSpecs(
+  runtime: Runtime,
+  entry: URL,
+): Promise<DashboardGivenSpecsResult> {
+  try {
+    const model = await runtime.loadModel(entry).getModel();
+    const specs: DashboardGivenSpec[] = [];
+    const givens = (model as unknown as { givens?: ReadonlyMap<string, unknown> }).givens;
+    for (const [name, g] of givens ?? []) specs.push(describeGivenSpec(name, g as GivenLike));
+    return { ok: true, givens: specs };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}

@@ -32,9 +32,23 @@
 # Claude Code, DuckDB, Chromium) — so a rebuild is what moves them, and rebuilds
 # are deliberate: the workflow publishes only on `workflow_dispatch`. What that
 # means in practice is that this image is a FLOOR, not a promise of currency.
-# The one that moves fastest, the `malloyyo` CLI, is a normal npm package: the
-# npm prefix is owned by `vscode` so `npm i -g @malloydata/malloyyo@latest`
-# inside a running container needs no sudo and no new image.
+#
+# THE CLI IS THE EXCEPTION, because it is the one that moves fastest and the
+# gap was not theoretical: `cli-publish.yml` releases on every push to main, so
+# a container that was current when it was built is one release behind by the
+# next merge. A codespace was found running 0.2.46 against an instance on
+# 0.2.57 — eleven releases — and the only way anyone noticed was by reading a
+# version string and then this file. So the metadata label below carries a
+# `postCreateCommand` that reinstalls it at CREATE time: the floor stays the
+# floor, and a new codespace still starts current without a 5.5GB rebuild.
+#
+# It costs a few seconds and a network call per codespace create, and it is
+# `|| true` because a registry blip must not fail the create — the baked CLI
+# still works, it is merely older. In an already-running container the npm
+# prefix is owned by `vscode`, so `npm i -g @malloydata/malloyyo@latest` needs
+# no sudo and no new image. The CLI also now says when it is behind
+# (packages/cli/src/update-check.ts), which is what makes the gap visible
+# rather than something to discover.
 
 FROM mcr.microsoft.com/devcontainers/base:2-bookworm
 
@@ -202,6 +216,7 @@ LABEL org.opencontainers.image.source="https://github.com/malloydata/malloyyo" \
 # Dockerfile parser's, not JSON's.
 LABEL devcontainer.metadata='[{ \
   "remoteUser": "vscode", \
+  "postCreateCommand": "npm i -g --no-fund --no-audit @malloydata/malloyyo@latest || true", \
   "forwardPorts": [4173, 4174], \
   "portsAttributes": { \
     "4173": { "label": "Malloy dashboard preview", "onAutoForward": "notify" }, \

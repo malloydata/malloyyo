@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { Command } from "commander";
+import { noticeOnExit, runUpdateCheck, UPDATE_CHECK_ARGV } from "./update-check.js";
 import { resolve, relative, sep } from "node:path";
 import { resolveTarget, resolveInstance, resolvePublishTarget, type Target } from "./config.js";
 import { gatherDirectory, gatherDashboards, gitArchiveZip, gitInfo } from "./gather.js";
@@ -702,6 +703,22 @@ program
 // itself rather than throwing, because its failures are already phrased for the person
 // who typed the command.
 registerCloudCommands(program);
+
+// The detached child of the update check (see update-check.ts). Hidden because
+// it is not a command anyone should type, and because `--help` listing it would
+// invite exactly that.
+program
+  .command(UPDATE_CHECK_ARGV, { hidden: true })
+  .description("internal: refresh the cached latest-version check")
+  .action(async () => {
+    await runUpdateCheck();
+  });
+
+// Registered before parsing, printed on exit — so a stale CLI says so after the
+// command it ran, rather than above it. Costs nothing per invocation: it reads a
+// small cache file and, at most once a day, starts a process it does not wait
+// for. Silent in CI, silent for `mcp` and `sql` whose stdout is a protocol.
+noticeOnExit(process.argv);
 
 program.parseAsync().catch((err: unknown) => {
   console.error(err instanceof Error ? err.message : String(err));

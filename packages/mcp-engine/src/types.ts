@@ -513,8 +513,8 @@ export interface CompactSchema {
     that carries views. */
 export interface ExploreDescribedSource extends CompactSchema {
   name: string;
-  /** View name → one-line description, or null when the view has no `#"` doc. */
-  views: Record<string, string | null>;
+  /** View name → its `#"` and declaration text (see DescribedView). */
+  views: Record<string, DescribedView>;
 }
 
 /** A `joins` entry — an ARRAY or a SOURCE-JOIN (never a scalar/record column).
@@ -553,6 +553,13 @@ export interface ExploreSourceDescribe {
   described_source: ExploreDescribedSource;
   joins: Record<string, JoinEntry>;
   join_source_map: Record<string, CompactSchema>;
+}
+
+/** A view on the described source: its `#"` and its declaration text
+    (`view: name is { … }`), sliced from the model. Either may be absent. */
+export interface DescribedView {
+  description?: string;
+  code?: string;
 }
 
 /** One join in describe_source's hierarchy: WHERE it is and how it behaves,

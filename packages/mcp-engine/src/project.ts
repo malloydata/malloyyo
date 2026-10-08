@@ -26,6 +26,7 @@ import type {
   JoinInfo,
   JoinOutline,
   ExploreDescribedPath,
+  DescribedView,
   ModelInfo,
   NamedQueryInfo,
   SourceDescription,
@@ -313,12 +314,19 @@ function buildSchema(
   return s;
 }
 
-function viewsMap(views: ViewInfo[]): Record<string, string | null> {
-  const out: Record<string, string | null> = Object.create(null);
-  // null (not "") for a view with no description — distinguishes "no description"
-  // from a deliberately blank one, and the value can't be omitted (it's the map
-  // value, and the view must be listed so it's discoverable/invocable).
-  for (const v of views) out[seg(v)] = v.description ?? null;
+function viewsMap(views: ViewInfo[]): Record<string, DescribedView> {
+  const out: Record<string, DescribedView> = Object.create(null);
+  // Every view is listed — it must be discoverable and invocable — with its
+  // `#"` and its own declaration text, sliced from its location. The text is
+  // what makes the source's malloy_text unnecessary by default: a view's body
+  // (its group_by, where:, nest:) is the one thing the structured fields
+  // otherwise can't say.
+  for (const v of views) {
+    const d: DescribedView = {};
+    if (v.description) d.description = v.description;
+    if (v.body) d.code = v.body;
+    out[seg(v)] = d;
+  }
   return out;
 }
 
@@ -493,8 +501,8 @@ export function buildSourceDescribe(
 // the path need not have the same fields.
 
 /** A full `joins` entry → its outline: everything but the fields. The join
-    statement only on request — in the hierarchy it repeats what the root's
-    `malloy_text` already says, and a join on an inline query is a paragraph. */
+    statement only where asked for: on the described thing's own joins, not on
+    every deeper path that reaches the same join again. */
 function outlineOf(e: JoinEntry, model: ModelInfo, withCode = false): JoinOutline {
   const o: JoinOutline = {};
   if (e.fans_out) o.fans_out = true;
@@ -514,8 +522,13 @@ function outlines(
   under?: string,
 ): Record<string, JoinOutline> {
   const out: Record<string, JoinOutline> = Object.create(null);
+  // The described thing's OWN joins carry their statement — how it connects,
+  // one line each, which the source text used to say; deeper levels are names.
+  const ownDepth = under === undefined ? 1 : under.split('.').length + 1;
   for (const [path, e] of Object.entries(joins)) {
-    if (under === undefined || path.startsWith(`${under}.`)) out[path] = outlineOf(e, model);
+    if (under === undefined || path.startsWith(`${under}.`)) {
+      out[path] = outlineOf(e, model, path.split('.').length === ownDepth);
+    }
   }
   return out;
 }

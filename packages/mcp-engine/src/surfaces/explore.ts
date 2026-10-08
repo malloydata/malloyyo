@@ -408,6 +408,12 @@ function describeSourceTool(host: ExploreHost): ToolDef {
             'The model the source lives in (the model_ref from list_sources). ' +
             'Optional when the source name is unique across the catalog.',
         },
+        include_source: {
+          type: 'boolean',
+          description:
+            'Also return the source\'s verbatim Malloy declaration. Rarely needed: fields, measures and ' +
+            'each view\'s own code are already in the result.',
+        },
         path: {
           type: 'string',
           description:
@@ -422,6 +428,7 @@ function describeSourceTool(host: ExploreHost): ToolDef {
       const source = argString(args, 'source');
       const modelRefArg = argOptString(args, 'model_ref');
       const path = argOptString(args, 'path')?.trim() || undefined;
+      const includeSource = args.include_source === true;
       if (!source.trim()) {
         return {
           ok: false, model_ref: modelRefArg ?? '', source,
@@ -482,9 +489,11 @@ function describeSourceTool(host: ExploreHost): ToolDef {
 
           const built = describeSourceOutline(compiled.model, source);
           if (!built) return notFound();
-          // malloy_text is JUST the described source's own declaration; what a
-          // join path holds comes from describe_source with `path`.
-          const malloy_text = sourceAsMalloy(compiled.model.sources[source]);
+          // malloy_text — JUST the described source's own declaration — on
+          // request only: every field's expression and every view's code are
+          // already in the structured result, so by default it says the source
+          // a second time. What a join path holds comes from `path`.
+          const malloy_text = includeSource ? sourceAsMalloy(compiled.model.sources[source]) : '';
           const base: SourceDescribeResult = {
             ok: true, model_ref: modelRef, source,
             guidance: prompts.explore.guidance,

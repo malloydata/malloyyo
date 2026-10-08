@@ -20,10 +20,10 @@ To answer a question you need to see what sources are available which pertain to
 # Build the Query
 * New to a pattern? `yo_help("explore/query-examples")` — the handful of Malloy query shapes (views, the workhorse group_by/aggregate, filtered aggregates, `all()`, `extend:`, `select:`, `nest:`) that cover almost every question, with the SQL habits that are wrong in Malloy.
 * `describe_source(source, model_ref)` — always describe a source before querying it (`model_ref` optional when the name is unique). Returns:
-  * `described_source` — the source's `dimensions` (columns), `measures`, and `views` (the author's saved queries). A dimension's `type` is a scalar or a nested record (`origin.city`); an array column has no `type` — it shows up as a `joins` entry at its `path`.
+  * `described_source` — the source's `dimensions` (columns), `measures`, and `views` (the author's saved queries, each with its code). A dimension's `type` is a scalar or a nested record (`origin.city`); an array column has no `type` — it shows up as a `joins` entry at its `path`.
   * `joins` — keyed by path, every array and source-join this source reaches, names only: `fans_out` marks a path that fans out, `is_array` an array, `source` the named source an unmodified join references. To write a reference, use the entry's `quoted_path` if it has one, else the key.
   * The fields behind a join: `describe_source(source, path: "<key>")` — returns `described_path` (the dimensions and measures at that path, as a query through this source sees them; a join can extend what it joins, so describe the path, not the joined source by name) and the joins below it. A record array's fields are used directly (`parcels.sku`); a scalar array's element is `each` (`tags.each`).
-  * In its own content block, the source's raw Malloy, for anything the structured output above doesn't cover.
+  * `views` carry their own Malloy code. The source's full verbatim Malloy is available with `include_source: true`, for anything the structured output doesn't cover.
 * `query(source: "...", malloy: "run: source -> { ... }", execute: false)` — validate without running; it returns the SQL. Iterate until clean. (`model_ref` optional, needed only when the source name is ambiguous.)
 * Some queries accept parameters (givens). More info if needed: yo_help("language/givens-model-level-parameters")
 

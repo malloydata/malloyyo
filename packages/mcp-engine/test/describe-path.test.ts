@@ -28,7 +28,8 @@ test('the root lists every join path, and no join fields', async () => {
   assert.equal(d.joins['crew']!.fans_out, true);
   assert.equal(d.joins['crew.people']!.fans_out, true, 'fan-out is for the whole path from the root');
   assert.equal(d.joins['tags']!.is_array, true);
-  assert.equal(d.joins['crew.people']!.code, undefined, 'the join statement is the path describe\'s');
+  assert.match(d.joins['crew']!.code ?? '', /^join_many: crew/, 'a direct join carries its statement');
+  assert.equal(d.joins['crew.people']!.code, undefined, 'deeper paths are names only');
   assert.equal(d.joins['crew.plain']!.source, 'people', 'an unmodified reference names its source');
   assert.equal(d.joins['crew.plain']!.description, 'A person.');
 });

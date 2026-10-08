@@ -30,6 +30,7 @@ export type {
   ExploreSourceDescribe,
   ExploreDescribedPath,
   JoinOutline,
+  DescribedView,
   ExploreSourceInfo,
   ExploreView,
   JoinEntry,

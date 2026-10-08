@@ -1,4 +1,36 @@
-# Spec: `describe_source` output (v5 — locked)
+# Spec: `describe_source` output (v6)
+
+## v6: the tool serves an outline, and one path at a time
+
+v5 (below) is the FULL walk — `buildSourceDescribe`, every path resolved with
+its fields, every reachable named source in `join_source_map`. It is still how
+the engine resolves a source, and still correct. It is no longer what the tool
+sends: on a hub source it was tens of kilobytes (the World Cup model's
+`matches`: 67 KB, 28 KB of it `join_source_map`), too large to read in one go.
+
+- **`describe_source(source)`** — the root in full (`described_source`:
+  dimensions, measures, views; `malloy_text`; `examples`) plus `joins`: the
+  HIERARCHY of every array and source-join it reaches, keyed by path as in v5,
+  **names only** — each a `JoinOutline` (`fans_out`, `cycle`, `quoted_path`,
+  `is_array`, `source` when the join references a named source unmodified,
+  `description`). No `source_def`, no `join_source_map`, no join statements
+  (the root's own are in its `malloy_text`).
+- **`describe_source(source, path)`** — `described_path`: the dimensions and
+  measures AT that path, as a query through `source` sees them (array stubs
+  absolute, so they key straight into `joins`) and the join statement that
+  made the path (`code`), plus the hierarchy below it.
+  No views (a joined source's views are not reachable through a path), no
+  `malloy_text`. An unknown path is a `path-not-found` problem listing the
+  paths there are.
+
+**By path, not by name.** A join can extend or refine its target
+(`join_one: people is people extend { … }`), and a join's name need not be
+its target's. So the fields at `principals.people` are not "the source named
+`people`", and `describe_source(people)` can describe something else. The path
+is the one address that always means what the query will see.
+
+This reverses locked decisions 7 and 9 below for the tool's output; the full
+walk keeps them.
 
 ## Design objective
 
@@ -212,9 +244,11 @@ Everything is recursive and obeys the same column/join split at every level:
    when a segment needs it); view keys embed backticks. Never blanket-quote;
    never make the consumer stitch backticks across a path.
 7. **`join_source_map`** is the full reachable named closure, deduped (no depth
-   limit); array-column stubs in its entries are relative.
+   limit); array-column stubs in its entries are relative. *(v6: the full walk
+   only — the tool sends the hierarchy, and fields per path on request.)*
 8. **Views only on `described_source`. `malloy_text` only the described source.**
-9. **No `depth` parameter.**
+9. **No `depth` parameter.** *(v6: still none — but a `path` parameter, which
+   describes one path rather than limiting a walk.)*
 10. **Non-public members are absent, not flagged.** A field, view or join the
     model marked `private` or `internal` never appears — not in `dimensions` /
     `measures` / `views`, not as a `joins` entry, not inside a

@@ -1,0 +1,22 @@
+// A join that REFINES its target: `crew.people` is `people` plus a field the
+// top-level source does not have. describe_source by path must show the field;
+// describing `people` by name would miss it.
+
+#" A person.
+source: people is duckdb.sql("SELECT 1 as id, 'Ann' as name") extend {
+  primary_key: id
+}
+
+source: crew is duckdb.sql("SELECT 10 as movie_id, 1 as person_id") extend {
+  join_one: people is people extend {
+    #" The name, shouted.
+    dimension: shout is upper(name)
+  } on person_id = people.id
+  join_one: plain is people on person_id = plain.id
+}
+
+#" Movies, with their crew.
+source: movies is duckdb.sql("SELECT 10 as movie_id, ['a', 'b'] as tags") extend {
+  join_many: crew on movie_id = crew.movie_id
+  measure: movie_count is count()
+}

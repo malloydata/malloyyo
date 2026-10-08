@@ -8,6 +8,7 @@ import { dashboardSourceUrl } from "@/lib/github-source-link";
 import { QueryIcon } from "@/components/QueryIcon";
 import { DashboardTree } from "@/components/DashboardTree";
 import { decodeDatasetRef } from "@/lib/repo-names";
+import { claudeChatUrl, exploreDatasetPrompt, useClaudeConnect } from "@/components/ClaudeConnectDialog";
 
 // The horizontal menu shared by a dataset's dashboard-style pages: the dashboard
 // views and the AI Q&A page. It reads like:
@@ -70,6 +71,7 @@ export function DatasetNav({
   const [modelSources, setModelSources] = useState<string[]>([]);
   const [instanceName, setInstanceName] = useState("Malloyyo");
   const [claudeConnected, setClaudeConnected] = useState(false);
+  const { openClaude, connectDialog } = useClaudeConnect(instanceName, claudeConnected);
   // Chat needs an ANTHROPIC_API_KEY; without one the pill would go nowhere.
   const [chatEnabled, setChatEnabled] = useState(false);
 
@@ -114,16 +116,8 @@ export function DatasetNav({
       .catch(() => {});
   }, []);
 
-  // Seed a new Claude chat on this dataset (matches the home page's link). When
-  // the connector isn't linked yet, send them to set it up.
-  const onExploreClaude = () => {
-    const url = claudeConnected
-      ? `https://claude.ai/new?q=${encodeURIComponent(
-          `Using the ${instanceName} Malloy tools, explore the "${datasetName || "dataset"}" dataset on ${instanceName} — list its sources and help me analyze it.`,
-        )}`
-      : "https://claude.ai/customize/connectors";
-    window.open(url, "_blank", "noopener,noreferrer");
-  };
+  // A Claude chat on this dataset, same prompt as the home page's card.
+  const onExploreClaude = () => openClaude(claudeChatUrl(exploreDatasetPrompt(instanceName, datasetName || "dataset")));
 
   // The dashboard's own .malloy on GitHub — the demo point being that a
   // dashboard IS a source file. Null (so: not rendered) when the dataset has no
@@ -253,6 +247,7 @@ export function DatasetNav({
           </svg>
         </button>
       </div>
+      {connectDialog}
     </nav>
   );
 }

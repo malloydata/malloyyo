@@ -40,7 +40,8 @@ lib/                            shared code, imported by relative path
   Note `##"` — two hashes. A `#"` attaches to whatever declaration follows it,
   so `#"` above the first source documents that SOURCE and leaves the dataset
   with no description. The description shows where someone is deciding whether
-  they want this dataset, or who should see it.
+  they want this dataset, or who should see it — and in `list_sources`, so keep
+  it to a sentence or two (`yo_help("develop/documenting-models")`).
 
   With no tag the title is derived from the name — `hub_spot` → "Hub Spot" —
   so a dataset that says nothing still reads properly. Use the tag when the

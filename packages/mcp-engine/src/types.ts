@@ -251,6 +251,10 @@ export interface RunStatementInfo {
 export interface ModelInfo {
   /** Root URI the model compiled from. Develop only (leaky on the explore surface). */
   entry?: string;
+  /** The model's own doc string (`##"`, two hashes) — what the dataset is. */
+  description?: string;
+  /** The model's agent notes (`##(agent)`). */
+  instructions?: string;
   annotations?: Annotation[];
   /** Given declarations — model scope is the authoritative scope for these. */
   givens?: GivenInfo[];
@@ -417,8 +421,11 @@ export interface ModelList {
 /** A source as it appears in {@link ListSourcesResult}: the `source_ref` is the
     map key, so only the choosing annotations remain on the value. */
 export interface ListedSource {
+  /** The source's `#"` — one sentence on what it answers. Its `#(agent)`
+      instructions are describe_source's, not the listing's: the listing is
+      read before anyone knows which source they want, so it carries only what
+      it takes to choose. */
   description?: string;
-  instructions?: string;
   /** Present (true) only when the source_ref key must be backtick-quoted. */
   must_quote?: boolean;
 }
@@ -426,8 +433,8 @@ export interface ListedSource {
 /** A model as it appears in {@link ListSourcesResult}: the `model_ref` is the
     map key; its sources are keyed by `source_ref`. */
 export interface ListedModel {
+  /** The model's `##"`. */
   description?: string;
-  instructions?: string;
   sources?: Record<string, ListedSource>;
   /** Dashboards keyed by name, mirroring how sources are keyed by source_ref. */
   dashboards?: Record<string, ListedDashboard>;

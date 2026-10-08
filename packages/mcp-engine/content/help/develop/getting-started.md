@@ -84,6 +84,12 @@ its public surface:
 - The export list is the consumer's menu — exactly what the test window and real
   consumers can query, nothing more.
 
+**Document what you export.** A `##"` for the model, a one-sentence `#"` on each
+exported source (what it answers), and `#(agent)` lines for how to query it.
+`list_sources` shows the short ones on every question, so size matters — see
+`yo_help("develop/documenting-models")`. `malloyyo lint` warns on missing or
+oversized descriptions.
+
 ## The loop
 
 Edit a file → `compile_file` → fix `problems[]` → `query` (pass the model file's

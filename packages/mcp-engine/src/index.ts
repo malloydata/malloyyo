@@ -69,7 +69,12 @@ export {
   projectModel, projectDescription, buildSourceDescribe,
   publicGroups, publicSource, publicOnlyModel,
 } from './project';
-export { modelCatalogEntry } from './catalog';
+export {
+  modelCatalogEntry,
+  catalogDocWarnings,
+  SOURCE_DESCRIPTION_CHARS,
+  MODEL_DESCRIPTION_CHARS,
+} from './catalog';
 export { run, executeMaterialized, DEFAULT_ROW_LIMIT, type RunOptions } from './run';
 export { rowLimitTruncation } from './truncation';
 export { jsonRows } from './rows';

@@ -116,10 +116,12 @@ and **givens** (the parameters that become the dashboard's filter controls).
 use. **Only what `index.malloy` exports is visible** to dashboards, `dashboard
 dev`, and the hosted app.
 
-Give each exported source a `#"` doc string. It's what `list_sources` shows the
-hosted app and any MCP client, and it's the only place to record the things a
-consumer can't infer — which source answers which question, and any measure
-whose meaning is subtle.
+Give each exported source a `#"` doc string: one sentence on which questions it
+answers. It's what `list_sources` shows the hosted app and any MCP client, for
+every source, on every question — so keep it short, and put how to query the
+source (grain, the measure to prefer, a subtle meaning) in `#(agent)` lines,
+which `describe_source` shows. Sizes and examples:
+`yo_help("develop/documenting-models")`.
 
 For Malloy modeling and givens specifics, lean on the author MCP rather than
 guessing: the repo's `.mcp.json` wires `mcp__malloyyo_author__*`. Call

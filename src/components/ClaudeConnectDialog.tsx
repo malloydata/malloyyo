@@ -4,14 +4,35 @@
 "use client";
 import { useEffect, useState, type ReactNode } from "react";
 
-// "Connect <instance> to Claude first": the one-time setup a claude.ai chat
-// needs before it can see this instance. Shown by ltool's "Explore further
-// with Claude", the dataset toolbar's "Explore in Claude" and the AI Q&A
-// page's "Ask your own in Claude" when the user has no live connector, instead
-// of opening claude.ai's Connectors page bare — that page has no entry for this
-// instance, and nothing on it says the address to add is this origin plus
-// `/mcp`. The front page passes its fuller McpSetup (more clients) as `children`
-// in place of the short steps; the frame and the buttons are the same.
+/** A new claude.ai chat with `prompt` already typed in. */
+export function claudeChatUrl(prompt: string): string {
+  return `https://claude.ai/new?q=${encodeURIComponent(prompt)}`;
+}
+
+/** The prompt for exploring a whole dataset (home page card, dataset toolbar). */
+export function exploreDatasetPrompt(instanceName: string, dataset: string): string {
+  return `Using the ${instanceName} Malloy tools, explore the "${dataset}" dataset on ${instanceName} — list its sources and help me analyze it.`;
+}
+
+// Every Claude button goes through this: open the seeded chat when claude.ai is
+// connected, otherwise show the dialog first. Render `connectDialog` once.
+export function useClaudeConnect(instanceName: string, claudeConnected: boolean, setupBody?: ReactNode) {
+  const [target, setTarget] = useState<string | null>(null);
+  const openClaude = (url: string) => {
+    if (claudeConnected) window.open(url, "_blank", "noopener,noreferrer");
+    else setTarget(url);
+  };
+  const connectDialog = target ? (
+    <ClaudeConnectDialog instanceName={instanceName} continueUrl={target} onClose={() => setTarget(null)}>
+      {setupBody}
+    </ClaudeConnectDialog>
+  ) : null;
+  return { openClaude, connectDialog };
+}
+
+// "Connect <instance> to Claude first": the one-time setup, including the
+// `<origin>/mcp` address claude.ai's Connectors page never shows. The home page
+// passes its fuller McpSetup as `children` in place of the short steps.
 export function ClaudeConnectDialog({
   instanceName,
   continueUrl,
@@ -20,7 +41,7 @@ export function ClaudeConnectDialog({
 }: {
   instanceName: string;
   /** The seeded claude.ai chat to open once the connector is added. */
-  continueUrl: string | null;
+  continueUrl: string;
   onClose: () => void;
   /** Replaces the default short steps (the front page shows its full McpSetup). */
   children?: ReactNode;
@@ -96,7 +117,7 @@ export function ClaudeConnectDialog({
         <div className="flex items-center gap-3 pt-1">
           <button
             onClick={() => {
-              if (continueUrl) window.open(continueUrl, "_blank", "noopener,noreferrer");
+              window.open(continueUrl, "_blank", "noopener,noreferrer");
               onClose();
             }}
             className="px-3 py-1.5 rounded bg-black text-white dark:bg-white dark:text-black hover:opacity-80"

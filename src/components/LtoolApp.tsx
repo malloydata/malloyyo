@@ -7,7 +7,7 @@ import { createPortal } from "react-dom";
 import Link from "next/link";
 import dynamic from "next/dynamic";
 import { SchemaPanel, type SourceOption } from "@/components/SchemaPanel";
-import { ClaudeConnectDialog } from "@/components/ClaudeConnectDialog";
+import { claudeChatUrl, useClaudeConnect } from "@/components/ClaudeConnectDialog";
 
 const MalloyCodeEditor = dynamic(
   () => import("@/components/MalloyCodeEditor").then((m) => m.MalloyCodeEditor),
@@ -580,7 +580,7 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
   const [instanceName, setInstanceName] = useState("Malloyyo");
   const [claudeConnected, setClaudeConnected] = useState(false);
   const [isAdmin, setIsAdmin] = useState(false);
-  const [showClaudeSetup, setShowClaudeSetup] = useState(false);
+  const { openClaude, connectDialog } = useClaudeConnect(instanceName, claudeConnected);
   const [shareCopied, setShareCopied] = useState(false);
   const [editedTitle, setEditedTitle] = useState<string | null>(null);
   // Click-to-rename a saved (unmodified) query's title, persisted on blur.
@@ -894,9 +894,9 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
   // the exact connector+tool instead of discovering it — important because
   // Claude only surfaces a handful of a connector's tools up front.
   const claudeUrl = activeSlug
-    ? `https://claude.ai/new?q=${encodeURIComponent(
+    ? claudeChatUrl(
         `Using the ${instanceName} Malloy tools, Call ${instanceName}:open_share_link with slug "${activeSlug}", then ask me what I'd like to know.`
-      )}`
+      )
     : null;
 
   // Ask the model for a query and show what it ran. The server does both — see
@@ -1343,10 +1343,7 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
               )}
               {claudeUrl && (
                 <button
-                  onClick={() => {
-                    if (claudeConnected) window.open(claudeUrl, "_blank", "noopener,noreferrer");
-                    else setShowClaudeSetup(true);
-                  }}
+                  onClick={() => openClaude(claudeUrl)}
                   className="text-xs px-3 py-1.5 rounded border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-900"
                   title={`Open a new Claude chat seeded with this query on ${instanceName}`}
                 >
@@ -1415,15 +1412,7 @@ export function LtoolApp({ initialSlug, initialSource, initialDatasetId }: { ini
         />
       )}
 
-      {/* One-time claude.ai connection instructions, shown before following the
-          Explore link when this user has never connected claude.ai. */}
-      {showClaudeSetup && claudeUrl && (
-        <ClaudeConnectDialog
-          instanceName={instanceName}
-          continueUrl={claudeUrl}
-          onClose={() => setShowClaudeSetup(false)}
-        />
-      )}
+      {connectDialog}
     </div>
   );
 }

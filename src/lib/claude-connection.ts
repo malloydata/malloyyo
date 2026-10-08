@@ -5,13 +5,9 @@ import { db, oauthAccessTokens, oauthRefreshTokens, oauthClients } from "@/db";
 import { eq, and, isNull, gt } from "drizzle-orm";
 import { isClaudeAiClient } from "@/lib/claude-client";
 
-// Has this user connected claude.ai to this instance — completed the MCP OAuth
-// flow FROM claude.ai (web, Desktop and mobile share the one connector and the
-// one callback) and still holding a live token? Decides whether the "Explore in
-// Claude" buttons open a seeded chat or show connection setup first. Grants
-// from other clients don't count: the malloyyo CLI's login and Claude Code use
-// the same OAuth tables, and a user with only those has no connector in
-// claude.ai, so a seeded chat there finds no tools. See isClaudeAiClient.
+// Has this user connected claude.ai (not just the CLI or Claude Code, which use
+// the same OAuth tables) and still holds a live token? Picks whether the Claude
+// buttons open a seeded chat or the connect dialog. See isClaudeAiClient.
 export async function hasActiveClaudeConnection(userId: string): Promise<boolean> {
   const now = new Date();
   const live = await db

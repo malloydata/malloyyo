@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { signIn } from "next-auth/react";
 import Link from "next/link";
 import { QueryIcon } from "@/components/QueryIcon";
-import { ClaudeConnectDialog } from "@/components/ClaudeConnectDialog";
+import { claudeChatUrl, exploreDatasetPrompt, useClaudeConnect } from "@/components/ClaudeConnectDialog";
 import { repoUrl, codespaceUrl } from "@/lib/github-source-link";
 import {
   Dialog,
@@ -120,11 +120,16 @@ export default function HomePage() {
   const [dashboards, setDashboards] = useState<
     Array<DashboardChip & { dataset: string; qualified: string }>
   >([]);
-  // Claude connect-instructions modal — shown when clicking a source's Claude
-  // button before the connector is linked. claudeTargetUrl is the explore chat
-  // to continue to after setup.
-  const [showClaudeSetup, setShowClaudeSetup] = useState(false);
-  const [claudeTargetUrl, setClaudeTargetUrl] = useState<string | null>(null);
+  // Claude buttons: a seeded chat, or the connect dialog (with the full
+  // McpSetup as its body) when claude.ai isn't connected yet.
+  const { openClaude, connectDialog } = useClaudeConnect(instanceName, claudeConnected, (
+    <>
+      <p className="text-gray-600 dark:text-gray-400">
+        You haven&apos;t connected {instanceName} to Claude yet. One-time setup:
+      </p>
+      <McpSetup instanceName={instanceName} />
+    </>
+  ));
 
   useEffect(() => { void load(); }, []);
 
@@ -313,20 +318,10 @@ function shortAuthor(author: string): string {
 
   // claude.ai chats seeded via this instance's MCP tools — one per source, one
   // for a whole dataset.
-  const claudeExploreUrl = (source: string) =>
-    `https://claude.ai/new?q=${encodeURIComponent(
-      `Using the ${instanceName} Malloy tools, describe_source "${source}" on ${instanceName}, then help me explore it.`,
-    )}`;
-  const claudeExploreDatasetUrl = (dataset: string) =>
-    `https://claude.ai/new?q=${encodeURIComponent(
-      `Using the ${instanceName} Malloy tools, explore the "${dataset}" dataset on ${instanceName} — list its sources and help me analyze it.`,
-    )}`;
-
-  // Open a seeded Claude chat, or the connect-setup modal if not yet linked.
-  function openClaude(url: string) {
-    if (claudeConnected) window.open(url, "_blank", "noopener,noreferrer");
-    else { setClaudeTargetUrl(url); setShowClaudeSetup(true); }
-  }
+  const claudeExploreUrl = (source: string) => claudeChatUrl(
+    `Using the ${instanceName} Malloy tools, describe_source "${source}" on ${instanceName}, then help me explore it.`,
+  );
+  const claudeExploreDatasetUrl = (dataset: string) => claudeChatUrl(exploreDatasetPrompt(instanceName, dataset));
   const exploreWithClaude = (source: string) => openClaude(claudeExploreUrl(source));
 
   if (me === undefined) return <main className="p-8 font-mono text-sm">loading…</main>;
@@ -675,21 +670,7 @@ function shortAuthor(author: string): string {
         </>
       )}
 
-      {/* Connect-to-Claude instructions, shown when a Claude button is clicked
-          before the connector is linked: the shared dialog, with the full
-          McpSetup instructions as its body. */}
-      {showClaudeSetup && (
-        <ClaudeConnectDialog
-          instanceName={instanceName}
-          continueUrl={claudeTargetUrl}
-          onClose={() => setShowClaudeSetup(false)}
-        >
-          <p className="text-gray-600 dark:text-gray-400">
-            You haven&apos;t connected {instanceName} to Claude yet. One-time setup:
-          </p>
-          <McpSetup instanceName={instanceName} />
-        </ClaudeConnectDialog>
-      )}
+      {connectDialog}
     </main>
   );
 }

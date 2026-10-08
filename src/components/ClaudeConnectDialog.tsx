@@ -5,12 +5,12 @@
 import { useEffect, useState } from "react";
 
 // "Connect <instance> to Claude first": the one-time setup a claude.ai chat
-// needs before it can see this instance. Shown by the dataset toolbar's
-// "Explore in Claude" and the AI Q&A page's "Ask your own in Claude" when the
-// user has no live connector, instead of opening claude.ai's Connectors page
-// bare — that page has no entry for this instance, and nothing on it says the
-// address to add is this origin plus `/mcp`. Same steps as ltool's
-// "Explore further with Claude" setup and the front page's McpSetup.
+// needs before it can see this instance. Shown by ltool's "Explore further
+// with Claude", the dataset toolbar's "Explore in Claude" and the AI Q&A
+// page's "Ask your own in Claude" when the user has no live connector, instead
+// of opening claude.ai's Connectors page bare — that page has no entry for this
+// instance, and nothing on it says the address to add is this origin plus
+// `/mcp`. The front page's McpSetup covers more clients and stays separate.
 export function ClaudeConnectDialog({
   instanceName,
   continueUrl,

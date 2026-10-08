@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { signIn } from "next-auth/react";
 import Link from "next/link";
 import { QueryIcon } from "@/components/QueryIcon";
+import { ClaudeConnectDialog } from "@/components/ClaudeConnectDialog";
 import { repoUrl, codespaceUrl } from "@/lib/github-source-link";
 import {
   Dialog,
@@ -675,34 +676,19 @@ function shortAuthor(author: string): string {
       )}
 
       {/* Connect-to-Claude instructions, shown when a Claude button is clicked
-          before the connector is linked. Reuses the full McpSetup instructions. */}
+          before the connector is linked: the shared dialog, with the full
+          McpSetup instructions as its body. */}
       {showClaudeSetup && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-          onClick={() => setShowClaudeSetup(false)}>
-          <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-lg shadow-xl max-w-lg w-full max-h-[85vh] overflow-y-auto p-5 space-y-4"
-            onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-start justify-between gap-3">
-              <h2 className="text-sm font-semibold">Connect {instanceName} to Claude first</h2>
-              <button onClick={() => setShowClaudeSetup(false)}
-                className="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 leading-none" title="Close">×</button>
-            </div>
-            <p className="text-xs text-gray-600 dark:text-gray-400">
-              You haven&apos;t connected {instanceName} to Claude yet. One-time setup:
-            </p>
-            <McpSetup instanceName={instanceName} />
-            <div className="flex items-center gap-3 pt-1">
-              <button
-                onClick={() => { if (claudeTargetUrl) window.open(claudeTargetUrl, "_blank", "noopener,noreferrer"); setShowClaudeSetup(false); }}
-                className="text-xs px-3 py-1.5 rounded bg-black text-white dark:bg-white dark:text-black hover:opacity-80">
-                Continue on to Claude.ai →
-              </button>
-              <button onClick={() => setShowClaudeSetup(false)}
-                className="text-xs px-3 py-1.5 rounded border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-900">
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
+        <ClaudeConnectDialog
+          instanceName={instanceName}
+          continueUrl={claudeTargetUrl}
+          onClose={() => setShowClaudeSetup(false)}
+        >
+          <p className="text-gray-600 dark:text-gray-400">
+            You haven&apos;t connected {instanceName} to Claude yet. One-time setup:
+          </p>
+          <McpSetup instanceName={instanceName} />
+        </ClaudeConnectDialog>
       )}
     </main>
   );

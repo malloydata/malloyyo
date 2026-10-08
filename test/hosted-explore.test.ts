@@ -26,11 +26,15 @@ import {
   malloyArtifacts,
   draftDashboards,
   history,
+  oauthClients,
+  oauthAccessTokens,
+  oauthRefreshTokens,
   type User,
 } from "@/db";
 import { buildHostedExploreSurface } from "@/lib/mcp-host";
 import { allDashboardsByDataset, getDashboard, listAllDashboards, listDashboardsAndDrafts } from "@/lib/dashboards";
 import { loadSharedQuery, runQueryForWeb } from "@/lib/mcp-tools";
+import { hasActiveClaudeConnection } from "@/lib/claude-connection";
 
 const MODEL = `#" Pet shop sales.
 source: sales is duckdb.sql("""
@@ -574,4 +578,34 @@ test("a draft renders against the dataset's current model, not the one it was sa
   const dash = await getDashboard(user.id, "petshop", "draft-follows1");
   assert.equal(dash?.modelId, next.id, "renders against the new version");
   assert.notEqual(dash?.modelId, saved.id);
+});
+
+test("claudeConnected counts only a live claude.ai grant, not a CLI or Claude Code login", async () => {
+  const hour = 60 * 60 * 1000;
+  const later = new Date(Date.now() + hour);
+  const earlier = new Date(Date.now() - hour);
+  const client = async (name: string, redirectUris: string[]) =>
+    (await db.insert(oauthClients).values({
+      name, redirectUris, tokenEndpointAuthMethod: "none",
+      grantTypes: ["authorization_code", "refresh_token"], responseTypes: ["code"],
+    }).returning())[0]!;
+  const person = async (email: string) => (await db.insert(users).values({ email }).returning())[0]!;
+  const cli = await client("malloyyo CLI", ["http://127.0.0.1:53682/callback"]);
+  const claude = await client("Claude", ["https://claude.ai/api/mcp/auth_callback"]);
+
+  // Only a CLI login: no claude.ai connector, so the setup steps must show.
+  const cliOnly = await person("cli-only@test.local");
+  await db.insert(oauthAccessTokens).values({ tokenHash: "at-cli", clientId: cli.id, userId: cliOnly.id, scope: "mcp publish", expiresAt: later });
+  assert.equal(await hasActiveClaudeConnection(cliOnly.id), false);
+
+  // claude.ai, access token expired but refresh token live: still connected.
+  const refreshing = await person("refreshing@test.local");
+  await db.insert(oauthAccessTokens).values({ tokenHash: "at-claude-old", clientId: claude.id, userId: refreshing.id, scope: "mcp", expiresAt: earlier });
+  await db.insert(oauthRefreshTokens).values({ tokenHash: "rt-claude", clientId: claude.id, userId: refreshing.id, scope: "mcp", expiresAt: later });
+  assert.equal(await hasActiveClaudeConnection(refreshing.id), true);
+
+  // claude.ai, revoked: not connected.
+  const revoked = await person("revoked@test.local");
+  await db.insert(oauthAccessTokens).values({ tokenHash: "at-claude-revoked", clientId: claude.id, userId: revoked.id, scope: "mcp", expiresAt: later, revokedAt: earlier });
+  assert.equal(await hasActiveClaudeConnection(revoked.id), false);
 });

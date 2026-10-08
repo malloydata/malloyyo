@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 
 // "Connect <instance> to Claude first": the one-time setup a claude.ai chat
 // needs before it can see this instance. Shown by ltool's "Explore further
@@ -10,16 +10,20 @@ import { useEffect, useState } from "react";
 // page's "Ask your own in Claude" when the user has no live connector, instead
 // of opening claude.ai's Connectors page bare — that page has no entry for this
 // instance, and nothing on it says the address to add is this origin plus
-// `/mcp`. The front page's McpSetup covers more clients and stays separate.
+// `/mcp`. The front page passes its fuller McpSetup (more clients) as `children`
+// in place of the short steps; the frame and the buttons are the same.
 export function ClaudeConnectDialog({
   instanceName,
   continueUrl,
   onClose,
+  children,
 }: {
   instanceName: string;
   /** The seeded claude.ai chat to open once the connector is added. */
-  continueUrl: string;
+  continueUrl: string | null;
   onClose: () => void;
+  /** Replaces the default short steps (the front page shows its full McpSetup). */
+  children?: ReactNode;
 }) {
   const [origin, setOrigin] = useState("");
   // window.location is browser-only; read it after mount so SSR and the first
@@ -34,20 +38,21 @@ export function ClaudeConnectDialog({
         role="dialog"
         aria-modal="true"
         aria-label={`Connect ${instanceName} to Claude`}
-        className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-lg shadow-xl max-w-md w-full p-5 space-y-4 font-mono text-xs"
+        className={`bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-lg shadow-xl w-full p-5 space-y-4 text-xs ${children ? "max-w-lg max-h-[85vh] overflow-y-auto" : "max-w-md font-mono"}`}
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-3">
           <h2 className="text-sm font-semibold">Connect {instanceName} to Claude first</h2>
           <button
             onClick={onClose}
-            className="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 leading-none"
+            className="text-sm text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 leading-none"
             title="Close"
           >
             ×
           </button>
         </div>
 
+        {children ?? (<>
         <p className="text-gray-600 dark:text-gray-400">
           Claude can only explore this data through a connector to {instanceName}. One-time setup:
         </p>
@@ -86,11 +91,12 @@ export function ClaudeConnectDialog({
         <ol className="list-decimal list-inside text-gray-700 dark:text-gray-300 space-y-2" start={3}>
           <li>Sign in to {instanceName} when claude.ai asks, and approve access</li>
         </ol>
+        </>)}
 
         <div className="flex items-center gap-3 pt-1">
           <button
             onClick={() => {
-              window.open(continueUrl, "_blank", "noopener,noreferrer");
+              if (continueUrl) window.open(continueUrl, "_blank", "noopener,noreferrer");
               onClose();
             }}
             className="px-3 py-1.5 rounded bg-black text-white dark:bg-white dark:text-black hover:opacity-80"

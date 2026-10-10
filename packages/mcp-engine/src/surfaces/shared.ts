@@ -61,8 +61,11 @@ export function toContent(result: object): {
 } {
   const { malloy_text, [HOST_ONLY]: _hostOnly, ...rest } =
     result as { malloy_text?: unknown; [HOST_ONLY]?: unknown };
+  // Unindented: indentation is about a third of a result's characters and buys
+  // a model nothing (measured in #169). It also keeps the wire honest about the
+  // byte budget, which measures rows unindented (budget.ts).
   const content: Array<{ type: 'text'; text: string }> = [
-    { type: 'text', text: JSON.stringify(rest, null, 2) },
+    { type: 'text', text: JSON.stringify(rest) },
   ];
   if (typeof malloy_text === 'string' && malloy_text.length > 0) {
     content.push({ type: 'text', text: malloy_text });

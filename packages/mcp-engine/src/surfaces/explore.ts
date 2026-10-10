@@ -13,7 +13,7 @@
 
 import type { Runtime } from '@malloydata/malloy';
 import { compile } from '../walker';
-import { buildSourceDescribe } from '../project';
+import { describeSourceOutline, describeSourcePath } from '../project';
 import { runRestricted, validateRestricted } from '../restricted';
 import { applyResultBudget } from './budget';
 import { DEFAULT_ROW_LIMIT } from '../run';
@@ -252,7 +252,8 @@ function srcNudge(modelRef: string, source: string): (p: Problem) => Problem {
       message:
         `${p.message} — call describe_source with source="${source}"` +
         (modelRef ? ` model_ref="${modelRef}"` : '') +
-        ' to see what fields, measures, views, and joins exist.',
+        ' to see what fields, measures, views, and joins exist' +
+        ' (add path="<join path>" for the fields behind a join).',
       help_topic: p.help_topic ?? 'language/fields',
     };
   };
@@ -407,6 +408,18 @@ function describeSourceTool(host: ExploreHost): ToolDef {
             'The model the source lives in (the model_ref from list_sources). ' +
             'Optional when the source name is unique across the catalog.',
         },
+        include_source: {
+          type: 'boolean',
+          description:
+            'Also return the source\'s verbatim Malloy declaration. Rarely needed: fields, measures and ' +
+            'each view\'s own code are already in the result.',
+        },
+        path: {
+          type: 'string',
+          description:
+            'A join path from this source\'s `joins` (e.g. `principals.people`). Returns the fields at ' +
+            'that path as a query through this source sees them, and the joins below it.',
+        },
       },
       required: ['source'],
       additionalProperties: false,
@@ -414,6 +427,8 @@ function describeSourceTool(host: ExploreHost): ToolDef {
     handler: async (args): Promise<SourceDescribeResult> => {
       const source = argString(args, 'source');
       const modelRefArg = argOptString(args, 'model_ref');
+      const path = argOptString(args, 'path')?.trim() || undefined;
+      const includeSource = args.include_source === true;
       if (!source.trim()) {
         return {
           ok: false, model_ref: modelRefArg ?? '', source,
@@ -432,9 +447,8 @@ function describeSourceTool(host: ExploreHost): ToolDef {
           if (!compiled.ok || !compiled.model) {
             return { ok: false, model_ref: modelRef, source, problems: compiled.problems };
           }
-          const built = buildSourceDescribe(compiled.model, source);
-          if (!built) {
-            const available = Object.keys(compiled.model.sources);
+          const notFound = (): SourceDescribeResult => {
+            const available = Object.keys(compiled.model!.sources);
             return {
               ok: false, model_ref: modelRef, source,
               problems: [
@@ -445,10 +459,41 @@ function describeSourceTool(host: ExploreHost): ToolDef {
                 ),
               ],
             };
+          };
+
+          if (path) {
+            // The fields at one join path, as a query through `source` sees
+            // them — by path, because a join can extend or refine its target.
+            const at = describeSourcePath(compiled.model, source, path);
+            if (!at) return notFound();
+            if (!at.ok) {
+              return {
+                ok: false, model_ref: modelRef, source, path,
+                problems: [
+                  ...compiled.problems,
+                  codeProblem(
+                    'path-not-found',
+                    `No join path '${path}' on '${source}'. Paths: ${at.paths.join(', ') || '(none)'}.`,
+                  ),
+                ],
+              };
+            }
+            const out: SourceDescribeResult = {
+              ok: true, model_ref: modelRef, source, path,
+              described_path: at.described_path,
+              problems: compiled.problems,
+            };
+            if (Object.keys(at.joins).length) out.joins = at.joins;
+            return out;
           }
-          // malloy_text is JUST the described source's own declaration; joined
-          // sources are recovered via describe_source by name.
-          const malloy_text = sourceAsMalloy(compiled.model.sources[source]);
+
+          const built = describeSourceOutline(compiled.model, source);
+          if (!built) return notFound();
+          // malloy_text — JUST the described source's own declaration — on
+          // request only: every field's expression and every view's code are
+          // already in the structured result, so by default it says the source
+          // a second time. What a join path holds comes from `path`.
+          const malloy_text = includeSource ? sourceAsMalloy(compiled.model.sources[source]) : '';
           const base: SourceDescribeResult = {
             ok: true, model_ref: modelRef, source,
             guidance: prompts.explore.guidance,
@@ -458,7 +503,6 @@ function describeSourceTool(host: ExploreHost): ToolDef {
           const examples = buildQueryExamples(built.described_source);
           if (examples.length) base.examples = examples;
           if (Object.keys(built.joins).length) base.joins = built.joins;
-          if (Object.keys(built.join_source_map).length) base.join_source_map = built.join_source_map;
           return malloy_text ? { ...base, malloy_text } : base;
         });
       } catch (e) {

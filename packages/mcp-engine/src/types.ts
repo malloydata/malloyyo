@@ -513,8 +513,8 @@ export interface CompactSchema {
     that carries views. */
 export interface ExploreDescribedSource extends CompactSchema {
   name: string;
-  /** View name → one-line description, or null when the view has no `#"` doc. */
-  views: Record<string, string | null>;
+  /** View name → its `#"` and declaration text (see DescribedView). */
+  views: Record<string, DescribedView>;
 }
 
 /** A `joins` entry — an ARRAY or a SOURCE-JOIN (never a scalar/record column).
@@ -555,6 +555,46 @@ export interface ExploreSourceDescribe {
   join_source_map: Record<string, CompactSchema>;
 }
 
+/** A view on the described source: its `#"` and its declaration text
+    (`view: name is { … }`), sliced from the model. Either may be absent. */
+export interface DescribedView {
+  description?: string;
+  code?: string;
+}
+
+/** One join in describe_source's hierarchy: WHERE it is and how it behaves,
+    never its fields. Keyed by clean dotted path, depth-first. The fields at a
+    path come from `describe_source(source, path)` — by path, because a join
+    can extend or refine what it joins, so the source a join names is not
+    necessarily what the path holds. */
+export interface JoinOutline {
+  fans_out?: true;
+  cycle?: true;
+  /** Paste-ready form of the key, present only when a segment needs quoting. */
+  quoted_path?: string;
+  is_array?: true;
+  /** The named source this join references unmodified. Absent when the join
+      defines or refines its own shape. */
+  source?: string;
+  /** The join statement as the model writes it — on `described_path` only. */
+  code?: string;
+  /** What is at this path, from the join's or its target's `#"`. */
+  description?: string;
+}
+
+/** describe_source with `path`: the fields at one join path, as a query
+    through the root source sees them. No views — a joined source's views are
+    not reachable through a path. */
+export interface ExploreDescribedPath extends CompactSchema {
+  path: string;
+  quoted_path?: string;
+  fans_out?: true;
+  is_array?: true;
+  cycle?: true;
+  source?: string;
+  code?: string;
+}
+
 export interface SourceDescribeResult {
   ok: boolean;
   /** The workflow seed — same string list_sources carries, repeated here so the
@@ -565,18 +605,22 @@ export interface SourceDescribeResult {
   model_ref: string;
   /** The source requested. */
   source: string;
-  /** The described source — every column, plus measures and views. */
+  /** The join path requested, when one was. */
+  path?: string;
+  /** The described source — every column, plus measures and views. Absent
+      when a `path` was described instead. */
   described_source?: ExploreDescribedSource;
+  /** The fields at `path`, when one was requested. */
+  described_path?: ExploreDescribedPath;
   /** A couple of runnable example queries built from this source's REAL fields.
       They model reuse — invoke a published view, aggregate a published measure —
       so a model copies the right pattern instead of re-deriving aggregates.
       Omitted when the source has nothing aggregable. */
   examples?: string[];
-  /** Arrays + source-joins, keyed by path (depth-first). Omitted when empty. */
-  joins?: Record<string, JoinEntry>;
-  /** Every reachable NAMED source, deduped by name (CompactSchema, no views).
-      Omitted when empty. */
-  join_source_map?: Record<string, CompactSchema>;
+  /** The join hierarchy below what was described — every array and
+      source-join, keyed by absolute path (depth-first), names only. Omitted
+      when empty. */
+  joins?: Record<string, JoinOutline>;
   /**
    * JUST the described source's verbatim Malloy declaration — delivered as its
    * own clean content block (toContent lifts it out so code is never escaped in

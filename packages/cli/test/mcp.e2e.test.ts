@@ -55,7 +55,7 @@ test('malloyyo mcp: explore surface over stdio, end to end', async () => {
     { jsonrpc: '2.0', method: 'notifications/initialized' },
     { jsonrpc: '2.0', id: 2, method: 'tools/list' },
     { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'list_sources', arguments: {} } },
-    { jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'describe_source', arguments: { source: 'managers' } } },
+    { jsonrpc: '2.0', id: 4, method: 'tools/call', params: { name: 'describe_source', arguments: { source: 'managers', include_source: true } } },
     { jsonrpc: '2.0', id: 5, method: 'tools/call', params: { name: 'query', arguments: { source: 'managers', malloy: 'run: managers -> { aggregate: c is count() }' } } },
     { jsonrpc: '2.0', id: 6, method: 'tools/call', params: { name: 'query', arguments: { source: 'managers', malloy: 'run: managers -> { select: name }', execute: false } } },
   ]);
@@ -73,7 +73,8 @@ test('malloyyo mcp: explore surface over stdio, end to end', async () => {
   assert.ok(idx?.sources && 'managers' in idx.sources, 'managers listed');
   assert.ok(!(idx?.sources && 'people' in idx.sources), 'imported people not top-level');
 
-  // describe_source — block 0 digest (resolved a BARE source) + block 1 source.
+  // describe_source — block 0 digest (resolved a BARE source) + block 1 source
+  // (the verbatim source is opt-in: include_source).
   // The described source rides in `described_source`, with dimensions keyed by name.
   const desc = res.get(4)!;
   const digest = JSON.parse(desc.result!.content![0]!.text) as {

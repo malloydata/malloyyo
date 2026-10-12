@@ -111,3 +111,34 @@ test('run(): a truncated date column names its grain', async () => {
   );
   assert.deepEqual(resultColumns(result), [{ name: 'm', type: 'date', timeframe: 'month' }]);
 });
+
+test('resultColumns: each column carries the format its model or query declares', async () => {
+  const result = await withFixtureRuntime((rt) =>
+    rt
+      .loadModel(`source: t is duckdb.sql("""SELECT 1.5 AS amt, DATE '2024-02-01' AS d""") extend {
+        # currency=usd0k label="Sales"
+        measure: total is amt.sum()
+        # number="mmm yyyy"
+        dimension: dm is d.month
+        measure: plain is amt.sum()
+      }`)
+      .loadQuery(`run: t -> {
+        group_by: dm
+        aggregate: total, plain
+        # percent
+        aggregate: share is total / all(total)
+        nest: n is { aggregate: total }
+      }`)
+      .run(),
+  );
+  const byName = Object.fromEntries((resultColumns(result) ?? []).map((c) => [c.name, c]));
+  // From the model's measure and dimension; a `label=` beside it is not a format.
+  assert.equal(byName['total']?.format, 'currency = usd0k');
+  assert.equal(byName['dm']?.format, 'number = "mmm yyyy"');
+  // From a tag on the query's own alias.
+  assert.equal(byName['share']?.format, 'percent');
+  // None declared: no key at all.
+  assert.equal('format' in byName['plain']!, false);
+  // Inside a nest.
+  assert.equal(byName['n']?.fields?.[0]?.format, 'currency = usd0k');
+});

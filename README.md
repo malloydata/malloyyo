@@ -1,274 +1,113 @@
-# malloyyo
+# Malloyyo
 
-A **natural-language interface to any corpus of data, however complex** — accurate and consistent, served to any AI over MCP.
+**Claude builds the dashboards. Malloyyo makes sure the numbers are right.**
 
-**Problem:** AI + document context + your analytical database = **inconsistent** results. Pointed at a raw database, an AI writes SQL from scratch — so the same question tomorrow yields a different query and different numbers, with wrong joins, invented columns, or fan-out double-counts that still *look* right.
+Claude is really good at building dashboards. Give it access to your data and it will build you something beautiful in a few minutes. That part is solved.
 
-**Solution:** AI + a [Malloy](https://malloydata.dev) **semantic layer** + your analytical database = **consistent** results. Measures, dimensions, and joins are defined once, correctly; the AI composes queries against the model instead of writing SQL, so numbers come back right by construction.
+The missing parts are everything else: semantics, access control, a shared home for the dashboards, and a workflow to manage it all as more and more people build on the same data.
 
-Malloyyo is the thin layer that serves that model:
+So we built it. Malloyyo serves your dashboards in Claude or on the web. It manages the meaning of your data in a [Malloy](https://malloydata.dev) semantic model. It controls who can see what. And it keeps your dashboards and your model in a GitHub repo, so all of it can be verified and maintained.
 
-- **Thin by design** — it sits between the AI and your data, nothing more.
-- **Develop, then publish** — build the model locally and `malloyyo publish` it (or point Malloyyo at a GitHub repo).
-- **Claude already knows Malloy** — the same way it knows Python — so authoring is incredibly fast and assisted.
-- **Readable, full-featured queries** — Malloy is a complete query language (join, nest, aggregate, filter) that stays legible: you can read a query and see at a glance it's doing the right thing.
-- **DuckDB built in** — query Parquet over plain HTTP (S3, GCS, any web server) with **no warehouse required**, or attach your own (BigQuery, Snowflake, MotherDuck, Databricks, …).
-- **Tight control** — the AI can only query what's in the semantic model; nothing outside it is reachable.
-- **A web interface, too** — every query is logged, so you can browse, edit, favorite, re-run, and share them in the browser (ltool), and hand any one off to "Explore further with Claude." Because Malloy renders a whole dashboard as a single query, one saved query can be a full report.
-- **Deploy in minutes** — one-click to Vercel, or [self-host with Docker](docs/docker.md).
+Try [the demo server](https://malloyyo.vercel.app/). Sign in with any Google account.
 
-Try [the demo server](https://malloyyo.vercel.app/) and "Explore further with Claude" — sign in with any Google account.
+## Data chaos, now 10x
 
-**Questions, or built something cool? We'd love to hear from you.** Come say hi on [Slack](https://join.slack.com/t/malloy-community/shared_invite/zt-2dvtske75-TJQfolRtZGXLS24RhTQ79g), and learn more about Malloy at [malloydata.dev](https://www.malloydata.dev) and in the [documentation](https://docs.malloydata.dev).
+At Looker we called it *data chaos*. Two people walk into a meeting, each with their own analysis. The numbers don't match. An argument starts.
 
-## How it works
+Add AI and the problem gets ten times worse. Analysis is cheap now. Ten people walk into the meeting, each with a vibe-coded dashboard, and none of the numbers match.
+
+There's a second, darker problem: **access control**. The database is the wrong layer for deciding what people can see. A table lands in the wrong place. A permission is missing. Queries draw from lots of places, and it's very hard to know exactly what any one person can reach. The same goes for an AI.
+
+A semantic layer solves both.
+
+- **Numbers match** ✓ The model defines the calculations and the join relationships once, so every query is correct.
+- **Access control** ✓ You grant access to a semantic model, which is a much bigger and more meaningful unit than a table. The AI can only query what the model exposes.
+
+## "Do we really need a semantic layer with AI?"
+
+People want a yes-or-no answer. Ours is **"Yes, and…"**
+
+I think the real reason people say "no" is the *end-state* problem. A traditional semantic layer describes calculations and joins, which is great, but a query against it is just a set of parameters. When the calculation you need isn't in the model, you're stuck. You download the data and finish the job somewhere else. A business user opens a spreadsheet. An AI opens Python.
+
+Either way you've left the governed system, and the numbers start to drift.
+
+When we designed Malloy, we decided the semantic layer and the query language had to be **one system**. Malloy describes the semantics, and it's also a complete query language. Any question you can answer in SQL, you can answer in Malloy, scoped to the model. You get consistent definitions and bounded access, and you never hit the end state.
+
+Claude already knows Malloy, the same way it knows Python. It reads and writes Malloy very well.
+
+## Another reason Looker worked: the workflow
+
+People credit Looker's success to its semantic layer. That was a big part of it. People may have missed something just as important: the **workflow**.
+
+Looker treated data analysts like developers. They wrote semantic models, kept them in version control, reviewed each other's changes, and gave the whole organization accurate data. Business users had autonomy. The data team kept things correct.
+
+Malloyyo brings that workflow to humans and agents working together.
+
+## The loop
 
 ```
-   MCP client (claude.ai)            Browser (you)
-           │ OAuth 2.1                     │ Google sign-in
-   ┌───────▼──────────┐          ┌─────────▼─────────┐
-   │  MCP server /mcp │          │      Web UI       │
-   │ analytical tools │          │  datasets · ltool │
-   └───────┬──────────┘          └─────────┬─────────┘
-           └──────────────┬────────────────┘
-                          │  compile · run             ┌────────────────────┐
-                          │                            │  Authoring Models  │
-                          │                            │   • Malloyyo CLI   │
-                          │                            │   • Claude         │
-                          │                            └─────┬───────────┬──┘
-                          │                          push    │           │ develop
-   ┌──────────────────────▼───────────────────────┐  (deploy)|           │
-   │                   Malloyyo                   │◀────────┘           │
-   │        load · compile · store · serve        │                      │
-   └──────┬─────────────────────────────┬─────────┘                      │
-          │                             │                                │
-   ┌──────▼──────┐             ┌────────▼────────┐                       │
-   │    Neon     │             │  Analytical DB  │◀─────────────────────┘
-   │  Postgres   │             │  • BigQuery     │  direct (dev)
-   │  metadata   │             │  • MotherDuck   │
-   │             │             │  • Snowflake    │
-   │  datasets   │             │  • Databricks   │
-   │  malloy_    │             │   (or S3/GCS)   │
-   │    models   │             │                 │
-   │  users      │             │  your data      │
-   └─────────────┘             └─────────────────┘
+   ┌──────────────────────────────────────────────────────────────────┐
+   │                                                                  │
+   ▼                                                                  │
+ 1. BUILD          Claude builds and tests the semantic model in      │
+                   your repo, from your SQL, workbooks, or another    │
+                   semantic layer.                                    │
+   │                                                                  │
+   ▼                                                                  │
+ 2. PUBLISH        Commit, publish to a Malloyyo server, grant        │
+                   access by role.                                    │
+   │                                                                  │
+   ▼                                                                  │
+ 3. ASK & BUILD    People ask questions and build dashboards, in      │
+                   Claude or on the web. When the model is missing    │
+                   a calculation, the agent writes it in Malloy.      │
+   │                                                                  │
+   ▼                                                                  │
+ 4. REFACTOR       The useful dashboards come back into the repo.     │
+                   A data developer and Claude find the calculations  │
+                   that matter, promote them into the model, and      │
+                   update the dashboards to use them.                 │
+   │                                                                  │
+   ▼                                                                  │
+ 5. VERIFY         `malloyyo lint` checks every dashboard against     │
+                   the model. Changes land as pull requests.          │
+   │                                                                  │
+   └──────────────────────────────────────────────────────────────────┘
 ```
 
-### Adding a dataset
+Step 4 is what makes Malloyyo different. Invented calculations are useful, but if nobody looks at them you get drift, with people reading the same data in slightly different ways. In Malloyyo, the dashboards are code in a repo, and Claude can read all of them. It finds the important calculations, puts them back into the shared model, and fixes the dashboards that depended on the old versions. It can also audit what people built and flag real mistakes.
 
-Develop your model in a repo with an `index.malloy` at its root, then **publish it with the [`malloyyo` CLI](packages/cli)**.
+It's the create-and-refactor cycle from software engineering. When it runs regularly, the organization just gets better at working with its data.
 
-First tell the repo where it publishes to. Nothing writes this for you — `malloy-config.json` is yours, and the CLI only ever reads it — so add a `malloyyo` block beside your connections:
+## What you get
 
-```json
-{
-  "connections": { "warehouse": { "is": "postgres", "host": "…" } },
-  "malloyyo": {
-    "targets": { "prod": { "url": "https://your-instance.example.com", "dataset": "orders" } }
-  }
-}
-```
+- **Dashboards in Claude and on the web.** The same dashboards and the same numbers in both places.
+- **A semantic model in Malloy.** Measures, dimensions, and joins defined once and correctly.
+- **No end state.** Malloy is a full query language, so questions don't have to leave the model.
+- **Role-based access control.** Grant datasets to roles. People and AIs see only what the model exposes.
+- **Everything in Git.** Models and dashboards live in a repo, published from the CLI or pulled from GitHub on push.
+- **Lint across the corpus.** Every change is checked against every dashboard in the repo.
+- **Your data where it is.** DuckDB is built in (query Parquet over plain HTTP, no warehouse required), or connect BigQuery, Snowflake, MotherDuck, Databricks, Postgres, and others.
+- **Thin by design.** Malloyyo is a small tool. The AI does most of the heavy lifting.
 
-Then:
+## Getting started
 
 ```bash
-malloyyo login              # one-time browser sign-in
-malloyyo publish            # bundle *.malloy + malloy-config.json and push
-```
-
-Both take a target name (`malloyyo publish prod`) when the repo defines more than one.
-
-The dataset must exist first — create it in the UI, or add `--create-dataset` to the first
-publish (it creates a private dataset, and only once the model compiles).
-
-**In CI there is no browser to sign in with**, so mint an API token instead — in the UI at
-`/settings/tokens` (any member can, for themselves) — and hand it over in the environment:
-
-```bash
-export MALLOYYO_TOKEN=myo_…    # instead of `malloyyo login`
-malloyyo publish
-```
-
-A token is shown once, carries the scopes you tick (`publish`, `mcp`), expires when you say
-so or never, and is revocable from the same page — effective on the very next request.
-See **[API tokens](docs/api-tokens.md)** for the CI recipe and the rest.
-
-The CLI records the git commit it published from; Malloyyo compiles and introspects the model and stores a new version. If it doesn't compile, the push is rejected and the live model is left unchanged.
-
-Alternatively, **point Malloyyo at a GitHub repo** and it pulls `index.malloy` (and any
-imports) plus dashboard artifacts under `dashboards/` directly — a webhook endpoint
-(`/api/datasets/<id>/webhook/github`) refreshes them on every push.
-
-### The two databases
-
-| Database | What lives there |
-|---|---|
-| **Cloud database** (BigQuery, Snowflake, MotherDuck, MySQL, Postgres, Presto, Trino) or **S3/GCS** | Your analytical data |
-| **Neon Postgres** | Metadata — `datasets`, `malloy_models`, `malloy_model_files`, `users`, `accounts`, `sessions`, OAuth clients and tokens |
-
-### MCP tools served at `/mcp`
-
-| Tool | What it does |
-|---|---|
-| `list_sources` | List the Malloy sources you can query on this endpoint |
-| `describe_source` | A source's semantic model — measures, dimensions, views, joins |
-| `query` | Run a Malloy query; returns rows + a shareable link (`execute: false` for SQL only) |
-| `open_share_link` | Resolve a shared link back to its source, question, and Malloy |
-
-The MCP endpoint speaks OAuth 2.1, so claude.ai's remote MCP integration can connect after a one-time authorization flow.
-
-## Developing Malloy models
-
-**You don't have to know Malloy — or wire up the database by hand.** Install the [`malloyyo` CLI](packages/cli), register it with Claude, then ask Claude to do the rest: connect to your data, turn your existing SQL / dbt / Looker definitions into a Malloy model, and test it against real data before you publish. One tool for the whole loop.
-
-> **Want none of this on your laptop?** Open your model repo in a **GitHub Codespace**
-> on the prebuilt [Malloyyo dev container](docs/devcontainer.md) — Claude Code, the Malloy
-> and Claude VS Code extensions, the `malloyyo` CLI, Node, Playwright and `gcloud`/`bq` are
-> already in the image. `malloyyo init` writes the one-line
-> `.devcontainer/devcontainer.json` that opts a repo in, and its codespace starts
-> in seconds.
-
-**1. Install and set up your model repo.**
-
-```bash
-npm install -g @malloydata/malloyyo   # one tool for the whole loop
+npm install -g @malloydata/malloyyo
 cd my-model-repo
-malloyyo init                         # write .mcp.json + scaffold index.malloy
+malloyyo init       # sets the repo up for Claude
+claude              # "connect to my warehouse and build a Malloy model from these dbt sources"
+malloyyo publish    # push it to your Malloyyo server
 ```
 
-`malloyyo init` sets the repo up so that **`cd my-model-repo && claude` opens in author mode** — connected to `malloyyo mcp --develop`, whose tools (`compile`, `compile_file`, `prettify`, `query`, `yo_help`) let Claude build the model *and* ask data questions of it. The server is named **`malloyyo_author`**, so the mode shows in every tool call (`mcp__malloyyo_author__…`) — no confusion with the core `malloy-cli`. `init` also scaffolds an `index.malloy` (the entry model the dashboard/publish tooling needs) if you don't have one.
+You don't need to know Malloy. Claude writes it, checks it against the compiler, and runs real queries to confirm the numbers.
 
-Two modes, chosen at launch, kept separate:
+- [Developing Malloy models](docs/developing-models.md) and the [CLI](packages/cli/README.md)
+- [Creating dashboards](docs/creating-dashboards.md)
+- [Roles and access](docs/roles-and-access.md)
+- [Deploy your own](docs/deploy.md): one click to Vercel, or [self-host with Docker](docs/docker.md)
+- [How Malloyyo works](docs/architecture.md): architecture, MCP tools, and a code map
 
-| command | surface | for |
-| --- | --- | --- |
-| `cd repo && claude` (after `init`) | **author** (`--develop`) | build the model — compile/edit/query, any `.malloy` file |
-| `malloyyo test` | **explore** (`--explore`) | preview **exactly** what claude.ai web will see (`list_sources`/`describe_source`/`query`, `index.malloy` only) |
+## Say hi
 
-`malloyyo test` launches Claude wired to *only* the explore surface, so it's a faithful web dress rehearsal. (`malloyyo author` is the explicit, single-surface counterpart to the `cd && claude` default.) Full authoring guidance — dashboards, givens/controls, grid layout, Vega charts — is reachable from either mode via `yo_help` (topics under `dashboards/*`, `develop/*`). For Claude Desktop or another client, add `malloyyo mcp --develop` (author) or `malloyyo mcp --explore` (test) to its MCP config.
-
-**2. Build your model with Claude.** Start `claude` in your model directory and just describe what you have:
-
-```
-claude
-
-> connect to my Postgres warehouse and build a Malloy model from these dbt sources
-> add a "net revenue" measure and verify it against last quarter's numbers
-```
-
-Claude sets up the connection and writes the `.malloy` for you. It follows a compiler-in-the-loop discipline — validate against the compiler, run real queries through the test window, confirm the numbers — and you steer from the results. You rarely write Malloy by hand.
-
-The connection lives in `malloy-config.json` at the model root, and Claude knows how to write it (`yo_help("connection-setup")`, or the [connection config docs](https://docs.malloydata.dev/documentation/setup/config)). Two things worth knowing:
-
-- **DuckDB needs no config at all** — with no `malloy-config.json`, an in-memory `duckdb` connection just works, so Claude can read your local CSV / Parquet files immediately. Other backends (BigQuery, Postgres, MotherDuck, Snowflake, Databricks, MySQL, Trino, Presto) get a small `malloy-config.json` entry.
-- **Secrets stay out of the committed file** — any value can be `{ "env": "VAR_NAME" }` (e.g. `ANALYTICAL_DATABASE_SECRET`), resolved from the environment when the connection opens. The same `malloy-config.json` ships to production on publish, so put anything environment-specific behind `{ "env": … }` and set that var locally and on the Malloyyo server.
-
-**3. Publish.** Once the model queries cleanly, sign in once and push:
-
-```bash
-malloyyo login <your-instance>     # one-time browser sign-in
-malloyyo publish <your-instance>   # bundle *.malloy + malloy-config.json and push
-```
-
-The server compiles and introspects the model and stores a new version; a compile failure rejects the push and leaves the live model unchanged. (Or push to GitHub and point Malloyyo at the repo.) See [`packages/cli/README.md`](packages/cli/README.md) for the CLI.
-
-## Stack
-
-- **Next.js 16** App Router
-- **Your Analytical Database** —  Most SQL based analytical data storage and query engines
-- **Neon Postgres** + **DrizzleORM** — metadata and auth state
-- **Malloy** (`@malloydata/malloy` + `@malloydata/db-duckdb`) — semantic layer
-- **NextAuth v5** + **Google OAuth** — user authentication
-- **OAuth 2.1 provider** — MCP authorization for claude.ai, and login for the CLI
-- **`malloyyo` CLI** (`packages/cli`) — publish models from a repo over an OAuth-authenticated push endpoint
-
-## Deploy your own
-
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fmalloydata%2Fmalloyyo&env=DATABASE_URL,AUTH_SECRET,AUTH_GOOGLE_ID,AUTH_GOOGLE_SECRET,APP_ADMIN_EMAILS,APP_BASE_URL,INSTANCE_NAME,INSTANCE_CODE&envDescription=Paste%20a%20Postgres%20DATABASE_URL.%20See%20the%20checklist%20for%20the%20rest.&envLink=https%3A%2F%2Fgithub.com%2Fmalloydata%2Fmalloyyo%23deploy-your-own&project-name=malloyyo&repository-name=malloyyo)
-
-The button forks the repo into your GitHub and creates a Vercel project. The schema
-**creates and upgrades itself at boot** (migrations are on by default in production;
-set `RUN_MIGRATIONS_ON_BOOT=0` only if you want to manage the schema yourself), so
-you never run a migration. The import screen prompts for these env vars:
-
-1. **`DATABASE_URL`** — a Postgres connection string (you can get a free instance from
-   [neon.tech](https://neon.tech)). **The build needs it, so paste one here.**
-   *Prefer Vercel-managed storage? Finish the import with a temporary value, then add
-   Postgres under the project's **Storage** tab — it overwrites `DATABASE_URL` — and
-   redeploy.*
-2. **`AUTH_SECRET`** — `openssl rand -base64 32`.
-3. **`APP_ADMIN_EMAILS`** — your email (admins add datasets / publish).
-4. **`INSTANCE_NAME` / `INSTANCE_CODE`** — a display name + a short, unique slug (e.g. `gld`).
-5. **`AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET`** — for sign-in; you can leave these blank now
-   and fill them after the first deploy (next step).
-6. **`APP_BASE_URL`** — your deployment's URL, e.g. `https://<yourproject>.vercel.app`.
-
-**Then enable Google sign-in:** create a Google OAuth app (Google Cloud Console →
-Credentials → Web application), set its authorized redirect URI to
-`https://<your-domain>/api/auth/callback/google`, put the client ID/secret + your
-`APP_BASE_URL` into the project's env vars, and redeploy.
-
-> Prefer Okta or Microsoft Entra ID (Azure AD) sign-in, or want the full
-> details? See **[Authentication](docs/authentication.md)**.
-
-After that, sign in with the admin email and add a dataset.
-
-Malloyyo sends a small allowlist of anonymized, server-side product-usage events by
-default. It never sends query text, SQL, results, URLs, email addresses, or raw user IDs.
-Self-hosters can stop all Malloyyo product telemetry by setting
-`MALLOYYO_TELEMETRY_DISABLED=1`, or inspect the sanitized events without sending them by
-setting `MALLOYYO_TELEMETRY_DEBUG=1`. See [Product telemetry](docs/telemetry.md) for the
-exact event/property allowlist, privacy boundaries, and pseudonymous identities.
-
-> Your model's `malloy-config.json` references your analytical database's secret from an
-> env var (e.g. `ANALYTICAL_DATABASE_SECRET` — see [Developing Malloy models](#developing-malloy-models)). Set that var on the project so the server can connect. `GITHUB_TOKEN` is optional (private-repo model pulls).
-
-### Self-host with Docker
-
-Prefer containers to Vercel? The repo ships a production `Dockerfile`. See
-**[Self-hosting with Docker](docs/docker.md)** for build and run instructions.
-
-## Running locally
-
-Copy `.env.local.example` to `local/<instance>` and fill in the blanks:
-
-```bash
-DATABASE_URL=postgresql://...          # Neon (or any Postgres)
-APP_BASE_URL=http://localhost:3000
-APP_ADMIN_EMAILS=you@example.com
-AUTH_SECRET=...                        # openssl rand -base64 32
-AUTH_GOOGLE_ID=...                     # Google OAuth client ID
-AUTH_GOOGLE_SECRET=...                 # Google OAuth client secret
-# GITHUB_TOKEN=github_pat_...          # Optional; needed for private repos
-# MALLOYYO_TELEMETRY_DISABLED=1        # Optional; self-hosted product telemetry opt-out
-```
-
-**Google sign-in** needs a Google OAuth app — Google Cloud Console → APIs & Services →
-Credentials → **Create OAuth client ID** → type **Web application**. Put its client
-ID/secret into `AUTH_GOOGLE_ID` / `AUTH_GOOGLE_SECRET`, and add this **Authorized redirect
-URI**:
-
-```
-http://localhost:3000/api/auth/callback/google
-```
-
-(Miss this and Google rejects sign-in with `redirect_uri_mismatch`.)
-
-Okta and Microsoft Entra ID (Azure AD) sign-in are also supported — see
-**[Authentication](docs/authentication.md)** for all three.
-
-```bash
-npm install
-npx dotenv-cli -e local/main -- npx tsx scripts/run-boot-migrations.ts   # first run only
-npx dotenv-cli -e local/main -- npm run dev
-```
-
-Open <http://localhost:3000>.
-
-## Code map
-
-1. **`packages/cli`** + **`src/app/api/datasets/[id]/model/push`** — the `malloyyo publish` path: the CLI bundles and uploads model files; the route compiles, introspects, and stores a versioned model (git provenance in `malloy_models.git_*`).
-2. **`src/lib/github.ts`** + **`src/lib/github-refresh.ts`** — the GitHub *pull* path: model loading and webhook-triggered refresh.
-3. **`src/lib/malloy.ts`** — single-file and multi-file Malloy compilation and execution via `InMemoryURLReader`.
-4. **`src/lib/mcp-tools.ts`** + **`src/app/mcp/route.ts`** — the MCP server. Tools are pure functions; the route is a JSON-RPC dispatcher.
-5. **`src/db/schema.ts`** — Drizzle schema for all Postgres tables.
+Questions, or built something cool? We'd love to hear from you. Come find us on [Slack](https://join.slack.com/t/malloy-community/shared_invite/zt-2dvtske75-TJQfolRtZGXLS24RhTQ79g), and learn more about Malloy at [malloydata.dev](https://www.malloydata.dev).

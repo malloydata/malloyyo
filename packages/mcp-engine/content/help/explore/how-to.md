@@ -30,7 +30,7 @@ To answer a question you need to see what sources are available which pertain to
 # Run the query
 * Pass a plain-English question with EVERY query, describing what that specific query answers. Queries are recorded/shared independently. Don't try to group related queries.
 * query(source: "...", malloy: "run: source -> { ... }", question: "...") — run it; get the rows.
-* Next to `rows`, the result carries `columns`: each column's `type` (with a number's `subtype`, a truncated date's `timeframe`, a nest's `fields`) and, when the model or query declares one, its display `format` exactly as tagged (`currency = usd0k`, `percent`, `number = "mmm yyyy"`). Write values the way `format` says: `currency = usd0k` is $521k, not 521034.77.
+* Next to `rows`, the result carries `columns`: each column's `type` (with a number's `subtype`, a truncated date's `timeframe`, a nest's `fields`) and, when the model or query declares one, its display `format` exactly as tagged (`currency = usd0k`, `percent`, `number = "mmm yyyy"`). Write values the way `format` says: `currency = usd0k` is $521k, not 521034.77. A timestamp column may also carry `timezone` (the query's `timezone:`): `rows` hold the instant as UTC ISO text, so read its date and time in that zone. No `timezone` means UTC.
 
 # Displaying Results
 * Lead with a natural-language restatement of the query — a short heading works well.

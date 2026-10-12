@@ -335,6 +335,10 @@ export interface ColumnInfo {
       as written in its tag: `currency=usd0k`, `number="mmm yyyy"`,
       `percent`, `duration=minutes`. Absent when it declares none. */
   format?: string;
+  /** Timestamps only: the zone the value's wall clock reads in — the query's
+      `timezone:`, or a nest's own. Absent means UTC. `rows` carry the instant
+      as UTC ISO text either way. */
+  timezone?: string;
 }
 
 export interface RunResult {

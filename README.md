@@ -20,7 +20,7 @@ There's a second, darker problem: **access control**. The database is the wrong 
 
 A semantic layer solves both.
 
-- **Numbers match** ✓ The model defines the calculations and the join relationships once, so every query is correct.
+- **Numbers match** ✓ The model defines the calculations and the join relationships once, Anything built on those calculations is correct.
 - **Access control** ✓ You grant access to a semantic model, which is a much bigger and more meaningful unit than a table. The AI can only query what the model exposes.
 
 ## "Do we really need a semantic layer with AI?"
@@ -32,6 +32,8 @@ I think the real reason people say "no" is the *end-state* problem. A traditiona
 Either way you've left the governed system, and the numbers start to drift.
 
 When we designed Malloy, we decided the semantic layer and the query language had to be **one system**. Malloy describes the semantics, and it's also a complete query language. Any question you can answer in SQL, you can answer in Malloy, scoped to the model. You get consistent definitions and bounded access, and you never hit the end state.
+
+The calculations in the model are guaranteed correct. But you aren't limited to them, the way you are in other systems. You can invent new ones. The interesting ones get factored back into the model.
 
 Claude already knows Malloy, the same way it knows Python. It reads and writes Malloy very well.
 
@@ -75,7 +77,7 @@ Malloyyo brings that workflow to humans and agents working together.
    └──────────────────────────────────────────────────────────────────┘
 ```
 
-Step 4 is what makes Malloyyo different. Invented calculations are useful, but if nobody looks at them you get drift, with people reading the same data in slightly different ways. In Malloyyo, the dashboards are code in a repo, and Claude can read all of them. It finds the important calculations, puts them back into the shared model, and fixes the dashboards that depended on the old versions. It can also audit what people built and flag real mistakes.
+Step 4 is what makes Malloyyo different. Invented calculations are useful, but they haven't been reviewed yet. If nobody looks at them you get drift, with people reading the same data in slightly different ways. In Malloyyo, the dashboards are code in a repo, and Claude can read all of them. It finds the important calculations, puts them back into the shared model, and fixes the dashboards that depended on the old versions. It can also audit what people built and flag real mistakes.
 
 It's the create-and-refactor cycle from software engineering. When it runs regularly, the organization just gets better at working with its data.
 

@@ -6,7 +6,7 @@ Claude is really good at building dashboards. Give it access to your data (via M
 
 The missing parts are everything else: semantics, access control, a shared home for the dashboards, and a workflow to manage it all as more and more people build on the same data.
 
-So we built it. Malloyyo serves your "Claude Dashboards" in Claude or on the web. It manages the meaning of your data in a [Malloy](https://malloydata.dev) semantic model. It controls who can see what. And it keeps your dashboards and your model in a GitHub repo, so all of it can be verified and maintained.
+So we built it. Malloyyo serves your "Claude Dashboards" in Claude or on the web. It manages the meaning of your data in a [Malloy](https://malloydata.dev) semantic model. It controls who can see what using role based security. And it keeps your dashboards and your model in a GitHub repo, so all of it can be verified and maintained.
 
 Try [the demo server](https://malloyyo.vercel.app/). Sign in with any Google account.
 

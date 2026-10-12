@@ -55,6 +55,7 @@
 // are kept in lockstep by packages/cli/test/json-rows.test.ts.
 
 import type { Result } from '@malloydata/malloy';
+import type { ColumnInfo } from './types';
 
 /** Largest bigint that survives a round trip through a JS number. */
 const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
@@ -94,4 +95,44 @@ export function jsonRows(result: Result): Record<string, unknown>[] {
     return result.toJSON().queryResult.result as Record<string, unknown>[];
   }
   return result.data.toObject().map((row) => jsonValue(row) as Record<string, unknown>);
+}
+
+type StableField = ReturnType<Result['toStableResult']>['schema']['fields'][number];
+type StableType = Extract<StableField, { kind: 'dimension' }>['type'];
+
+function columnType(t: StableType): Omit<ColumnInfo, 'name'> {
+  switch (t.kind) {
+    case 'number_type':
+      return t.subtype ? { type: 'number', subtype: t.subtype } : { type: 'number' };
+    case 'date_type':
+    case 'timestamp_type':
+    case 'timestamptz_type': {
+      const type = t.kind.replace(/_type$/, '');
+      return t.timeframe ? { type, timeframe: t.timeframe } : { type };
+    }
+    case 'record_type':
+      return { type: 'record', fields: t.fields.map((f) => ({ name: f.name, ...columnType(f.type) })) };
+    case 'array_type': {
+      const el = columnType(t.element_type);
+      return el.type === 'record' ? { type: 'array', fields: el.fields } : { type: 'array', element: el };
+    }
+    default:
+      return { type: t.kind.replace(/_type$/, '') };
+  }
+}
+
+/**
+ * The column types of a Malloy result — the schema `rows` lose on the way to
+ * JSON, where a date is a string and a bigint may be either. Read from the
+ * stable schema (no data), in output order.
+ */
+export function resultColumns(result: Result): ColumnInfo[] | undefined {
+  if (!result.hasSchema) return undefined;
+  const out: ColumnInfo[] = [];
+  for (const f of result.toStableResult().schema.fields) {
+    if (f.kind === 'dimension' || f.kind === 'measure' || f.kind === 'calculate') {
+      out.push({ name: f.name, ...columnType(f.type) });
+    }
+  }
+  return out;
 }

@@ -314,10 +314,32 @@ export interface TruncationInfo {
   hint: string;
 }
 
+/** One output column's type, as it travels next to `rows`. */
+export interface ColumnInfo {
+  name: string;
+  /** "string" | "number" | "boolean" | "date" | "timestamp" | "timestamptz" |
+      "json" | "sql_native" | "array" | "record". */
+  type: string;
+  /** Numbers: "integer" | "decimal" | "bigint". A bigint beyond
+      ±Number.MAX_SAFE_INTEGER arrives in `rows` as a string of digits. */
+  subtype?: string;
+  /** Truncated dates/timestamps: the grain, e.g. "month". The value is still
+      the full ISO date/timestamp at the start of that period. */
+  timeframe?: string;
+  /** A record's fields, or an array's element fields (a nest is an array of
+      records). */
+  fields?: ColumnInfo[];
+  /** An array of scalars: the element's type. */
+  element?: Omit<ColumnInfo, 'name'>;
+}
+
 export interface RunResult {
   ok: boolean;
   sql?: string;
   rows?: unknown[];
+  /** Each output column's type, in order — what `rows` (plain JSON) cannot
+      say: which strings are dates, which numbers are bigints, a nest's fields. */
+  columns?: ColumnInfo[];
   /** Rows the query produced (bounded by rowLimit). */
   row_count?: number;
   /** Rows actually present in `rows` after budgeting. */

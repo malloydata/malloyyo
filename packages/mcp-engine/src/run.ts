@@ -14,7 +14,7 @@ import {
 } from './host-givens';
 import { API, MalloyError } from '@malloydata/malloy';
 import { codeProblem, errorProblem, mapProblems } from './problems';
-import { jsonRows } from './rows';
+import { jsonRows, resultColumns } from './rows';
 import { rowLimitTruncation } from './truncation';
 import type { Problem, RunResult } from './types';
 
@@ -120,6 +120,8 @@ export async function executeMaterialized(
       total_time_ms: t2 - t0,
       problems: loadProblems,
     };
+    const columns = resultColumns(results);
+    if (columns) out.columns = columns;
     if (rows.length === rowLimit) out.truncated = rowLimitTruncation(rowLimit);
     if (opts.stableResult) out.stable_result = API.util.wrapResult(results);
     return out;

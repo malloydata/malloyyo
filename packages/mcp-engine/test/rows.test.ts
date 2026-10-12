@@ -8,7 +8,7 @@
 // everywhere else.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { jsonRows, run } from '../src/index';
+import { jsonRows, resultColumns, run } from '../src/index';
 import { fixtureUrl, withFixtureRuntime } from './helpers';
 
 /** Run the fixture and hand back the one row, both ways. */
@@ -85,4 +85,29 @@ test('run(): the fix reaches the RunResult wire shape', async () => {
   const row = (result.rows as Record<string, unknown>[])[0]!;
   assert.equal(row['big'], 1);
   assert.equal(typeof row['big'], 'number');
+});
+
+test('run(): columns carry each output type the JSON rows lose', async () => {
+  // The rows can't say a string is a date, or that a number is a bigint whose
+  // big values arrive as digits — the columns do, in output order.
+  const result = await withFixtureRuntime((rt) => run(rt, fixtureUrl('bigints.malloy')));
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.columns, [
+    { name: 'big', type: 'number', subtype: 'bigint' },
+    { name: 'small', type: 'number', subtype: 'integer' },
+    { name: 'dbl', type: 'number', subtype: 'decimal' },
+    { name: 'strcol', type: 'string' },
+    { name: 'huge', type: 'number', subtype: 'bigint' },
+    { name: 'neg_huge', type: 'number', subtype: 'bigint' },
+    { name: 'd', type: 'date' },
+    { name: 'big_total', type: 'number', subtype: 'bigint' },
+    { name: 'sub', type: 'array', fields: [{ name: 'big', type: 'number', subtype: 'bigint' }] },
+  ]);
+});
+
+test('run(): a truncated date column names its grain', async () => {
+  const result = await withFixtureRuntime((rt) =>
+    rt.loadModel(fixtureUrl('bigints.malloy')).loadQuery('run: nums -> { group_by: m is d.month }').run(),
+  );
+  assert.deepEqual(resultColumns(result), [{ name: 'm', type: 'date', timeframe: 'month' }]);
 });

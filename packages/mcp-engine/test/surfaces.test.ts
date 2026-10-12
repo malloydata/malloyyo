@@ -373,3 +373,27 @@ test('explore: a model with no dashboards omits the field', async () => {
     assert.equal('dashboards' in m, false, 'no dashboards → no key');
   }
 });
+
+test('explore: results name the model by the host canonical ref, not the spelling passed', async () => {
+  // A hosted catalog accepts aliases and bare names but lists `repo:name`.
+  // Echoing the caller's spelling back made one model look like two.
+  const inner = testExploreHost();
+  const host = {
+    withModel: <T>(ref: string, fn: Parameters<typeof inner.withModel<T>>[1]) =>
+      inner.withModel(ref, (m) => fn({ ...m, ref: 'acme:flights' })),
+  };
+  const s = exploreSurface(host);
+  const described = (await tool(s, 'describe_source').handler({
+    model_ref: 'flights.malloy',
+    source: 'flights',
+  })) as SourceDescribeResult;
+  assert.equal(described.model_ref, 'acme:flights');
+  const ran = (await tool(s, 'query').handler({
+    model_ref: 'flights.malloy',
+    source: 'flights',
+    malloy: 'run: flights -> { aggregate: c is count() }',
+    question: 'how many flights',
+  })) as RunResult & { model_ref?: string };
+  assert.equal(ran.ok, true);
+  assert.equal(ran.model_ref, 'acme:flights');
+});

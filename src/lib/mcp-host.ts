@@ -178,7 +178,7 @@ async function visibleDatasets(userId: string): Promise<DatasetRow[]> {
  */
 async function findModelByRef(userId: string, ref: string) {
   const found = await findByDatasetRef(userId, ref);
-  return found ? { ds: found.ds, model: found.model } : null;
+  return found ? { ds: found.ds, model: found.model, ref: found.ref } : null;
 }
 
 // Lease a pooled Runtime over one dataset's latest model and hand the engine a
@@ -189,6 +189,7 @@ async function leaseDataset<T>(
   model: { id: string; source: string; revisionId: string | null; datasetId: string },
   fn: (m: BoundModel) => Promise<T>,
   scoped?: { required: readonly string[]; user: { email: string | null; roles: string[] } },
+  ref?: string,
 ): Promise<T> {
   const files = await modelFileMap(model);
   // The identity rides on the RUNTIME (core locks it there), and the names the
@@ -199,7 +200,7 @@ async function leaseDataset<T>(
     files,
     model.id,
     (runtime, readSource) =>
-      fn({ runtime, entry: ENTRY, readSource, requireGivens: scoped?.required }),
+      fn({ runtime, entry: ENTRY, readSource, requireGivens: scoped?.required, ref }),
     scope,
   );
 }
@@ -220,6 +221,7 @@ function makeExploreHost(user: User, baseUrl: string): ExploreHost {
         found.model,
         fn,
         required.length > 0 ? { required, user: { email: user.email, roles: rolesOf(user) } } : undefined,
+        found.ref,
       );
     },
     list: async () => {

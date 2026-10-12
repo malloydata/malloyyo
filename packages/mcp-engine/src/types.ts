@@ -331,6 +331,10 @@ export interface ColumnInfo {
   fields?: ColumnInfo[];
   /** An array of scalars: the element's type. */
   element?: Omit<ColumnInfo, 'name'>;
+  /** The display format the model or query declares for this column, exactly
+      as written in its tag: `currency=usd0k`, `number="mmm yyyy"`,
+      `percent`, `duration=minutes`. Absent when it declares none. */
+  format?: string;
 }
 
 export interface RunResult {

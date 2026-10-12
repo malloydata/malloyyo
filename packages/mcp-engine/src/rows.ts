@@ -54,7 +54,7 @@
 // source set ships as source and must resolve with no workspace deps). The two
 // are kept in lockstep by packages/cli/test/json-rows.test.ts.
 
-import type { Result } from '@malloydata/malloy';
+import { tagFromAnnotations, type Result } from '@malloydata/malloy';
 import type { ColumnInfo } from './types';
 
 /** Largest bigint that survives a round trip through a JS number. */
@@ -99,6 +99,37 @@ export function jsonRows(result: Result): Record<string, unknown>[] {
 
 type StableField = ReturnType<Result['toStableResult']>['schema']['fields'][number];
 type StableType = Extract<StableField, { kind: 'dimension' }>['type'];
+type StableAnnotations = Extract<StableField, { kind: 'dimension' }>['annotations'];
+
+/** The tag properties that say how one value displays — the renderer's cell
+    formats. */
+const FORMAT_PROPS = ['currency', 'percent', 'duration', 'number'] as const;
+
+/**
+ * A field's declared display format, as the modeler wrote it (`currency=usd0k`,
+ * `number="mmm yyyy"`, `percent`), or undefined when it declares none. Only
+ * the format properties: a `label=` or chart tag on the same line is not a
+ * format. Re-serialized from the parsed tag rather than formatted here, so
+ * this can never disagree with the renderer about what the format is.
+ */
+function columnFormat(annotations: StableAnnotations): string | undefined {
+  if (!annotations?.length) return undefined;
+  const tag = tagFromAnnotations(annotations, '');
+  const properties: Record<string, unknown> = {};
+  for (const p of FORMAT_PROPS) if (tag.has(p)) properties[p] = tag.dict[p];
+  if (Object.keys(properties).length === 0) return undefined;
+  // The Tag class, reached through the instance: malloy-tag is core's
+  // dependency, not this package's.
+  const TagClass = tag.constructor as new (init: { properties: Record<string, unknown> }) => {
+    toString(): string;
+  };
+  return new TagClass({ properties }).toString().replace(/^#\s*/, '').trim();
+}
+
+function column(name: string, t: StableType, annotations: StableAnnotations): ColumnInfo {
+  const format = columnFormat(annotations);
+  return { name, ...columnType(t), ...(format ? { format } : {}) };
+}
 
 function columnType(t: StableType): Omit<ColumnInfo, 'name'> {
   switch (t.kind) {
@@ -111,7 +142,7 @@ function columnType(t: StableType): Omit<ColumnInfo, 'name'> {
       return t.timeframe ? { type, timeframe: t.timeframe } : { type };
     }
     case 'record_type':
-      return { type: 'record', fields: t.fields.map((f) => ({ name: f.name, ...columnType(f.type) })) };
+      return { type: 'record', fields: t.fields.map((f) => column(f.name, f.type, f.annotations)) };
     case 'array_type': {
       const el = columnType(t.element_type);
       return el.type === 'record' ? { type: 'array', fields: el.fields } : { type: 'array', element: el };
@@ -123,15 +154,16 @@ function columnType(t: StableType): Omit<ColumnInfo, 'name'> {
 
 /**
  * The column types of a Malloy result — the schema `rows` lose on the way to
- * JSON, where a date is a string and a bigint may be either. Read from the
- * stable schema (no data), in output order.
+ * JSON, where a date is a string and a bigint may be either — and each
+ * column's declared display format. Read from the stable schema (no data), in
+ * output order.
  */
 export function resultColumns(result: Result): ColumnInfo[] | undefined {
   if (!result.hasSchema) return undefined;
   const out: ColumnInfo[] = [];
   for (const f of result.toStableResult().schema.fields) {
     if (f.kind === 'dimension' || f.kind === 'measure' || f.kind === 'calculate') {
-      out.push({ name: f.name, ...columnType(f.type) });
+      out.push(column(f.name, f.type, f.annotations));
     }
   }
   return out;

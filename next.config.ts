@@ -60,6 +60,10 @@ const DUCKDB_NATIVE_ROUTES = [
   "/api/datasets/*/drafts",
   "/api/datasets/*/drafts/*",
   "/api/ltool/share/*",
+  // Bracket-free on purpose, like "/api/datasets": covers refresh, push and
+  // webhook/github. push and the webhook reach Malloy indirectly (repo-publish
+  // → ./malloy, repo-webhook → github-refresh), so the grep above misses them.
+  "/api/repos",
 ];
 
 /**

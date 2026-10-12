@@ -33,25 +33,14 @@ import { bundleDashboard } from "./bundle";
 import { declaredRuns, explainProblems } from "./engine";
 import { artifactManifest } from "./manifest";
 import { DRAFT_PREFIX } from "./meta";
+import { draftBody, draftFile } from "./draft-text";
+
+export { draftBody } from "./draft-text";
 
 const NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 const MAX_TEXT = 256 * 1024;
 /** Rows fetched per tile when a save test-runs its queries — a check, not a read. */
 const TILE_SAMPLE_ROWS = 3;
-
-/** The one import a draft dashboard file may carry: the model's own entry. */
-const INDEX_IMPORT_RE = /^[ \t]*import[ \t]+(["'])\.\.\/index\.malloy\1[ \t]*;?[ \t]*$/gm;
-
-/**
- * The compiler flags a draft dashboard file may set. Restricted mode forbids
- * `##!` outright, but a dashboard using givens can't compile without
- * `##! experimental { givens }` in its own file — every real dashboard file
- * starts with it. These two switch on language features (given references,
- * access modifiers); neither widens what the file can reach, which is what the
- * gate is about. Any other `##!` content stays in the body and is rejected.
- */
-const ALLOWED_EXPERIMENTS = new Set(["givens", "access_modifiers"]);
-const EXPERIMENT_RE = /^[ \t]*##![ \t]*experimental[ \t]*\{([^}\n]*)\}[ \t]*$/gm;
 
 export interface DraftInput {
   /** The dashboard's name — its file basename, e.g. "trend". */
@@ -118,17 +107,6 @@ export function inlineQueries(source: string): string[] {
   return [...out];
 }
 
-/** The file minus its `import "../index.malloy"` and its allowed
-    `##! experimental { … }` line — what the gate checks. */
-export function draftBody(malloy: string): string {
-  return malloy
-    .replace(INDEX_IMPORT_RE, "")
-    .replace(EXPERIMENT_RE, (line, flags: string) => {
-      const names = flags.split(/[\s,]+/).filter(Boolean);
-      return names.length > 0 && names.every((n) => ALLOWED_EXPERIMENTS.has(n)) ? "" : line;
-    });
-}
-
 /** The only problem restricted mode raises for clean definitions-only text:
     it expects a `run:`, and a dashboard file has none. Anything else is real. */
 function isNoQueriesProblem(p: Problem): boolean {
@@ -145,7 +123,7 @@ export async function saveDraftDashboard(
   if (!NAME_RE.test(name)) {
     return { ok: false, error: "name must be letters, digits, '-' or '_' (the dashboard file's basename)" };
   }
-  const malloy = String(input.malloy ?? "");
+  const malloy = draftFile(String(input.malloy ?? ""));
   const source = String(input.source ?? "");
   if (!malloy.trim() && !source.trim()) {
     return { ok: false, error: "give a component (source), a dashboards/<name>.malloy, or both" };

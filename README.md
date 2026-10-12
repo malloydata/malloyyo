@@ -2,11 +2,11 @@
 
 **Claude builds the dashboards. Malloyyo makes sure the numbers are right.**
 
-Claude is really good at building dashboards. Give it access to your data and it will build you something beautiful in a few minutes. That part is solved.
+Claude is really good at building dashboards. Give it access to your data (via MCP) and it will build you a beautiful [Claude Dashboard](https://www.youtube.com/watch?v=en0GuyhieQk) in a few minutes. That part is solved.
 
 The missing parts are everything else: semantics, access control, a shared home for the dashboards, and a workflow to manage it all as more and more people build on the same data.
 
-So we built it. Malloyyo serves your dashboards in Claude or on the web. It manages the meaning of your data in a [Malloy](https://malloydata.dev) semantic model. It controls who can see what. And it keeps your dashboards and your model in a GitHub repo, so all of it can be verified and maintained.
+So we built it. Malloyyo serves your "Claude Dashboards" in Claude or on the web. It manages the meaning of your data in a [Malloy](https://malloydata.dev) semantic model. It controls who can see what. And it keeps your dashboards and your model in a GitHub repo, so all of it can be verified and maintained.
 
 Try [the demo server](https://malloyyo.vercel.app/). Sign in with any Google account.
 

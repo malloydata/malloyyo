@@ -13,6 +13,7 @@ import type { SourceInfo } from "./malloy";
 import { datasetVisibleWhere, rolesOf, type RoleBearing } from "./roles";
 import { env } from "./env";
 import { leaseScope } from "./tenancy";
+import { qualifiedName } from "./repo-names";
 import { parseSlug, instanceSlug } from "./slug";
 import { logger, serializeErr } from "./logger";
 import {
@@ -122,7 +123,10 @@ export async function findByDatasetRef(userId: string, ref: string) {
   if (!visible) return null;
   const model = await latestModel(visible.id);
   if (!model) return null;
-  return { ds: visible, model, description: null as string | null };
+  // The canonical ref, whatever spelling resolved here — what list_sources
+  // reports, so a result can name the dataset back the same way.
+  const canonical = qualifiedName(r.repo?.slug, visible.name);
+  return { ds: visible, model, ref: canonical, description: null as string | null };
 }
 
 /**

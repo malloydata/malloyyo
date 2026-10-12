@@ -61,6 +61,12 @@ export interface BoundModel {
    * back. See ../host-givens.
    */
   requireGivens?: readonly string[];
+  /**
+   * The model's canonical ref — the one `list_sources` reports. A host that
+   * accepts other spellings (an alias, a bare name) sets it, so results name
+   * the model one way whatever the caller passed.
+   */
+  ref?: string;
 }
 
 export interface ExploreHost {
@@ -427,21 +433,22 @@ function describeSourceTool(host: ExploreHost): ToolDef {
       const modelRef = r.model_ref;
       try {
         return await host.withModel(modelRef, async (m) => {
+          const ref = m.ref ?? modelRef;
           // No exportedOnly: describe resolves ANY named source (the back door).
           const compiled = await compile(m.runtime, m.entry, { readSource: m.readSource });
           if (!compiled.ok || !compiled.model) {
-            return { ok: false, model_ref: modelRef, source, problems: compiled.problems };
+            return { ok: false, model_ref: ref, source, problems: compiled.problems };
           }
           const built = buildSourceDescribe(compiled.model, source);
           if (!built) {
             const available = Object.keys(compiled.model.sources);
             return {
-              ok: false, model_ref: modelRef, source,
+              ok: false, model_ref: ref, source,
               problems: [
                 ...compiled.problems,
                 codeProblem(
                   'source-not-found',
-                  `No source named '${source}' in '${modelRef}'. Sources: ${available.join(', ') || '(none)'}.`,
+                  `No source named '${source}' in '${ref}'. Sources: ${available.join(', ') || '(none)'}.`,
                 ),
               ],
             };
@@ -450,7 +457,7 @@ function describeSourceTool(host: ExploreHost): ToolDef {
           // sources are recovered via describe_source by name.
           const malloy_text = sourceAsMalloy(compiled.model.sources[source]);
           const base: SourceDescribeResult = {
-            ok: true, model_ref: modelRef, source,
+            ok: true, model_ref: ref, source,
             guidance: prompts.explore.guidance,
             described_source: built.described_source,
             problems: compiled.problems,
@@ -534,18 +541,19 @@ function exploreQueryTool(host: ExploreHost, opts: ExploreSurfaceOptions): ToolD
       }
       try {
         return await host.withModel(modelRef, async (m) => {
+          const ref = m.ref ?? modelRef;
           const res = await executeQuery(
             m, args, queryFieldFix(modelRef, source, argString(args, 'malloy')), opts.result,
           );
           // execute:false: SQL is the confirmatory-inspect channel — the agent
           // SHOULD see it; just tag which model the source resolved to.
-          if (!execute) return { ...res, model_ref: modelRef };
+          if (!execute) return { ...res, model_ref: ref };
           // execute:true: withhold SQL from the agent (SQL rides execute:false),
           // but the run generated it — park it on the host_only channel toContent
           // drops, so a host can record it. Plus the resolved model_ref, so the
           // host needn't re-run resolution. Typed end-to-end via WithHostOnly.
           const { sql, ...rest } = res as RunResult;
-          const out: WithHostOnly<RunResult & { model_ref: string }> = { ...rest, model_ref: modelRef };
+          const out: WithHostOnly<RunResult & { model_ref: string }> = { ...rest, model_ref: ref };
           if (sql !== undefined) out[HOST_ONLY] = { sql };
           return out;
         });

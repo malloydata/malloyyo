@@ -14,6 +14,7 @@
 export type {
   AccessModifier,
   Annotation,
+  ColumnInfo,
   ArrayStub,
   CompactField,
   CompactMember,
@@ -77,7 +78,7 @@ export {
 } from './catalog';
 export { run, executeMaterialized, DEFAULT_ROW_LIMIT, type RunOptions } from './run';
 export { rowLimitTruncation } from './truncation';
-export { jsonRows } from './rows';
+export { jsonRows, resultColumns } from './rows';
 export { validateRestricted, runRestricted } from './restricted';
 export {
   datasetTitle,

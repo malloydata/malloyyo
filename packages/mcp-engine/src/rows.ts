@@ -126,12 +126,36 @@ function columnFormat(annotations: StableAnnotations): string | undefined {
   return new TagClass({ properties }).toString().replace(/^#\s*/, '').trim();
 }
 
-function column(name: string, t: StableType, annotations: StableAnnotations): ColumnInfo {
-  const format = columnFormat(annotations);
-  return { name, ...columnType(t), ...(format ? { format } : {}) };
+/**
+ * The zone a nest's timestamps display in: its own `timezone:`, which the
+ * result carries as `#(malloy) query_timezone=…` on the nest, else the zone it
+ * inherits. The renderer's rule (getEffectiveQueryTimezone).
+ */
+function nestTimezone(annotations: StableAnnotations, inherited: string | undefined): string | undefined {
+  if (!annotations?.length) return inherited;
+  return tagFromAnnotations(annotations, 'malloy').text('query_timezone') ?? inherited;
 }
 
-function columnType(t: StableType): Omit<ColumnInfo, 'name'> {
+function column(
+  name: string,
+  t: StableType,
+  annotations: StableAnnotations,
+  timezone: string | undefined,
+): ColumnInfo {
+  const format = columnFormat(annotations);
+  const nested = t.kind === 'record_type' || t.kind === 'array_type';
+  const info: ColumnInfo = {
+    name,
+    ...columnType(t, nested ? nestTimezone(annotations, timezone) : timezone),
+    ...(format ? { format } : {}),
+  };
+  // A timestamp is an instant: say which zone its wall clock reads in. A date
+  // is a calendar day and has none.
+  if (timezone && (info.type === 'timestamp' || info.type === 'timestamptz')) info.timezone = timezone;
+  return info;
+}
+
+function columnType(t: StableType, timezone: string | undefined): Omit<ColumnInfo, 'name'> {
   switch (t.kind) {
     case 'number_type':
       return t.subtype ? { type: 'number', subtype: t.subtype } : { type: 'number' };
@@ -142,9 +166,9 @@ function columnType(t: StableType): Omit<ColumnInfo, 'name'> {
       return t.timeframe ? { type, timeframe: t.timeframe } : { type };
     }
     case 'record_type':
-      return { type: 'record', fields: t.fields.map((f) => column(f.name, f.type, f.annotations)) };
+      return { type: 'record', fields: t.fields.map((f) => column(f.name, f.type, f.annotations, timezone)) };
     case 'array_type': {
-      const el = columnType(t.element_type);
+      const el = columnType(t.element_type, timezone);
       return el.type === 'record' ? { type: 'array', fields: el.fields } : { type: 'array', element: el };
     }
     default:
@@ -154,16 +178,17 @@ function columnType(t: StableType): Omit<ColumnInfo, 'name'> {
 
 /**
  * The column types of a Malloy result — the schema `rows` lose on the way to
- * JSON, where a date is a string and a bigint may be either — and each
- * column's declared display format. Read from the stable schema (no data), in
- * output order.
+ * JSON, where a date is a string and a bigint may be either — each column's
+ * declared display format, and the zone a timestamp's wall clock reads in.
+ * Read from the stable schema (no data), in output order.
  */
 export function resultColumns(result: Result): ColumnInfo[] | undefined {
   if (!result.hasSchema) return undefined;
+  const stable = result.toStableResult();
   const out: ColumnInfo[] = [];
-  for (const f of result.toStableResult().schema.fields) {
+  for (const f of stable.schema.fields) {
     if (f.kind === 'dimension' || f.kind === 'measure' || f.kind === 'calculate') {
-      out.push(column(f.name, f.type, f.annotations));
+      out.push(column(f.name, f.type, f.annotations, stable.query_timezone));
     }
   }
   return out;

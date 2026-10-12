@@ -142,3 +142,34 @@ test('resultColumns: each column carries the format its model or query declares'
   // Inside a nest.
   assert.equal(byName['n']?.fields?.[0]?.format, 'currency = usd0k');
 });
+
+test("resultColumns: a timestamp names the zone it reads in — the query's, or its nest's", async () => {
+  const result = await withFixtureRuntime((rt) =>
+    rt
+      .loadModel(`source: t is duckdb.sql("""SELECT TIMESTAMP '2026-09-01 00:00:00' AS ts, DATE '2026-09-01' AS d""")`)
+      .loadQuery(`run: t -> {
+        timezone: 'America/Los_Angeles'
+        group_by: ts, d
+        nest: tokyo is { timezone: 'Asia/Tokyo'; group_by: ts }
+        nest: inherits is { group_by: ts }
+      }`)
+      .run(),
+  );
+  const byName = Object.fromEntries((resultColumns(result) ?? []).map((c) => [c.name, c]));
+  assert.equal(byName['ts']?.timezone, 'America/Los_Angeles');
+  // A date is a calendar day: no zone.
+  assert.equal('timezone' in byName['d']!, false);
+  // A nest's own `timezone:` wins; without one it inherits the query's.
+  assert.equal(byName['tokyo']?.fields?.[0]?.timezone, 'Asia/Tokyo');
+  assert.equal(byName['inherits']?.fields?.[0]?.timezone, 'America/Los_Angeles');
+});
+
+test('resultColumns: no `timezone:` in the query, no zone on the column (UTC)', async () => {
+  const result = await withFixtureRuntime((rt) =>
+    rt
+      .loadModel(`source: t is duckdb.sql("""SELECT TIMESTAMP '2026-09-01 00:00:00' AS ts""")`)
+      .loadQuery('run: t -> { group_by: ts }')
+      .run(),
+  );
+  assert.equal('timezone' in (resultColumns(result) ?? [])[0]!, false);
+});

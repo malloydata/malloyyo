@@ -181,6 +181,13 @@ export function gitInfo(dir: string): GitInfo {
  * files depending on which way it arrived.
  */
 
+export type ArchiveBuild = {
+  zip: Buffer;
+  fileCount: number;
+  /** The archive's biggest files, biggest first — for a "too large" message. */
+  largest: { path: string; bytes: number }[];
+};
+
 /**
  * The repo, as git sees it, packed as a zip.
  *
@@ -205,7 +212,7 @@ export function gitInfo(dir: string): GitInfo {
  * that out of the author's real index — running this never changes what they
  * have staged.
  */
-export function gitArchiveZip(dir: string): { zip: Buffer; fileCount: number } {
+export function gitArchiveZip(dir: string): ArchiveBuild {
   const tmpIndex = join(
     mkdtempSync(join(tmpdir(), "malloyyo-index-")),
     "index",
@@ -240,7 +247,18 @@ export function gitArchiveZip(dir: string): { zip: Buffer; fileCount: number } {
     const tree = (git(["write-tree"]) as string).trim();
     const fileCount = ((git(["ls-files"]) as string).trim().match(/\n/g)?.length ?? -1) + 1;
     const zip = git(["archive", "--format=zip", tree], "buffer") as unknown as Buffer;
-    return { zip, fileCount };
+    // `<mode> <type> <sha> <size>\t<path>` — the archived tree's own sizes, so
+    // a too-large publish can name what is making it large.
+    const largest = (git(["ls-tree", "-r", "-l", "-z", tree]) as string)
+      .split("\0")
+      .filter(Boolean)
+      .map((line) => {
+        const [meta, path] = line.split("\t");
+        return { path: path ?? "", bytes: Number(meta?.trim().split(/\s+/)[3]) || 0 };
+      })
+      .sort((a, b) => b.bytes - a.bytes)
+      .slice(0, 8);
+    return { zip, fileCount, largest };
   } finally {
     rmSync(dirname(tmpIndex), { recursive: true, force: true });
   }

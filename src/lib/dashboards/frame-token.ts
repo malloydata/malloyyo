@@ -32,7 +32,7 @@ const TTL_SECONDS = 300; // 5 min — ample to load the frame + bundle once.
 // Note for operators: setting DASHBOARD_TOKEN_SECRET on a running instance
 // invalidates in-flight frame tokens. Their TTL is 5 minutes, so the blast
 // radius is a dashboard open at that moment needing a refresh.
-function secret(): string {
+export function dashboardTokenSecret(): string {
   const s = process.env.DASHBOARD_TOKEN_SECRET ?? process.env.AUTH_SECRET;
   if (!s) {
     throw new Error("Missing required env var: DASHBOARD_TOKEN_SECRET (or AUTH_SECRET) — needed to sign dashboard frame tokens");
@@ -41,7 +41,7 @@ function secret(): string {
 }
 
 function sign(payload: string): string {
-  return crypto.createHmac("sha256", secret()).update(payload).digest("base64url");
+  return crypto.createHmac("sha256", dashboardTokenSecret()).update(payload).digest("base64url");
 }
 
 export interface FrameTokenClaims {

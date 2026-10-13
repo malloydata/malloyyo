@@ -17,6 +17,9 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
     // Generated build output (gitignored bundles) — never our source to lint.
     "**/dist/**",
+    // The screenshot service: its own package (own lockfile, plain Node), not
+    // part of the app's build — see screenshot/README.md.
+    "screenshot/**",
     // Browser runtime for dashboard artifacts: bundled at runtime by esbuild,
     // not part of the app/CLI TS build (needs @ts-nocheck, different React
     // constraints). Includes the CLI frame runtime and example dashboards.

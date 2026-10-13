@@ -31,6 +31,8 @@ import {
 import { dashboardPanel, type DashboardPanel } from "@/lib/mcp-app-panel";
 import { getDashboard, listDashboards, visibleImageHosts } from "@/lib/dashboards";
 import { saveDraftDashboard } from "@/lib/dashboards/draft";
+import { mintScreenshotToken } from "@/lib/dashboards/screenshot-token";
+import { requestScreenshot, screenshotServiceConfig, type ScreenshotServiceConfig } from "@/lib/dashboards/screenshot-service";
 import { createApiToken } from "@/lib/api-tokens";
 import { runDashboard } from "@/lib/dashboards/engine";
 import { bearerToken, credentialLabel, resolveBearer, type Credential } from "@/lib/bearer-auth";
@@ -120,7 +122,87 @@ function buildServer(scope: RequestScope): McpServer {
 
   registerAuthoringTools(server, scope);
 
+  // Only where a screenshot service is configured: elsewhere the tool doesn't
+  // exist, so no client is offered something that cannot work.
+  const shots = screenshotServiceConfig();
+  if (shots) registerScreenshotTool(server, scope, shots);
+
   return server;
+}
+
+const SCREENSHOT_TOOL = "screenshot_dashboard";
+
+/**
+ * A picture of a dashboard as the caller would see it, for checking a
+ * dashboard (often a draft just saved) before showing it to anyone. The
+ * service renders it as this user, through a token that opens only this
+ * dashboard; the image comes back with what the page logged while it drew.
+ */
+function registerScreenshotTool(server: McpServer, scope: RequestScope, cfg: ScreenshotServiceConfig): void {
+  const { userId } = scope;
+  const tag = `[${env.INSTANCE_NAME}]`;
+  type ShotArgs = { dataset: string; dashboard: string; givens?: Record<string, unknown> };
+  server.registerTool(
+    SCREENSHOT_TOOL,
+    {
+      title: "Screenshot a dashboard",
+      description:
+        `${tag} Renders a dashboard exactly as a person would see it and returns a PNG, plus ` +
+        `any errors the page logged while drawing. Use it to check a dashboard — especially a ` +
+        `draft you just saved with save_draft_dashboard — for layout, chart, label and ` +
+        `formatting problems before showing it to the user. \`givens\` opens it with those ` +
+        `filter values. Takes several seconds.`,
+      annotations: { readOnlyHint: true },
+      inputSchema: fromJsonSchema<ShotArgs>({
+        type: "object",
+        properties: {
+          dataset: { type: "string", description: "Dataset name (the model_ref list_sources reports)." },
+          dashboard: {
+            type: "string",
+            description: "Dashboard name, as listed by list_sources, or the `dashboard` save_draft_dashboard returned.",
+          },
+          givens: {
+            type: "object",
+            description: "Optional filter values by given name (no $), as filter text, e.g. {\"CATEGORY\": \"Jeans\"}.",
+          },
+        },
+        required: ["dataset", "dashboard"],
+      }),
+    },
+    logged(scope, SCREENSHOT_TOOL, async ({ dataset, dashboard, givens }: ShotArgs) => {
+      // The same check show_dashboard makes, and the reason the token is safe
+      // to mint: it only ever names a dashboard this user can already open.
+      const dash = await getDashboard(userId, dataset, dashboard);
+      if (!dash) {
+        const msg = `No dashboard '${dashboard}' in '${dataset}'. list_sources reports each model's dashboards.`;
+        return { content: text(msg), structuredContent: { ok: false, error: msg }, isError: true };
+      }
+      const given: Record<string, string> = {};
+      for (const [k, v] of Object.entries(givens ?? {})) {
+        if (v !== null && v !== undefined) given[k.replace(/^\$/, "")] = String(v);
+      }
+      const token = mintScreenshotToken({ userId, datasetId: dataset, name: dashboard, givens: given });
+      const shot = await requestScreenshot(cfg, token);
+      if (!shot.ok) {
+        return { content: text(shot.error), structuredContent: { ok: false, error: shot.error }, isError: true };
+      }
+      const d = shot.diagnostics;
+      const problems = [
+        d.timedOut ? "The page was still loading at the deadline; the picture may be incomplete." : "",
+        ...(d.renderErrors ?? []).map((e) => `Tile error shown on the page: ${e}`),
+        ...d.pageErrors.map((e) => `Page error: ${e}`),
+        ...d.consoleErrors.map((e) => `Console error: ${e}`),
+        ...d.failedRequests.map((e) => `Failed request: ${e}`),
+      ].filter(Boolean);
+      const summary =
+        `Screenshot of '${dash.title}' (${shot.width}×${shot.height}px, ${d.durationMs}ms).` +
+        (problems.length ? `\n${problems.join("\n")}` : " The page logged no errors.");
+      return {
+        content: [{ type: "image", data: shot.png, mimeType: "image/png" }, ...text(summary)],
+        structuredContent: { ok: true, width: shot.width, height: shot.height, diagnostics: d as unknown as Json },
+      };
+    }),
+  );
 }
 
 /** How long a CLI token from issue_cli_token lives. */

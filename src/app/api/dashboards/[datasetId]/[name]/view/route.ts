@@ -11,15 +11,17 @@
 // gets the same data as HTML from the sibling /frame route.
 
 import { NextResponse } from "next/server";
-import { getSessionUser, UnauthorizedError } from "@/lib/user";
+import { UnauthorizedError } from "@/lib/user";
+import { getDashboardViewer } from "@/lib/dashboards/viewer";
 import { dashboardViewData } from "@/lib/dashboards/engine";
 
 export const runtime = "nodejs";
 
 export async function GET(_req: Request, ctx: { params: Promise<{ datasetId: string; name: string }> }) {
   try {
-    const user = await getSessionUser();
     const { datasetId, name } = await ctx.params;
+    // The session, or a screenshot token naming this dashboard (viewer.ts).
+    const user = await getDashboardViewer(datasetId, name);
     const view = await dashboardViewData(user.id, datasetId, name);
     if (!view) return NextResponse.json({ ok: false, error: "dashboard not found" }, { status: 404 });
     return NextResponse.json({ ok: true, info: view.info, givenSpecs: view.givenSpecs });

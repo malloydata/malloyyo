@@ -16,7 +16,8 @@
 // `?$given=…` / `?~viewstate=…` link state — is NOT inlined at all; the frame
 // reads it from its own location.search. Keep it that way.
 
-import { getSessionUser, UnauthorizedError } from "@/lib/user";
+import { UnauthorizedError } from "@/lib/user";
+import { getDashboardViewer } from "@/lib/dashboards/viewer";
 import { dashboardViewData } from "@/lib/dashboards/engine";
 import { listDashboards } from "@/lib/dashboards/meta";
 import { mintFrameToken } from "@/lib/dashboards/frame-token";
@@ -26,8 +27,9 @@ export const runtime = "nodejs";
 
 export async function GET(req: Request, ctx: { params: Promise<{ datasetId: string; name: string }> }) {
   try {
-    const user = await getSessionUser();
     const { datasetId, name } = await ctx.params;
+    // The session, or a screenshot token naming this dashboard (viewer.ts).
+    const user = await getDashboardViewer(datasetId, name);
     // info + given specs are assembled by the shared helper, so this sandboxed
     // path and the in-page tag-only renderer stay in lockstep.
     const view = await dashboardViewData(user.id, datasetId, name);

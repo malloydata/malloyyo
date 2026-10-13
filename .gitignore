@@ -3,6 +3,7 @@
 # dependencies
 /node_modules
 packages/*/node_modules
+screenshot/node_modules
 packages/*/dist
 
 # scratch worktrees Claude Code checks out for isolated agents. It creates these

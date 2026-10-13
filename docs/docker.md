@@ -93,7 +93,8 @@ The ones that matter for a container deploy:
 | Okta / Microsoft Entra ID vars | optional | Additional sign-in providers. See [Authentication](authentication.md). |
 | `APP_ADMIN_EMAILS` | recommended | Comma-separated emails that are auto-admins (create datasets, publish). |
 | `GITHUB_WEBHOOK_SECRET` | recommended | Enables HMAC verification of GitHub's push webhook. Unset, the dataset UUID in the webhook URL is its only protection. Use the same value in the webhook's Secret field on GitHub. |
-| `DASHBOARD_TOKEN_SECRET` | optional | Signs dashboard frame tokens; defaults to `AUTH_SECRET`. |
+| `DASHBOARD_TOKEN_SECRET` | optional | Signs dashboard frame and screenshot tokens; defaults to `AUTH_SECRET`. |
+| `SCREENSHOT_SERVICE_URL` / `SCREENSHOT_SERVICE_KEY` | optional | Turns on the `screenshot_dashboard` MCP tool by pointing at a [screenshot service](../screenshot/README.md) container. Unset, the tool doesn't exist. |
 | `INSTANCE_NAME` / `INSTANCE_CODE` | optional | Display name + short slug; default `Malloyyo` / `main`. |
 | `MALLOYYO_TELEMETRY_DISABLED` | optional | Set `1` to disable Malloyyo's minimal product telemetry on a self-hosted instance. See [Product telemetry](telemetry.md). |
 | `MALLOYYO_TELEMETRY_DEBUG` | optional | Set `1` to print sanitized events without sending them on a self-hosted instance. |

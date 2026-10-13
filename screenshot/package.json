@@ -1,0 +1,17 @@
+{
+  "name": "malloyyo-screenshot",
+  "private": true,
+  "description": "Headless browser that renders one Malloyyo origin's /screenshot page from a token and returns a PNG",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test test.mjs"
+  },
+  "dependencies": {
+    "playwright": "1.63.0"
+  }
+}

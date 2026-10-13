@@ -31,10 +31,16 @@ export async function getSessionUser(): Promise<User> {
   if (!session?.user?.id) {
     throw new UnauthorizedError("not signed in");
   }
+  return getAuthorizedUser(session.user.id);
+}
+
+/** The user row by id, authorized as of this request. Shared by every path that
+    has already established WHO is asking (a session, a screenshot token). */
+export async function getAuthorizedUser(id: string): Promise<User> {
   const [u] = await db
     .select()
     .from(users)
-    .where(eq(users.id, session.user.id))
+    .where(eq(users.id, id))
     .limit(1);
   if (!u) throw new UnauthorizedError("user not found");
 

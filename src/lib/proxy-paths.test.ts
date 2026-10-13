@@ -3,7 +3,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { renewalApplies, shouldUseReauth } from "./proxy-paths";
+import { ALWAYS_ALLOW, renewalApplies, shouldUseReauth } from "./proxy-paths";
 
 test("renewal applies only to protected page reads", () => {
   assert.equal(renewalApplies("GET", "/datasets"), true);
@@ -19,4 +19,11 @@ test("a provider-shaped cookie selects reauth only for an installed integration"
   assert.equal(shouldUseReauth(false, true), false);
   assert.equal(shouldUseReauth(true, false), false);
   assert.equal(shouldUseReauth(true, true), true);
+});
+
+test("only /screenshot itself skips the session gate (it checks its own token)", () => {
+  assert.equal(ALWAYS_ALLOW.test("/screenshot"), true);
+  assert.equal(ALWAYS_ALLOW.test("/screenshots"), false);
+  assert.equal(ALWAYS_ALLOW.test("/screenshot/other"), false);
+  assert.equal(renewalApplies("GET", "/screenshot"), false);
 });

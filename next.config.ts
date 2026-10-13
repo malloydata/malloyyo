@@ -95,6 +95,10 @@ const ESBUILD_WASM = ["./node_modules/esbuild-wasm/**"];
 const nextConfig: NextConfig = {
   // Emit .next/standalone (minimal server + traced node_modules) for the Docker image.
   output: "standalone",
+  // Dev only: the screenshot service's container reaches `npm run dev` on the
+  // host as host.docker.internal, and the dev server otherwise refuses that
+  // origin its client assets and HMR socket (the page then never hydrates).
+  allowedDevOrigins: ["host.docker.internal"],
   async headers() {
     // Baseline security response headers. There were none at all before this —
     // Vercel supplied none either, so this is not a regression being fixed but

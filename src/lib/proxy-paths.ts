@@ -5,9 +5,10 @@
 
 // OAuth discovery, MCP, and every authentication screen must stay reachable without an
 // application session. /logout is especially important: renewing there would resurrect
-// the session the visitor just ended.
+// the session the visitor just ended. /screenshot (exactly) authenticates by the
+// screenshot service's token, not a session, and 404s without one.
 export const ALWAYS_ALLOW =
-  /^\/(api\/auth|api\/oauth|\.well-known|mcp|oauth\/consent|login|logout|authenticate|reauth)/;
+  /^\/(api\/auth|api\/oauth|\.well-known|mcp|oauth\/consent|login|logout|authenticate|reauth|screenshot$)/;
 
 /** Server-side renewal is only a safe, useful pre-pass for page reads. */
 export function renewalApplies(method: string, pathname: string): boolean {

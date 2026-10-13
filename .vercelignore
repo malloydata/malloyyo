@@ -1,3 +1,6 @@
 # Never upload the local instance env directory (a symlink to gitignored,
 # per-instance secrets) into a Vercel deployment.
 local
+
+# The screenshot service runs as its own container, never inside the app.
+screenshot

@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: MIT
 
 import { NextResponse } from "next/server";
-import { getSessionUser, UnauthorizedError } from "@/lib/user";
+import { UnauthorizedError } from "@/lib/user";
+import { getDashboardViewer, isScreenshotRequest } from "@/lib/dashboards/viewer";
 import { runDashboard } from "@/lib/dashboards/engine";
 import { captureTelemetry } from "@/lib/telemetry";
 
@@ -13,13 +14,6 @@ export const runtime = "nodejs";
 // (default: the stored manifest's); `malloy` runs restricted Malloy text —
 // core's restricted mode is the gate (suggestion queries, ad-hoc panels).
 export async function POST(req: Request) {
-  let user;
-  try {
-    user = await getSessionUser();
-  } catch (err) {
-    if (err instanceof UnauthorizedError) return NextResponse.json({ ok: false, error: "sign in required" }, { status: 401 });
-    throw err;
-  }
   let body: {
     datasetId?: string;
     name?: string;
@@ -36,8 +30,19 @@ export async function POST(req: Request) {
   if (!datasetId || !name) {
     return NextResponse.json({ ok: false, error: "datasetId and name are required" }, { status: 400 });
   }
+  // The session, or a screenshot token naming exactly this dashboard (viewer.ts).
+  let user;
+  try {
+    user = await getDashboardViewer(datasetId, name);
+  } catch (err) {
+    if (err instanceof UnauthorizedError) return NextResponse.json({ ok: false, error: "sign in required" }, { status: 401 });
+    throw err;
+  }
   const startedAt = Date.now();
   const result = await runDashboard(user, datasetId, name, { query, malloy }, givens ?? {});
+  // A screenshot's queries are not a person using the dashboard; the
+  // screenshot_dashboard call that caused them is recorded as itself.
+  if (await isScreenshotRequest()) return NextResponse.json(result);
   void captureTelemetry(
     {
       event: "query ran",

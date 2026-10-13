@@ -10,7 +10,8 @@ export function TelemetryPageView() {
   const pathname = usePathname();
 
   useEffect(() => {
-    if (!pathname) return;
+    // A screenshot service rendering a dashboard is not a person viewing a page.
+    if (!pathname || pathname === "/screenshot") return;
     void fetch("/api/telemetry/page", {
       method: "POST",
       headers: { "Content-Type": "application/json" },

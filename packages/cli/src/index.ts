@@ -173,6 +173,24 @@ Target resolution:
   \`malloyyo login <url>\`, or set \$MALLOYYO_TOKEN (mint one at
   <url>/settings/tokens — that is what CI wants), or pass --token.`;
 
+/** Vercel Functions refuse a request body over 4.5MB, before the app runs. */
+const HOSTED_REQUEST_LIMIT = 4.5 * 1024 * 1024;
+
+const mb = (n: number) => `${(n / 1024 / 1024).toFixed(1)}MB`;
+
+/** What to say when a publish is (or will be) too large: the size, the
+    biggest files, and the setting that leaves them out. */
+function tooLargeHint(requestBytes: number, largest: { path: string; bytes: number }[]): string {
+  return [
+    `the publish request is ${mb(requestBytes)}; a Vercel-hosted instance accepts ${mb(HOSTED_REQUEST_LIMIT)}.`,
+    `largest files in the archive:`,
+    ...largest.map((f) => `    ${mb(f.bytes).padStart(7)}  ${f.path}`),
+    `leave out what the model doesn't read with git's export-ignore, in .gitattributes`,
+    `(anchored with a leading "/", or it matches at every depth):`,
+    `    /docs/ export-ignore`,
+  ].join("\n");
+}
+
 type PublishRepoOptions = {
   token?: string;
   dryRun?: boolean;
@@ -219,7 +237,7 @@ async function publishRepo(
   // directory was called `docs/`, and uploaded the gitignored
   // `malloy-config-local.json` where the real credentials live. Both stop being
   // possible here rather than being patched one at a time.
-  const { zip: archive, fileCount } = gitArchiveZip(root);
+  const { zip: archive, fileCount, largest } = gitArchiveZip(root);
   if (fileCount === 0) throw new Error(`${root} has no files git tracks — nothing to publish`);
 
   const git = gitInfo(root);
@@ -229,6 +247,12 @@ async function publishRepo(
   console.log(`→ ${t.url}  repo=${opts.repo}${opts.createDatasets ? " (create missing)" : ""}`);
   console.log(`  ${datasetNames.length} dataset(s): ${datasetNames.join(", ")}`);
   console.log(`  ${fileCount} file(s), ${(archive.length / 1024).toFixed(0)}KB archive  ${provenance}`);
+  // The request carries the archive base64'd inside JSON. Not refused here —
+  // a self-hosted instance takes more — but said before the send, because a
+  // Vercel-hosted one answers 413 without a word about why.
+  const requestBytes = Math.ceil(archive.length / 3) * 4;
+  const tooLarge = tooLargeHint(requestBytes, largest);
+  if (requestBytes > HOSTED_REQUEST_LIMIT) console.warn(`  warning: ${tooLarge}`);
 
   if (opts.dryRun) {
     console.log("dry run — not sending");
@@ -252,6 +276,7 @@ async function publishRepo(
     datasets?: { name: string; version: number; created?: boolean }[];
   } | null;
 
+  if (res.status === 413) throw new Error(`publish refused by ${t.url} (413): ${tooLarge}`);
   if (!res.ok || !out?.ok) {
     throw new Error(out?.error ?? `publish failed (${res.status})`);
   }

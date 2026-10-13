@@ -162,6 +162,24 @@ test("git's own export-ignore excludes a committed build, and must be anchored",
   }
 });
 
+test("the archive names its biggest files, so a too-large publish can say what to leave out", () => {
+  const root = repo({
+    "malloy-config.json": "{}",
+    "index.malloy": "source: a is b",
+    "docs/big.parquet": "x".repeat(9000),
+    "docs/assets/chunk.js": "x".repeat(4000),
+  });
+  try {
+    const { largest } = gitArchiveZip(root);
+    assert.deepEqual(largest.slice(0, 2), [
+      { path: "docs/big.parquet", bytes: 9000 },
+      { path: "docs/assets/chunk.js", bytes: 4000 },
+    ]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("a repo with no commits yet publishes what is there", () => {
   // `malloyyo init` leaves exactly this, and a first publish before a first
   // commit is an ordinary thing to do.

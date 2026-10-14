@@ -44,7 +44,7 @@ test('explore: canonical tool set', () => {
   );
 });
 
-test('explore: describe_source front-loads depth-1, defers the tail, keeps full-closure Malloy', async () => {
+test('explore: describe_source is the root in full plus its join hierarchy, by name only', async () => {
   const s = exploreSurface(testExploreHost());
   const result = (await tool(s, 'describe_source').handler({
     model_ref: 'flights.malloy',
@@ -55,20 +55,54 @@ test('explore: describe_source front-loads depth-1, defers the tail, keeps full-
   // The described source carries its own field surface, including views.
   assert.equal(result.described_source?.name, 'flights');
   assert.ok('by_carrier' in (result.described_source?.views ?? {}), 'views ride on the described source');
-  // Named target's fields are deduped into join_source_map.
-  assert.ok(result.join_source_map?.['carriers'], 'named target has its fields');
+  // The hierarchy names the join and what it references — not its fields.
+  const carriers = result.joins?.['carriers'];
+  assert.equal(carriers?.source, 'carriers');
+  assert.equal(carriers?.description, 'Reference table of airline carriers.');
+  assert.ok(!('source_def' in (carriers ?? {})), 'no fields in the hierarchy');
+  assert.ok(!('join_source_map' in result), 'no closure of joined sources');
   // No develop-only coords / raw body in the structured blocks.
-  const structured = JSON.stringify({
-    d: result.described_source, j: result.joins, m: result.join_source_map,
-  });
+  const structured = JSON.stringify({ d: result.described_source, j: result.joins });
   assert.ok(!structured.includes('"location"'), 'no develop-only location coords');
   assert.ok(!structured.includes('"body"'), 'no raw source text in the structured blocks');
-  // The Malloy appendix is JUST the described source (joined sources are
-  // recovered via describe_source by name, not dumped here).
-  const malloy = result.malloy_text ?? '';
+  // A view carries its own code, so the source text is not sent by default.
+  assert.match(result.described_source?.views['by_carrier']?.code ?? '', /group_by: carriers\.name/);
+  assert.equal(result.malloy_text, undefined, 'no verbatim source unless asked');
+
+  // On request: JUST the described source, verbatim.
+  const full = (await tool(s, 'describe_source').handler({
+    model_ref: 'flights.malloy',
+    source: 'flights',
+    include_source: true,
+  })) as SourceDescribeResult;
+  const malloy = full.malloy_text ?? '';
   assert.match(malloy, /source: flights is/, 'appendix carries the requested source verbatim');
   assert.match(malloy, /join_one: carriers is carriers with carrier/, 'the source\'s own join keys ride in its text');
-  assert.ok(!/source: carriers is/.test(malloy), 'the joined (closure) source is NOT dumped');
+  assert.ok(!/source: carriers is/.test(malloy), 'the joined source is NOT dumped');
+});
+
+test('explore: describe_source with a path returns the fields there', async () => {
+  const s = exploreSurface(testExploreHost());
+  const result = (await tool(s, 'describe_source').handler({
+    model_ref: 'flights.malloy',
+    source: 'flights',
+    path: 'carriers',
+  })) as SourceDescribeResult;
+  assert.equal(result.ok, true);
+  assert.equal(result.path, 'carriers');
+  assert.equal(result.described_source, undefined, 'a path result describes the path, not the root');
+  assert.ok('lower_name' in (result.described_path?.dimensions ?? {}));
+  assert.ok('carrier_count' in (result.described_path?.measures ?? {}));
+  assert.equal(result.malloy_text, undefined);
+
+  const missing = (await tool(s, 'describe_source').handler({
+    model_ref: 'flights.malloy',
+    source: 'flights',
+    path: 'nope',
+  })) as SourceDescribeResult;
+  assert.equal(missing.ok, false);
+  const p = missing.problems.find((x) => x.code === 'path-not-found');
+  assert.match(p?.message ?? '', /Paths: legs, tags, carriers|carriers/);
 });
 
 test('explore: two-channel annotations + direct-join relation', async () => {
@@ -91,7 +125,8 @@ test('explore: two-channel annotations + direct-join relation', async () => {
   const carriers = result.joins!['carriers'];
   assert.ok(carriers && carriers.source === 'carriers');
   assert.equal(carriers.fans_out, undefined, 'join_one does not fan');
-  assert.match(carriers.code ?? '', /^join_one:/);
+  // A direct join carries its statement.
+  assert.match(carriers.code ?? '', /^join_one: carriers/);
 });
 
 test('explore: describe_source on unknown source lists what exists', async () => {

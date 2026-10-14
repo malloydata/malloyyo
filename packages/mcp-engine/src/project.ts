@@ -24,6 +24,9 @@ import type {
   GivenInfo,
   JoinEntry,
   JoinInfo,
+  JoinOutline,
+  ExploreDescribedPath,
+  DescribedView,
   ModelInfo,
   NamedQueryInfo,
   SourceDescription,
@@ -311,12 +314,19 @@ function buildSchema(
   return s;
 }
 
-function viewsMap(views: ViewInfo[]): Record<string, string | null> {
-  const out: Record<string, string | null> = Object.create(null);
-  // null (not "") for a view with no description — distinguishes "no description"
-  // from a deliberately blank one, and the value can't be omitted (it's the map
-  // value, and the view must be listed so it's discoverable/invocable).
-  for (const v of views) out[seg(v)] = v.description ?? null;
+function viewsMap(views: ViewInfo[]): Record<string, DescribedView> {
+  const out: Record<string, DescribedView> = Object.create(null);
+  // Every view is listed — it must be discoverable and invocable — with its
+  // `#"` and its own declaration text, sliced from its location. The text is
+  // what makes the source's malloy_text unnecessary by default: a view's body
+  // (its group_by, where:, nest:) is the one thing the structured fields
+  // otherwise can't say.
+  for (const v of views) {
+    const d: DescribedView = {};
+    if (v.description) d.description = v.description;
+    if (v.body) d.code = v.body;
+    out[seg(v)] = d;
+  }
   return out;
 }
 
@@ -478,4 +488,89 @@ export function buildSourceDescribe(
   };
   emitJoins(root, root.anon_srcs ?? [], '', '', false, new Set([name]), new Set(), ctx);
   return { described_source, joins: ctx.joins, join_source_map: ctx.map };
+}
+
+// ── describe_source as the explore tool serves it: outline, or one path ─────
+//
+// buildSourceDescribe walks the whole join graph and resolves the fields at
+// every path — correctly, extensions included. Sending all of it is what made a
+// hub source's describe tens of kilobytes. So the tool sends the root source in
+// full plus the HIERARCHY of its joins (paths, no fields), and the fields at a
+// path on request. By path, not by the joined source's name: a join can extend
+// or refine its target, so `people` the top-level source and `principals.people`
+// the path need not have the same fields.
+
+/** A full `joins` entry → its outline: everything but the fields. The join
+    statement only where asked for: on the described thing's own joins, not on
+    every deeper path that reaches the same join again. */
+function outlineOf(e: JoinEntry, model: ModelInfo, withCode = false): JoinOutline {
+  const o: JoinOutline = {};
+  if (e.fans_out) o.fans_out = true;
+  if (e.cycle) o.cycle = true;
+  if (e.quoted_path) o.quoted_path = e.quoted_path;
+  if (e.is_array) o.is_array = true;
+  if (e.source) o.source = e.source;
+  if (withCode && e.code) o.code = e.code;
+  const description = e.source ? model.sources[e.source]?.description : e.source_def?.description;
+  if (description) o.description = description;
+  return o;
+}
+
+function outlines(
+  joins: Record<string, JoinEntry>,
+  model: ModelInfo,
+  under?: string,
+): Record<string, JoinOutline> {
+  const out: Record<string, JoinOutline> = Object.create(null);
+  // The described thing's OWN joins carry their statement — how it connects,
+  // one line each, which the source text used to say; deeper levels are names.
+  const ownDepth = under === undefined ? 1 : under.split('.').length + 1;
+  for (const [path, e] of Object.entries(joins)) {
+    if (under === undefined || path.startsWith(`${under}.`)) {
+      out[path] = outlineOf(e, model, path.split('.').length === ownDepth);
+    }
+  }
+  return out;
+}
+
+/** The root source in full, plus its join hierarchy as names. */
+export function describeSourceOutline(
+  compiled: ModelInfo,
+  name: string,
+): { described_source: ExploreDescribedSource; joins: Record<string, JoinOutline> } | undefined {
+  const full = buildSourceDescribe(compiled, name);
+  if (!full) return undefined;
+  return { described_source: full.described_source, joins: outlines(full.joins, publicOnlyModel(compiled)) };
+}
+
+export type PathDescribe =
+  | { ok: true; described_path: ExploreDescribedPath; joins: Record<string, JoinOutline> }
+  | { ok: false; paths: string[] };
+
+/** The fields at one join path of `name`, plus the hierarchy below it.
+    undefined when there is no such source; `{ ok: false, paths }` when the
+    source has no such path. */
+export function describeSourcePath(
+  compiled: ModelInfo,
+  name: string,
+  path: string,
+): PathDescribe | undefined {
+  const full = buildSourceDescribe(compiled, name);
+  if (!full) return undefined;
+  const entry = full.joins[path];
+  if (!entry) return { ok: false, paths: Object.keys(full.joins) };
+  const model = publicOnlyModel(compiled);
+  let schema: CompactSchema | undefined = entry.source_def;
+  if (!schema && entry.source) {
+    // An unmodified reference: the path holds exactly the named source. Built
+    // with ABSOLUTE array stubs, so each one points at its key in `joins`.
+    const target = model.sources[entry.source];
+    if (target) schema = buildSchema(target, path, target);
+  }
+  const described_path: ExploreDescribedPath = {
+    path,
+    ...outlineOf(entry, model, true),
+    ...(schema ?? { dimensions: {}, measures: {} }),
+  };
+  return { ok: true, described_path, joins: outlines(full.joins, model, path) };
 }

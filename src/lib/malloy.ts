@@ -426,6 +426,23 @@ export async function withReaderRuntime<T>(
   }
 }
 
+/** Run `fn` against ONE named connection from a malloy-config.json, with no
+    model at all — for looking at a database before anyone has modeled it
+    (repo-authoring.ts). The connection is resolved exactly as a model's would
+    be, `{"env": …}` references against this server's environment included. */
+export async function withConfigConnection<T>(
+  configJson: string | undefined,
+  name: string,
+  fn: (connection: malloy.Connection) => Promise<T>,
+): Promise<T> {
+  const parts = await buildPartsWithReader(new malloy.InMemoryURLReader(new Map()), configJson, []);
+  try {
+    return await fn(await parts.config.connections.lookupConnection(name));
+  } finally {
+    await parts.cleanup();
+  }
+}
+
 // Build a throwaway Runtime from a file map. If malloy-config.json is present, uses
 // MalloyConfig (BigQuery, Postgres, Snowflake, Trino, MySQL, Databricks, DuckDB).
 // Falls back to a MotherDuck DuckDB SingleConnectionRuntime when no config is present.

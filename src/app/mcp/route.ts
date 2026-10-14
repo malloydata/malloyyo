@@ -31,6 +31,8 @@ import {
 import { dashboardPanel, type DashboardPanel } from "@/lib/mcp-app-panel";
 import { getDashboard, listDashboards, visibleImageHosts } from "@/lib/dashboards";
 import { saveDraftDashboard } from "@/lib/dashboards/draft";
+import { hasRole, MALLOYYO_ADMIN } from "@/lib/roles";
+import { checkRepo, describeTable, findRepo, listRepos, listTables, publishRepo } from "@/lib/repo-authoring";
 import { createApiToken } from "@/lib/api-tokens";
 import { runDashboard } from "@/lib/dashboards/engine";
 import { bearerToken, credentialLabel, resolveBearer, type Credential } from "@/lib/bearer-auth";
@@ -120,7 +122,183 @@ function buildServer(scope: RequestScope): McpServer {
 
   registerAuthoringTools(server, scope);
 
+  // Admins only: these run SQL through a repo's connections and compile model
+  // code nobody has reviewed — the power publishing already has, reached from
+  // a chat. A member never sees them.
+  if (hasRole(scope.user, MALLOYYO_ADMIN)) registerRepoTools(server, scope);
+
   return server;
+}
+
+/** Text + structured content for a tool result, as an error when `ok` is false. */
+function result<T extends { ok: boolean; error?: string }>(r: T, summary?: string): CallToolResult {
+  if (!r.ok) return { content: text(r.error ?? "failed"), structuredContent: r as unknown as Json, isError: true };
+  return { content: text(summary ?? JSON.stringify(r, null, 2)), structuredContent: r as unknown as Json };
+}
+
+/**
+ * Adding a dataset to a repo from a chat (src/lib/repo-authoring.ts). Git
+ * writes are GitHub's own MCP server's, as the person; these are what only
+ * this instance can answer — what a repo's connections can see, whether a
+ * branch or pull request compiles here, and the publish after the merge.
+ */
+function registerRepoTools(server: McpServer, scope: RequestScope): void {
+  const tag = `[${env.INSTANCE_NAME}]`;
+  const withRepo = async <T extends object>(ref: string, fn: (repo: NonNullable<Awaited<ReturnType<typeof findRepo>>>) => Promise<T>) => {
+    const repo = await findRepo(ref);
+    if (!repo) return { ok: false, error: `No repo "${ref}" on this instance. list_repos shows them.` };
+    return fn(repo);
+  };
+
+  server.registerTool(
+    "list_repos",
+    {
+      title: "List model repos",
+      description:
+        `${tag} The model repos this instance publishes: their GitHub repo and branch, layout, datasets and ` +
+        `database connections (names and kinds only). Start here to add a dataset to a repo; read ` +
+        `yo_help("repo/add-dataset-from-chat") first.`,
+      annotations: { readOnlyHint: true },
+      inputSchema: fromJsonSchema<Json>({ type: "object", properties: {} }),
+    },
+    logged(scope, "list_repos", async () => {
+      const repos = await listRepos();
+      return result({ ok: true, repos });
+    }),
+  );
+
+  type TablesArgs = { repo: string; connection: string; schema?: string; like?: string; dataset_dir?: string };
+  server.registerTool(
+    "list_tables",
+    {
+      title: "List a connection's tables",
+      description:
+        `${tag} Lists the tables a repo's database connection can see (up to 500), before anything is ` +
+        `modeled. \`schema\` narrows to one schema (BigQuery requires it: the dataset); \`like\` filters ` +
+        `names (SQL LIKE, e.g. "%order%"). Admins only.`,
+      annotations: { readOnlyHint: true },
+      inputSchema: fromJsonSchema<TablesArgs>({
+        type: "object",
+        properties: {
+          repo: { type: "string", description: "The repo, as list_repos names it (slug or owner/name)." },
+          connection: { type: "string", description: "A connection name from list_repos." },
+          schema: { type: "string", description: "Optional schema (BigQuery: dataset) to list." },
+          like: { type: "string", description: "Optional table-name pattern, SQL LIKE." },
+          dataset_dir: { type: "string", description: "Optional: use this dataset's own malloy-config.json." },
+        },
+        required: ["repo", "connection"],
+      }),
+    },
+    logged(scope, "list_tables", async (a: TablesArgs) =>
+      result(await withRepo(a.repo, (repo) => listTables(repo, a.connection, { schema: a.schema, like: a.like, dir: a.dataset_dir }))),
+    ),
+  );
+
+  type DescribeArgs = { repo: string; connection: string; table: string; dataset_dir?: string };
+  server.registerTool(
+    "describe_table",
+    {
+      title: "Describe a table",
+      description:
+        `${tag} One table's columns and types, its row count and ${5} sample rows, read through the repo's ` +
+        `connection the way a model would read it (\`connection.table('…')\`). On DuckDB the table can be a ` +
+        `file path or URL (Parquet, CSV, JSON). Admins only.`,
+      annotations: { readOnlyHint: true },
+      inputSchema: fromJsonSchema<DescribeArgs>({
+        type: "object",
+        properties: {
+          repo: { type: "string", description: "The repo, as list_repos names it." },
+          connection: { type: "string", description: "A connection name from list_repos." },
+          table: { type: "string", description: "Table as the model would name it: 'schema.table', or a path/URL on DuckDB." },
+          dataset_dir: { type: "string", description: "Optional: use this dataset's own malloy-config.json." },
+        },
+        required: ["repo", "connection", "table"],
+      }),
+    },
+    logged(scope, "describe_table", async (a: DescribeArgs) =>
+      result(await withRepo(a.repo, (repo) => describeTable(repo, a.connection, a.table, { dir: a.dataset_dir }))),
+    ),
+  );
+
+  type CheckArgs = {
+    repo: string;
+    ref?: string;
+    pull_request?: number;
+    test_query?: { dataset_dir: string; malloy: string };
+  };
+  server.registerTool(
+    "check_repo",
+    {
+      title: "Check a branch or pull request",
+      description:
+        `${tag} Compiles a repo at a branch, tag or commit (\`ref\`), or at a pull request's merge result ` +
+        `(\`pull_request\`), exactly as publishing would: layout rules, every dataset, its dashboards. Nothing ` +
+        `is stored or published. Says which datasets are new. \`test_query\` also runs one Malloy query ` +
+        `against a dataset at that ref. Check the pull request before merging it — that is what catches a ` +
+        `change that merges cleanly but breaks the model. Admins only.`,
+      annotations: { readOnlyHint: true },
+      inputSchema: fromJsonSchema<CheckArgs>({
+        type: "object",
+        properties: {
+          repo: { type: "string", description: "The repo, as list_repos names it." },
+          ref: { type: "string", description: "Branch, tag or commit SHA. Default: the repo's published branch." },
+          pull_request: { type: "integer", description: "Check this pull request's merge result instead of a ref." },
+          test_query: {
+            type: "object",
+            description: "Optional query to run at that ref.",
+            properties: {
+              dataset_dir: { type: "string", description: "The dataset's directory, e.g. datasets/returns." },
+              malloy: { type: "string", description: "Malloy text, e.g. run: returns -> { aggregate: row_count }" },
+            },
+            required: ["dataset_dir", "malloy"],
+          },
+        },
+        required: ["repo"],
+      }),
+    },
+    logged(scope, "check_repo", async (a: CheckArgs) =>
+      result(
+        await withRepo(a.repo, (repo) =>
+          checkRepo(
+            repo,
+            { ref: a.ref, pr: a.pull_request },
+            a.test_query ? { dir: a.test_query.dataset_dir, malloy: a.test_query.malloy } : undefined,
+          ),
+        ),
+      ),
+    ),
+  );
+
+  server.registerTool(
+    "publish_repo",
+    {
+      title: "Publish a repo",
+      description:
+        `${tag} Pulls the repo's published branch from GitHub and publishes it, creating a dataset for any new ` +
+        `datasets/<name>/ directory. Run it after the pull request is merged. Everything compiles or nothing ` +
+        `changes. Admins only.`,
+      annotations: { readOnlyHint: false },
+      inputSchema: fromJsonSchema<{ repo: string }>({
+        type: "object",
+        properties: { repo: { type: "string", description: "The repo, as list_repos names it." } },
+        required: ["repo"],
+      }),
+    },
+    logged(scope, "publish_repo", async ({ repo: ref }: { repo: string }) => {
+      const out = await withRepo(ref, (repo) => publishRepo(repo));
+      if (!out.ok) return result(out);
+      const r = out as Extract<typeof out, { revision: number }>;
+      const created = r.datasets.filter((d) => d.created).map((d) => d.qualified);
+      return result(
+        r,
+        r.unchanged
+          ? `Nothing new: ${r.repo.slug} is already at this commit.`
+          : `Published ${r.repo.slug} revision ${r.revision}` +
+              (created.length ? `; created ${created.join(", ")}` : "") +
+              `. Datasets: ${r.datasets.map((d) => d.qualified).join(", ")}.`,
+      );
+    }),
+  );
 }
 
 /** How long a CLI token from issue_cli_token lives. */

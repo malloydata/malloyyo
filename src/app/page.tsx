@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 import { signIn } from "next-auth/react";
 import Link from "next/link";
 import { QueryIcon } from "@/components/QueryIcon";
+import { claudeChatUrl, exploreDatasetPrompt, useClaudeConnect } from "@/components/ClaudeConnectDialog";
 import { repoUrl, codespaceUrl } from "@/lib/github-source-link";
 import {
   Dialog,
@@ -119,11 +120,16 @@ export default function HomePage() {
   const [dashboards, setDashboards] = useState<
     Array<DashboardChip & { dataset: string; qualified: string }>
   >([]);
-  // Claude connect-instructions modal — shown when clicking a source's Claude
-  // button before the connector is linked. claudeTargetUrl is the explore chat
-  // to continue to after setup.
-  const [showClaudeSetup, setShowClaudeSetup] = useState(false);
-  const [claudeTargetUrl, setClaudeTargetUrl] = useState<string | null>(null);
+  // Claude buttons: a seeded chat, or the connect dialog (with the full
+  // McpSetup as its body) when claude.ai isn't connected yet.
+  const { openClaude, connectDialog } = useClaudeConnect(instanceName, claudeConnected, (
+    <>
+      <p className="text-gray-600 dark:text-gray-400">
+        You haven&apos;t connected {instanceName} to Claude yet. One-time setup:
+      </p>
+      <McpSetup instanceName={instanceName} />
+    </>
+  ));
 
   useEffect(() => { void load(); }, []);
 
@@ -312,20 +318,10 @@ function shortAuthor(author: string): string {
 
   // claude.ai chats seeded via this instance's MCP tools — one per source, one
   // for a whole dataset.
-  const claudeExploreUrl = (source: string) =>
-    `https://claude.ai/new?q=${encodeURIComponent(
-      `Using the ${instanceName} Malloy tools, describe_source "${source}" on ${instanceName}, then help me explore it.`,
-    )}`;
-  const claudeExploreDatasetUrl = (dataset: string) =>
-    `https://claude.ai/new?q=${encodeURIComponent(
-      `Using the ${instanceName} Malloy tools, explore the "${dataset}" dataset on ${instanceName} — list its sources and help me analyze it.`,
-    )}`;
-
-  // Open a seeded Claude chat, or the connect-setup modal if not yet linked.
-  function openClaude(url: string) {
-    if (claudeConnected) window.open(url, "_blank", "noopener,noreferrer");
-    else { setClaudeTargetUrl(url); setShowClaudeSetup(true); }
-  }
+  const claudeExploreUrl = (source: string) => claudeChatUrl(
+    `Using the ${instanceName} Malloy tools, describe_source "${source}" on ${instanceName}, then help me explore it.`,
+  );
+  const claudeExploreDatasetUrl = (dataset: string) => claudeChatUrl(exploreDatasetPrompt(instanceName, dataset));
   const exploreWithClaude = (source: string) => openClaude(claudeExploreUrl(source));
 
   if (me === undefined) return <main className="p-8 font-mono text-sm">loading…</main>;
@@ -674,36 +670,7 @@ function shortAuthor(author: string): string {
         </>
       )}
 
-      {/* Connect-to-Claude instructions, shown when a Claude button is clicked
-          before the connector is linked. Reuses the full McpSetup instructions. */}
-      {showClaudeSetup && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-          onClick={() => setShowClaudeSetup(false)}>
-          <div className="bg-white dark:bg-gray-950 border border-gray-200 dark:border-gray-800 rounded-lg shadow-xl max-w-lg w-full max-h-[85vh] overflow-y-auto p-5 space-y-4"
-            onClick={(e) => e.stopPropagation()}>
-            <div className="flex items-start justify-between gap-3">
-              <h2 className="text-sm font-semibold">Connect {instanceName} to Claude first</h2>
-              <button onClick={() => setShowClaudeSetup(false)}
-                className="text-gray-400 hover:text-gray-700 dark:hover:text-gray-200 leading-none" title="Close">×</button>
-            </div>
-            <p className="text-xs text-gray-600 dark:text-gray-400">
-              You haven&apos;t connected {instanceName} to Claude yet. One-time setup:
-            </p>
-            <McpSetup instanceName={instanceName} />
-            <div className="flex items-center gap-3 pt-1">
-              <button
-                onClick={() => { if (claudeTargetUrl) window.open(claudeTargetUrl, "_blank", "noopener,noreferrer"); setShowClaudeSetup(false); }}
-                className="text-xs px-3 py-1.5 rounded bg-black text-white dark:bg-white dark:text-black hover:opacity-80">
-                Continue on to Claude.ai →
-              </button>
-              <button onClick={() => setShowClaudeSetup(false)}
-                className="text-xs px-3 py-1.5 rounded border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-900">
-                Cancel
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {connectDialog}
     </main>
   );
 }

@@ -5,6 +5,7 @@
 import { use, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { DatasetNav } from "@/components/DatasetNav";
+import { claudeChatUrl, useClaudeConnect } from "@/components/ClaudeConnectDialog";
 
 // The AI Q&A page: every answered question asked against this dataset (by Claude,
 // other models, or people in ltool), newest first. It sits in the dataset's
@@ -63,6 +64,7 @@ export default function QuestionsPage({ params }: { params: Promise<{ id: string
   const [datasetName, setDatasetName] = useState("");
   const [instanceName, setInstanceName] = useState("Malloyyo");
   const [claudeConnected, setClaudeConnected] = useState(false);
+  const { openClaude, connectDialog } = useClaudeConnect(instanceName, claudeConnected);
 
   // Fetch-on-mount / refetch when the dataset changes; the async callback flips
   // loading and populates items.
@@ -93,14 +95,9 @@ export default function QuestionsPage({ params }: { params: Promise<{ id: string
   // Ask your own: open a Claude chat wired to this dataset over MCP. New questions
   // asked there land back on this page. When the connector isn't linked yet, send
   // them to set it up first.
-  const onAskInClaude = () => {
-    const url = claudeConnected
-      ? `https://claude.ai/new?q=${encodeURIComponent(
-          `Using the ${instanceName} Malloy tools, help me ask and answer analytical questions about the "${datasetName || "dataset"}" dataset on ${instanceName}.`,
-        )}`
-      : "https://claude.ai/customize/connectors";
-    window.open(url, "_blank", "noopener,noreferrer");
-  };
+  const onAskInClaude = () => openClaude(claudeChatUrl(
+    `Using the ${instanceName} Malloy tools, help me ask and answer analytical questions about the "${datasetName || "dataset"}" dataset on ${instanceName}.`,
+  ));
   const askButton = (
     <button
       onClick={onAskInClaude}
@@ -176,6 +173,7 @@ export default function QuestionsPage({ params }: { params: Promise<{ id: string
         </ul>
         )}
       </div>
+      {connectDialog}
     </main>
   );
 }

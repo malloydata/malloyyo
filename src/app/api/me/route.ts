@@ -2,8 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { NextResponse } from "next/server";
-import { db, users, oauthAccessTokens, oauthRefreshTokens } from "@/db";
-import { eq, and, isNull, gt } from "drizzle-orm";
+import { users } from "@/db";
 import { isAdmin } from "@/lib/admin";
 import { getSettings } from "@/lib/settings";
 import { env } from "@/lib/env";
@@ -12,27 +11,9 @@ import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { askConfig, askEnabled } from "@/lib/ask";
 import { hostedSignIn } from "@/lib/hosted-auth-integration";
 import { signInPath, signOutPath } from "@/lib/auth-paths";
+import { hasActiveClaudeConnection } from "@/lib/claude-connection";
 
 export const runtime = "nodejs";
-
-// Has this user ever completed the MCP OAuth flow and still holds a live
-// token? Used by the ltool "Explore further with Claude" button to decide
-// whether to show connection setup instructions first.
-async function hasActiveClaudeConnection(userId: string): Promise<boolean> {
-  const now = new Date();
-  const [acc] = await db
-    .select({ h: oauthAccessTokens.tokenHash })
-    .from(oauthAccessTokens)
-    .where(and(eq(oauthAccessTokens.userId, userId), isNull(oauthAccessTokens.revokedAt), gt(oauthAccessTokens.expiresAt, now)))
-    .limit(1);
-  if (acc) return true;
-  const [ref] = await db
-    .select({ id: oauthRefreshTokens.id })
-    .from(oauthRefreshTokens)
-    .where(and(eq(oauthRefreshTokens.userId, userId), isNull(oauthRefreshTokens.revokedAt), gt(oauthRefreshTokens.expiresAt, now)))
-    .limit(1);
-  return !!ref;
-}
 
 export async function GET() {
   const { tagline, signinNotice } = await getSettings();

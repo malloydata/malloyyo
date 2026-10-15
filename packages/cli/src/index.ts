@@ -30,7 +30,7 @@ import { initCmd } from "./init.js";
 import { sqlCmd } from "./sql.js";
 import { launchCmd } from "./launch.js";
 import { clearCreds } from "./store.js";
-import { draftList, draftPromote, loginWithToken } from "./draft.js";
+import { draftDelete, draftList, draftPromote, loginWithToken } from "./draft.js";
 import { registerCloudCommands } from "./cloud/index.js";
 import type { PublishRequest, ModelStatus } from "./protocol.js";
 // Single source of truth: the build runs after the release bump, so esbuild
@@ -567,6 +567,16 @@ draft
   .option("--force", "overwrite existing dashboard files of that name")
   .description("write a draft into this repo as dashboards/<name>.malloy + component")
   .action(draftPromote);
+
+draft
+  .command("delete")
+  .argument("<slug>", "draft slug, as `malloyyo draft list` prints it")
+  .argument("[dir]", "model directory", ".")
+  .option("-i, --instance <instance>", "instance URL, or a configured target name")
+  .option("--dataset <dataset>", "dataset the draft belongs to; overrides the config")
+  .option("--token <token>", "bearer token (overrides login/env)")
+  .description("delete a draft (yours, or any as an admin); its link stops working")
+  .action(draftDelete);
 
 program
   .command("logout")

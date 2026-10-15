@@ -29,8 +29,8 @@ import {
   dashboardBundlePayload,
 } from "@/lib/mcp-app-dashboard";
 import { dashboardPanel, type DashboardPanel } from "@/lib/mcp-app-panel";
-import { getDashboard, listDashboards, visibleImageHosts } from "@/lib/dashboards";
-import { saveDraftDashboard } from "@/lib/dashboards/draft";
+import { DRAFT_PREFIX, draftForward, draftSlug, getDashboard, listDashboards, visibleImageHosts } from "@/lib/dashboards";
+import { deleteDraft, recordPromotion, saveDraftDashboard } from "@/lib/dashboards/draft";
 import { hasRole, MALLOYYO_ADMIN } from "@/lib/roles";
 import { checkRepo, describeTable, findRepo, listRepos, listTables, publishRepo } from "@/lib/repo-authoring";
 import { fetchBranchPreview } from "@/lib/repo-preview-store";
@@ -357,6 +357,8 @@ function registerRepoTools(server: McpServer, scope: RequestScope): void {
 const CLI_TOKEN_TTL_MS = 60 * 60 * 1000;
 const ISSUE_CLI_TOKEN_TOOL = "issue_cli_token";
 const SAVE_DRAFT_TOOL = "save_draft_dashboard";
+const DELETE_DRAFT_TOOL = "delete_draft_dashboard";
+const PROMOTED_DRAFT_TOOL = "mark_draft_promoted";
 
 /**
  * Dashboard authoring from an agent: a CLI credential, and draft dashboards.
@@ -497,6 +499,83 @@ function registerAuthoringTools(server: McpServer, scope: RequestScope): void {
       };
     }),
   );
+
+  // A draft is named `draft-<slug>` everywhere a dashboard goes; accept either.
+  const slugOf = (dashboard: string) => draftSlug(dashboard) ?? dashboard;
+  const fail = (msg: string): CallToolResult => ({ content: text(msg), structuredContent: { ok: false, error: msg }, isError: true });
+
+  type DraftRefArgs = { dataset: string; dashboard: string };
+  server.registerTool(
+    DELETE_DRAFT_TOOL,
+    {
+      title: "Delete a draft dashboard",
+      description:
+        `${tag} Deletes a draft dashboard; its link stops working. Its author or an admin may. Ask the person ` +
+        `first. A draft that was promoted and is now published doesn't need deleting: it is already out of ` +
+        `the listings, and its link forwards to the published dashboard — deleting it ends that forward.`,
+      annotations: { readOnlyHint: false, destructiveHint: true },
+      inputSchema: fromJsonSchema<DraftRefArgs>({
+        type: "object",
+        properties: {
+          dataset: { type: "string", description: "Dataset name (the model_ref list_sources reports)." },
+          dashboard: { type: "string", description: "The draft, as `draft-<slug>` or its slug." },
+        },
+        required: ["dataset", "dashboard"],
+      }),
+    },
+    logged(scope, DELETE_DRAFT_TOOL, async (a: DraftRefArgs) => {
+      const r = await deleteDraft(scope.user, a.dataset, slugOf(a.dashboard));
+      if (r.outcome === "not-yours") return fail("That draft belongs to someone else; its author or an admin can delete it.");
+      if (r.outcome === "not-found") return fail(`No draft '${a.dashboard}' in '${a.dataset}'.`);
+      return {
+        content: text(
+          `Deleted ${DRAFT_PREFIX}${slugOf(a.dashboard)}.` +
+            ("promotedAs" in r && r.promotedAs ? ` Its link no longer forwards to '${r.promotedAs}'.` : ""),
+        ),
+        structuredContent: { ok: true, deleted: `${DRAFT_PREFIX}${slugOf(a.dashboard)}` },
+      };
+    }),
+  );
+
+  type PromotedArgs = DraftRefArgs & { promoted_as: string };
+  server.registerTool(
+    PROMOTED_DRAFT_TOOL,
+    {
+      title: "Mark a draft as promoted",
+      description:
+        `${tag} Records that a draft dashboard was written into the model repo as \`promoted_as\` (the ` +
+        `dashboard's name there, i.e. dashboards/<promoted_as>.malloy). Call it after the files are ` +
+        `committed. Once the dataset publishes that dashboard, the draft's link redirects to it and the ` +
+        `draft leaves the listings, so saved links keep working. Until then the draft still serves. ` +
+        `The draft's author records it.`,
+      annotations: { readOnlyHint: false },
+      inputSchema: fromJsonSchema<PromotedArgs>({
+        type: "object",
+        properties: {
+          dataset: { type: "string", description: "Dataset name (the model_ref list_sources reports)." },
+          dashboard: { type: "string", description: "The draft, as `draft-<slug>` or its slug." },
+          promoted_as: { type: "string", description: "The dashboard's name in the repo, e.g. revenue_trend." },
+        },
+        required: ["dataset", "dashboard", "promoted_as"],
+      }),
+    },
+    logged(scope, PROMOTED_DRAFT_TOOL, async (a: PromotedArgs) => {
+      const name = a.promoted_as.trim();
+      if (!name || draftSlug(name) !== null) return fail(`'${a.promoted_as}' isn't a dashboard name a repo publishes.`);
+      const outcome = await recordPromotion(userId, a.dataset, slugOf(a.dashboard), { name });
+      if (outcome === "not-yours") return fail("That draft belongs to someone else; its author records its promotion.");
+      if (outcome === "not-found") return fail(`No draft '${a.dashboard}' in '${a.dataset}'.`);
+      const live = await draftForward(userId, a.dataset, `${DRAFT_PREFIX}${slugOf(a.dashboard)}`);
+      return {
+        content: text(
+          live
+            ? `Recorded. '${name}' is already published, so the draft's link now opens it.`
+            : `Recorded. Once '${name}' is published (merge, then publish_repo), the draft's link opens it instead.`,
+        ),
+        structuredContent: { ok: true, promoted_as: name, forwarding: Boolean(live) },
+      };
+    }),
+  );
 }
 
 /** Any panel URI this server has ever minted — see the template registration. */
@@ -603,6 +682,8 @@ function registerDashboardApp(server: McpServer, scope: RequestScope, panel: Das
       // as shown while the panel says "not found" — or, in a client that
       // doesn't draw panels, shows nothing at all. getDashboard answers null
       // for a dataset the user can't see, so this can't reveal one exists.
+      // A promoted draft that's now published shows the published dashboard.
+      dashboard = (await draftForward(userId, dataset, dashboard)) ?? dashboard;
       const dash = await getDashboard(userId, dataset, dashboard);
       if (!dash) {
         const names = (await listDashboards(userId, dataset)).map((d) => d.name);

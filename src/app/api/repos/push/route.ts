@@ -26,6 +26,7 @@ import { db, repos } from "@/db";
 import { isAdmin } from "@/lib/admin";
 import { credentialLabel, requireBearer } from "@/lib/bearer-auth";
 import { logger, serializeErr } from "@/lib/logger";
+import { storePreview } from "@/lib/repo-preview-store";
 import { publishRevision } from "@/lib/repo-publish";
 import { findRepoForPublish, repoSlugFromGitHub } from "@/lib/repos";
 import { canAuthor } from "@/lib/roles";
@@ -48,6 +49,12 @@ type Body = {
   /** Name the repo explicitly. Optional; nothing sends it yet. */
   repoSlug?: string;
   git?: { sha?: string | null; branch?: string | null; dirty?: boolean | null };
+  /**
+   * Store the archive as a BRANCH PREVIEW of `branch` instead of publishing it
+   * (src/lib/repo-previews.ts): compiled, addressable as `repo@branch:dataset`,
+   * and live for nobody. `malloyyo publish --branch` sends it. Admin-only.
+   */
+  preview?: boolean;
 };
 
 export async function POST(req: Request) {
@@ -65,6 +72,38 @@ export async function POST(req: Request) {
 
   const found = await findRepoForPublish({ githubRepo, repoSlug: body.repoSlug });
   if ("error" in found) return bad(found.error, 409, { kind: "request" });
+
+  if (body.preview) {
+    // Admin-only to start, like every other way in to a preview. A preview of
+    // a repo that doesn't exist here has nothing to be a preview OF.
+    if (!isAdmin(auth.user)) return bad("Branch previews are for admins.", 403, { kind: "request" });
+    if (!("repo" in found)) {
+      return bad(`"${githubRepo || body.repoSlug}" is not a repo on this instance — publish it before previewing a branch`, 404, {
+        kind: "request",
+      });
+    }
+    const previewBranch = (typeof body.git?.branch === "string" && body.git.branch.trim()) || branch;
+    try {
+      const result = await storePreview(found.repo, raw, {
+        source: "cli",
+        branch: previewBranch,
+        sha: body.git?.sha ?? null,
+        dirty: body.git?.dirty ?? false,
+        createdById: auth.user.id,
+      });
+      if (!result.ok) return bad(result.error, 400, { kind: "compile" });
+      logger.info("repo branch preview stored", {
+        repo: found.repo.slug,
+        branch: result.branch,
+        revision: result.revision,
+        credential: credentialLabel(auth.cred),
+      });
+      return NextResponse.json(result);
+    } catch (err) {
+      logger.error("repo branch preview failed", { repo: found.repo.slug, ...serializeErr(err) });
+      return bad("the preview could not be stored — the server log has the detail", 500, { kind: "persist" });
+    }
+  }
 
   let repo;
   if ("repo" in found) {

@@ -33,6 +33,7 @@ import { getDashboard, listDashboards, visibleImageHosts } from "@/lib/dashboard
 import { saveDraftDashboard } from "@/lib/dashboards/draft";
 import { hasRole, MALLOYYO_ADMIN } from "@/lib/roles";
 import { checkRepo, describeTable, findRepo, listRepos, listTables, publishRepo } from "@/lib/repo-authoring";
+import { fetchBranchPreview } from "@/lib/repo-preview-store";
 import { createApiToken } from "@/lib/api-tokens";
 import { runDashboard } from "@/lib/dashboards/engine";
 import { bearerToken, credentialLabel, resolveBearer, type Credential } from "@/lib/bearer-auth";
@@ -231,17 +232,18 @@ function registerRepoTools(server: McpServer, scope: RequestScope): void {
     {
       title: "Check a branch or pull request",
       description:
-        `${tag} Compiles a repo at a branch, tag or commit (\`ref\`), or at a pull request's merge result ` +
+        `${tag} Compiles a repo at a commit, branch or tag (\`ref\`), or at a pull request's merge result ` +
         `(\`pull_request\`), exactly as publishing would: layout rules, every dataset, its dashboards. Nothing ` +
         `is stored or published. Says which datasets are new. \`test_query\` also runs one Malloy query ` +
-        `against a dataset at that ref. Check the pull request before merging it — that is what catches a ` +
+        `against a dataset at that ref. Right after a commit, pass the commit SHA your write returned: a branch ` +
+        `name can resolve to the previous commit for up to a minute. Check the pull request before merging it — that is what catches a ` +
         `change that merges cleanly but breaks the model. Admins only.`,
       annotations: { readOnlyHint: true },
       inputSchema: fromJsonSchema<CheckArgs>({
         type: "object",
         properties: {
           repo: { type: "string", description: "The repo, as list_repos names it." },
-          ref: { type: "string", description: "Branch, tag or commit SHA. Default: the repo's published branch." },
+          ref: { type: "string", description: "Commit SHA (best, right after a commit), branch or tag. Default: the repo's published branch." },
           pull_request: { type: "integer", description: "Check this pull request's merge result instead of a ref." },
           test_query: {
             type: "object",
@@ -267,6 +269,42 @@ function registerRepoTools(server: McpServer, scope: RequestScope): void {
         ),
       ),
     ),
+  );
+
+  type FetchArgs = { repo: string; branch: string };
+  server.registerTool(
+    "fetch_branch",
+    {
+      title: "Fetch a branch to preview",
+      description:
+        `${tag} Fetches a branch of a repo from GitHub into a PREVIEW: its datasets and dashboards, compiled ` +
+        `but not published. Every tool that takes a dataset then takes \`repo@branch:dataset\` ` +
+        `(e.g. query's model_ref, describe_source, show_dashboard) and serves that snapshot until the next ` +
+        `fetch. Fetch after each push you want to look at. Returns each dataset's preview address and ` +
+        `whether it compiled. Admins only.`,
+      annotations: { readOnlyHint: false },
+      inputSchema: fromJsonSchema<FetchArgs>({
+        type: "object",
+        properties: {
+          repo: { type: "string", description: "The repo, as list_repos names it." },
+          branch: { type: "string", description: "The branch to fetch." },
+        },
+        required: ["repo", "branch"],
+      }),
+    },
+    logged(scope, "fetch_branch", async (a: FetchArgs) => {
+      const out = await withRepo(a.repo, (repo) => fetchBranchPreview(repo, a.branch, scope.userId));
+      if (!out.ok) return result(out);
+      const r = out as Extract<typeof out, { revision: number }>;
+      const lines = r.datasets.map(
+        (d) =>
+          `  ${d.address} — ${d.ok ? `${d.status}, ${d.sources?.length ?? 0} sources, ${d.artifacts?.length ?? 0} dashboards` : `FAILED: ${d.error}`}`,
+      );
+      return result(
+        r,
+        `Fetched ${r.repo}@${r.branch} at ${r.commit?.slice(0, 7) ?? "?"}. Preview addresses:\n${lines.join("\n")}`,
+      );
+    }),
   );
 
   server.registerTool(

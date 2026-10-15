@@ -195,7 +195,12 @@ export type PublishInput = {
  * rejected by `repo_revisions_repo_revision_unique` — a correct outcome reported
  * as a database error. The lock is held for one insert and no I/O.
  */
-async function storeRevision(input: PublishInput, archive: { zip: Buffer; sha256: string }) {
+export async function storeRevision(
+  input: PublishInput,
+  archive: { zip: Buffer; sha256: string },
+  /** A branch preview (repo-previews.ts): stored to look at, never activated. */
+  opts: { preview?: boolean } = {},
+) {
   return db.transaction(async (tx) => {
     await tx.execute(sql`select 1 from repos where id = ${input.repo.id} for update`);
     const [{ next }] = await tx.execute<{ next: number }>(
@@ -214,6 +219,7 @@ async function storeRevision(input: PublishInput, archive: { zip: Buffer; sha256
         archive: archive.zip,
         archiveBytes: archive.zip.length,
         archiveSha256: archive.sha256,
+        preview: opts.preview ?? false,
       })
       .returning();
     return row;

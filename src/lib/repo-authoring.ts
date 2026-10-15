@@ -26,7 +26,7 @@
  * hour, and looking at tables should not spend them.
  */
 
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 import { MalloyError, InMemoryURLReader } from "@malloydata/malloy";
 import { jsonRows, layoutFromListing } from "@malloyyo/mcp-engine";
 import { db, datasets, repoRevisions, repos, type Repo } from "@/db";
@@ -94,6 +94,8 @@ export type RepoSummary = {
   datasets: Array<{ name: string; dir: string }>;
   connections: Array<{ name: string; kind: string }>;
   liveCommit: string | null;
+  /** Branches fetched as previews: the latest snapshot of each. */
+  previews: Array<{ branch: string; commit: string | null; fetchedAt: string; ok: boolean }>;
 };
 
 export async function listRepos(): Promise<RepoSummary[]> {
@@ -121,8 +123,24 @@ export async function listRepos(): Promise<RepoSummary[]> {
       .from(datasets)
       .where(and(eq(datasets.repoId, repo.id), eq(datasets.status, "ready")));
     if (!live && rowsHere.length > 0) layout = "legacy";
+    const snapshots = await db
+      .select({
+        branch: repoRevisions.gitBranch,
+        commit: repoRevisions.gitSha,
+        createdAt: repoRevisions.createdAt,
+        verified: repoRevisions.verifiedAt,
+      })
+      .from(repoRevisions)
+      .where(and(eq(repoRevisions.repoId, repo.id), eq(repoRevisions.preview, true)))
+      .orderBy(desc(repoRevisions.createdAt));
+    const previews = new Map<string, RepoSummary["previews"][number]>();
+    for (const s of snapshots) {
+      if (!s.branch || previews.has(s.branch)) continue;
+      previews.set(s.branch, { branch: s.branch, commit: s.commit, fetchedAt: s.createdAt.toISOString(), ok: s.verified !== null });
+    }
     out.push({
       repo: repo.slug,
+      previews: [...previews.values()],
       github: repo.githubRepo,
       branch: repo.githubBranch ?? "main",
       layout,
@@ -287,6 +305,7 @@ export type RepoCheck =
       layout: "single" | "multi";
       datasets: DatasetCheck[];
       query?: { dir: string; rows: unknown[]; rowCount: number } | { dir: string; error: string };
+      note?: string;
     }
   | Fail;
 
@@ -296,7 +315,7 @@ async function resolveRef(
   owner: string,
   name: string,
   target: { ref?: string; pr?: number },
-): Promise<{ sha: string; label: string } | Fail> {
+): Promise<{ sha: string; label: string; byName?: boolean } | Fail> {
   const useToken = repo.githubUseToken;
   if (target.pr !== undefined) {
     const pr = await fetchGitHubPullRequest(owner, name, target.pr, { useToken });
@@ -316,9 +335,10 @@ async function resolveRef(
     return { sha: pr.mergeCommitSha, label: `pull request #${target.pr} merged into ${pr.baseRef}` };
   }
   const ref = target.ref ?? repo.githubBranch ?? "main";
-  const sha = /^[0-9a-f]{40}$/i.test(ref) ? ref : await fetchGitHubCommitSha(owner, name, ref, { useToken });
+  if (/^[0-9a-f]{40}$/i.test(ref)) return { sha: ref, label: ref };
+  const sha = await fetchGitHubCommitSha(owner, name, ref, { useToken });
   if (!sha) return { ok: false, error: `GitHub has no branch, tag or commit "${ref}" in ${repo.githubRepo}.` };
-  return { sha, label: ref };
+  return { sha, label: ref, byName: true };
 }
 
 export async function checkRepo(
@@ -387,6 +407,14 @@ export async function checkRepo(
       datasets: results,
     };
     if (probe) out.query = await runAt(root, probe, allDirs, filePaths);
+    // GitHub caches unauthenticated API answers for up to a minute, so a branch
+    // name read just after a push can still name the commit before it — and
+    // the check would report errors you already fixed. A SHA can't go stale.
+    if ("byName" in resolved && resolved.byName) {
+      out.note =
+        `"${resolved.label}" resolved to ${resolved.sha.slice(0, 12)}. A branch name can lag up to a minute ` +
+        `behind a fresh push; to check exactly what you just committed, pass that commit's SHA as \`ref\`.`;
+    }
     return out;
   } finally {
     discardWorkspace(root);

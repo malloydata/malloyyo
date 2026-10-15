@@ -325,6 +325,19 @@ export const repos = pgTable(
  * uncompressed size is known before anything is inflated, which is what bounds
  * a decompression bomb.
  */
+/** One dataset directory of a branch preview, as compiled when it was fetched. */
+export type PreviewDataset = {
+  name: string;
+  dir: string;
+  ok: boolean;
+  error?: string;
+  title?: string | null;
+  description?: string | null;
+  sources?: Array<{ name: string; description?: string | null }>;
+  declaredGivens?: string[];
+  artifacts?: Array<{ name: string; title: string | null; manifest: unknown; source: string }>;
+};
+
 export const repoRevisions = pgTable(
   "repo_revisions",
   {
@@ -386,6 +399,18 @@ export const repoRevisions = pgTable(
      */
     active: boolean("active").notNull().default(false),
     activatedAt: timestamp("activated_at", { withTimezone: true }),
+    /**
+     * A BRANCH PREVIEW: a snapshot fetched to look at, never to serve. It is
+     * never activated, and nothing that asks "what does this dataset serve"
+     * sees it — only an address naming it, `repo@branch:dataset`
+     * (src/lib/repo-previews.ts). Its branch is `git_branch`. Admin-only.
+     */
+    preview: boolean("preview").notNull().default(false),
+    /** A preview's compile result per dataset directory, recorded at fetch time:
+        whether it compiled, its sources and givens, and its dashboards (with
+        their components) — the preview's stand-in for model and artifact rows,
+        which it deliberately has none of. */
+    previewDatasets: jsonb("preview_datasets").$type<PreviewDataset[]>(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .default(sql`now()`),
@@ -394,6 +419,7 @@ export const repoRevisions = pgTable(
     uniqueIndex("repo_revisions_repo_revision_unique").on(t.repoId, t.revision),
     uniqueIndex("repo_revisions_one_active").on(t.repoId).where(sql`active`),
     index("repo_revisions_repo_created_idx").on(t.repoId, t.createdAt),
+    index("repo_revisions_preview_branch_idx").on(t.repoId, t.gitBranch, t.createdAt).where(sql`preview`),
   ],
 );
 

@@ -13,9 +13,10 @@
 // This module must NEVER import ./engine or @/lib/malloy (statically or lazily).
 
 import { and, eq, asc, desc, inArray } from "drizzle-orm";
-import { db, datasets, malloyArtifacts, malloyModels, draftDashboards, repos, users } from "@/db";
+import { db, datasets, malloyArtifacts, malloyModels, draftDashboards, repos, users, type PreviewDataset } from "@/db";
 import { qualifiedName } from "@/lib/repo-names";
 import { visibleDatasetWhere, findByDatasetRef, latestModel } from "@/lib/mcp-tools";
+import { previewModelRef } from "@/lib/repo-previews";
 import { aboutFirst } from "./about";
 import { imageHostsFromConfig } from "./image-hosts";
 
@@ -108,7 +109,18 @@ export async function listDashboardsForModel(
 export async function listDashboards(userId: string, datasetId: string): Promise<DashboardSummary[]> {
   const found = await findByDatasetRef(userId, datasetId);
   if (!found) return [];
+  if ("preview" in found) return previewDashboards(found.preview.entry, datasetId, found.ds.name);
   return listDashboardsForModel(found.model.id, datasetId, found.ds.name);
+}
+
+/** A branch preview's dashboards: compiled at fetch time, not artifact rows. */
+function previewDashboards(entry: PreviewDataset, datasetId: string, datasetName: string): DashboardSummary[] {
+  const rows = (entry.artifacts ?? []).map((a) => ({
+    name: a.name,
+    title: a.title,
+    manifest: (a.manifest ?? {}) as Record<string, unknown>,
+  }));
+  return aboutFirst(rows).map((a) => summary(datasetId, datasetName, a));
 }
 
 /** One dataset's dashboards AND the drafts people made on it — what the home
@@ -118,6 +130,8 @@ export async function listDashboards(userId: string, datasetId: string): Promise
 export async function listDashboardsAndDrafts(userId: string, datasetRef: string): Promise<DashboardSummary[]> {
   const found = await findByDatasetRef(userId, datasetRef);
   if (!found) return [];
+  // A preview has no drafts: drafts belong to the published dataset.
+  if ("preview" in found) return previewDashboards(found.preview.entry, datasetRef, found.ds.name);
   return [
     ...(await listDashboardsForModel(found.model.id, found.ds.id, found.ds.name)),
     ...(await listDraftsOnDataset(found.ds.id, found.ds.name)),
@@ -284,6 +298,19 @@ function draftSummary(
 export async function getDashboard(userId: string, datasetId: string, name: string): Promise<DashboardDetail | null> {
   const found = await findByDatasetRef(userId, datasetId);
   if (!found) return null;
+  if ("preview" in found) {
+    const a = (found.preview.entry.artifacts ?? []).find((x) => x.name === name);
+    if (!a) return null;
+    return {
+      datasetId,
+      datasetName: found.ds.name,
+      name: a.name,
+      title: a.title ?? a.name,
+      manifest: (a.manifest ?? {}) as Record<string, unknown>,
+      source: a.source,
+      modelId: found.model.id,
+    };
+  }
   const slug = draftSlug(name);
   if (slug !== null) {
     // Visibility is the dataset's (checked above); the slug must belong to it.
@@ -350,6 +377,11 @@ export const isCustomDashboard = (dash: Pick<DashboardDetail, "source">): boolea
  * text; callers parse what they need (image-hosts.ts, and poolSizeFromConfig's
  * reader in @/lib/malloy, are both shaped that way). */
 export async function modelConfigJson(modelId: string): Promise<string | undefined> {
+  const preview = previewModelRef(modelId);
+  if (preview) {
+    const { modelFileMap } = await import("@/lib/mcp-tools");
+    return (await modelFileMap(preview)).get("malloy-config.json");
+  }
   const [model] = await db
     .select({
       id: malloyModels.id,

@@ -23,6 +23,7 @@ import { signInPath } from "@/lib/auth-paths";
 // reference_ssr_page_duckdb_500.
 import { getDashboard, isCustomDashboard } from "@/lib/dashboards";
 import { CustomDashboardFrame } from "./CustomDashboardFrame";
+import { PreviewBanner } from "@/components/PreviewBanner";
 import { TagOnlyDashboard } from "./TagOnlyDashboard";
 
 export default async function DashboardViewPage({
@@ -63,6 +64,7 @@ export default async function DashboardViewPage({
         activeDashboard={name}
         activeTitle={dash.title}
       />
+      <PreviewBanner userId={user.id} datasetRef={id} dashboard={name} />
       {isCustomDashboard(dash) ? (
         <CustomDashboardFrame key={`${id}/${name}`} id={id} name={name} />
       ) : (

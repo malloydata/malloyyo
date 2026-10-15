@@ -198,6 +198,8 @@ type PublishRepoOptions = {
   createDatasets?: boolean;
   repo?: string;
   instance?: string;
+  /** Upload as a branch preview instead of publishing; `true` = the current git branch. */
+  branch?: string | boolean;
 };
 
 /**
@@ -241,10 +243,20 @@ async function publishRepo(
   if (fileCount === 0) throw new Error(`${root} has no files git tracks — nothing to publish`);
 
   const git = gitInfo(root);
+  // A PREVIEW, not a publish: the server compiles the working tree and keeps it
+  // under `repo@branch:dataset` for admins to query and look at, live for
+  // nobody. Named by the branch it previews, so re-uploading replaces it.
+  const previewBranch = opts.branch === true ? git.branch : opts.branch || null;
+  if (opts.branch !== undefined && !previewBranch) {
+    throw new Error(`no git branch to name the preview after — pass one:  --branch <name>`);
+  }
   const provenance = git.sha
     ? `${git.branch}@${shortSha(git.sha)}${git.dirty ? " (dirty)" : ""}`
     : "(no git)";
-  console.log(`→ ${t.url}  repo=${opts.repo}${opts.createDatasets ? " (create missing)" : ""}`);
+  console.log(
+    `→ ${t.url}  repo=${opts.repo}` +
+      (previewBranch ? `  preview of branch ${previewBranch}` : opts.createDatasets ? " (create missing)" : ""),
+  );
   console.log(`  ${datasetNames.length} dataset(s): ${datasetNames.join(", ")}`);
   console.log(`  ${fileCount} file(s), ${(archive.length / 1024).toFixed(0)}KB archive  ${provenance}`);
   // The request carries the archive base64'd inside JSON. Not refused here —
@@ -264,12 +276,14 @@ async function publishRepo(
     headers: { "content-type": "application/json", authorization: `Bearer ${bearer}` },
     body: JSON.stringify({
       repo: opts.repo,
-      branch: git.branch ?? "main",
+      branch: previewBranch ?? git.branch ?? "main",
       archive: archive.toString("base64"),
       createDatasets: opts.createDatasets ?? false,
-      git,
+      git: previewBranch ? { ...git, branch: previewBranch } : git,
+      ...(previewBranch ? { preview: true } : {}),
     }),
   });
+  if (previewBranch) return reportPreview(res, t.url, tooLarge);
   const out = (await res.json().catch(() => null)) as {
     ok?: boolean;
     error?: string;
@@ -286,6 +300,31 @@ async function publishRepo(
   console.log(`published ${out.datasets?.length ?? 0} dataset(s) to ${t.url}`);
 }
 
+/** What a `--branch` upload answers: each dataset's preview address and whether it compiled. */
+async function reportPreview(res: Response, url: string, tooLarge: string): Promise<void> {
+  const out = (await res.json().catch(() => null)) as {
+    ok?: boolean;
+    error?: string;
+    branch?: string;
+    datasets?: { name: string; ok: boolean; error?: string; address: string; status: "new" | "existing" }[];
+  } | null;
+  if (res.status === 413) throw new Error(`preview refused by ${url} (413): ${tooLarge}`);
+  if (!res.ok || !out?.ok) throw new Error(out?.error ?? `preview failed (${res.status})`);
+  const datasets = out.datasets ?? [];
+  for (const d of datasets) {
+    const mark = d.ok ? "✓" : "✗";
+    console.log(`  ${mark} ${d.address}${d.status === "new" ? "  (new on this branch)" : ""}`);
+    if (!d.ok && d.error) console.log(`      ${d.error.split("\n").join("\n      ")}`);
+  }
+  const failed = datasets.filter((d) => !d.ok).length;
+  console.log(
+    `preview of ${out.branch} stored on ${url} — admins only, nothing published` +
+      (failed ? ` (${failed} dataset(s) did not compile)` : ""),
+  );
+  console.log(`  query it as <repo>@${out.branch}:<dataset>, or open ${url}/datasets/<address>`);
+  if (failed) process.exitCode = 1;
+}
+
 async function publish(
   target: string | undefined,
   dir: string,
@@ -298,6 +337,7 @@ async function publish(
     repo?: string;
     instance?: string;
     dataset?: string;
+    branch?: string | boolean;
   },
 ): Promise<void> {
   const root = resolve(dir);
@@ -336,11 +376,14 @@ async function publish(
     }
     if (!opts.repo) {
       throw new Error(
-        `${root} publishes ${names.length} datasets, and a repo is published as one unit.\n` +
+        `${root} publishes ${names.length} datasets, and a repo is ${opts.branch !== undefined ? "previewed" : "published"} as one unit.\n` +
           `Name it:  malloyyo publish --repo <owner/name>`,
       );
     }
     return publishRepo(root, names, target, opts as PublishRepoOptions);
+  }
+  if (opts.branch !== undefined) {
+    throw new Error(`--branch previews a repo with a datasets/ directory; ${root} publishes one dataset from its root.`);
   }
   // FIRST, because this one is about WHERE you are standing and the next is about
   // which flag you typed. The other order made the two refusals a loop: pointed
@@ -552,6 +595,10 @@ program
     "publish a repo with a datasets/ directory — every dataset in it, as one unit",
   )
   .option("--create-datasets", "with --repo: create any dataset the repo publishes that doesn't exist yet")
+  .option(
+    "--branch [name]",
+    "with --repo: upload the working tree as an admin-only PREVIEW of <name> (default: the current git branch) instead of publishing",
+  )
   .description('push the Malloy model in <dir> (default ".") to <target>')
   .addHelpText("after", `\n${PUBLISH_HELP}\n`)
   .action(publish);

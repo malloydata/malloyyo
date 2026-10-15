@@ -620,7 +620,7 @@ export async function withModelRuntime<T>(
     // shadow dies with the request.
     let rehydrated = false;
     const rt = runtime as malloy.Runtime;
-    if (MODEL_DEF_CACHE && cacheKey) {
+    if (MODEL_DEF_CACHE && durableKey(cacheKey)) {
       const def = await loadDef(cacheKey);
       if (def !== undefined) {
         rehydrated = true;
@@ -637,7 +637,7 @@ export async function withModelRuntime<T>(
       // Cold miss: the engine compiled into the pool cache; extract + persist
       // (awaited — a background write would be killed by Vercel's post-response
       // freeze). persistModelDef is bulletproof, so this can't break the query.
-      if (MODEL_DEF_CACHE && cacheKey && !rehydrated) {
+      if (MODEL_DEF_CACHE && durableKey(cacheKey) && !rehydrated) {
         await persistModelDef(cacheKey, () => rt.getModel(entry));
       }
       return result;
@@ -652,6 +652,13 @@ export async function withModelRuntime<T>(
 // ModelDef so future cold instances skip it. Keyed by model.id (= the pool
 // cacheKey), immutable per version, so no invalidation. Off => exact prior behavior.
 const MODEL_DEF_CACHE = process.env.MODEL_DEF_CACHE === "1" || process.env.MODEL_DEF_CACHE === "true";
+
+/** Only a model row's id has a durable home (malloy_models.compiled_model_def).
+    Other keys — a branch preview's `preview:<revision>:<dir>`, a draft's — are
+    pooled in memory and never written. */
+function durableKey(cacheKey: string | undefined): cacheKey is string {
+  return !!cacheKey && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(cacheKey);
+}
 
 type ModelMat = ReturnType<malloy.Runtime["loadModel"]>;
 type CompiledModel = Awaited<ReturnType<ModelMat["getModel"]>>;
@@ -710,11 +717,11 @@ async function acquireModel(
   entryPath: string,
 ): Promise<{ mm: ModelMat; persist: boolean }> {
   const url = fileUrl(entryPath);
-  if (MODEL_DEF_CACHE && cacheKey) {
+  if (MODEL_DEF_CACHE && durableKey(cacheKey)) {
     const def = await loadDef(cacheKey);
     if (def !== undefined) return { mm: rehydrateModel(runtime, def), persist: false };
   }
-  return { mm: runtime.loadModel(url), persist: MODEL_DEF_CACHE && !!cacheKey };
+  return { mm: runtime.loadModel(url), persist: MODEL_DEF_CACHE && durableKey(cacheKey) };
 }
 
 // Extract and durably persist a freshly-compiled model's ModelDef. AWAITED by

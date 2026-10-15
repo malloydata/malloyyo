@@ -57,11 +57,30 @@ admin's job, outside this flow.
 
 ## 3. Check it here
 
-`check_repo(repo, ref: "<branch>")` compiles the repo at that branch exactly as
-publishing would. Your dataset should show `status: "new"` and `ok: true`, with
-its sources. Add a `test_query`
+`check_repo(repo, ref: "<commit SHA>")` compiles the repo at that commit exactly
+as publishing would. Pass the SHA your last write returned, not the branch name:
+GitHub can answer a branch name with the commit before yours for up to a minute
+after a push, and you'd be shown errors you already fixed. Your dataset should
+show `status: "new"` and `ok: true`, with its sources. Add a `test_query`
 (`{dataset_dir: "datasets/<name>", malloy: "run: orders -> { aggregate: row_count is count() }"}`)
 to see real numbers. Fix what it reports, commit again, and re-check.
+
+### Try it like it's published: branch previews
+
+To use the branch the way people will use the published dataset, with every
+tool and its dashboards, run `fetch_branch(repo, branch)`. It takes a snapshot
+of the branch and compiles it here. It answers with an address per dataset,
+`<repo>@<branch>:<dataset>` (e.g. `shop@malloyyo/add-orders:orders`). Pass that
+address as `model_ref` to `describe_source` and `query`, or send the person to
+`/datasets/<address>` (URL-encoded) to see its dashboards.
+
+- **A snapshot, not a live view.** Someone else may push to the branch, and the
+  address keeps showing what you fetched until you fetch again. Fetch after each
+  push you want to look at, and before you open the pull request.
+- **Previews are for admins** and are never published. Queries against one
+  don't make share links.
+- Someone working locally can upload a working tree without pushing:
+  `malloyyo publish --repo <owner/name> --branch`.
 
 When it's clean, open a pull request with GitHub's tools. Say what the dataset
 is, which tables it reads, and include a sample of the test query's result.

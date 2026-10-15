@@ -21,7 +21,7 @@ import {
   registerAppTool,
 } from "@modelcontextprotocol/ext-apps/server";
 import { publishedSchema } from "@malloyyo/mcp-engine/mcp-sdk";
-import { buildHostedExploreSurface } from "@/lib/mcp-host";
+import { buildHostedExploreSurface, dashboardUrl } from "@/lib/mcp-host";
 import {
   BUNDLE_TOOL,
   RUN_TOOL,
@@ -157,8 +157,9 @@ function registerRepoTools(server: McpServer, scope: RequestScope): void {
       title: "List model repos",
       description:
         `${tag} The model repos this instance publishes: their GitHub repo and branch, layout, datasets and ` +
-        `database connections (names and kinds only). Start here to add a dataset to a repo; read ` +
-        `yo_help("repo/add-dataset-from-chat") first.`,
+        `database connections (names and kinds only), and the branches fetched as previews. Start here to ` +
+        `add a dataset to a repo (read yo_help("repo/add-dataset-from-chat") first), or to try a branch's ` +
+        `models and dashboards before they're published (yo_help("repo/branches")).`,
       annotations: { readOnlyHint: true },
       inputSchema: fromJsonSchema<Json>({ type: "object", properties: {} }),
     },
@@ -275,13 +276,14 @@ function registerRepoTools(server: McpServer, scope: RequestScope): void {
   server.registerTool(
     "fetch_branch",
     {
-      title: "Fetch a branch to preview",
+      title: "Preview a branch: its models and dashboards, unpublished",
       description:
-        `${tag} Fetches a branch of a repo from GitHub into a PREVIEW: its datasets and dashboards, compiled ` +
-        `but not published. Every tool that takes a dataset then takes \`repo@branch:dataset\` ` +
-        `(e.g. query's model_ref, describe_source, show_dashboard) and serves that snapshot until the next ` +
-        `fetch. Fetch after each push you want to look at. Returns each dataset's preview address and ` +
-        `whether it compiled. Admins only.`,
+        `${tag} The way to SEE a branch's changes here — models, queries, dashboards — before they are ` +
+        `published. Fetches the branch from GitHub (push first) into a preview, compiled but not ` +
+        `published. Every tool that takes a dataset then takes \`repo@branch:dataset\` ` +
+        `(query's model_ref, describe_source, show_dashboard) and serves that snapshot until the next ` +
+        `fetch, so fetch again after each push. Returns each dataset's preview address, whether it ` +
+        `compiled, and a browser link to each dashboard. Admins only.`,
       annotations: { readOnlyHint: false },
       inputSchema: fromJsonSchema<FetchArgs>({
         type: "object",
@@ -296,13 +298,25 @@ function registerRepoTools(server: McpServer, scope: RequestScope): void {
       const out = await withRepo(a.repo, (repo) => fetchBranchPreview(repo, a.branch, scope.userId));
       if (!out.ok) return result(out);
       const r = out as Extract<typeof out, { revision: number }>;
-      const lines = r.datasets.map(
-        (d) =>
-          `  ${d.address} — ${d.ok ? `${d.status}, ${d.sources?.length ?? 0} sources, ${d.artifacts?.length ?? 0} dashboards` : `FAILED: ${d.error}`}`,
-      );
+      // Links, not just addresses: the person wants to open the dashboards,
+      // and an address alone left a model guessing at the URL shape.
+      const datasets = r.datasets.map((d) => ({
+        ...d,
+        dashboards: (d.artifacts ?? []).map((a) => ({
+          name: a.name,
+          title: a.title,
+          url: dashboardUrl(env.APP_BASE_URL, d.address, a.name),
+        })),
+      }));
+      const lines = datasets.flatMap((d) => [
+        `  ${d.address} — ${d.ok ? `${d.status}, ${d.sources?.length ?? 0} sources, ${d.dashboards.length} dashboards` : `FAILED: ${d.error}`}`,
+        ...d.dashboards.map((a) => `      ${a.title ?? a.name}: ${a.url}`),
+      ]);
       return result(
-        r,
-        `Fetched ${r.repo}@${r.branch} at ${r.commit?.slice(0, 7) ?? "?"}. Preview addresses:\n${lines.join("\n")}`,
+        { ...r, datasets },
+        `Fetched ${r.repo}@${r.branch} at ${r.commit?.slice(0, 7) ?? "?"}. Preview addresses:\n${lines.join("\n")}\n\n` +
+          `Pass an address as model_ref to describe_source and query, or as dataset to show_dashboard. ` +
+          `Give the person the dashboard links. This is a snapshot: after the next push, fetch_branch again.`,
       );
     }),
   );
@@ -598,7 +612,12 @@ function registerDashboardApp(server: McpServer, scope: RequestScope, panel: Das
         return { content: text(msg), structuredContent: { ok: false, error: msg }, isError: true };
       }
       return {
-        content: text(`Showing the '${dash.title}' dashboard in an inline panel.`),
+        // The link too: a client that doesn't draw panels shows nothing, and
+        // the person may want it in a browser anyway.
+        content: text(
+          `Showing the '${dash.title}' dashboard in an inline panel. ` +
+            `In a browser: ${dashboardUrl(env.APP_BASE_URL, dataset, dash.name)}`,
+        ),
         structuredContent: { ok: true, datasetId: dataset, name: dash.name },
       };
     }),

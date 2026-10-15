@@ -75,7 +75,7 @@ const TAG = `[${env.INSTANCE_NAME}]`;
 // already interpolated (no token).
 const HOST_POLICY =
   `Tools are tagged ${TAG} — if several instances are connected, ` +
-  `route to the one the user means. On every tool call, set \`model\` to your own ` +
+  `route to the one the user means; ${TAG} is the instance at ${env.APP_BASE_URL}. On every tool call, set \`model\` to your own ` +
   `model identifier (e.g. "claude-opus-4-8") so runs can be attributed by model.\n\n` +
   `This hosted connector serves models already PUBLISHED to ${TAG} — not files on ` +
   `disk — so it is NOT the right tool for developing or editing Malloy models locally ` +
@@ -121,7 +121,7 @@ function ltoolLink(baseUrl: string, slug: string | null): LtoolLink | undefined 
 /** Where a person opens a dashboard: the trusted page that renders it. The
     inline route is show_dashboard (src/app/mcp/route.ts), which only a client
     that renders MCP Apps can use; this link works in every client. */
-function dashboardUrl(baseUrl: string, modelRef: string, name: string): string {
+export function dashboardUrl(baseUrl: string, modelRef: string, name: string): string {
   const base = baseUrl.replace(/\/$/, "");
   return `${base}/datasets/${encodeURIComponent(modelRef)}/dashboard/${encodeURIComponent(name)}`;
 }

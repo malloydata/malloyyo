@@ -94,6 +94,8 @@ export type RepoSummary = {
   datasets: Array<{ name: string; dir: string }>;
   connections: Array<{ name: string; kind: string }>;
   liveCommit: string | null;
+  /** How to preview a branch of this repo — said here because list_repos is where a model starts. */
+  previewing: string;
   /** Branches fetched as previews: the latest snapshot of each. */
   previews: Array<{ branch: string; commit: string | null; fetchedAt: string; ok: boolean }>;
 };
@@ -140,6 +142,10 @@ export async function listRepos(): Promise<RepoSummary[]> {
     }
     out.push({
       repo: repo.slug,
+      previewing: repo.githubRepo
+        ? `fetch_branch(repo, branch) snapshots a pushed branch so its datasets and dashboards can be used here ` +
+          `as ${repo.slug}@<branch>:<dataset>, unpublished. Fetch again after each push.`
+        : `Not on GitHub: upload a working tree with \`malloyyo publish --repo <owner/name> --branch\`.`,
       previews: [...previews.values()],
       github: repo.githubRepo,
       branch: repo.githubBranch ?? "main",
@@ -306,6 +312,7 @@ export type RepoCheck =
       datasets: DatasetCheck[];
       query?: { dir: string; rows: unknown[]; rowCount: number } | { dir: string; error: string };
       note?: string;
+      next: string;
     }
   | Fail;
 
@@ -405,6 +412,12 @@ export async function checkRepo(
       commit: resolved.sha,
       layout: layout.kind,
       datasets: results,
+      // check_repo answers "does it compile"; looking at it is another tool,
+      // and a model that hadn't been told so went looking and didn't find it.
+      next:
+        `To use a branch's datasets and dashboards here before publishing — query them, open the ` +
+        `dashboards — fetch_branch(repo: "${repo.slug}", branch: "<branch>"); it answers with ` +
+        `\`${repo.slug}@<branch>:<dataset>\` addresses and dashboard links.`,
     };
     if (probe) out.query = await runAt(root, probe, allDirs, filePaths);
     // GitHub caches unauthenticated API answers for up to a minute, so a branch

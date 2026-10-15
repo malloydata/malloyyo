@@ -82,6 +82,8 @@ address as `model_ref` to `describe_source` and `query`, or send the person to
 - Someone working locally can upload a working tree without pushing:
   `malloyyo publish --repo <owner/name> --branch`.
 
+`yo_help("repo/branches")` has the details.
+
 When it's clean, open a pull request with GitHub's tools. Say what the dataset
 is, which tables it reads, and include a sample of the test query's result.
 

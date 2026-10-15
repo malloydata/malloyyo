@@ -105,3 +105,7 @@ in `lib/`, and import it with `'../../lib/<file>.malloy'`.
 `given:` declarations with it, so a shared library that declares `MALLOYYO_EMAIL`
 makes every dataset importing it scoped by the asker. Import selectively —
 `import { orders } from '../../lib/x.malloy'` — when that is not what you want.
+
+## Trying a change before it's published
+
+Work on a branch and preview it here: `yo_help("repo/branches")`.

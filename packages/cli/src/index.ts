@@ -2,7 +2,13 @@
 import { Command } from "commander";
 import { noticeOnExit, runUpdateCheck, UPDATE_CHECK_ARGV } from "./update-check.js";
 import { resolve, relative, sep } from "node:path";
-import { resolveTarget, resolveInstance, resolvePublishTarget, type Target } from "./config.js";
+import {
+  resolveTarget,
+  resolveInstance,
+  resolvePublishTarget,
+  resolveRepoTarget,
+  type Target,
+} from "./config.js";
 import { gatherDirectory, gatherDashboards, gitArchiveZip, gitInfo } from "./gather.js";
 import { layoutFromListing } from "@malloyyo/mcp-engine";
 import { fsLister, repoRootOf } from "./repo.js";
@@ -161,12 +167,18 @@ const PUBLISH_HELP = `One dataset, or several:
   all of them or none. \`malloyyo lint\` shows what yours publishes.
 
 Target resolution:
-  The instance and dataset normally come from the \`malloyyo\` block in
-  malloy-config.json. Either can be overridden, and giving BOTH means the
-  config is never read — so a repo with no targets (or none for this
-  instance) can be published without editing its committed config:
+  The instance and the dataset (or, for a datasets/ repo, the repo) normally
+  come from the \`malloyyo\` block in malloy-config.json:
+
+    "targets": { "prod": { "url": "https://…", "dataset": "movies" } }
+    "targets": { "prod": { "url": "https://…", "repo": "owner/name" } }
+
+  Either half can be overridden, and giving BOTH means the config is never
+  read — so a repo with no targets (or none for this instance) can be
+  published without editing its committed config:
 
     malloyyo publish -i https://gravity.malloyyo.com --dataset movies --create-dataset
+    malloyyo publish -i https://gravity.malloyyo.com --repo owner/name --create-datasets
 
   -i takes what \`login\` takes: a URL, or the name of a configured target
   whose url should be borrowed. Authenticate the same way as always:
@@ -216,7 +228,7 @@ async function publishRepo(
   target: string | undefined,
   opts: PublishRepoOptions,
 ): Promise<void> {
-  const t = resolvePublishTarget(root, target, { instance: opts.instance, dataset: opts.repo });
+  const t = resolveRepoTarget(root, target, { instance: opts.instance, repo: opts.repo });
   const bearer = await getAccessToken(t, { tokenFlag: opts.token });
 
   if (!opts.skipLint) {
@@ -244,7 +256,7 @@ async function publishRepo(
   const provenance = git.sha
     ? `${git.branch}@${shortSha(git.sha)}${git.dirty ? " (dirty)" : ""}`
     : "(no git)";
-  console.log(`→ ${t.url}  repo=${opts.repo}${opts.createDatasets ? " (create missing)" : ""}`);
+  console.log(`→ ${t.url}  repo=${t.repo}${opts.createDatasets ? " (create missing)" : ""}`);
   console.log(`  ${datasetNames.length} dataset(s): ${datasetNames.join(", ")}`);
   console.log(`  ${fileCount} file(s), ${(archive.length / 1024).toFixed(0)}KB archive  ${provenance}`);
   // The request carries the archive base64'd inside JSON. Not refused here —
@@ -263,7 +275,7 @@ async function publishRepo(
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${bearer}` },
     body: JSON.stringify({
-      repo: opts.repo,
+      repo: t.repo,
       branch: git.branch ?? "main",
       archive: archive.toString("base64"),
       createDatasets: opts.createDatasets ?? false,
@@ -334,12 +346,8 @@ async function publish(
           (opts.createDataset ? " --create-datasets" : ""),
       );
     }
-    if (!opts.repo) {
-      throw new Error(
-        `${root} publishes ${names.length} datasets, and a repo is published as one unit.\n` +
-          `Name it:  malloyyo publish --repo <owner/name>`,
-      );
-    }
+    // No --repo is fine now: the target's "repo" names it. resolveRepoTarget
+    // refuses a target that names a dataset instead, or names neither.
     return publishRepo(root, names, target, opts as PublishRepoOptions);
   }
   // FIRST, because this one is about WHERE you are standing and the next is about
@@ -549,9 +557,9 @@ program
   .option("--create-dataset", "create the target dataset if it doesn't exist yet (private)")
   .option(
     "--repo <owner/name>",
-    "publish a repo with a datasets/ directory — every dataset in it, as one unit",
+    "repo with a datasets/ directory to publish — every dataset in it, as one unit; overrides the target's \"repo\"",
   )
-  .option("--create-datasets", "with --repo: create any dataset the repo publishes that doesn't exist yet")
+  .option("--create-datasets", "for a datasets/ repo: create any dataset the repo publishes that doesn't exist yet")
   .description('push the Malloy model in <dir> (default ".") to <target>')
   .addHelpText("after", `\n${PUBLISH_HELP}\n`)
   .action(publish);

@@ -81,6 +81,19 @@ malloyyo publish            # bundle *.malloy + malloy-config.json and push
 
 Both take a target name (`malloyyo publish prod`) when the repo defines more than one.
 
+**A repo with a `datasets/` directory** (one dataset per directory) publishes all of them as
+one unit, so its target names the **repo** — its GitHub `owner/name` — instead of a dataset:
+
+```json
+"malloyyo": {
+  "targets": { "prod": { "url": "https://your-instance.example.com", "repo": "acme/models" } }
+}
+```
+
+`malloyyo publish` then needs no flags; `--repo owner/name` overrides the target's `repo`, the
+way `--dataset` overrides its `dataset`. A target names one or the other, never both, and the
+CLI refuses the one that doesn't fit the repo's layout rather than ignoring it.
+
 The dataset must exist first — create it in the UI, or add `--create-dataset` to the first
 publish (it creates a private dataset, and only once the model compiles).
 

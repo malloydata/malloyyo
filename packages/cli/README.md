@@ -42,13 +42,19 @@ entry per deployment. **Only the env-var name is committed — never the token v
 {
   "connections": { /* … */ },
   "malloyyo": {
-    "main":    { "url": "https://malloyyo.example.com",         "dataset": "mdw",
-                 "malloyyo_token": { "env": "malloyyo_main_token" } },
-    "staging": { "url": "https://malloyyo-staging.example.com", "dataset": "mdw_staging",
-                 "malloyyo_token": { "env": "malloyyo_staging_token" } }
+    "targets": {
+      "main":    { "url": "https://malloyyo.example.com",         "dataset": "mdw",
+                   "malloyyo_token": { "env": "malloyyo_main_token" } },
+      "staging": { "url": "https://malloyyo-staging.example.com", "dataset": "mdw_staging",
+                   "malloyyo_token": { "env": "malloyyo_staging_token" } }
+    }
   }
 }
 ```
+
+A repo with a `datasets/` directory publishes all its datasets as one unit, so its targets
+name the repo (GitHub `owner/name`) instead of a dataset —
+`{ "url": "https://malloyyo.example.com", "repo": "acme/models" }` — and `--repo` overrides it.
 
 ## Sign in
 

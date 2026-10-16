@@ -42,6 +42,7 @@ import {
 } from "@/db";
 import { createApiToken } from "@/lib/api-tokens";
 import { latestModel } from "@/lib/mcp-tools";
+import { repoSlugFromGitHub } from "@/lib/repos";
 import { POST as pushRoute } from "@/app/api/datasets/[id]/model/push/route";
 import { GET as statusRoute } from "@/app/api/datasets/[id]/model/status/route";
 import { POST as repoPushRoute } from "@/app/api/repos/push/route";
@@ -1137,7 +1138,14 @@ test("a reserved given this server does not fill is refused at publish", async (
 const REPO_SLUG = `lloydtabb/repo_flow_${RUN}`;
 
 /** A repo with a `datasets/` directory: one directory per dataset. */
-function makeRepo(names: string[], opts: { broken?: string } = {}): string {
+function makeRepo(
+  names: string[],
+  opts: {
+    broken?: string;
+    /** What the config's target says it publishes, beside its url. */
+    target?: { repo?: string; dataset?: string };
+  } = {},
+): string {
   const dir = mkdtempSync(join(tmpdir(), "malloyyo-repo-"));
   projects.push(dir);
   // `publish --repo` packs what GIT tracks, so a fixture has to be a git repo —
@@ -1147,7 +1155,10 @@ function makeRepo(names: string[], opts: { broken?: string } = {}): string {
   writeFileSync(
     join(dir, "malloy-config.json"),
     JSON.stringify(
-      { connections: { duckdb: { is: "duckdb" } }, malloyyo: { targets: { test: { url: serverUrl } } } },
+      {
+        connections: { duckdb: { is: "duckdb" } },
+        malloyyo: { targets: { test: { url: serverUrl, ...opts.target } } },
+      },
       null,
       2,
     ),
@@ -1187,6 +1198,26 @@ test("a repo publishes every dataset it holds, in one request", async () => {
     assert.equal(repoRow.githubRepo, null, "…and the repo is not attached to GitHub");
     assert.equal((await models(ds.id)).length, 1);
   }
+});
+
+test("a target's \"repo\" names the repo, so publish needs no --repo", async () => {
+  // The config is the whole description of where a repo goes — no flag to retype
+  // on every publish, and the same push a --repo publish makes.
+  const name = `rf_cfg_${RUN}`;
+  const dir = makeRepo([name], { target: { repo: REPO_SLUG } });
+  const r = await runCli(["publish", "--create-datasets", "--token", token], dir);
+  assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`);
+  assert.match(r.stdout, new RegExp(`repo=${REPO_SLUG}`));
+  const [ds] = await datasetRows(name);
+  assert.ok(ds?.repoId, `${name} was created in the repo the config named`);
+  const [repoRow] = await db.select().from(repos).where(eq(repos.id, ds.repoId!));
+  assert.equal(repoRow.slug, repoSlugFromGitHub(REPO_SLUG));
+
+  // A target written for the single-dataset layout is refused here, not dropped.
+  const wrong = makeRepo([name], { target: { dataset: name } });
+  const w = await runCli(["publish", "--token", token], wrong);
+  assert.notEqual(w.code, 0);
+  assert.match(`${w.stdout}${w.stderr}`, /names a dataset[\s\S]*"repo": "<owner\/name>"/);
 });
 
 test("a repo with a broken dataset publishes NOTHING", async () => {

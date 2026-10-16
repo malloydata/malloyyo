@@ -15,6 +15,7 @@ import {
   resolveTarget,
   resolveInstance,
   resolvePublishTarget,
+  resolveRepoTarget,
 } from "../src/config.js";
 
 function withConfig(malloyyo: unknown, fn: (dir: string) => void) {
@@ -251,6 +252,114 @@ test("image_hosts is a known setting, not an unknown key or a target", () => {
       assert.throws(() => resolveTarget(dir, "image_hosts"), /Unknown target/);
       // Still exactly one target, so the unambiguous-target rule is unaffected.
       assert.equal(resolveInstance(dir).url, "https://x.dev");
+    },
+  );
+});
+
+// Targets that name a repo. A repo with a `datasets/` directory publishes as one unit,
+// so its target names the REPO; one with `index.malloy` at its root names a dataset.
+// The rule pinned here is that each resolver reads only the key its layout needs, and
+// refuses — never silently drops — the other one.
+
+test("a repo target resolves its repo from the config", () => {
+  withConfig(
+    { targets: { prod: { url: "https://x.dev/", repo: "acme/models", malloyyo_token: { env: "TOK" } } } },
+    (dir) => {
+      assert.deepEqual(resolveRepoTarget(dir), {
+        name: "prod",
+        url: "https://x.dev",
+        repo: "acme/models",
+        tokenEnv: "TOK",
+      });
+      assert.equal(resolveRepoTarget(dir, "prod").repo, "acme/models");
+    },
+  );
+});
+
+test("--repo overrides the target's repo, and --instance its url", () => {
+  withConfig({ targets: { prod: { url: "https://x.dev", repo: "acme/models" } } }, (dir) => {
+    assert.equal(resolveRepoTarget(dir, undefined, { repo: "acme/other" }).repo, "acme/other");
+    const moved = resolveRepoTarget(dir, undefined, { instance: "https://y.dev" });
+    assert.equal(moved.url, "https://y.dev");
+    assert.equal(moved.repo, "acme/models");
+    // Same rule as a dataset target: the token var belongs to the configured host.
+    assert.equal(moved.tokenEnv, undefined);
+  });
+  // A flag also rescues a target written for the other layout — exactly as --dataset does.
+  withConfig({ targets: { prod: { url: "https://x.dev", dataset: "d" } } }, (dir) => {
+    assert.equal(resolveRepoTarget(dir, "prod", { repo: "acme/models" }).repo, "acme/models");
+  });
+});
+
+test("--instance + --repo never reads the config", () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "malloyyo-nocfg-"));
+  try {
+    assert.deepEqual(
+      resolveRepoTarget(dir, undefined, { instance: "https://g.dev/", repo: "acme/models" }),
+      { name: "https://g.dev", url: "https://g.dev", repo: "acme/models" },
+    );
+    // Without --repo there is nothing to name it, and the error offers both fixes.
+    assert.throws(
+      () => resolveRepoTarget(dir, undefined, { instance: "https://g.dev" }),
+      (e: unknown) => {
+        assert.ok(e instanceof Error);
+        assert.match(e.message, /"repo": "<owner\/name>"/);
+        assert.match(e.message, /--repo <owner\/name>/);
+        return true;
+      },
+    );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a dataset target used on a datasets/ repo is told to use "repo"', () => {
+  // It used to be silently ignored, with --repo required on every publish.
+  withConfig({ targets: { prod: { url: "https://x.dev", dataset: "orders" } } }, (dir) => {
+    assert.throws(() => resolveRepoTarget(dir), (e: unknown) => {
+      assert.ok(e instanceof Error);
+      assert.match(e.message, /names a dataset \("orders"\)/);
+      assert.match(e.message, /"prod": \{ "url": "https:\/\/x\.dev", "repo": "<owner\/name>" \}/);
+      assert.match(e.message, /malloyyo publish --repo <owner\/name>/);
+      return true;
+    });
+  });
+});
+
+test('a repo target used where one dataset is needed is told to use "dataset"', () => {
+  withConfig({ targets: { prod: { url: "https://x.dev", repo: "acme/models" } } }, (dir) => {
+    // publish (single-dataset layout) and draft offer --dataset; status has none to offer.
+    assert.throws(
+      () => resolvePublishTarget(dir),
+      /names a repo \("acme\/models"\)[\s\S]*"dataset": "<dataset>"[\s\S]*--dataset/,
+    );
+    assert.throws(() => resolveTarget(dir), (e: unknown) => {
+      assert.ok(e instanceof Error);
+      assert.match(e.message, /names a repo/);
+      assert.doesNotMatch(e.message, /--dataset/);
+      return true;
+    });
+    // --dataset overrides it, as it overrides a configured dataset.
+    assert.equal(resolvePublishTarget(dir, undefined, { dataset: "orders" }).dataset, "orders");
+  });
+});
+
+test("a target with neither key says which one to add, instead of publishing to undefined", () => {
+  // Used to build /api/datasets/undefined/… and let the server's 404 explain it.
+  withConfig({ targets: { prod: { url: "https://x.dev" } } }, (dir) => {
+    assert.throws(() => resolveTarget(dir), /has no "dataset"/);
+    assert.throws(() => resolveRepoTarget(dir), /has no "repo"[\s\S]*--repo <owner\/name>/);
+  });
+});
+
+test("a target naming both a dataset and a repo is refused, not half-read", () => {
+  withConfig(
+    { targets: { prod: { url: "https://x.dev", dataset: "orders", repo: "acme/models" } } },
+    (dir) => {
+      assert.throws(() => resolveRepoTarget(dir), /both a "dataset" and a "repo"[\s\S]*remove "dataset"/);
+      assert.throws(() => resolveTarget(dir), /both a "dataset" and a "repo"[\s\S]*remove "repo"/);
+      // A flag names what to publish outright, so the target's keys never come into it.
+      assert.equal(resolveRepoTarget(dir, undefined, { repo: "acme/x" }).repo, "acme/x");
     },
   );
 });

@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import type { AddressInfo } from "node:net";
 import { loadCreds, saveCreds, type Creds } from "./store.js";
 import { apiFetch } from "./http.js";
-import type { Target } from "./config.js";
+import type { Endpoint } from "./config.js";
 
 /** Env-shaped input. NOT NodeJS.ProcessEnv, which Next augments with a REQUIRED
     NODE_ENV — so `{}`, the natural way for a test to ask "with nothing set?",
@@ -329,7 +329,7 @@ type Env = Record<string, string | undefined>;
 /** The source getAccessToken WILL use, without resolving the token itself.
     Same precedence, so an auth failure can name the thing to fix. */
 export function tokenSource(
-  target: Target,
+  target: Endpoint,
   opts: { tokenFlag?: string },
   env: Env = process.env,
 ): TokenSource {
@@ -353,7 +353,7 @@ export function tokenSource(
  * names the source it actually used (tokenSource, above).
  */
 export async function getAccessToken(
-  target: Target,
+  target: Endpoint,
   opts: { tokenFlag?: string },
   env: Env = process.env,
 ): Promise<string> {

@@ -1,18 +1,37 @@
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 
-export interface Target {
+/** An instance and how to authenticate to it — what every target has, whatever it publishes. */
+export interface Endpoint {
   name: string;
   url: string;
-  dataset: string;
   /** Env var name holding a bearer token, if the config declares one. */
   tokenEnv?: string;
 }
 
-/** One entry under the `malloyyo` config block. Only the token env var *name* is committed. */
+/** A target that addresses one dataset: a single-dataset repo, `status`, `draft`. */
+export interface Target extends Endpoint {
+  dataset: string;
+}
+
+/** A target that addresses a repo with a `datasets/` directory, published as one unit. */
+export interface RepoTarget extends Endpoint {
+  /** GitHub `owner/name` — what the server matches the push against (findRepoForPublish). */
+  repo: string;
+}
+
+/**
+ * One entry under the `malloyyo` config block. Only the token env var *name* is committed.
+ *
+ * `dataset` and `repo` are the two things a target can publish, and the repo's layout
+ * decides which it needs: `dataset` for an `index.malloy` at the root, `repo` for a
+ * `datasets/` directory. A target names one of them, not both — nothing would read both,
+ * and a key the CLI silently ignores is how a target ends up publishing somewhere else.
+ */
 interface TargetConfig {
   url: string;
-  dataset: string;
+  dataset?: string;
+  repo?: string;
   malloyyo_token?: { env: string };
 }
 
@@ -30,7 +49,10 @@ export interface SiteConfig {
  *   { "malloyyo": {
  *       "analytics": "G-XXXXXXXXXX",
  *       "image_hosts": ["image.tmdb.org"],
- *       "targets": { "prod": { "url": …, "dataset": … } }
+ *       "targets": {
+ *         "prod": { "url": …, "dataset": … },          // index.malloy at the repo root
+ *         "all":  { "url": …, "repo": "owner/name" }   // a datasets/ directory
+ *       }
  *   } }
  *
  * `image_hosts` is read by the SERVER, not by this file: it widens the dashboard
@@ -119,15 +141,18 @@ function parseMalloyyoConfig(raw: Record<string, unknown>): {
 const TARGETS_BLOCK_EXAMPLE =
   '  "malloyyo": {\n' +
   '    "targets": { "prod": { "url": "https://<instance>", "dataset": "<dataset>" } }\n' +
-  "  }";
+  "  }\n" +
+  "For a repo with a datasets/ directory, the target names the repo instead:\n" +
+  '    "targets": { "prod": { "url": "https://<instance>", "repo": "<owner/name>" } }';
 
-function readTargetMap(dir: string): TargetMap {
+/** `orFlags` is a command line that needs no config, appended where the config has nothing. */
+function readTargetMap(dir: string, orFlags = ""): TargetMap {
   const raw = readMalloyyoBlock(dir);
   if (raw) return parseMalloyyoConfig(raw).targets;
   throw new Error(
     `No \`malloyyo\` config found in ${dir} ` +
       `(looked for a "malloyyo" block in malloy-config.json, then malloyyo.json).\n` +
-      `Add one to malloy-config.json:\n${TARGETS_BLOCK_EXAMPLE}`,
+      `Add one to malloy-config.json:\n${TARGETS_BLOCK_EXAMPLE}${orFlags}`,
   );
 }
 
@@ -196,7 +221,16 @@ function targetUrl(name: string, cfg: TargetConfig): string {
  * one instance are precisely two different datasets.
  */
 export function resolveTarget(dir: string, name?: string): Target {
-  const targets = readTargetMap(dir);
+  const t = readTarget(dir, name);
+  return { name: t.name, url: t.url, dataset: datasetOf(t), tokenEnv: t.tokenEnv };
+}
+
+/** A configured target before anyone has asked what it publishes. */
+type ConfiguredTarget = Endpoint & { dataset?: string; repo?: string };
+
+/** The named (or sole) target, with whichever of `dataset`/`repo` it declares. */
+function readTarget(dir: string, name?: string, orFlags = ""): ConfiguredTarget {
+  const targets = readTargetMap(dir, orFlags);
   const entries = Object.entries(targets);
 
   if (name === undefined) {
@@ -205,19 +239,14 @@ export function resolveTarget(dir: string, name?: string): Target {
       // rather than the diagnosis: nothing in this toolchain writes malloy-config.json,
       // so a missing block is something only they can add.
       throw new Error(
-        `No publish targets defined. Add one to malloy-config.json:\n${TARGETS_BLOCK_EXAMPLE}`,
+        `No publish targets defined. Add one to malloy-config.json:\n${TARGETS_BLOCK_EXAMPLE}${orFlags}`,
       );
     }
     if (entries.length > 1) {
       throw new Error(`Multiple targets — specify which: ${entries.map(([n]) => n).join(", ")}.`);
     }
     const [onlyName, onlyCfg] = entries[0];
-    return {
-      name: onlyName,
-      url: targetUrl(onlyName, onlyCfg),
-      dataset: onlyCfg.dataset,
-      tokenEnv: onlyCfg.malloyyo_token?.env,
-    };
+    return configured(onlyName, onlyCfg);
   }
 
   const cfg = targets[name];
@@ -225,12 +254,81 @@ export function resolveTarget(dir: string, name?: string): Target {
     const available = Object.keys(targets).join(", ") || "(none defined)";
     throw new Error(`Unknown target "${name}". Available: ${available}`);
   }
+  return configured(name, cfg);
+}
+
+function configured(name: string, cfg: TargetConfig): ConfiguredTarget {
+  // A non-string value (`"repo": true`, a number) reads as absent, so it gets the
+  // "add one" error below rather than reaching a URL or a request body as-is.
+  const str = (v: unknown) => (typeof v === "string" && v !== "" ? v : undefined);
   return {
     name,
     url: targetUrl(name, cfg),
-    dataset: cfg.dataset,
+    dataset: str(cfg.dataset),
+    repo: str(cfg.repo),
     tokenEnv: cfg.malloyyo_token?.env,
   };
+}
+
+/**
+ * The dataset a target addresses, or an error that says what to write instead.
+ *
+ * Before targets could name a repo, a target missing its dataset reached the request as
+ * `undefined` — `/api/datasets/undefined/model/push` — and the server's 404 said nothing
+ * about the config. A target that names a repo is now the likely way to get here: written
+ * for a `datasets/` repo, then used by something that addresses one dataset.
+ */
+function datasetOf(t: ConfiguredTarget, opts: { flag?: boolean } = {}): string {
+  const shape = `  "${t.name}": { "url": "${t.url}", "dataset": "<dataset>" }`;
+  // `status` has no --dataset to offer; `publish` and `draft` do.
+  const orFlag = opts.flag ? `\nOr name it on the command line:  --dataset <dataset>` : "";
+  if (t.dataset !== undefined && t.repo !== undefined) throw bothKeys(t, "dataset");
+  if (t.dataset !== undefined) return t.dataset;
+  if (t.repo !== undefined) {
+    throw new Error(
+      `Target "${t.name}" names a repo ("${t.repo}"), but this command addresses a single dataset, ` +
+        `so "repo" has nothing to name.\n` +
+        `Use "dataset" instead:\n${shape}${orFlag}`,
+    );
+  }
+  throw new Error(
+    `Target "${t.name}" has no "dataset" in malloy-config.json. Add one:\n${shape}${orFlag}`,
+  );
+}
+
+/** The repo a target addresses — the `datasets/` counterpart of datasetOf. */
+function repoOf(t: ConfiguredTarget): string {
+  const shape = (value: string) => `  "${t.name}": { "url": "${t.url}", "repo": "${value}" }`;
+  if (t.dataset !== undefined && t.repo !== undefined) throw bothKeys(t, "repo");
+  if (t.repo !== undefined) return t.repo;
+  if (t.dataset !== undefined) {
+    throw new Error(
+      `Target "${t.name}" names a dataset ("${t.dataset}"), but this repo has a datasets/ ` +
+        `directory and publishes all of them as one unit, so "dataset" cannot say which.\n` +
+        `Use "repo" instead:\n${shape("<owner/name>")}\n` +
+        `Or name it on the command line:  malloyyo publish --repo <owner/name>`,
+    );
+  }
+  throw missingRepo(t.name, t.url);
+}
+
+function missingRepo(name: string, url: string): Error {
+  return new Error(
+    `This repo has a datasets/ directory and publishes as one unit, so its target names the ` +
+      `repo, and target "${name}" has no "repo". Add one to malloy-config.json:\n` +
+      `  "${name}": { "url": "${url}", "repo": "<owner/name>" }\n` +
+      `Or name it on the command line:  malloyyo publish --repo <owner/name>`,
+  );
+}
+
+/** A target naming both keys. Only one is ever read, so the other would be silently
+    ignored — exactly what `repo` was added to stop happening to `dataset`. */
+function bothKeys(t: ConfiguredTarget, wanted: "dataset" | "repo"): Error {
+  const other = wanted === "dataset" ? "repo" : "dataset";
+  return new Error(
+    `Target "${t.name}" names both a "dataset" and a "repo"; a target publishes one or the other.\n` +
+      `This needs "${wanted}" — remove "${other}" from the target (or give it a target of its own).`,
+  );
 }
 
 /**
@@ -287,28 +385,76 @@ export function resolvePublishTarget(
   name?: string,
   overrides: { instance?: string; dataset?: string } = {},
 ): Target {
-  const { instance, dataset } = overrides;
+  const { endpoint, value } = overridden(dir, name, overrides.instance, overrides.dataset, (t) =>
+    datasetOf(t, { flag: true }),
+  );
+  return { ...endpoint, dataset: value };
+}
 
-  if (instance === undefined && dataset === undefined) return resolveTarget(dir, name);
+/**
+ * The target a `datasets/` repo publishes to: resolvePublishTarget with `repo` in the
+ * place of `dataset`, and the same rules — `--repo` overrides the target's `repo`,
+ * `--instance` its url, and both together never open the config.
+ *
+ *   malloyyo publish -i https://gravity.malloyyo.com --repo acme/models --create-datasets
+ *
+ * Its own function, not resolvePublishTarget with the repo passed as the dataset: that
+ * is how `--repo` worked at first, and it meant a target could not say which repo, and a
+ * `dataset` written in the target was silently dropped.
+ */
+export function resolveRepoTarget(
+  dir: string,
+  name?: string,
+  overrides: { instance?: string; repo?: string } = {},
+): RepoTarget {
+  // Where the config has no target at all, the flags are as good a fix as adding one —
+  // and for a repo that has never published, usually the quicker one.
+  const orFlags =
+    "\nOr skip the config:  malloyyo publish -i https://<instance> --repo <owner/name>";
+  const { endpoint, value } = overridden(
+    dir,
+    name,
+    overrides.instance,
+    overrides.repo,
+    repoOf,
+    orFlags,
+  );
+  return { ...endpoint, repo: value };
+}
 
+/**
+ * A target's two halves — WHICH instance, and WHAT on it (a dataset or a repo) — each
+ * overridable on its own. `pick` reads the second half from the config, and runs only
+ * when no flag supplied it.
+ */
+function overridden(
+  dir: string,
+  name: string | undefined,
+  instance: string | undefined,
+  flagValue: string | undefined,
+  pick: (t: ConfiguredTarget) => string,
+  orFlags = "",
+): { endpoint: Endpoint; value: string } {
   // Fully specified, and no target named: nothing to read. This is the shape that works
   // in a repo whose malloy-config.json has no `malloyyo` block at all.
-  if (instance !== undefined && dataset !== undefined && name === undefined) {
+  if (instance !== undefined && flagValue !== undefined && name === undefined) {
     const resolved = resolveInstance(dir, instance);
-    return { name: resolved.name, url: resolved.url, dataset };
+    return { endpoint: { name: resolved.name, url: resolved.url }, value: flagValue };
   }
 
-  const base = resolveTarget(dir, name);
-  if (instance === undefined) return { ...base, dataset: dataset as string };
+  const base = readTarget(dir, name, orFlags);
+  const value = flagValue ?? pick(base);
+  if (instance === undefined) {
+    return { endpoint: { name: base.name, url: base.url, tokenEnv: base.tokenEnv }, value };
+  }
 
   const resolved = resolveInstance(dir, instance);
   return {
-    name: resolved.name,
-    url: resolved.url,
-    dataset: dataset ?? base.dataset,
+    endpoint: { name: resolved.name, url: resolved.url },
     // tokenEnv is deliberately NOT carried over. It names a credential for the
     // CONFIGURED instance, and this is a different one — sending that token to another
     // host is both wrong and a leak. Falling through to --token or the stored login for
     // the new URL is the safe default.
+    value,
   };
 }

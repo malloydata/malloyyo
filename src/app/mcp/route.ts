@@ -21,7 +21,7 @@ import {
   registerAppTool,
 } from "@modelcontextprotocol/ext-apps/server";
 import { publishedSchema } from "@malloyyo/mcp-engine/mcp-sdk";
-import { buildHostedExploreSurface } from "@/lib/mcp-host";
+import { buildHostedExploreSurface, dashboardUrl } from "@/lib/mcp-host";
 import {
   BUNDLE_TOOL,
   RUN_TOOL,
@@ -29,8 +29,11 @@ import {
   dashboardBundlePayload,
 } from "@/lib/mcp-app-dashboard";
 import { dashboardPanel, type DashboardPanel } from "@/lib/mcp-app-panel";
-import { getDashboard, listDashboards, visibleImageHosts } from "@/lib/dashboards";
-import { saveDraftDashboard } from "@/lib/dashboards/draft";
+import { DRAFT_PREFIX, draftForward, draftSlug, getDashboard, listDashboards, visibleImageHosts } from "@/lib/dashboards";
+import { deleteDraft, recordPromotion, saveDraftDashboard } from "@/lib/dashboards/draft";
+import { hasRole, MALLOYYO_ADMIN } from "@/lib/roles";
+import { checkRepo, describeTable, findRepo, listRepos, listTables, publishRepo } from "@/lib/repo-authoring";
+import { fetchBranchPreview } from "@/lib/repo-preview-store";
 import { createApiToken } from "@/lib/api-tokens";
 import { runDashboard } from "@/lib/dashboards/engine";
 import { bearerToken, credentialLabel, resolveBearer, type Credential } from "@/lib/bearer-auth";
@@ -120,13 +123,242 @@ function buildServer(scope: RequestScope): McpServer {
 
   registerAuthoringTools(server, scope);
 
+  // Admins only: these run SQL through a repo's connections and compile model
+  // code nobody has reviewed — the power publishing already has, reached from
+  // a chat. A member never sees them.
+  if (hasRole(scope.user, MALLOYYO_ADMIN)) registerRepoTools(server, scope);
+
   return server;
+}
+
+/** Text + structured content for a tool result, as an error when `ok` is false. */
+function result<T extends { ok: boolean; error?: string }>(r: T, summary?: string): CallToolResult {
+  if (!r.ok) return { content: text(r.error ?? "failed"), structuredContent: r as unknown as Json, isError: true };
+  return { content: text(summary ?? JSON.stringify(r, null, 2)), structuredContent: r as unknown as Json };
+}
+
+/**
+ * Adding a dataset to a repo from a chat (src/lib/repo-authoring.ts). Git
+ * writes are GitHub's own MCP server's, as the person; these are what only
+ * this instance can answer — what a repo's connections can see, whether a
+ * branch or pull request compiles here, and the publish after the merge.
+ */
+function registerRepoTools(server: McpServer, scope: RequestScope): void {
+  const tag = `[${env.INSTANCE_NAME}]`;
+  const withRepo = async <T extends object>(ref: string, fn: (repo: NonNullable<Awaited<ReturnType<typeof findRepo>>>) => Promise<T>) => {
+    const repo = await findRepo(ref);
+    if (!repo) return { ok: false, error: `No repo "${ref}" on this instance. list_repos shows them.` };
+    return fn(repo);
+  };
+
+  server.registerTool(
+    "list_repos",
+    {
+      title: "List model repos",
+      description:
+        `${tag} The model repos this instance publishes: their GitHub repo and branch, layout, datasets and ` +
+        `database connections (names and kinds only), and the branches fetched as previews. Start here to ` +
+        `add a dataset to a repo (read yo_help("repo/add-dataset-from-chat") first), or to try a branch's ` +
+        `models and dashboards before they're published (yo_help("repo/branches")).`,
+      annotations: { readOnlyHint: true },
+      inputSchema: fromJsonSchema<Json>({ type: "object", properties: {} }),
+    },
+    logged(scope, "list_repos", async () => {
+      const repos = await listRepos();
+      return result({ ok: true, repos });
+    }),
+  );
+
+  type TablesArgs = { repo: string; connection: string; schema?: string; like?: string; dataset_dir?: string };
+  server.registerTool(
+    "list_tables",
+    {
+      title: "List a connection's tables",
+      description:
+        `${tag} Lists the tables a repo's database connection can see (up to 500), before anything is ` +
+        `modeled. \`schema\` narrows to one schema (BigQuery requires it: the dataset); \`like\` filters ` +
+        `names (SQL LIKE, e.g. "%order%"). Admins only.`,
+      annotations: { readOnlyHint: true },
+      inputSchema: fromJsonSchema<TablesArgs>({
+        type: "object",
+        properties: {
+          repo: { type: "string", description: "The repo, as list_repos names it (slug or owner/name)." },
+          connection: { type: "string", description: "A connection name from list_repos." },
+          schema: { type: "string", description: "Optional schema (BigQuery: dataset) to list." },
+          like: { type: "string", description: "Optional table-name pattern, SQL LIKE." },
+          dataset_dir: { type: "string", description: "Optional: use this dataset's own malloy-config.json." },
+        },
+        required: ["repo", "connection"],
+      }),
+    },
+    logged(scope, "list_tables", async (a: TablesArgs) =>
+      result(await withRepo(a.repo, (repo) => listTables(repo, a.connection, { schema: a.schema, like: a.like, dir: a.dataset_dir }))),
+    ),
+  );
+
+  type DescribeArgs = { repo: string; connection: string; table: string; dataset_dir?: string };
+  server.registerTool(
+    "describe_table",
+    {
+      title: "Describe a table",
+      description:
+        `${tag} One table's columns and types, its row count and ${5} sample rows, read through the repo's ` +
+        `connection the way a model would read it (\`connection.table('…')\`). On DuckDB the table can be a ` +
+        `file path or URL (Parquet, CSV, JSON). Admins only.`,
+      annotations: { readOnlyHint: true },
+      inputSchema: fromJsonSchema<DescribeArgs>({
+        type: "object",
+        properties: {
+          repo: { type: "string", description: "The repo, as list_repos names it." },
+          connection: { type: "string", description: "A connection name from list_repos." },
+          table: { type: "string", description: "Table as the model would name it: 'schema.table', or a path/URL on DuckDB." },
+          dataset_dir: { type: "string", description: "Optional: use this dataset's own malloy-config.json." },
+        },
+        required: ["repo", "connection", "table"],
+      }),
+    },
+    logged(scope, "describe_table", async (a: DescribeArgs) =>
+      result(await withRepo(a.repo, (repo) => describeTable(repo, a.connection, a.table, { dir: a.dataset_dir }))),
+    ),
+  );
+
+  type CheckArgs = {
+    repo: string;
+    ref?: string;
+    pull_request?: number;
+    test_query?: { dataset_dir: string; malloy: string };
+  };
+  server.registerTool(
+    "check_repo",
+    {
+      title: "Check a branch or pull request",
+      description:
+        `${tag} Compiles a repo at a commit, branch or tag (\`ref\`), or at a pull request's merge result ` +
+        `(\`pull_request\`), exactly as publishing would: layout rules, every dataset, its dashboards. Nothing ` +
+        `is stored or published. Says which datasets are new. \`test_query\` also runs one Malloy query ` +
+        `against a dataset at that ref. Right after a commit, pass the commit SHA your write returned: a branch ` +
+        `name can resolve to the previous commit for up to a minute. Check the pull request before merging it — that is what catches a ` +
+        `change that merges cleanly but breaks the model. Admins only.`,
+      annotations: { readOnlyHint: true },
+      inputSchema: fromJsonSchema<CheckArgs>({
+        type: "object",
+        properties: {
+          repo: { type: "string", description: "The repo, as list_repos names it." },
+          ref: { type: "string", description: "Commit SHA (best, right after a commit), branch or tag. Default: the repo's published branch." },
+          pull_request: { type: "integer", description: "Check this pull request's merge result instead of a ref." },
+          test_query: {
+            type: "object",
+            description: "Optional query to run at that ref.",
+            properties: {
+              dataset_dir: { type: "string", description: "The dataset's directory, e.g. datasets/returns." },
+              malloy: { type: "string", description: "Malloy text, e.g. run: returns -> { aggregate: row_count }" },
+            },
+            required: ["dataset_dir", "malloy"],
+          },
+        },
+        required: ["repo"],
+      }),
+    },
+    logged(scope, "check_repo", async (a: CheckArgs) =>
+      result(
+        await withRepo(a.repo, (repo) =>
+          checkRepo(
+            repo,
+            { ref: a.ref, pr: a.pull_request },
+            a.test_query ? { dir: a.test_query.dataset_dir, malloy: a.test_query.malloy } : undefined,
+          ),
+        ),
+      ),
+    ),
+  );
+
+  type FetchArgs = { repo: string; branch: string };
+  server.registerTool(
+    "fetch_branch",
+    {
+      title: "Preview a branch: its models and dashboards, unpublished",
+      description:
+        `${tag} The way to SEE a branch's changes here — models, queries, dashboards — before they are ` +
+        `published. Fetches the branch from GitHub (push first) into a preview, compiled but not ` +
+        `published. Every tool that takes a dataset then takes \`repo@branch:dataset\` ` +
+        `(query's model_ref, describe_source, show_dashboard) and serves that snapshot until the next ` +
+        `fetch, so fetch again after each push. Returns each dataset's preview address, whether it ` +
+        `compiled, and a browser link to each dashboard. Admins only.`,
+      annotations: { readOnlyHint: false },
+      inputSchema: fromJsonSchema<FetchArgs>({
+        type: "object",
+        properties: {
+          repo: { type: "string", description: "The repo, as list_repos names it." },
+          branch: { type: "string", description: "The branch to fetch." },
+        },
+        required: ["repo", "branch"],
+      }),
+    },
+    logged(scope, "fetch_branch", async (a: FetchArgs) => {
+      const out = await withRepo(a.repo, (repo) => fetchBranchPreview(repo, a.branch, scope.userId));
+      if (!out.ok) return result(out);
+      const r = out as Extract<typeof out, { revision: number }>;
+      // Links, not just addresses: the person wants to open the dashboards,
+      // and an address alone left a model guessing at the URL shape.
+      const datasets = r.datasets.map((d) => ({
+        ...d,
+        dashboards: (d.artifacts ?? []).map((a) => ({
+          name: a.name,
+          title: a.title,
+          url: dashboardUrl(env.APP_BASE_URL, d.address, a.name),
+        })),
+      }));
+      const lines = datasets.flatMap((d) => [
+        `  ${d.address} — ${d.ok ? `${d.status}, ${d.sources?.length ?? 0} sources, ${d.dashboards.length} dashboards` : `FAILED: ${d.error}`}`,
+        ...d.dashboards.map((a) => `      ${a.title ?? a.name}: ${a.url}`),
+      ]);
+      return result(
+        { ...r, datasets },
+        `Fetched ${r.repo}@${r.branch} at ${r.commit?.slice(0, 7) ?? "?"}. Preview addresses:\n${lines.join("\n")}\n\n` +
+          `Pass an address as model_ref to describe_source and query, or as dataset to show_dashboard. ` +
+          `Give the person the dashboard links. This is a snapshot: after the next push, fetch_branch again.`,
+      );
+    }),
+  );
+
+  server.registerTool(
+    "publish_repo",
+    {
+      title: "Publish a repo",
+      description:
+        `${tag} Pulls the repo's published branch from GitHub and publishes it, creating a dataset for any new ` +
+        `datasets/<name>/ directory. Run it after the pull request is merged. Everything compiles or nothing ` +
+        `changes. Admins only.`,
+      annotations: { readOnlyHint: false },
+      inputSchema: fromJsonSchema<{ repo: string }>({
+        type: "object",
+        properties: { repo: { type: "string", description: "The repo, as list_repos names it." } },
+        required: ["repo"],
+      }),
+    },
+    logged(scope, "publish_repo", async ({ repo: ref }: { repo: string }) => {
+      const out = await withRepo(ref, (repo) => publishRepo(repo));
+      if (!out.ok) return result(out);
+      const r = out as Extract<typeof out, { revision: number }>;
+      const created = r.datasets.filter((d) => d.created).map((d) => d.qualified);
+      return result(
+        r,
+        r.unchanged
+          ? `Nothing new: ${r.repo.slug} is already at this commit.`
+          : `Published ${r.repo.slug} revision ${r.revision}` +
+              (created.length ? `; created ${created.join(", ")}` : "") +
+              `. Datasets: ${r.datasets.map((d) => d.qualified).join(", ")}.`,
+      );
+    }),
+  );
 }
 
 /** How long a CLI token from issue_cli_token lives. */
 const CLI_TOKEN_TTL_MS = 60 * 60 * 1000;
 const ISSUE_CLI_TOKEN_TOOL = "issue_cli_token";
 const SAVE_DRAFT_TOOL = "save_draft_dashboard";
+const DELETE_DRAFT_TOOL = "delete_draft_dashboard";
+const PROMOTED_DRAFT_TOOL = "mark_draft_promoted";
 
 /**
  * Dashboard authoring from an agent: a CLI credential, and draft dashboards.
@@ -267,6 +499,83 @@ function registerAuthoringTools(server: McpServer, scope: RequestScope): void {
       };
     }),
   );
+
+  // A draft is named `draft-<slug>` everywhere a dashboard goes; accept either.
+  const slugOf = (dashboard: string) => draftSlug(dashboard) ?? dashboard;
+  const fail = (msg: string): CallToolResult => ({ content: text(msg), structuredContent: { ok: false, error: msg }, isError: true });
+
+  type DraftRefArgs = { dataset: string; dashboard: string };
+  server.registerTool(
+    DELETE_DRAFT_TOOL,
+    {
+      title: "Delete a draft dashboard",
+      description:
+        `${tag} Deletes a draft dashboard; its link stops working. Its author or an admin may. Ask the person ` +
+        `first. A draft that was promoted and is now published doesn't need deleting: it is already out of ` +
+        `the listings, and its link forwards to the published dashboard — deleting it ends that forward.`,
+      annotations: { readOnlyHint: false, destructiveHint: true },
+      inputSchema: fromJsonSchema<DraftRefArgs>({
+        type: "object",
+        properties: {
+          dataset: { type: "string", description: "Dataset name (the model_ref list_sources reports)." },
+          dashboard: { type: "string", description: "The draft, as `draft-<slug>` or its slug." },
+        },
+        required: ["dataset", "dashboard"],
+      }),
+    },
+    logged(scope, DELETE_DRAFT_TOOL, async (a: DraftRefArgs) => {
+      const r = await deleteDraft(scope.user, a.dataset, slugOf(a.dashboard));
+      if (r.outcome === "not-yours") return fail("That draft belongs to someone else; its author or an admin can delete it.");
+      if (r.outcome === "not-found") return fail(`No draft '${a.dashboard}' in '${a.dataset}'.`);
+      return {
+        content: text(
+          `Deleted ${DRAFT_PREFIX}${slugOf(a.dashboard)}.` +
+            ("promotedAs" in r && r.promotedAs ? ` Its link no longer forwards to '${r.promotedAs}'.` : ""),
+        ),
+        structuredContent: { ok: true, deleted: `${DRAFT_PREFIX}${slugOf(a.dashboard)}` },
+      };
+    }),
+  );
+
+  type PromotedArgs = DraftRefArgs & { promoted_as: string };
+  server.registerTool(
+    PROMOTED_DRAFT_TOOL,
+    {
+      title: "Mark a draft as promoted",
+      description:
+        `${tag} Records that a draft dashboard was written into the model repo as \`promoted_as\` (the ` +
+        `dashboard's name there, i.e. dashboards/<promoted_as>.malloy). Call it after the files are ` +
+        `committed. Once the dataset publishes that dashboard, the draft's link redirects to it and the ` +
+        `draft leaves the listings, so saved links keep working. Until then the draft still serves. ` +
+        `The draft's author records it.`,
+      annotations: { readOnlyHint: false },
+      inputSchema: fromJsonSchema<PromotedArgs>({
+        type: "object",
+        properties: {
+          dataset: { type: "string", description: "Dataset name (the model_ref list_sources reports)." },
+          dashboard: { type: "string", description: "The draft, as `draft-<slug>` or its slug." },
+          promoted_as: { type: "string", description: "The dashboard's name in the repo, e.g. revenue_trend." },
+        },
+        required: ["dataset", "dashboard", "promoted_as"],
+      }),
+    },
+    logged(scope, PROMOTED_DRAFT_TOOL, async (a: PromotedArgs) => {
+      const name = a.promoted_as.trim();
+      if (!name || draftSlug(name) !== null) return fail(`'${a.promoted_as}' isn't a dashboard name a repo publishes.`);
+      const outcome = await recordPromotion(userId, a.dataset, slugOf(a.dashboard), { name });
+      if (outcome === "not-yours") return fail("That draft belongs to someone else; its author records its promotion.");
+      if (outcome === "not-found") return fail(`No draft '${a.dashboard}' in '${a.dataset}'.`);
+      const live = await draftForward(userId, a.dataset, `${DRAFT_PREFIX}${slugOf(a.dashboard)}`);
+      return {
+        content: text(
+          live
+            ? `Recorded. '${name}' is already published, so the draft's link now opens it.`
+            : `Recorded. Once '${name}' is published (merge, then publish_repo), the draft's link opens it instead.`,
+        ),
+        structuredContent: { ok: true, promoted_as: name, forwarding: Boolean(live) },
+      };
+    }),
+  );
 }
 
 /** Any panel URI this server has ever minted — see the template registration. */
@@ -373,6 +682,8 @@ function registerDashboardApp(server: McpServer, scope: RequestScope, panel: Das
       // as shown while the panel says "not found" — or, in a client that
       // doesn't draw panels, shows nothing at all. getDashboard answers null
       // for a dataset the user can't see, so this can't reveal one exists.
+      // A promoted draft that's now published shows the published dashboard.
+      dashboard = (await draftForward(userId, dataset, dashboard)) ?? dashboard;
       const dash = await getDashboard(userId, dataset, dashboard);
       if (!dash) {
         const names = (await listDashboards(userId, dataset)).map((d) => d.name);
@@ -382,7 +693,12 @@ function registerDashboardApp(server: McpServer, scope: RequestScope, panel: Das
         return { content: text(msg), structuredContent: { ok: false, error: msg }, isError: true };
       }
       return {
-        content: text(`Showing the '${dash.title}' dashboard in an inline panel.`),
+        // The link too: a client that doesn't draw panels shows nothing, and
+        // the person may want it in a browser anyway.
+        content: text(
+          `Showing the '${dash.title}' dashboard in an inline panel. ` +
+            `In a browser: ${dashboardUrl(env.APP_BASE_URL, dataset, dash.name)}`,
+        ),
         structuredContent: { ok: true, datasetId: dataset, name: dash.name },
       };
     }),

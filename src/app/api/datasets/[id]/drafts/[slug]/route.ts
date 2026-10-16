@@ -3,7 +3,8 @@
 
 import { NextResponse } from "next/server";
 import { requireBearer } from "@/lib/bearer-auth";
-import { getDraftFiles, recordPromotion } from "@/lib/dashboards/draft";
+import { deleteDraft, getDraftFiles, recordPromotion } from "@/lib/dashboards/draft";
+import { getSessionUserOrNull } from "@/lib/user";
 
 export const runtime = "nodejs";
 
@@ -51,6 +52,32 @@ export async function POST(req: Request, ctx: Ctx) {
   return outcome === "not-yours"
     ? NextResponse.json(
         { ok: false, error: "that draft belongs to someone else — its own author records a promotion" },
+        { status: 403 },
+      )
+    : NextResponse.json({ ok: false, error: `no draft '${slug}' in '${id}'` }, { status: 404 });
+}
+
+/**
+ * DELETE /api/datasets/:ref/drafts/:slug — delete a draft. Its author or an
+ * admin. A browser session (the draft page's Delete) or a bearer token
+ * (`malloyyo draft delete`).
+ */
+export async function DELETE(req: Request, ctx: Ctx) {
+  let user;
+  if (req.headers.get("authorization")) {
+    const auth = await requireBearer(req, { scope: "mcp" });
+    if (!auth.ok) return NextResponse.json({ ok: false, error: auth.error }, { status: auth.status });
+    user = auth.user;
+  } else {
+    user = await getSessionUserOrNull();
+    if (!user) return NextResponse.json({ ok: false, error: "sign in first" }, { status: 401 });
+  }
+  const { id, slug } = await ctx.params;
+  const r = await deleteDraft(user, id, slug);
+  if (r.outcome === "deleted") return NextResponse.json({ ok: true, deleted: slug, promotedAs: r.promotedAs });
+  return r.outcome === "not-yours"
+    ? NextResponse.json(
+        { ok: false, error: "that draft belongs to someone else — its author or an admin can delete it" },
         { status: 403 },
       )
     : NextResponse.json({ ok: false, error: `no draft '${slug}' in '${id}'` }, { status: 404 });

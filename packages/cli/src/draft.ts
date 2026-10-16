@@ -121,6 +121,25 @@ export async function draftList(
   }
 }
 
+// ── delete ───────────────────────────────────────────────────────────────────
+
+export async function draftDelete(
+  slug: string,
+  dir: string,
+  opts: { instance?: string; dataset?: string; token?: string },
+): Promise<void> {
+  const t = resolvePublishTarget(resolve(dir), undefined, { instance: opts.instance, dataset: opts.dataset });
+  const bearer = await getAccessToken(t, { tokenFlag: opts.token });
+  const bare = slug.startsWith("draft-") ? slug.slice("draft-".length) : slug;
+  const out = await draftFetch<{ promotedAs: string | null }>(t, `/drafts/${encodeURIComponent(bare)}`, bearer, {
+    method: "DELETE",
+  });
+  console.log(
+    `deleted draft ${bare} from ${t.dataset} at ${t.url}` +
+      (out.promotedAs ? ` (its link no longer forwards to ${out.promotedAs})` : ""),
+  );
+}
+
 // ── promote ──────────────────────────────────────────────────────────────────
 
 interface DraftFiles extends DraftSummary {

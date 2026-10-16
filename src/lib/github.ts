@@ -191,6 +191,45 @@ export async function fetchGitHubCommitSha(
 }
 
 /**
+ * A pull request's test-merge commit: what merging it into its base would
+ * produce, which GitHub computes and keeps current. Checking THAT, not the
+ * branch head, is what catches a PR that merges cleanly but breaks the model
+ * (the base renamed something the branch still uses).
+ *
+ * `mergeCommitSha` is null while GitHub is still computing mergeability, and
+ * when the PR conflicts; `mergeable` says which.
+ */
+export async function fetchGitHubPullRequest(
+  owner: string,
+  repo: string,
+  number: number,
+  opts: { useToken?: boolean } = {},
+): Promise<
+  | { ok: true; state: string; headSha: string; mergeCommitSha: string | null; mergeable: boolean | null; baseRef: string }
+  | { ok: false; status: number }
+> {
+  const useToken = opts.useToken !== false;
+  const url = `https://api.github.com/repos/${owner}/${repo}/pulls/${number}`;
+  const res = await githubFetch(url, githubHeaders(useToken, "application/vnd.github+json"));
+  if (!res.ok) return { ok: false, status: res.status };
+  const b = (await res.json()) as {
+    state?: string;
+    head?: { sha?: string };
+    base?: { ref?: string };
+    merge_commit_sha?: string | null;
+    mergeable?: boolean | null;
+  };
+  return {
+    ok: true,
+    state: b.state ?? "unknown",
+    headSha: b.head?.sha ?? "",
+    mergeCommitSha: b.merge_commit_sha ?? null,
+    mergeable: b.mergeable ?? null,
+    baseRef: b.base?.ref ?? "",
+  };
+}
+
+/**
  * Every path in the repo, in ONE request (the git trees API, recursive).
  *
  * The Contents API costs a request per directory, and discovering a

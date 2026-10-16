@@ -26,6 +26,7 @@ import {
 } from "@malloyyo/mcp-engine";
 import { db, malloyModels } from "@/db";
 import { findByDatasetRef, modelFileMap } from "@/lib/mcp-tools";
+import { previewModelRef } from "@/lib/repo-previews";
 import { runNamedMalloyFiles, withModelRuntime, fileUrl } from "@/lib/malloy";
 import { getDashboard, modelConfigJson, type DashboardDetail } from "./meta";
 import { isReservedGiven, leaseScope } from "@/lib/tenancy";
@@ -43,7 +44,10 @@ export type { DashboardDetail };
  * version, so a save is a new runtime rather than a stale compile.
  */
 async function dashboardFiles(dash: DashboardDetail): Promise<{ files: Map<string, string>; cacheKey: string }> {
-  const [model] = await db.select().from(malloyModels).where(eq(malloyModels.id, dash.modelId)).limit(1);
+  // A branch preview's model is its snapshot, not a row (repo-previews.ts).
+  const model =
+    previewModelRef(dash.modelId) ??
+    (await db.select().from(malloyModels).where(eq(malloyModels.id, dash.modelId)).limit(1))[0];
   if (!model) throw new Error("dashboard model not found");
   const files = await modelFileMap(model);
   if (!dash.draft) return { files, cacheKey: model.id };

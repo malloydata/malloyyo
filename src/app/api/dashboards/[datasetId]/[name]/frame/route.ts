@@ -21,6 +21,7 @@ import { dashboardViewData } from "@/lib/dashboards/engine";
 import { listDashboards } from "@/lib/dashboards/meta";
 import { mintFrameToken } from "@/lib/dashboards/frame-token";
 import { frameCsp, frameHtml, frameNonce } from "@/lib/dashboards/frame-html";
+import { datasetRefSegment, plainDatasetRef } from "@/lib/dataset-ref-path";
 
 export const runtime = "nodejs";
 
@@ -41,8 +42,8 @@ export async function GET(req: Request, ctx: { params: Promise<{ datasetId: stri
     //
     // Capability token for the sandboxed guest to fetch its own bundle without a
     // session cookie (see frame-token.ts). Scoped to this viewer + dashboard.
-    const token = mintFrameToken({ userId: user.id, datasetId, name });
-    const bundleUrl = `/api/dashboards/${datasetId}/${encodeURIComponent(name)}/bundle?t=${encodeURIComponent(token)}`;
+    const token = mintFrameToken({ userId: user.id, datasetId: plainDatasetRef(datasetId), name });
+    const bundleUrl = `/api/dashboards/${datasetRefSegment(datasetId)}/${encodeURIComponent(name)}/bundle?t=${encodeURIComponent(token)}`;
     // Escaping and the CSP live in frame-html.ts — read the header there before
     // adding anything to this document. JSON.stringify alone is NOT safe in a
     // script element, and only model-derived values belong in there at all.

@@ -3,6 +3,7 @@
 
 "use client";
 import { useEffect, useRef } from "react";
+import { datasetRefSegment } from "@/lib/dataset-ref-path";
 
 // In-page renderer for a TAG-ONLY dashboard (no Dashboard.tsx). There is no
 // untrusted author code, so nothing needs sandboxing: the Malloy renderer's
@@ -68,7 +69,7 @@ export function TagOnlyDashboard({ id, name }: { id: string; name: string }) {
     // assembling it needs Malloy/DuckDB, which can't run in a page render fn (it
     // would 500 — reference_ssr_page_duckdb_500). Then load the vendor and mount.
     Promise.all([
-      fetch(`/api/dashboards/${id}/${encodeURIComponent(name)}/view`).then((r) => r.json()),
+      fetch(`/api/dashboards/${datasetRefSegment(id)}/${encodeURIComponent(name)}/view`).then((r) => r.json()),
       loadVendor(),
     ])
       .then(([view, rt]) => {

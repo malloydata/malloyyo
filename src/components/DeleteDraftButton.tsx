@@ -5,6 +5,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { datasetRefSegment } from "@/lib/dataset-ref-path";
 
 /** Deletes a draft dashboard, after a confirm, then goes to its dataset. */
 export function DeleteDraftButton({ datasetRef, slug }: { datasetRef: string; slug: string }) {
@@ -16,14 +17,14 @@ export function DeleteDraftButton({ datasetRef, slug }: { datasetRef: string; sl
     if (!window.confirm("Delete this draft? Its link will stop working.")) return;
     setBusy(true);
     setError(null);
-    const res = await fetch(`/api/datasets/${datasetRef}/drafts/${encodeURIComponent(slug)}`, { method: "DELETE" });
+    const res = await fetch(`/api/datasets/${datasetRefSegment(datasetRef)}/drafts/${encodeURIComponent(slug)}`, { method: "DELETE" });
     const out = (await res.json().catch(() => null)) as { ok?: boolean; error?: string } | null;
     if (!res.ok || !out?.ok) {
       setBusy(false);
       setError(out?.error ?? `delete failed (${res.status})`);
       return;
     }
-    router.push(`/datasets/${datasetRef}`);
+    router.push(`/datasets/${datasetRefSegment(datasetRef)}`);
     router.refresh();
   }
 

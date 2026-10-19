@@ -30,7 +30,7 @@
  * running on this server with its connections' credentials.
  */
 
-import { and, desc, eq, like } from "drizzle-orm";
+import { and, desc, eq, isNotNull, like } from "drizzle-orm";
 import { db, datasets, repoRevisions, type Dataset, type PreviewDataset, type Repo } from "@/db";
 
 type Fail = { ok: false; error: string };
@@ -63,7 +63,14 @@ async function previewRevision(repoId: string, ref: string) {
       and(
         eq(repoRevisions.repoId, repoId),
         eq(repoRevisions.preview, true),
-        bySha ? like(repoRevisions.gitSha, `${ref.toLowerCase()}%`) : eq(repoRevisions.gitBranch, ref),
+        // A row is written before its compile results; until they land it has
+        // nothing to serve and must not shadow the label's previous snapshot.
+        isNotNull(repoRevisions.previewDatasets),
+        // A SHA names a COMMIT: only clean snapshots are that commit. An
+        // overlay (preview_changes) records its base's SHA but isn't it.
+        bySha
+          ? and(like(repoRevisions.gitSha, `${ref.toLowerCase()}%`), eq(repoRevisions.gitDirty, false))
+          : eq(repoRevisions.gitBranch, ref),
       ),
     )
     .orderBy(desc(repoRevisions.createdAt))

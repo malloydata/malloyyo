@@ -34,7 +34,7 @@ import { db, datasets, repoRevisions, repos, type Repo } from "@/db";
 import { fetchGitHubCommitSha, fetchGitHubPullRequest, fetchGitHubZipball, parseGitHubRepo } from "./github";
 import { refreshRepo } from "./github-refresh";
 import { fileUrl, withConfigConnection, withReaderRuntime } from "./malloy";
-import { discardWorkspace, materializeArchive, normalizeArchive } from "./repo-archive";
+import { discardWorkspace, isSafeMemberPath, materializeArchive, normalizeArchive } from "./repo-archive";
 import { compileDir, localConfigRefusal, type PublishResult } from "./repo-publish";
 import { listTablesSql, sqlString } from "./repo-catalog-sql";
 import { githubRepoFromRemote } from "./repo-names";
@@ -184,6 +184,10 @@ export async function listRepos(): Promise<RepoSummary[]> {
 
 /** The repo's config (a dataset's own when `dir` has one), from its live revision. */
 async function liveConfig(repo: Repo, dir: string): Promise<{ text?: string } | Fail> {
+  // A directory INSIDE the repo: `../..` would search other workspaces' configs.
+  if (dir && !isSafeMemberPath(dir.replace(/\/+$/, ""))) {
+    return { ok: false, error: `dataset_dir "${dir}" isn't a directory in the repo (e.g. datasets/orders).` };
+  }
   const live = await openLive(repo);
   if (!live) return { ok: false, error: `${repo.slug} has not published yet, so it has no connections here.` };
   try {
@@ -340,6 +344,18 @@ async function resolveRef(
   if (target.pr !== undefined) {
     const pr = await fetchGitHubPullRequest(owner, name, target.pr, { useToken });
     if (!pr.ok) return { ok: false, error: `GitHub would not give pull request #${target.pr} (HTTP ${pr.status}).` };
+    // A fork's PR is anyone-on-GitHub's code. Compiling it runs it with this
+    // server's environment and connections — before review, merge, or any
+    // admin act but asking for a check — so only same-repo PRs are checked.
+    if (pr.headRepo && pr.headRepo.toLowerCase() !== `${owner}/${name}`.toLowerCase()) {
+      return {
+        ok: false,
+        error:
+          `Pull request #${target.pr} comes from a fork (${pr.headRepo}). Its code isn't checked here: ` +
+          `compiling it would run it with this instance's connections. Review it, then push it to a branch ` +
+          `of ${owner}/${name} and check that.`,
+      };
+    }
     if (pr.state !== "open") return { ok: false, error: `Pull request #${target.pr} is ${pr.state}.` };
     if (pr.mergeable === false) {
       return {

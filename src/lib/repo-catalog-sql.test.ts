@@ -48,3 +48,12 @@ test("quotes in filters are escaped, not trusted", () => {
   assert.match(sql, /table_schema = 'x'' or ''1''=''1'/);
   assert.match(sql, /like 'a''b'/);
 });
+
+test("a backslash can't end the literal where the dialect treats it as an escape", () => {
+  const like = "\\' union select 1 -- ";
+  const mysql = listTablesSql("mysql", { like });
+  assert.equal(typeof mysql, "string");
+  assert.ok((mysql as string).includes("'\\\\'' union select 1 -- '"), mysql as string);
+  // Postgres/DuckDB literals take a backslash literally: only quotes double.
+  assert.ok((listTablesSql("postgres", { like }) as string).includes("'\\'' union select 1 -- '"));
+});

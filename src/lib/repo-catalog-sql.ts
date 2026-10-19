@@ -7,20 +7,24 @@
 
 type Fail = { ok: false; error: string };
 
-export function sqlString(s: string): string {
-  return `'${s.replace(/'/g, "''")}'`;
+/** Dialects whose string literals treat `\` as an escape, so it must be doubled too. */
+const BACKSLASH_ESCAPES = new Set(["mysql", "standardsql", "snowflake", "databricks"]);
+
+export function sqlString(s: string, dialect = ""): string {
+  const v = BACKSLASH_ESCAPES.has(dialect) ? s.replace(/\\/g, "\\\\") : s;
+  return `'${v.replace(/'/g, "''")}'`;
 }
 
 /** The catalog query for a dialect. `schema` narrows; BigQuery requires it. */
 export function listTablesSql(dialect: string, opts: { schema?: string; like?: string } = {}): string | Fail {
   const filters: string[] = [];
-  if (opts.like) filters.push(`lower(table_name) like ${sqlString(opts.like.toLowerCase())}`);
+  if (opts.like) filters.push(`lower(table_name) like ${sqlString(opts.like.toLowerCase(), dialect)}`);
   const where = (base: string[]) => {
     const all = [...base, ...filters];
     return all.length ? ` where ${all.join(" and ")}` : "";
   };
   const cols = "table_catalog as table_catalog, table_schema as table_schema, table_name as table_name, table_type as table_type";
-  const schemaEq = opts.schema ? [`table_schema = ${sqlString(opts.schema)}`] : [];
+  const schemaEq = opts.schema ? [`table_schema = ${sqlString(opts.schema, dialect)}`] : [];
   switch (dialect) {
     case "standardsql": {
       if (!opts.schema) {
@@ -41,7 +45,7 @@ export function listTablesSql(dialect: string, opts: { schema?: string; like?: s
     case "snowflake":
       return (
         `select ${cols} from information_schema.tables` +
-        where(opts.schema ? [`table_schema = ${sqlString(opts.schema.toUpperCase())}`] : ["table_schema <> 'INFORMATION_SCHEMA'"]) +
+        where(opts.schema ? [`table_schema = ${sqlString(opts.schema.toUpperCase(), dialect)}`] : ["table_schema <> 'INFORMATION_SCHEMA'"]) +
         " order by 1, 2, 3"
       );
     default:

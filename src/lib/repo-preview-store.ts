@@ -12,7 +12,7 @@
 import { and, desc, eq, like } from "drizzle-orm";
 import { layoutFromListing } from "@malloyyo/mcp-engine";
 import { db, datasets, repoRevisions, type PreviewDataset, type Repo, type RepoRevisionSource } from "@/db";
-import { fetchGitHubCommitSha, fetchGitHubZipball, parseGitHubRepo } from "./github";
+import { fetchGitHubBranchSha, fetchGitHubCommitSha, fetchGitHubZipball, parseGitHubRepo } from "./github";
 import { discardWorkspace, materializeArchive, normalizeArchive, overlayArchive, ArchiveError } from "./repo-archive";
 import { previewRef } from "./repo-preview-refs";
 import { compileDir, localConfigRefusal, storeRevision } from "./repo-publish";
@@ -44,7 +44,9 @@ export async function fetchBranchPreview(repo: Repo, branch: string, userId: str
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
-  const sha = await fetchGitHubCommitSha(owner, name, branch, { useToken: repo.githubUseToken });
+  // A branch of THIS repo only: the commits API would also resolve a SHA from
+  // any fork, and fetching runs what it names.
+  const sha = await fetchGitHubBranchSha(owner, name, branch, { useToken: repo.githubUseToken });
   if (!sha) return { ok: false, error: `GitHub has no branch "${branch}" in ${repo.githubRepo}.` };
   // By SHA, so the bytes are exactly the commit just named — not whatever the
   // branch moved to between the two requests.
@@ -89,20 +91,28 @@ async function baseArchive(repo: Repo, ref: string): Promise<{ ok: true; zip: Bu
   if (!/^[0-9a-f]{7,40}$/i.test(ref)) {
     return { ok: false, error: `base must be a commit SHA (\`git merge-base HEAD origin/<published branch>\`), not "${ref}".` };
   }
-  // Clean only: a dirty revision is a commit plus changes, not the commit.
-  const [held] = await db
+  // Only what this server fetched from GitHub itself is known to BE that
+  // commit. A CLI upload's SHA and clean flag are the client's claim — trusting
+  // them would let any repo owner plant files under a commit an admin later
+  // previews on top of. Clean only: a dirty revision is a commit plus changes.
+  const held = await db
     .select({ archive: repoRevisions.archive, sha: repoRevisions.gitSha })
     .from(repoRevisions)
     .where(
       and(
         eq(repoRevisions.repoId, repo.id),
+        eq(repoRevisions.source, "github"),
         eq(repoRevisions.gitDirty, false),
         like(repoRevisions.gitSha, `${ref.toLowerCase()}%`),
       ),
     )
     .orderBy(desc(repoRevisions.createdAt))
-    .limit(1);
-  if (held?.sha) return { ok: true, zip: held.archive, sha: held.sha };
+    .limit(20);
+  const shas = new Set(held.map((h) => h.sha));
+  if (shas.size > 1) {
+    return { ok: false, error: `base "${ref}" matches more than one commit; pass the full SHA.` };
+  }
+  if (held[0]?.sha) return { ok: true, zip: held[0].archive, sha: held[0].sha };
 
   if (!repo.githubRepo) {
     return { ok: false, error: `${repo.slug} isn't on GitHub, and this instance doesn't hold commit ${ref}.` };

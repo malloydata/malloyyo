@@ -134,6 +134,14 @@ export async function saveDraftDashboard(
 
   const found = await findByDatasetRef(userId, datasetRef);
   if (!found) return { ok: false, error: `dataset '${datasetRef}' not found` };
+  // A draft belongs to a published dataset and is listed to its readers; one
+  // validated against an unpublished preview's model would land there anyway.
+  if ("preview" in found) {
+    return {
+      ok: false,
+      error: "Drafts are saved on a published dataset, not a branch preview. In a clone, add the dashboard to the repo and preview_changes instead.",
+    };
+  }
 
   // The canonical ref, for the `dataset` and `url` this returns: the caller's
   // own `datasetRef` may be any spelling — a uuid, an alias, a bare name — so

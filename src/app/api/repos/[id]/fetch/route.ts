@@ -37,6 +37,11 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     .limit(1);
   if (!repo) return NextResponse.json({ error: "not found" }, { status: 404 });
 
+  // JSON only: a cross-site form can't send it, so a session cookie alone
+  // can't be ridden into fetching (and compiling) a branch.
+  if (!(req.headers.get("content-type") ?? "").includes("application/json")) {
+    return NextResponse.json({ error: "send JSON" }, { status: 415 });
+  }
   const body = (await req.json().catch(() => ({}))) as { branch?: unknown };
   const branch = typeof body.branch === "string" ? body.branch.trim() : "";
   if (!branch) return NextResponse.json({ error: "give a branch" }, { status: 400 });

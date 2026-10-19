@@ -67,6 +67,11 @@ export async function POST(req: Request) {
   if (!githubRepo && !body?.repoSlug) return bad("repo is required (e.g. --repo owner/name)", 400);
   if (typeof body?.archive !== "string" || !body.archive) return bad("no archive in payload", 400);
 
+  // The client's provenance claim, kept only when it is shaped like one: a
+  // full commit SHA. Nothing downstream may treat it as verified.
+  if (body.git && (typeof body.git.sha !== "string" || !/^[0-9a-f]{40}$/i.test(body.git.sha))) {
+    body.git = { ...body.git, sha: null };
+  }
   const raw = Buffer.from(body.archive, "base64");
   if (raw.length === 0) return bad("the repo archive is empty", 400);
 
@@ -88,7 +93,8 @@ export async function POST(req: Request) {
         source: "cli",
         branch: previewBranch,
         sha: body.git?.sha ?? null,
-        dirty: body.git?.dirty ?? false,
+        // A preview upload is a working tree: dirty unless the client says clean.
+        dirty: body.git?.dirty ?? true,
         createdById: auth.user.id,
       });
       if (!result.ok) return bad(result.error, 400, { kind: "compile" });

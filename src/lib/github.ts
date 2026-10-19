@@ -191,6 +191,25 @@ export async function fetchGitHubCommitSha(
 }
 
 /**
+ * The head commit of a BRANCH of this repo — null for anything else. Unlike
+ * the commits API, which resolves any SHA in the fork network, so a fork's
+ * commit would pass for one of the repo's own.
+ */
+export async function fetchGitHubBranchSha(
+  owner: string,
+  repo: string,
+  branch: string,
+  opts: { useToken?: boolean } = {},
+): Promise<string | null> {
+  const useToken = opts.useToken !== false;
+  const url = `https://api.github.com/repos/${owner}/${repo}/branches/${encodeURIComponent(branch)}`;
+  const res = await githubFetch(url, githubHeaders(useToken, "application/vnd.github+json"));
+  if (!res.ok) return null;
+  const body = (await res.json()) as { commit?: { sha?: string } };
+  return typeof body.commit?.sha === "string" ? body.commit.sha : null;
+}
+
+/**
  * A pull request's test-merge commit: what merging it into its base would
  * produce, which GitHub computes and keeps current. Checking THAT, not the
  * branch head, is what catches a PR that merges cleanly but breaks the model
@@ -205,7 +224,16 @@ export async function fetchGitHubPullRequest(
   number: number,
   opts: { useToken?: boolean } = {},
 ): Promise<
-  | { ok: true; state: string; headSha: string; mergeCommitSha: string | null; mergeable: boolean | null; baseRef: string }
+  | {
+      ok: true;
+      state: string;
+      headSha: string;
+      /** `owner/name` the PR's branch lives in — another repo when it comes from a fork. */
+      headRepo: string | null;
+      mergeCommitSha: string | null;
+      mergeable: boolean | null;
+      baseRef: string;
+    }
   | { ok: false; status: number }
 > {
   const useToken = opts.useToken !== false;
@@ -214,7 +242,7 @@ export async function fetchGitHubPullRequest(
   if (!res.ok) return { ok: false, status: res.status };
   const b = (await res.json()) as {
     state?: string;
-    head?: { sha?: string };
+    head?: { sha?: string; repo?: { full_name?: string } | null };
     base?: { ref?: string };
     merge_commit_sha?: string | null;
     mergeable?: boolean | null;
@@ -223,6 +251,7 @@ export async function fetchGitHubPullRequest(
     ok: true,
     state: b.state ?? "unknown",
     headSha: b.head?.sha ?? "",
+    headRepo: b.head?.repo?.full_name ?? null,
     mergeCommitSha: b.merge_commit_sha ?? null,
     mergeable: b.mergeable ?? null,
     baseRef: b.base?.ref ?? "",

@@ -66,6 +66,8 @@ interface RequestScope {
    *  mint another API token. Without this the scope could not tell, and a
    *  minted token could mint its successor indefinitely. */
   credentialKind: Credential["kind"];
+  /** The credential's scopes — the repo tools need more than `mcp` from an API token. */
+  credentialScopes: readonly string[];
 }
 
 type Json = Record<string, unknown>;
@@ -126,7 +128,15 @@ function buildServer(scope: RequestScope): McpServer {
   // Admins only: these run SQL through a repo's connections and compile model
   // code nobody has reviewed — the power publishing already has, reached from
   // a chat. A member never sees them.
-  if (hasRole(scope.user, MALLOYYO_ADMIN)) registerRepoTools(server, scope);
+  //
+  // Not from an `mcp`-only API TOKEN: those are handed to CLIs and scripts as
+  // query credentials (issue_cli_token mints them, labelled "query scope"), and
+  // compiling repo code reaches the server's connections and environment. An
+  // API token needs `publish` for these. An OAuth connection is the admin
+  // connecting their own Claude interactively, and carries them as before.
+  const repoToolsAllowed =
+    scope.credentialKind === "oauth" || scope.credentialScopes.includes("publish");
+  if (hasRole(scope.user, MALLOYYO_ADMIN) && repoToolsAllowed) registerRepoTools(server, scope);
 
   return server;
 }
@@ -910,6 +920,7 @@ async function serve(req: Request): Promise<Response> {
     log,
     origin: originFromRequest(req),
     credentialKind: auth.cred.kind,
+    credentialScopes: auth.cred.scopes,
   };
   const res = await handler.fetch(req, {
     authInfo: { token: raw, clientId: credentialLabel(auth.cred), scopes: ["mcp"], extra: { scope } },

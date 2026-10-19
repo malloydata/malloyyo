@@ -56,6 +56,33 @@ Then tell the person it works and ask what they want, unless they already said.
    are previews: only admins see them, and nothing is published.
 7. Repeat. Each `preview_changes` replaces what that label's addresses show.
 
+## Adding a dataset
+
+- **Check the repo's layout first.** `list_repos` says it in `addingDatasets`.
+  A repo with `datasets/<name>/` directories takes a new one directly. A
+  single-dataset repo (`index.malloy` at its root) needs restructuring first;
+  `yo_help("repo/datasets")` covers that, and it's a separate change to agree
+  with the person.
+- **Look at the data.** Use `list_tables(repo, connection)` with a connection
+  from `list_repos`; narrow it with `schema` or `like`, and on BigQuery
+  `schema` (the dataset) is required. Then `describe_table` for each table
+  that matters: columns, row count and five rows. On DuckDB, a "table" can be
+  a file path or URL (Parquet, CSV, JSON).
+- **Ask before modeling.** Find out what the person wants to answer: the main
+  entities, what one row of each table is, how the tables join, and the few
+  measures that matter. A model built from their questions beats one copied
+  from the schema.
+- **Write `datasets/<name>/index.malloy`.** The directory names the dataset,
+  so make it a short lowercase slug. Use the connection names from
+  `list_repos`, e.g. `source: orders is warehouse.table('sales.orders') extend { … }`.
+  Give each source a `#"` description, and each measure one too; they're what
+  people read in `describe_source`.
+- **Stay in your lane.** Don't touch other datasets or `malloy-config.json`
+  unless the person asked. A connection or credential that doesn't exist yet is
+  an admin's job, outside this change.
+- **It's created at publish.** Until then, the new dataset exists only in
+  previews (`status: "new"`).
+
 ## Proposing it
 
 When the person is happy with it:
@@ -81,3 +108,5 @@ When the person is happy with it:
 - **Drafts.** Dashboards someone made in chat are drafts. Promoting one into
   the repo is in `yo_help("dashboards/drafts")`.
 - **Branch previews** in more depth are in `yo_help("repo/branches")`.
+- **A repo that isn't on GitHub** was published with the CLI. There's no clone
+  to author in, so it can't be changed this way.

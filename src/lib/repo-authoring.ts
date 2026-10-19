@@ -2,11 +2,12 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * ADDING A DATASET TO A REPO FROM A CHAT.
+ * AUTHORING A MODEL REPO FROM A CLONE (Claude Code on the web).
  *
- * The admin-only MCP tools behind it (src/app/mcp/route.ts). Claude edits the
- * repo with GitHub's own MCP server — every write is the person's, in their
- * repo, on a branch — and uses these for what only this instance knows:
+ * The admin-only MCP tools behind it (src/app/mcp/route.ts). Claude edits its
+ * clone and commits and pushes through the session's own GitHub connection —
+ * every commit is the person's — and uses these for what only this instance
+ * knows (previews themselves are src/lib/repo-preview-store.ts):
  *
  *   listRepos      which repos this instance publishes, their layout, datasets
  *                  and connections (names and kinds, never a secret)
@@ -162,9 +163,10 @@ export async function listRepos(): Promise<RepoSummary[]> {
       branch: repo.githubBranch ?? "main",
       layout,
       addingDatasets: !repo.githubRepo
-        ? "Not attached to GitHub (published with the CLI), so it can't be changed from here."
+        ? "Not attached to GitHub (published with the CLI): there's no clone to author in. Publish it with the CLI."
         : layout === "multi"
-          ? `Add datasets/<name>/index.malloy on a branch of ${repo.githubRepo}, then check_repo, merge, publish_repo.`
+          ? `In a clone of ${repo.githubRepo}: add datasets/<name>/index.malloy on a branch, preview_changes, then ` +
+            `PR, check_repo(pull_request), merge, publish_repo. yo_help("authoring/start").`
           : layout === "single"
             ? "A single-dataset repo (index.malloy at its root). A second dataset means restructuring it into datasets/<name>/ first, which this flow doesn't do."
             : layout === "legacy"
@@ -427,8 +429,8 @@ export async function checkRepo(
       // and a model that hadn't been told so went looking and didn't find it.
       next:
         `To use a branch's datasets and dashboards here before publishing — query them, open the ` +
-        `dashboards — fetch_branch(repo: "${repo.slug}", branch: "<branch>"), or from a clone, ` +
-        `preview_changes; both answer with \`${repo.slug}@<branch>:<dataset>\` addresses and dashboard links.`,
+        `dashboards — preview_changes from your clone, or fetch_branch(repo: "${repo.slug}", branch: "<branch>") ` +
+        `for a pushed branch; both answer with \`${repo.slug}@<branch>:<dataset>\` addresses and dashboard links.`,
     };
     if (probe) out.query = await runAt(root, probe, allDirs, filePaths);
     // GitHub caches unauthenticated API answers for up to a minute, so a branch

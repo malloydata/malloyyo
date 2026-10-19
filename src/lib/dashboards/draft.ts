@@ -429,7 +429,7 @@ export async function recordPromotion(
   datasetRef: string,
   slug: string,
   /** `hash` is of what was written; the CLI knows it. Without one (a chat that
-      wrote the files with GitHub's tools) the draft's own content is hashed —
+      wrote the files into its clone) the draft's own content is hashed —
       "promoted from this version" — which is what a divergence check compares. */
   promoted: { name: string; hash?: string },
 ): Promise<"recorded" | "not-found" | "not-yours"> {

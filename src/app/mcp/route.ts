@@ -30,7 +30,7 @@ import {
 } from "@/lib/mcp-app-dashboard";
 import { dashboardPanel, type DashboardPanel } from "@/lib/mcp-app-panel";
 import { DRAFT_PREFIX, draftForward, draftSlug, getDashboard, listDashboards, visibleImageHosts } from "@/lib/dashboards";
-import { deleteDraft, recordPromotion, saveDraftDashboard } from "@/lib/dashboards/draft";
+import { deleteDraft, getDraftFiles, recordPromotion, saveDraftDashboard } from "@/lib/dashboards/draft";
 import { hasRole, MALLOYYO_ADMIN } from "@/lib/roles";
 import { checkRepo, describeTable, findRepo, listRepos, listTables, publishRepo } from "@/lib/repo-authoring";
 import { fetchBranchPreview, previewChanges, type PreviewSummary } from "@/lib/repo-preview-store";
@@ -162,10 +162,11 @@ function result<T extends { ok: boolean; error?: string }>(r: T, summary?: strin
 }
 
 /**
- * Adding a dataset to a repo from a chat (src/lib/repo-authoring.ts). Git
- * writes are GitHub's own MCP server's, as the person; these are what only
- * this instance can answer — what a repo's connections can see, whether a
- * branch or pull request compiles here, and the publish after the merge.
+ * Authoring a model repo from a clone — Claude Code on the web
+ * (src/lib/repo-authoring.ts, src/lib/repo-preview-store.ts). Git is the
+ * session's own, as the person; these answer what only this instance can —
+ * what a repo's connections can see, what the working copy compiles to and
+ * shows, whether a pull request merges into a working model, and the publish.
  */
 function registerRepoTools(server: McpServer, scope: RequestScope): void {
   const tag = `[${env.INSTANCE_NAME}]`;
@@ -186,9 +187,8 @@ function registerRepoTools(server: McpServer, scope: RequestScope): void {
       title: "List model repos",
       description:
         `${tag} The model repos this instance publishes: their GitHub repo and branch, layout, datasets and ` +
-        `database connections (names and kinds only), and the branches fetched as previews. Start here to ` +
-        `add a dataset to a repo (read yo_help("repo/add-dataset-from-chat") first), or to try a branch's ` +
-        `models and dashboards before they're published (yo_help("repo/branches")).`,
+        `database connections (names and kinds only), and the branches previewed. Start here when ` +
+        `authoring in a clone of a model repo; read yo_help("authoring/start") first.`,
       annotations: { readOnlyHint: true },
       inputSchema: fromJsonSchema<Json>({ type: "object", properties: {} }),
     },
@@ -267,7 +267,8 @@ function registerRepoTools(server: McpServer, scope: RequestScope): void {
         `is stored or published. Says which datasets are new. \`test_query\` also runs one Malloy query ` +
         `against a dataset at that ref. Right after a commit, pass the commit SHA your write returned: a branch ` +
         `name can resolve to the previous commit for up to a minute. Check the pull request before merging it — that is what catches a ` +
-        `change that merges cleanly but breaks the model. Admins only.`,
+        `change that merges cleanly but breaks the model. Working in a clone, preview_changes is the edit loop; ` +
+        `this is for the pull request. Admins only.`,
       annotations: { readOnlyHint: true },
       inputSchema: fromJsonSchema<CheckArgs>({
         type: "object",
@@ -305,10 +306,11 @@ function registerRepoTools(server: McpServer, scope: RequestScope): void {
   server.registerTool(
     "fetch_branch",
     {
-      title: "Preview a branch: its models and dashboards, unpublished",
+      title: "Preview a pushed branch: its models and dashboards, unpublished",
       description:
-        `${tag} The way to SEE a branch's changes here — models, queries, dashboards — before they are ` +
-        `published. Fetches the branch from GitHub (push first) into a preview, compiled but not ` +
+        `${tag} Previews a branch AS PUSHED TO GITHUB — e.g. someone else's — so its models, queries and ` +
+        `dashboards can be used here before they're published. Working in your own clone, use ` +
+        `preview_changes instead: no push needed. Fetches the branch into a preview, compiled but not ` +
         `published. Every tool that takes a dataset then takes \`repo@branch:dataset\` ` +
         `(query's model_ref, describe_source, show_dashboard) and serves that snapshot until the next ` +
         `fetch, so fetch again after each push. Returns each dataset's preview address, whether it ` +
@@ -415,6 +417,7 @@ const CLI_TOKEN_TTL_MS = 60 * 60 * 1000;
 const ISSUE_CLI_TOKEN_TOOL = "issue_cli_token";
 const SAVE_DRAFT_TOOL = "save_draft_dashboard";
 const DELETE_DRAFT_TOOL = "delete_draft_dashboard";
+const GET_DRAFT_TOOL = "get_draft_dashboard";
 const PROMOTED_DRAFT_TOOL = "mark_draft_promoted";
 
 /**
@@ -562,6 +565,32 @@ function registerAuthoringTools(server: McpServer, scope: RequestScope): void {
   const fail = (msg: string): CallToolResult => ({ content: text(msg), structuredContent: { ok: false, error: msg }, isError: true });
 
   type DraftRefArgs = { dataset: string; dashboard: string };
+  server.registerTool(
+    GET_DRAFT_TOOL,
+    {
+      title: "Get a draft dashboard's files",
+      description:
+        `${tag} A draft dashboard's files — its dashboards/<name>.malloy (when it has one), its component, and ` +
+        `the Malloy the component runs inline — so it can be promoted into the model repo: write them into ` +
+        `the clone as dashboards/<name>.malloy + component, lifting the inline queries into named queries ` +
+        `in the .malloy (yo_help("dashboards/drafts")). Read-only; anyone who can see the dataset.`,
+      annotations: { readOnlyHint: true },
+      inputSchema: fromJsonSchema<DraftRefArgs>({
+        type: "object",
+        properties: {
+          dataset: { type: "string", description: "Dataset name (the model_ref list_sources reports)." },
+          dashboard: { type: "string", description: "The draft, as `draft-<slug>` or its slug." },
+        },
+        required: ["dataset", "dashboard"],
+      }),
+    },
+    logged(scope, GET_DRAFT_TOOL, async (a: DraftRefArgs) => {
+      const draft = await getDraftFiles(userId, a.dataset, slugOf(a.dashboard));
+      if (!draft) return fail(`No draft '${a.dashboard}' in '${a.dataset}'.`);
+      return { content: text(JSON.stringify(draft, null, 2)), structuredContent: { ok: true, draft } as unknown as Json };
+    }),
+  );
+
   server.registerTool(
     DELETE_DRAFT_TOOL,
     {

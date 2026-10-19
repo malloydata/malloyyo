@@ -1,76 +1,58 @@
 ---
-description: Change a repo's models or dashboards on a branch and see them here before they're published — where the files are, check_repo, fetch_branch previews and their links
+description: Branch previews — a repo's unpublished changes, compiled and usable here as repo@label:dataset; the three ways to make one, and what they're good for
 ---
 
-# Working on a branch
+# Branch previews
 
-To change a published model or its dashboards without changing what people see,
-work on a branch of the model repo and look at it here as a **preview**. Branch
-previews are for admins. If `fetch_branch` isn't in your tool list, either the
-person isn't an admin here or your client loaded its tools before this one
-existed (reconnecting fixes that).
+A **preview** is a model repo with unpublished changes in it, compiled by this
+instance with its own connections and usable as if it were published:
+queries, `describe_source`, dashboards. Nothing about it is published. Only
+admins can make or see one. The workflow for authoring with previews is in
+`yo_help("authoring/start")`; this page covers previews themselves.
 
-## 1. Get the files
+## The address
 
-This instance serves compiled models, not repo files. `describe_source` shows
-sources, dimensions and measures, but not the Malloy text behind a dashboard
-(`dashboards/*.malloy`) or its components (`*.jsx`). Those are in the repo.
+Each dataset in a preview gets an address:
 
-- `list_repos` names each repo's GitHub repo (`owner/name`) and published branch.
-- Read and write the files with **GitHub's tools**, or in a clone if you have
-  one. Make a branch off the published branch; never commit to the published
-  branch.
+    <repo>@<label>:<dataset>        e.g.  malloyyo_test@claude/returns:returns
 
-## 2. Check that it compiles
+The label is usually the branch name. Pass the address anywhere a dataset goes:
 
-`check_repo(repo, ref)` reads the repo **from GitHub**, so push first. Pass
-the commit SHA you just pushed, not the branch name: right after a push, GitHub
-can answer a branch name with the previous commit for up to a minute. It
-compiles every dataset and dashboard the way publishing would. Add a
-`test_query` to see numbers at that commit.
+- as `model_ref` to `describe_source` and `query`
+- as `dataset` to `show_dashboard`
+- in a browser, as `/datasets/<address, URL-encoded>/dashboard/<name>`. Every
+  tool that makes a preview returns these links, so give them to the person.
 
-## 3. Look at it: `fetch_branch`
+The page shows a banner naming the preview and its commit. Queries against a
+preview make no share links.
 
-`fetch_branch(repo, branch)` takes a snapshot of the pushed branch, compiles it,
-and gives each dataset a preview address:
+## Making one
 
-    <repo>@<branch>:<dataset>        e.g.  malloyyo_test@imdb-calcs:imdb
+| From | Use | When |
+| --- | --- | --- |
+| Your clone (Claude Code on the web) | `preview_changes(repo, label, base, files, deleted)` | While authoring. Sends only your edits, committed or not; no push needed. |
+| A branch on GitHub | `fetch_branch(repo, branch)`, or **Fetch from GitHub** on the repo's page | To look at a branch someone else pushed. |
+| A local checkout with the CLI | `malloyyo publish --repo <owner/name> --branch` | Developing on your own machine. |
 
-Pass that address anywhere a dataset goes:
+Each answers with every dataset's compile result, `ok` or the error, plus its
+address and dashboard links. A dataset that doesn't exist on this instance yet
+gets a preview like any other, which is how a new dataset is tried before it's
+created.
 
-- `describe_source` and `query`, as `model_ref`
-- `show_dashboard`, as `dataset`
-- in a browser, `/datasets/<address, URL-encoded>/dashboard/<name>`.
-  `fetch_branch` returns these links for every dashboard, so give them to the
-  person.
+## A snapshot, not a live view
 
-The page shows a banner naming the branch and commit. Nothing is published:
-queries make no share links, and only admins can open the pages.
+A preview shows what was sent or fetched. Making another preview with the same
+label replaces what that label's addresses show; older ones stay reachable by
+commit SHA (`repo@<sha>:dataset`). So preview again after each round of edits,
+or fetch again after each push you want to see. `list_repos` lists each repo's
+latest previews.
 
-**A snapshot, not a live view.** The address keeps showing what was fetched
-until someone fetches again, so `fetch_branch` again after every push you want
-to look at. `list_repos` lists the branches already fetched and when.
+## Then
 
-## 4. From a clone, without pushing
+A preview never becomes the published version. The published version always
+comes from the repo's published branch. To ship:
 
-In a session with a clone of the repo (Claude Code on the web),
-`preview_changes` sends your working copy's edits and previews them in one
-step, with no push. It's the loop to use there; `yo_help("authoring/start")`
-has it.
-
-## 5. From a local working tree
-
-Someone with a clone and the CLI can skip the push:
-
-    malloyyo publish --repo <owner/name> --branch
-
-This uploads the working tree, including uncommitted changes, as a preview of the
-current git branch (`--branch <name>` picks another). It prints the addresses the
-same way.
-
-## 6. Ship it
-
-Open a pull request, run `check_repo(repo, pull_request: <n>)` on it, and let the
-person decide to merge. Then `publish_repo(repo)`, or the repo's GitHub hook,
-publishes the merged result. A preview never becomes the published version; the
-published version always comes from the published branch.
+1. Push the branch and open a pull request.
+2. `check_repo(repo, pull_request: <n>)` checks what merging would produce.
+3. The person merges.
+4. `publish_repo(repo)`, or the repo's GitHub hook, publishes.

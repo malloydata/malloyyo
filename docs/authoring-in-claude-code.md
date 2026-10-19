@@ -138,7 +138,8 @@ You'll rarely need these from Claude Code, but they exist:
 A dashboard made in chat with `save_draft_dashboard` is a **draft**. It lives on
 the instance and is listed to everyone who can see the dataset, labelled as a
 draft. To make it part of the model, Claude writes it into the repo as
-`dashboards/<name>.malloy` plus its component, then records the promotion.
+`dashboards/<name>.malloy` plus its component (`get_draft_dashboard` hands it
+the files), previews it, commits, and records the promotion.
 
 Once the promoted dashboard is published, **the draft's link opens the
 published dashboard instead**, so bookmarks and shared links keep working. The
@@ -234,6 +235,7 @@ and CI.
 | `publish_repo` | Publish the repo's published branch, creating any new datasets | Authors |
 | `query`, `describe_source`, `show_dashboard` | Work on published datasets and on preview addresses | Everyone (previews: authors) |
 | `save_draft_dashboard` | Save a draft dashboard | Everyone with query access |
+| `get_draft_dashboard` | A draft's files, for promoting it into the repo | Everyone who can see the dataset |
 | `mark_draft_promoted` | Record that a draft became a repo dashboard, so its link forwards | The draft's author |
 | `delete_draft_dashboard` | Delete a draft | The draft's author, or an admin |
 

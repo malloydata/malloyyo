@@ -114,11 +114,16 @@ needs them LIFTED into its `.malloy` as named queries — the component then use
 the model, not the component. The written `.malloy` carries them as comments to
 work from. Then `malloyyo lint`, and the usual PR.
 
-**From a chat, without the CLI:** read the draft's files, write them into a
-branch of the repo with GitHub's tools (lifting inline queries as above; see
-`yo_help("repo/branches")`), and after committing call
-`mark_draft_promoted(dataset, dashboard: "draft-<slug>", promoted_as: "<name>")`.
-`malloyyo draft promote` records this itself.
+**From a clone, without the CLI** (Claude Code on the web):
+
+1. `get_draft_dashboard(dataset, dashboard)` returns the draft's files.
+2. Write them into the clone as `dashboards/<name>.malloy` plus its component,
+   lifting the inline queries as described above.
+3. `preview_changes` to see it compiled and rendered (`yo_help("authoring/start")`).
+4. Commit, then call
+   `mark_draft_promoted(dataset, dashboard: "draft-<slug>", promoted_as: "<name>")`.
+
+`malloyyo draft promote` records the promotion itself.
 
 **What happens to the draft.** Once the dataset publishes the promoted
 dashboard, the draft's URL **redirects** to it, keeping any query string, and

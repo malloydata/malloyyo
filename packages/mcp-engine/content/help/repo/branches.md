@@ -51,7 +51,14 @@ queries make no share links, and only admins can open the pages.
 until someone fetches again, so `fetch_branch` again after every push you want
 to look at. `list_repos` lists the branches already fetched and when.
 
-## 4. From a local working tree
+## 4. From a clone, without pushing
+
+In a session with a clone of the repo (Claude Code on the web),
+`preview_changes` sends your working copy's edits and previews them in one
+step, with no push. It's the loop to use there; `yo_help("authoring/start")`
+has it.
+
+## 5. From a local working tree
 
 Someone with a clone and the CLI can skip the push:
 
@@ -61,7 +68,7 @@ This uploads the working tree, including uncommitted changes, as a preview of th
 current git branch (`--branch <name>` picks another). It prints the addresses the
 same way.
 
-## 5. Ship it
+## 6. Ship it
 
 Open a pull request, run `check_repo(repo, pull_request: <n>)` on it, and let the
 person decide to merge. Then `publish_repo(repo)`, or the repo's GitHub hook,

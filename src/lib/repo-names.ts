@@ -82,3 +82,18 @@ export function decodeDatasetRef(ref: string): string {
     return ref;
   }
 }
+
+/**
+ * `owner/name` out of whatever names a GitHub repo: `owner/name` itself, a
+ * github.com URL, an SSH remote, or a proxied remote whose path ends in
+ * `owner/name(.git)` — what `git remote get-url origin` prints in a sandbox.
+ * Null when there aren't two path segments to take.
+ */
+export function githubRepoFromRemote(remote: string): string | null {
+  const s = remote.trim().replace(/\.git\/?$/, "").replace(/\/+$/, "");
+  const path = s.replace(/^[a-z]+:\/\/[^/]*\//i, "").replace(/^[^@/]+@[^:/]+:/, "");
+  const parts = path.split("/").filter(Boolean);
+  if (parts.length < 2) return null;
+  const [owner, name] = parts.slice(-2);
+  return /^[\w.-]+$/.test(owner) && /^[\w.-]+$/.test(name) ? `${owner}/${name}` : null;
+}

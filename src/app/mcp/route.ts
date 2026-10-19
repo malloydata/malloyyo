@@ -33,7 +33,7 @@ import { DRAFT_PREFIX, draftForward, draftSlug, getDashboard, listDashboards, vi
 import { deleteDraft, recordPromotion, saveDraftDashboard } from "@/lib/dashboards/draft";
 import { hasRole, MALLOYYO_ADMIN } from "@/lib/roles";
 import { checkRepo, describeTable, findRepo, listRepos, listTables, publishRepo } from "@/lib/repo-authoring";
-import { fetchBranchPreview } from "@/lib/repo-preview-store";
+import { fetchBranchPreview, previewChanges, type PreviewSummary } from "@/lib/repo-preview-store";
 import { createApiToken } from "@/lib/api-tokens";
 import { runDashboard } from "@/lib/dashboards/engine";
 import { bearerToken, credentialLabel, resolveBearer, type Credential } from "@/lib/bearer-auth";
@@ -131,6 +131,30 @@ function buildServer(scope: RequestScope): McpServer {
   return server;
 }
 
+/** A preview's answer, from fetch_branch or preview_changes: addresses, compile results, dashboard links. */
+function previewResult(r: PreviewSummary, headline: string, again: string): CallToolResult {
+  // Links, not just addresses: the person wants to open the dashboards, and an
+  // address alone left a model guessing at the URL shape.
+  const datasets = r.datasets.map((d) => ({
+    ...d,
+    dashboards: (d.artifacts ?? []).map((a) => ({
+      name: a.name,
+      title: a.title,
+      url: dashboardUrl(env.APP_BASE_URL, d.address, a.name),
+    })),
+  }));
+  const lines = datasets.flatMap((d) => [
+    `  ${d.address} — ${d.ok ? `${d.status}, ${d.sources?.length ?? 0} sources, ${d.dashboards.length} dashboards` : `FAILED: ${d.error}`}`,
+    ...d.dashboards.map((a) => `      ${a.title ?? a.name}: ${a.url}`),
+  ]);
+  return result(
+    { ...r, datasets },
+    `${headline} Preview addresses:\n${lines.join("\n")}\n\n` +
+      `Pass an address as model_ref to describe_source and query, or as dataset to show_dashboard. ` +
+      `Give the person the dashboard links. This is a snapshot: ${again}.`,
+  );
+}
+
 /** Text + structured content for a tool result, as an error when `ok` is false. */
 function result<T extends { ok: boolean; error?: string }>(r: T, summary?: string): CallToolResult {
   if (!r.ok) return { content: text(r.error ?? "failed"), structuredContent: r as unknown as Json, isError: true };
@@ -147,7 +171,12 @@ function registerRepoTools(server: McpServer, scope: RequestScope): void {
   const tag = `[${env.INSTANCE_NAME}]`;
   const withRepo = async <T extends object>(ref: string, fn: (repo: NonNullable<Awaited<ReturnType<typeof findRepo>>>) => Promise<T>) => {
     const repo = await findRepo(ref);
-    if (!repo) return { ok: false, error: `No repo "${ref}" on this instance. list_repos shows them.` };
+    if (!repo) {
+      return {
+        ok: false,
+        error: `No repo "${ref}" on this instance — it doesn't publish that repo; an admin has to add it. list_repos shows the ones it has.`,
+      };
+    }
     return fn(repo);
   };
 
@@ -297,26 +326,54 @@ function registerRepoTools(server: McpServer, scope: RequestScope): void {
     logged(scope, "fetch_branch", async (a: FetchArgs) => {
       const out = await withRepo(a.repo, (repo) => fetchBranchPreview(repo, a.branch, scope.userId));
       if (!out.ok) return result(out);
-      const r = out as Extract<typeof out, { revision: number }>;
-      // Links, not just addresses: the person wants to open the dashboards,
-      // and an address alone left a model guessing at the URL shape.
-      const datasets = r.datasets.map((d) => ({
-        ...d,
-        dashboards: (d.artifacts ?? []).map((a) => ({
-          name: a.name,
-          title: a.title,
-          url: dashboardUrl(env.APP_BASE_URL, d.address, a.name),
-        })),
-      }));
-      const lines = datasets.flatMap((d) => [
-        `  ${d.address} — ${d.ok ? `${d.status}, ${d.sources?.length ?? 0} sources, ${d.dashboards.length} dashboards` : `FAILED: ${d.error}`}`,
-        ...d.dashboards.map((a) => `      ${a.title ?? a.name}: ${a.url}`),
-      ]);
-      return result(
-        { ...r, datasets },
-        `Fetched ${r.repo}@${r.branch} at ${r.commit?.slice(0, 7) ?? "?"}. Preview addresses:\n${lines.join("\n")}\n\n` +
-          `Pass an address as model_ref to describe_source and query, or as dataset to show_dashboard. ` +
-          `Give the person the dashboard links. This is a snapshot: after the next push, fetch_branch again.`,
+      const r = out as PreviewSummary;
+      return previewResult(r, `Fetched ${r.repo}@${r.branch} at ${r.commit?.slice(0, 7) ?? "?"}.`, "after the next push, fetch_branch again");
+    }),
+  );
+
+  type ChangesArgs = { repo: string; label: string; base: string; files?: Record<string, string>; deleted?: string[] };
+  server.registerTool(
+    "preview_changes",
+    {
+      title: "Preview a working copy's changes",
+      description:
+        `${tag} For a session with a clone of a model repo (Claude Code): compiles the repo as it is in your ` +
+        `working copy — the base commit plus your changes, committed or not — into a PREVIEW, without pushing. ` +
+        `Returns each dataset's compile result, its preview address \`repo@label:dataset\` (use it as ` +
+        `model_ref for query/describe_source and as dataset for show_dashboard) and a browser link for each ` +
+        `dashboard. Call it after each round of edits. Send only what changed: ` +
+        `base = \`git merge-base HEAD origin/<published branch>\`; files = full text of every file in ` +
+        `\`git diff --name-only --diff-filter=d <base>\` plus untracked files (\`git ls-files --others --exclude-standard\`); ` +
+        `deleted = \`git diff --name-only --diff-filter=D <base>\`. With no files it previews the base itself. ` +
+        `Read yo_help("authoring/start") first. Admins only.`,
+      annotations: { readOnlyHint: false },
+      inputSchema: fromJsonSchema<ChangesArgs>({
+        type: "object",
+        properties: {
+          repo: { type: "string", description: "The repo: `owner/name`, or `git remote get-url origin` as printed." },
+          label: { type: "string", description: "Names the preview — the current branch (`git branch --show-current`)." },
+          base: { type: "string", description: "The commit SHA your changes are relative to; it must be on GitHub." },
+          files: {
+            type: "object",
+            description: "Changed or added files: repo-relative path → full new text.",
+            additionalProperties: { type: "string" },
+          },
+          deleted: { type: "array", items: { type: "string" }, description: "Repo-relative paths deleted since base." },
+        },
+        required: ["repo", "label", "base"],
+      }),
+    },
+    logged(scope, "preview_changes", async (a: ChangesArgs) => {
+      const out = await withRepo(a.repo, (repo) =>
+        previewChanges(repo, { label: a.label, base: a.base, files: a.files ?? {}, deleted: a.deleted ?? [] }, scope.userId),
+      );
+      if (!out.ok) return result(out);
+      const r = out as PreviewSummary;
+      const n = Object.keys(a.files ?? {}).length + (a.deleted?.length ?? 0);
+      return previewResult(
+        r,
+        `Previewed ${r.repo}@${r.branch}: ${r.commit?.slice(0, 7) ?? "?"} plus ${n} changed file(s).`,
+        "after your next edits, preview_changes again",
       );
     }),
   );

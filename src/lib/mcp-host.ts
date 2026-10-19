@@ -78,11 +78,12 @@ const HOST_POLICY =
   `route to the one the user means; ${TAG} is the instance at ${env.APP_BASE_URL}. On every tool call, set \`model\` to your own ` +
   `model identifier (e.g. "claude-opus-4-8") so runs can be attributed by model.\n\n` +
   `This hosted connector serves models already PUBLISHED to ${TAG} — not files on ` +
-  `disk — so it is NOT the right tool for developing or editing Malloy models locally ` +
-  `with the CLI: on-disk edits are invisible here until you \`malloyyo publish\`. For ` +
-  `local model development, use the malloyyo CLI's own MCP server ` +
-  `(\`malloyyo mcp -C <model-dir>\`), which reads the working directory; validate edits ` +
-  `with \`malloyyo lint\`. Use this connector only to explore already-published data.`;
+  `disk: edits in a working copy are invisible here until they are sent. ` +
+  `AUTHORING (admins): in a session with a clone of one of ${TAG}'s model repos — e.g. ` +
+  `Claude Code on the web — this connector IS the authoring loop: preview_changes sends ` +
+  `your edits and compiles them here, with real data and dashboard links, before anything ` +
+  `is pushed. Read yo_help("authoring/start") first. Without that tool, use the malloyyo ` +
+  `CLI's own MCP server (\`malloyyo mcp -C <model-dir>\`) for local development.`;
 
 function text(value: unknown): ToolResult {
   return { content: [{ type: "text", text: typeof value === "string" ? value : JSON.stringify(value, null, 2) }] };

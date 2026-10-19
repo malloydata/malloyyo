@@ -9,11 +9,11 @@
  * resolving half — a page may import that, and must never import DuckDB.
  */
 
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq, like } from "drizzle-orm";
 import { layoutFromListing } from "@malloyyo/mcp-engine";
 import { db, datasets, repoRevisions, type PreviewDataset, type Repo, type RepoRevisionSource } from "@/db";
 import { fetchGitHubCommitSha, fetchGitHubZipball, parseGitHubRepo } from "./github";
-import { discardWorkspace, materializeArchive, normalizeArchive, ArchiveError } from "./repo-archive";
+import { discardWorkspace, materializeArchive, normalizeArchive, overlayArchive, ArchiveError } from "./repo-archive";
 import { previewRef } from "./repo-preview-refs";
 import { compileDir, localConfigRefusal, storeRevision } from "./repo-publish";
 import { fsLister } from "./repo-workspace";
@@ -51,6 +51,78 @@ export async function fetchBranchPreview(repo: Repo, branch: string, userId: str
   const raw = await fetchGitHubZipball(owner, name, sha, { useToken: repo.githubUseToken });
   if (!raw) return { ok: false, error: `GitHub would not give ${repo.githubRepo} at ${sha.slice(0, 12)}.` };
   return storePreview(repo, raw, { source: "github", branch, sha, dirty: false, createdById: userId });
+}
+
+/**
+ * Preview a working copy: the base commit's files with `changes` laid over
+ * them. What `preview_changes` sends from a Claude Code session — only what
+ * changed, because the caller writes tool arguments token by token, so a whole
+ * repo per round would be slow and expensive where an edit is a few KB.
+ *
+ * The base must be a commit GitHub has (the session's merge-base with the
+ * published branch is). Its files come from a revision this instance already
+ * holds whenever one is exactly that commit — a publish, or a fetched branch —
+ * which is the usual case and costs no GitHub call; otherwise from GitHub, by
+ * SHA.
+ */
+export async function previewChanges(
+  repo: Repo,
+  req: { label: string; base: string; files: Record<string, string>; deleted: string[] },
+  userId: string,
+): Promise<PreviewSummary | Fail> {
+  const base = await baseArchive(repo, req.base.trim());
+  if (!base.ok) return base;
+  let zip: Buffer;
+  try {
+    zip = overlayArchive(base.zip, { files: req.files, deleted: req.deleted });
+  } catch (err) {
+    if (err instanceof ArchiveError) return { ok: false, error: `${err.message}.` };
+    throw err;
+  }
+  // `dirty`: the snapshot is the base commit PLUS changes, so it must never be
+  // mistaken for that commit — including by baseArchive below, next time.
+  return storePreview(repo, zip, { source: "cli", branch: req.label, sha: base.sha, dirty: true, createdById: userId });
+}
+
+/** The files of commit `ref` — from a clean stored revision of it, else from GitHub. */
+async function baseArchive(repo: Repo, ref: string): Promise<{ ok: true; zip: Buffer; sha: string } | Fail> {
+  if (!/^[0-9a-f]{7,40}$/i.test(ref)) {
+    return { ok: false, error: `base must be a commit SHA (\`git merge-base HEAD origin/<published branch>\`), not "${ref}".` };
+  }
+  // Clean only: a dirty revision is a commit plus changes, not the commit.
+  const [held] = await db
+    .select({ archive: repoRevisions.archive, sha: repoRevisions.gitSha })
+    .from(repoRevisions)
+    .where(
+      and(
+        eq(repoRevisions.repoId, repo.id),
+        eq(repoRevisions.gitDirty, false),
+        like(repoRevisions.gitSha, `${ref.toLowerCase()}%`),
+      ),
+    )
+    .orderBy(desc(repoRevisions.createdAt))
+    .limit(1);
+  if (held?.sha) return { ok: true, zip: held.archive, sha: held.sha };
+
+  if (!repo.githubRepo) {
+    return { ok: false, error: `${repo.slug} isn't on GitHub, and this instance doesn't hold commit ${ref}.` };
+  }
+  const { owner, repo: name } = parseGitHubRepo(repo.githubRepo);
+  const sha = await fetchGitHubCommitSha(owner, name, ref, { useToken: repo.githubUseToken });
+  if (!sha) {
+    return {
+      ok: false,
+      error: `Base commit ${ref} isn't on GitHub (${repo.githubRepo}). Use the merge-base with the published branch, or push first.`,
+    };
+  }
+  const raw = await fetchGitHubZipball(owner, name, sha, { useToken: repo.githubUseToken });
+  if (!raw) return { ok: false, error: `GitHub would not give ${repo.githubRepo} at ${sha.slice(0, 12)}.` };
+  try {
+    return { ok: true, zip: (await normalizeArchive(raw, { stripWrapper: true })).zip, sha };
+  } catch (err) {
+    if (err instanceof ArchiveError) return { ok: false, error: err.message };
+    throw err;
+  }
 }
 
 /**

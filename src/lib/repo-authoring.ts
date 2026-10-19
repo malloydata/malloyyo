@@ -26,7 +26,7 @@
  * hour, and looking at tables should not spend them.
  */
 
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { MalloyError, InMemoryURLReader } from "@malloydata/malloy";
 import { jsonRows, layoutFromListing } from "@malloyyo/mcp-engine";
 import { db, datasets, repoRevisions, repos, type Repo } from "@/db";
@@ -36,6 +36,7 @@ import { fileUrl, withConfigConnection, withReaderRuntime } from "./malloy";
 import { discardWorkspace, materializeArchive, normalizeArchive } from "./repo-archive";
 import { compileDir, localConfigRefusal, type PublishResult } from "./repo-publish";
 import { listTablesSql, sqlString } from "./repo-catalog-sql";
+import { githubRepoFromRemote } from "./repo-names";
 import { datasetView, discoverRepoConfig, fsLister, WorkspaceURLReader, writeDatasetWorkspace } from "./repo-workspace";
 
 const IDENT = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -52,7 +53,16 @@ export async function findRepo(ref: string): Promise<Repo | null> {
   const r = ref.trim();
   const [bySlug] = await db.select().from(repos).where(eq(repos.slug, r)).limit(1);
   if (bySlug) return bySlug;
-  const [byGithub] = await db.select().from(repos).where(eq(repos.githubRepo, r)).limit(1);
+  // `owner/name`, or a remote URL as `git remote get-url origin` prints it —
+  // what a Claude Code session working in a clone has to hand. GitHub names
+  // are case-insensitive.
+  const gh = githubRepoFromRemote(r);
+  if (!gh) return null;
+  const [byGithub] = await db
+    .select()
+    .from(repos)
+    .where(sql`lower(${repos.githubRepo}) = ${gh.toLowerCase()}`)
+    .limit(1);
   return byGithub ?? null;
 }
 
@@ -143,8 +153,9 @@ export async function listRepos(): Promise<RepoSummary[]> {
     out.push({
       repo: repo.slug,
       previewing: repo.githubRepo
-        ? `fetch_branch(repo, branch) snapshots a pushed branch so its datasets and dashboards can be used here ` +
-          `as ${repo.slug}@<branch>:<dataset>, unpublished. Fetch again after each push.`
+        ? `Working in a clone: preview_changes sends your edits, no push needed (yo_help("authoring/start")). ` +
+          `A pushed branch: fetch_branch(repo, branch). Either way its datasets and dashboards are then usable ` +
+          `here as ${repo.slug}@<branch>:<dataset>, unpublished.`
         : `Not on GitHub: upload a working tree with \`malloyyo publish --repo <owner/name> --branch\`.`,
       previews: [...previews.values()],
       github: repo.githubRepo,
@@ -416,8 +427,8 @@ export async function checkRepo(
       // and a model that hadn't been told so went looking and didn't find it.
       next:
         `To use a branch's datasets and dashboards here before publishing — query them, open the ` +
-        `dashboards — fetch_branch(repo: "${repo.slug}", branch: "<branch>"); it answers with ` +
-        `\`${repo.slug}@<branch>:<dataset>\` addresses and dashboard links.`,
+        `dashboards — fetch_branch(repo: "${repo.slug}", branch: "<branch>"), or from a clone, ` +
+        `preview_changes; both answer with \`${repo.slug}@<branch>:<dataset>\` addresses and dashboard links.`,
     };
     if (probe) out.query = await runAt(root, probe, allDirs, filePaths);
     // GitHub caches unauthenticated API answers for up to a minute, so a branch

@@ -14,6 +14,7 @@
  * write now, and this is the only thing that writes it.
  */
 
+import { env } from "@/lib/env";
 import { NextResponse } from "next/server";
 import { and, asc, count, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import { db, chats, datasets, draftDashboards, repos, repoRevisions, malloyModels, savedQueries } from "@/db";
@@ -223,6 +224,8 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
     needsUpdate: !live,
     history,
     previews,
+    // Whether this instance makes previews at all (env.REPO_AUTHORING).
+    authoring: env.REPO_AUTHORING,
     datasets: members.map((d) => ({
       ...d,
       qualified: qualifiedName(repo.slug, d.name),

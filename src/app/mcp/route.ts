@@ -136,7 +136,8 @@ function buildServer(scope: RequestScope): McpServer {
   // connecting their own Claude interactively, and carries them as before.
   const repoToolsAllowed =
     scope.credentialKind === "oauth" || scope.credentialScopes.includes("publish");
-  if (hasRole(scope.user, MALLOYYO_ADMIN) && repoToolsAllowed) registerRepoTools(server, scope);
+  // And only where the instance has opted in (env.REPO_AUTHORING).
+  if (env.REPO_AUTHORING && hasRole(scope.user, MALLOYYO_ADMIN) && repoToolsAllowed) registerRepoTools(server, scope);
 
   return server;
 }

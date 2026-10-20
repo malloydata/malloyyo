@@ -13,6 +13,7 @@ import { eq } from "drizzle-orm";
 import { db, repos } from "@/db";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
+import { env } from "@/lib/env";
 import { fetchBranchPreview } from "@/lib/repo-preview-store";
 
 export const runtime = "nodejs";
@@ -28,6 +29,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     throw err;
   }
   if (!isAdmin(me)) return NextResponse.json({ error: "admin required" }, { status: 403 });
+  if (!env.REPO_AUTHORING) return NextResponse.json({ error: "Repo authoring is off on this instance (REPO_AUTHORING). An operator turns it on." }, { status: 403 });
 
   const { id } = await ctx.params;
   const [repo] = await db

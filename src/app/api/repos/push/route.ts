@@ -24,6 +24,7 @@ import { NextResponse } from "next/server";
 import { nameToSlug } from "@malloyyo/mcp-engine";
 import { db, repos } from "@/db";
 import { isAdmin } from "@/lib/admin";
+import { env } from "@/lib/env";
 import { credentialLabel, requireBearer } from "@/lib/bearer-auth";
 import { logger, serializeErr } from "@/lib/logger";
 import { storePreview } from "@/lib/repo-preview-store";
@@ -82,6 +83,7 @@ export async function POST(req: Request) {
     // Admin-only to start, like every other way in to a preview. A preview of
     // a repo that doesn't exist here has nothing to be a preview OF.
     if (!isAdmin(auth.user)) return bad("Branch previews are for admins.", 403, { kind: "request" });
+    if (!env.REPO_AUTHORING) return bad(`Repo authoring is off on this instance (REPO_AUTHORING). An operator turns it on.`, 403, { kind: "request" });
     if (!("repo" in found)) {
       return bad(`"${githubRepo || body.repoSlug}" is not a repo on this instance — publish it before previewing a branch`, 404, {
         kind: "request",

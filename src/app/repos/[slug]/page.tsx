@@ -40,6 +40,8 @@ type RepoDetail = {
         deleted — they are left pointing at a name nothing resolves. */
     orphanedChats: number;
   };
+  /** Whether this instance makes previews (REPO_AUTHORING). */
+  authoring?: boolean;
   /** Branch previews: the latest fetched snapshot of each branch. */
   previews: Array<{
     branch: string;
@@ -142,7 +144,7 @@ export default function RepoPage({ params }: { params: Promise<{ slug: string }>
 
       <GitHubSection repo={data} onChanged={load} />
       <DatasetsSection repo={data} />
-      <PreviewsSection repo={data} onChanged={load} />
+      {data.authoring ? <PreviewsSection repo={data} onChanged={load} /> : null}
       <RevisionsSection repo={data} />
       <RemoveSection repo={data} />
     </main>

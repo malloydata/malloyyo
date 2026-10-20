@@ -16,7 +16,9 @@ a pull request you review, and publishing happens only after you merge.
 
 ## What you need
 
-- **An account on a Malloyyo instance with authoring rights.** Today that means
+- **An instance with authoring turned on.** Its operator sets
+  `REPO_AUTHORING=1`; it is off by default (see [Security](#security)).
+- **An account on that instance with authoring rights.** Today that means
   an admin.
 - **A model repo on GitHub that the instance publishes.** Your admin adds it
   once. Ask them if you're not sure.
@@ -205,12 +207,23 @@ and CI.
 
 ### Security
 
-- **Only authors can preview, and every preview is admin-visible only.** A
-  preview compiles model code nobody has reviewed, running SQL through the
-  instance's connections with the instance's credentials. That is the same
-  reach publishing has, so it gets the same gate.
-- **Warehouse credentials never leave the instance.** Claude's sandbox doesn't
-  have them and doesn't need them.
+- **Off by default.** Authoring is enabled per instance with `REPO_AUTHORING=1`
+  in its environment. Until then the authoring tools aren't offered, and the
+  repo page's Fetch and `malloyyo publish --branch` are refused.
+- **Turning it on hands Claude the power publishing has.** A preview compiles
+  model code nobody has reviewed, running SQL through the instance's
+  connections with the instance's credentials, and the server's process can
+  be read from inside that code. So a prompt injection in an admin's session
+  can attempt to read server secrets. Turn it on where you'd let that admin's
+  Claude publish. Sandboxing preview compiles (no local file reads, no
+  environment references in configs a preview changes) is planned.
+- **Only authors can preview, and every preview is admin-visible only.** That
+  is the same gate publishing has. API tokens need the `publish` scope;
+  `mcp`-only tokens don't get the authoring tools.
+- **Pull requests from forks aren't compiled.** `check_repo` refuses them, and
+  `fetch_branch` only takes the repo's own branches.
+- **Claude's sandbox never holds warehouse credentials.** It doesn't need them:
+  the instance compiles.
 - **A local config is refused.** A `malloy-config-local.json` in a preview is
   rejected, exactly as at publish.
 - **Previews are never served as published.** They are stored as revisions that

@@ -64,6 +64,14 @@ export const env = {
   // so a user setting, replacing, emptying, or removing their token never collides with
   // the platform's. `||` not `??`: an empty GITHUB_TOKEN means "unset", and must fall
   // through rather than authenticate as nobody.
+  // Repo authoring: the admin tools that compile unpublished model code with
+  // this server's connections (preview_changes, fetch_branch, check_repo, …),
+  // the repo page's Fetch, and `malloyyo publish --branch`. OFF unless "1":
+  // compiling repo code reaches the server's environment, and until previews
+  // are sandboxed an instance opts in deliberately.
+  get REPO_AUTHORING(): boolean {
+    return process.env.REPO_AUTHORING === "1" || process.env.REPO_AUTHORING === "true";
+  },
   get GITHUB_TOKEN() {
     return process.env.GITHUB_TOKEN || process.env.GITHUB_TOKEN_FALLBACK || "";
   },

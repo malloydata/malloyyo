@@ -3,6 +3,7 @@
 
 "use client";
 import { useEffect, useRef } from "react";
+import { datasetRefSegment } from "@/lib/dataset-ref-path";
 
 // The sandboxed iframe host for a CUSTOM dashboard (one with a Dashboard.tsx).
 // The iframe runs untrusted, repo-authored dashboard code, so it is sandboxed
@@ -61,7 +62,7 @@ export function CustomDashboardFrame({ id, name }: { id: string; name: string })
     // reload the iframe.
     const frame = iframeRef.current;
     if (frame && !frame.src) {
-      frame.src = `/api/dashboards/${id}/${encodeURIComponent(name)}/frame${window.location.search}`;
+      frame.src = `/api/dashboards/${datasetRefSegment(id)}/${encodeURIComponent(name)}/frame${window.location.search}`;
     }
     async function onMessage(e: MessageEvent) {
       const frame = iframeRef.current;

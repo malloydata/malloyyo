@@ -1,6 +1,7 @@
 // Copyright (c) The Malloy Foundation
 // SPDX-License-Identifier: MIT
 
+import { plainDatasetRef } from "@/lib/dataset-ref-path";
 import { getDashboard } from "@/lib/dashboards";
 import { bundleDashboard } from "@/lib/dashboards/bundle";
 import { verifyFrameToken } from "@/lib/dashboards/frame-token";
@@ -16,7 +17,8 @@ export async function GET(req: Request, ctx: { params: Promise<{ datasetId: stri
   const { datasetId, name } = await ctx.params;
   const token = new URL(req.url).searchParams.get("t") ?? "";
   const claims = verifyFrameToken(token);
-  if (!claims || claims.datasetId !== datasetId || claims.name !== name) {
+  // Compared decoded: the param's encoding differs by platform (dataset-ref-path.ts).
+  if (!claims || plainDatasetRef(claims.datasetId) !== plainDatasetRef(datasetId) || claims.name !== name) {
     return new Response("invalid or expired frame token", { status: 401 });
   }
   const dash = await getDashboard(claims.userId, datasetId, name);

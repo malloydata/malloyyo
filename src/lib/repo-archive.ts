@@ -492,3 +492,51 @@ export function discardWorkspace(dir: string): void {
     });
   }
 }
+
+/** What `preview_changes` may carry: enough for any edit, small enough to be sent as tool arguments. */
+export const OVERLAY_LIMITS = { files: 200, bytes: 512 * 1024 };
+
+/**
+ * A stored (normalized) archive with a working copy's changes laid over it —
+ * the files `preview_changes` sends, against the base commit it names.
+ *
+ * Pure, and strict about what it is told: a path that isn't safe, a deletion
+ * of a file the base doesn't have, or a path both written and deleted is an
+ * error, because each means the caller's idea of the base is not the server's
+ * — and a preview of something other than what the author has would be worse
+ * than none.
+ */
+export function overlayArchive(
+  baseZip: Buffer,
+  changes: { files: Record<string, string>; deleted: string[] },
+): Buffer {
+  const written = Object.keys(changes.files);
+  if (written.length + changes.deleted.length > OVERLAY_LIMITS.files) {
+    throw new ArchiveError(
+      `${written.length + changes.deleted.length} changed files is more than ${OVERLAY_LIMITS.files}; ` +
+        `push the branch and use fetch_branch instead`,
+    );
+  }
+  const bytes = written.reduce((n, p) => n + Buffer.byteLength(changes.files[p], "utf8"), 0);
+  if (bytes > OVERLAY_LIMITS.bytes) {
+    throw new ArchiveError(
+      `${Math.round(bytes / 1024)}KB of changes is more than ${OVERLAY_LIMITS.bytes / 1024}KB; ` +
+        `push the branch and use fetch_branch instead`,
+    );
+  }
+  const unsafe = [...written, ...changes.deleted].filter((p) => !isSafeMemberPath(p) || p.endsWith("/"));
+  if (unsafe.length > 0) throw new ArchiveError(`not a repo file path: ${unsafe.slice(0, 5).join(", ")}`);
+  const both = changes.deleted.filter((p) => p in changes.files);
+  if (both.length > 0) throw new ArchiveError(`both written and deleted: ${both.join(", ")}`);
+
+  const members = readZip(baseZip);
+  const missing = changes.deleted.filter((p) => !members.has(p));
+  if (missing.length > 0) {
+    throw new ArchiveError(`deleted, but not in the base commit: ${missing.slice(0, 5).join(", ")}`);
+  }
+  for (const p of changes.deleted) members.delete(p);
+  for (const p of written) members.set(p, new TextEncoder().encode(changes.files[p]));
+  const toPack: Record<string, Uint8Array> = {};
+  for (const [name, b] of [...members].sort((a, z) => a[0].localeCompare(z[0]))) toPack[name] = b;
+  return Buffer.from(zipSync(toPack, { level: 6, mtime: ZIP_EPOCH }));
+}

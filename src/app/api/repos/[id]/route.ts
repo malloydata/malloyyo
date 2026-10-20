@@ -14,6 +14,7 @@
  * write now, and this is the only thing that writes it.
  */
 
+import { env } from "@/lib/env";
 import { NextResponse } from "next/server";
 import { and, asc, count, desc, eq, inArray, ne, sql } from "drizzle-orm";
 import { db, chats, datasets, draftDashboards, repos, repoRevisions, malloyModels, savedQueries } from "@/db";
@@ -134,9 +135,45 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
       createdAt: repoRevisions.createdAt,
     })
     .from(repoRevisions)
-    .where(eq(repoRevisions.repoId, repo.id))
+    // Branch previews are listed apart (below): they are looked at, never live,
+    // and in this list they would read as "superseded".
+    .where(and(eq(repoRevisions.repoId, repo.id), eq(repoRevisions.preview, false)))
     .orderBy(desc(repoRevisions.revision))
     .limit(20);
+
+  // The latest snapshot of each fetched branch (src/lib/repo-previews.ts).
+  const snapshots = await db
+    .select({
+      branch: repoRevisions.gitBranch,
+      gitSha: repoRevisions.gitSha,
+      gitDirty: repoRevisions.gitDirty,
+      source: repoRevisions.source,
+      createdAt: repoRevisions.createdAt,
+      verifyError: repoRevisions.verifyError,
+      datasets: repoRevisions.previewDatasets,
+    })
+    .from(repoRevisions)
+    .where(and(eq(repoRevisions.repoId, repo.id), eq(repoRevisions.preview, true)))
+    .orderBy(desc(repoRevisions.createdAt))
+    .limit(50);
+  const seen = new Set<string>();
+  const previews = snapshots
+    .filter((s) => s.branch && !seen.has(s.branch) && (seen.add(s.branch), true))
+    .map((s) => ({
+      branch: s.branch!,
+      gitSha: s.gitSha,
+      gitDirty: s.gitDirty,
+      source: s.source,
+      createdAt: s.createdAt,
+      verifyError: s.verifyError,
+      datasets: (s.datasets ?? []).map((d) => ({
+        name: d.name,
+        ok: d.ok,
+        error: d.error ?? null,
+        address: `${repo.slug}@${s.branch}:${d.name}`,
+        dashboards: (d.artifacts ?? []).map((a) => ({ name: a.name, title: a.title ?? a.name })),
+      })),
+    }));
 
   const members = await db
     .select({
@@ -186,6 +223,9 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
     live: live ? { revision: live.revision, verifiedAt: live.verifiedAt, gitSha: live.gitSha } : null,
     needsUpdate: !live,
     history,
+    previews,
+    // Whether this instance makes previews at all (env.REPO_AUTHORING).
+    authoring: env.REPO_AUTHORING,
     datasets: members.map((d) => ({
       ...d,
       qualified: qualifiedName(repo.slug, d.name),

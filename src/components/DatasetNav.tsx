@@ -8,6 +8,7 @@ import { dashboardSourceUrl } from "@/lib/github-source-link";
 import { QueryIcon } from "@/components/QueryIcon";
 import { DashboardTree } from "@/components/DashboardTree";
 import { decodeDatasetRef } from "@/lib/repo-names";
+import { datasetRefSegment } from "@/lib/dataset-ref-path";
 
 // The horizontal menu shared by a dataset's dashboard-style pages: the dashboard
 // views and the AI Q&A page. It reads like:
@@ -79,7 +80,7 @@ export function DatasetNav({
   const linkRef = datasetRef ?? decodeDatasetRef(datasetId);
 
   useEffect(() => {
-    fetch(`/api/datasets/${datasetId}`)
+    fetch(`/api/datasets/${datasetRefSegment(datasetId)}`)
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         if (d?.name) setDatasetName(d.title || d.name);

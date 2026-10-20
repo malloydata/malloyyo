@@ -40,6 +40,24 @@ type RepoDetail = {
         deleted — they are left pointing at a name nothing resolves. */
     orphanedChats: number;
   };
+  /** Whether this instance makes previews (REPO_AUTHORING). */
+  authoring?: boolean;
+  /** Branch previews: the latest fetched snapshot of each branch. */
+  previews: Array<{
+    branch: string;
+    gitSha: string | null;
+    gitDirty: boolean | null;
+    source: string;
+    createdAt: string;
+    verifyError: string | null;
+    datasets: Array<{
+      name: string;
+      ok: boolean;
+      error: string | null;
+      address: string;
+      dashboards: Array<{ name: string; title: string }>;
+    }>;
+  }>;
   history: Array<{
     id: string;
     revision: number;
@@ -126,6 +144,7 @@ export default function RepoPage({ params }: { params: Promise<{ slug: string }>
 
       <GitHubSection repo={data} onChanged={load} />
       <DatasetsSection repo={data} />
+      {data.authoring ? <PreviewsSection repo={data} onChanged={load} /> : null}
       <RevisionsSection repo={data} />
       <RemoveSection repo={data} />
     </main>
@@ -353,6 +372,113 @@ function DatasetsSection({ repo }: { repo: RepoDetail }) {
           </div>
         ))}
       </div>
+    </section>
+  );
+}
+
+/**
+ * Branch previews: a branch fetched to look at, never published
+ * (src/lib/repo-previews.ts). Each dataset and dashboard links to its preview
+ * address, `repo@branch:dataset`, which serves that snapshot until the branch
+ * is fetched again. Claude fetches with the `fetch_branch` tool, the CLI with
+ * `malloyyo publish --branch`, and this box does it from GitHub.
+ */
+function PreviewsSection({ repo, onChanged }: { repo: RepoDetail; onChanged: () => void }) {
+  const [branch, setBranch] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
+
+  async function fetchBranch() {
+    setBusy(true);
+    setMsg(null);
+    const res = await fetch(`/api/repos/${encodeURIComponent(repo.slug)}/fetch`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ branch: branch.trim() }),
+    });
+    const j = await res.json().catch(() => ({}));
+    setBusy(false);
+    if (!res.ok || j.ok === false) return setMsg({ kind: "err", text: j.error ?? `HTTP ${res.status}` });
+    const failed = (j.datasets ?? []).filter((d: { ok: boolean }) => !d.ok).length;
+    setMsg({
+      kind: failed ? "err" : "ok",
+      text: `fetched ${j.branch} at ${short(j.commit) ?? "?"}` + (failed ? ` — ${failed} dataset(s) failed to compile` : ""),
+    });
+    onChanged();
+  }
+
+  return (
+    <section className="flex flex-col gap-2">
+      <h2 className="text-sm font-medium">Branch previews</h2>
+      <p className="text-xs text-gray-500 dark:text-gray-400">
+        A branch fetched here compiles like a publish but goes live nowhere. Address it as{" "}
+        <code className="text-[11px]">{repo.slug}@&lt;branch&gt;:&lt;dataset&gt;</code>, here or from Claude. Admins only;
+        it changes only when fetched again.
+      </p>
+      {repo.githubRepo && (
+        <div className="flex items-center gap-2">
+          <input
+            value={branch}
+            onChange={(e) => setBranch(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && branch.trim() && !busy && fetchBranch()}
+            placeholder="branch name"
+            className="text-xs border border-gray-300 dark:border-gray-700 rounded px-2 py-1 bg-transparent w-64 font-mono"
+          />
+          <button
+            onClick={fetchBranch}
+            disabled={!branch.trim() || busy}
+            className="text-xs px-2 py-1 rounded border border-gray-300 dark:border-gray-700 disabled:opacity-50"
+          >
+            {busy ? "fetching…" : "Fetch from GitHub"}
+          </button>
+        </div>
+      )}
+      {msg && (
+        <p className={`text-xs ${msg.kind === "ok" ? "text-green-700 dark:text-green-400" : "text-red-600 dark:text-red-400"}`}>
+          {msg.text}
+        </p>
+      )}
+      {repo.previews.length > 0 && (
+        <div className="border border-gray-200 dark:border-gray-800 rounded divide-y divide-gray-200 dark:divide-gray-800 text-xs">
+          {repo.previews.map((p) => (
+            <div key={p.branch} className="px-3 py-2 flex flex-col gap-1">
+              <div className="flex items-center gap-3">
+                <span className="font-mono font-medium">{p.branch}</span>
+                <span className="font-mono text-gray-500">
+                  {short(p.gitSha) ?? "—"}
+                  {p.gitDirty ? "+" : ""}
+                </span>
+                <span className="text-gray-500">{p.source === "cli" ? "uploaded" : "GitHub"}</span>
+                <span className="text-gray-400 ml-auto whitespace-nowrap">{new Date(p.createdAt).toLocaleString()}</span>
+              </div>
+              <ul className="flex flex-col gap-0.5">
+                {p.datasets.map((d) => (
+                  <li key={d.name} className="flex flex-wrap items-center gap-x-2">
+                    {d.ok ? (
+                      <Link className="font-mono hover:underline" href={`/datasets/${encodeURIComponent(d.address)}`}>
+                        {d.name}
+                      </Link>
+                    ) : (
+                      <span className="font-mono text-red-600 dark:text-red-400" title={d.error ?? ""}>
+                        {d.name} (failed: {d.error})
+                      </span>
+                    )}
+                    {d.dashboards.map((b) => (
+                      <Link
+                        key={b.name}
+                        className="text-gray-500 hover:underline"
+                        href={`/datasets/${encodeURIComponent(d.address)}/dashboard/${encodeURIComponent(b.name)}`}
+                      >
+                        {b.title}
+                      </Link>
+                    ))}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      )}
     </section>
   );
 }

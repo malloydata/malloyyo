@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 import { eq, and, desc, count } from "drizzle-orm";
-import { db, datasets, malloyModels, savedQueries, history, favorites } from "@/db";
+import { db, datasets, malloyModels, repos, savedQueries, history, favorites, users } from "@/db";
 import type { SourceInfo } from "./malloy";
 // NOTE: `runRestrictedMalloyFiles` (and everything under ./malloy) pulls in
 // @malloydata/db-duckdb → @duckdb/node-api, whose native libduckdb.so loads at
@@ -10,10 +10,11 @@ import type { SourceInfo } from "./malloy";
 // so modules that only READ the DB — notably loadSharedQuery, used by the
 // /ltool/[slug] page — don't drag DuckDB into their serverless bundle and 500
 // with "libduckdb.so: cannot open shared object file".
-import { datasetVisibleWhere, rolesOf, type RoleBearing } from "./roles";
+import { datasetVisibleWhere, hasRole, MALLOYYO_ADMIN, rolesOf, type RoleBearing } from "./roles";
 import { env } from "./env";
 import { leaseScope } from "./tenancy";
 import { qualifiedName } from "./repo-names";
+import { parsePreviewRef, previewDirOf, previewRows, resolvePreview, STAND_IN_DATASET_ID } from "./repo-previews";
 import { parseSlug, instanceSlug } from "./slug";
 import { logger, serializeErr } from "./logger";
 import {
@@ -112,6 +113,13 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * visibility is applied to the answer.
  */
 export async function findByDatasetRef(userId: string, ref: string) {
+  // `repo@ref:dataset` — a fetched branch snapshot (repo-previews.ts). Admins
+  // only; anyone else gets the same null as a dataset they can't see.
+  const asPreview = parsePreviewRef(ref);
+  if (asPreview) {
+    const r = await findPreview(userId, ref);
+    return r.ok ? r.found : null;
+  }
   const { resolveDatasetRef } = await import("./repos");
   const r = await resolveDatasetRef(ref);
   if (!r.ok) return null;
@@ -127,6 +135,37 @@ export async function findByDatasetRef(userId: string, ref: string) {
   // reports, so a result can name the dataset back the same way.
   const canonical = qualifiedName(r.repo?.slug, visible.name);
   return { ds: visible, model, ref: canonical, description: null as string | null };
+}
+
+/**
+ * A branch preview by its address, with the reason when there isn't one — the
+ * MCP tools say it ("hasn't been fetched", "admins only") where a page can only 404.
+ */
+export async function findPreview(userId: string, ref: string) {
+  const parsed = parsePreviewRef(ref);
+  if (!parsed) return { ok: false as const, error: `"${ref}" is not a preview address (repo@branch:dataset).` };
+  const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+  if (!user || !hasRole(user, MALLOYYO_ADMIN)) {
+    return { ok: false as const, error: "Branch previews are for admins." };
+  }
+  const r = await resolvePreview(parsed, async (slug) => {
+    const [row] = await db.select().from(repos).where(eq(repos.slug, slug)).limit(1);
+    return row ?? null;
+  });
+  if (!r.ok) return r;
+  const { ds, model, existed } = await previewRows(r);
+  return {
+    ok: true as const,
+    found: {
+      ds,
+      model,
+      ref: r.address,
+      description: null as string | null,
+      /** Set only for a branch preview. `isNew`: the branch adds this dataset, so
+          nothing here may record against its (stand-in) id. */
+      preview: { revision: r.revision, entry: r.entry, isNew: !existed },
+    },
+  };
 }
 
 /**
@@ -190,7 +229,7 @@ export async function modelFileMap(
   repoDir?: string,
 ): Promise<Map<string, string>> {
   const { modelFilesFor } = await import("./repo-files");
-  let dir = repoDir;
+  let dir = repoDir ?? previewDirOf(model.id) ?? undefined;
   if (dir === undefined && model.revisionId) {
     const [ds] = await db
       .select({ repoDir: datasets.repoDir })
@@ -255,7 +294,9 @@ export type RecordHistoryFields = {
 export async function recordHistory(fields: RecordHistoryFields): Promise<{ slug: string | null }> {
   let recordedSlug: string | null = null;
   try {
-    const datasetId = fields.datasetId ?? null;
+    // A preview of a dataset its branch adds has a stand-in id that names no
+    // row; the run is still recorded, against no dataset.
+    const datasetId = fields.datasetId === STAND_IN_DATASET_ID ? null : (fields.datasetId ?? null);
     const { sessionId, sequence } = await resolveSession(fields.userId);
     const slug = fields.mintSlug ? instanceSlug() : null;
     await db.insert(history).values({
@@ -448,6 +489,9 @@ export async function runQueryForWeb(
   if (!found) return { ok: false, error: `source '${source}' not found` };
   const { ds, model } = found;
   if (ds.status !== "ready") return { ok: false, error: `source '${source}' is not ready` };
+  // A branch preview runs, but mints no share link: one would later open the
+  // published model, not this snapshot (repo-previews.ts).
+  const isPreview = "preview" in found;
   const files = await modelFileMap(model);
   const t0 = Date.now();
   try {
@@ -465,7 +509,7 @@ export async function runQueryForWeb(
     const { slug } = await recordHistory({
       userId, entrypoint: opts.entrypoint ?? "ltool", datasetId: ds.id, toolName: "query", question: opts.question ?? null,
       source, malloyInput: malloyQuery, compiledSql: res.sql, rowCount: res.rowCount, durationMs,
-      executed: true, userAgent: opts.userAgent, authorModel: opts.authorModel, mintSlug: true,
+      executed: true, userAgent: opts.userAgent, authorModel: opts.authorModel, mintSlug: !isPreview,
     });
     return {
       ok: true,
@@ -513,8 +557,14 @@ export async function saveWebQuery(
   // By ref, for the same reason as runQueryForWeb above.
   const found = datasetId ? await findByDatasetRef(userId, datasetId) : await findBySource(userId, source);
   if (!found) return { ok: false, error: `source '${source}' not found` };
+  if ("preview" in found) {
+    return { ok: false, error: "This is a branch preview, so its queries can't be saved. Save it on the published dataset once the branch is merged." };
+  }
   const { ds, model } = found;
   if (ds.status !== "ready") return { ok: false, error: `source '${source}' is not ready` };
+  // A branch preview runs, but mints no share link: one would later open the
+  // published model, not this snapshot (repo-previews.ts).
+  const isPreview = "preview" in found;
   const files = await modelFileMap(model);
 
   const t0 = Date.now();
@@ -537,7 +587,7 @@ export async function saveWebQuery(
     const { slug } = await recordHistory({
       userId, entrypoint: "ltool", datasetId: ds.id, toolName: "query", question: title,
       source, malloyInput: malloyQuery, compiledSql: res.sql, rowCount: res.rowCount, durationMs,
-      executed: true, userAgent: opts.userAgent, authorModel: opts.authorModel ?? "human", mintSlug: true,
+      executed: true, userAgent: opts.userAgent, authorModel: opts.authorModel ?? "human", mintSlug: !isPreview,
     });
     const saved = slug ? await promoteToSaved(slug) : null;
     if (saved) {

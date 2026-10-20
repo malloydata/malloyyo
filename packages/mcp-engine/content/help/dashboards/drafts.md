@@ -114,6 +114,29 @@ needs them LIFTED into its `.malloy` as named queries — the component then use
 the model, not the component. The written `.malloy` carries them as comments to
 work from. Then `malloyyo lint`, and the usual PR.
 
+**From a clone, without the CLI** (Claude Code on the web):
+
+1. `get_draft_dashboard(dataset, dashboard)` returns the draft's files.
+2. Write them into the clone as `dashboards/<name>.malloy` plus its component,
+   lifting the inline queries as described above.
+3. `preview_changes` to see it compiled and rendered (`yo_help("authoring/start")`).
+4. Commit, then call
+   `mark_draft_promoted(dataset, dashboard: "draft-<slug>", promoted_as: "<name>")`.
+
+`malloyyo draft promote` records the promotion itself.
+
+**What happens to the draft.** Once the dataset publishes the promoted
+dashboard, the draft's URL **redirects** to it, keeping any query string, and
+the draft drops out of listings. Saved links keep working, and nobody picks the
+stale copy from a menu. Until then the draft serves as before.
+
+## Deleting a draft
+
+`delete_draft_dashboard(dataset, dashboard)`, **Delete draft** on the draft's
+page, or `malloyyo draft delete <slug>`. Its author or an admin can. Its link
+stops working, so ask the person first. A promoted draft that's already
+published doesn't need deleting, and deleting it ends the redirect.
+
 ## Iterating
 
 1. `list_sources`, then `describe_source` for the source you'll query.

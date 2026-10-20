@@ -19,6 +19,7 @@ import { env } from "./env";
 import type { GitHubURLReader } from "./github";
 import { logger, serializeErr } from "./logger";
 import { readModelDef, writeModelDef, packModelDef, unpackModelDef, extractModelDef, rehydrateModel } from "./model-cache";
+import { configEnvOverlay } from "./config-env";
 
 // DuckDB extension autoloading requires a writable home directory. Vercel/Lambda
 // functions may have HOME unset or empty — default to /tmp which is always writable.
@@ -375,6 +376,15 @@ type RuntimeParts = {
   cleanup: () => Promise<void>;
 };
 
+/**
+ * The overlays every server-side MalloyConfig gets: Malloy's defaults, with
+ * `env` replaced so a model's config reads only what config-env.ts allows —
+ * never this server's own secrets.
+ */
+export function serverConfigOverlays(): malloy.ConfigOverlays {
+  return { ...malloy.defaultConfigOverlays(), env: configEnvOverlay() };
+}
+
 async function buildPartsWithReader(
   reader: malloy.URLReader,
   configJson: string | undefined,
@@ -384,7 +394,7 @@ async function buildPartsWithReader(
   await ensureConnectionTypes();
   const config = new malloy.MalloyConfig(
     withFinalizedGivens(configJson ?? fallbackConfigJson(), finalize),
-    { overlays: malloy.defaultConfigOverlays() },
+    { overlays: serverConfigOverlays() },
   );
   return { config, urlReader: reader, cacheManager, cleanup: () => config.shutdown("close") };
 }

@@ -90,7 +90,7 @@ function isNameClash(err: unknown): boolean {
   return e?.code === "23505" || e?.cause?.code === "23505";
 }
 
-type CompiledDir = {
+export type CompiledDir = {
   dir: string;
   /** The directory's name as the layout reads it; "" for a root-entry repo. */
   layoutName: string;
@@ -195,7 +195,12 @@ export type PublishInput = {
  * rejected by `repo_revisions_repo_revision_unique` — a correct outcome reported
  * as a database error. The lock is held for one insert and no I/O.
  */
-async function storeRevision(input: PublishInput, archive: { zip: Buffer; sha256: string }) {
+export async function storeRevision(
+  input: PublishInput,
+  archive: { zip: Buffer; sha256: string },
+  /** A branch preview (repo-previews.ts): stored to look at, never activated. */
+  opts: { preview?: boolean } = {},
+) {
   return db.transaction(async (tx) => {
     await tx.execute(sql`select 1 from repos where id = ${input.repo.id} for update`);
     const [{ next }] = await tx.execute<{ next: number }>(
@@ -214,6 +219,7 @@ async function storeRevision(input: PublishInput, archive: { zip: Buffer; sha256
         archive: archive.zip,
         archiveBytes: archive.zip.length,
         archiveSha256: archive.sha256,
+        preview: opts.preview ?? false,
       })
       .returning();
     return row;
@@ -234,7 +240,9 @@ async function recordFailure(revisionId: string, error: string): Promise<void> {
  * every "lint blessed it, the server refused it" bug was an in-memory file map
  * behaving unlike a directory tree.
  */
-async function compileDir(
+/** One dataset directory, compiled exactly as a publish compiles it — also the
+    authoring check's compile (repo-authoring.ts), so the two cannot disagree. */
+export async function compileDir(
   repoRoot: string,
   dir: string,
   layoutName: string,
@@ -340,6 +348,20 @@ function componentSource(ws: string, base: string): string {
   return "";
 }
 
+/** The refusal for an archive carrying Malloy's local config override, or null.
+    Shared with the authoring check (repo-authoring.ts), which must refuse what a
+    publish would. */
+export function localConfigRefusal(entries: Array<{ path: string }>): string | null {
+  const localConfig = entries.find((e) => e.path.split("/").pop() === CONFIG_NAMES[0]);
+  if (!localConfig) return null;
+  return (
+    `${localConfig.path} is in the archive. That file is Malloy's LOCAL override — it holds ` +
+    `real credentials where the shared malloy-config.json holds {"env": …} references, and it ` +
+    `should be gitignored. Remove it from the repo (and rotate anything it held, since it has ` +
+    `been committed).`
+  );
+}
+
 /**
  * Publish a revision of a repo, inline, end to end.
  *
@@ -368,18 +390,8 @@ export async function publishRevision(input: PublishInput): Promise<PublishResul
   // see — Malloy's own discovery prefers it, so the model would compile against
   // different connections locally than here, which is the exact class of bug
   // this rewrite exists to remove. A refusal names the file.
-  const localConfig = archive.entries.find((e) => e.path.split("/").pop() === CONFIG_NAMES[0]);
-  if (localConfig) {
-    return {
-      ok: false,
-      kind: "archive",
-      error:
-        `${localConfig.path} is in the archive. That file is Malloy's LOCAL override — it holds ` +
-        `real credentials where the shared malloy-config.json holds {"env": …} references, and it ` +
-        `should be gitignored. Remove it from the repo (and rotate anything it held, since it has ` +
-        `been committed).`,
-    };
-  }
+  const localConfig = localConfigRefusal(archive.entries);
+  if (localConfig) return { ok: false, kind: "archive", error: localConfig };
 
   // ── 2. bytes we already serve ─────────────────────────────────────────────
   // A webhook storm, or a re-run of the same publish. Only the ACTIVE revision

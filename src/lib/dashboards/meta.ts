@@ -13,9 +13,10 @@
 // This module must NEVER import ./engine or @/lib/malloy (statically or lazily).
 
 import { and, eq, asc, desc, inArray } from "drizzle-orm";
-import { db, datasets, malloyArtifacts, malloyModels, draftDashboards, repos, users } from "@/db";
+import { db, datasets, malloyArtifacts, malloyModels, draftDashboards, repos, users, type PreviewDataset } from "@/db";
 import { qualifiedName } from "@/lib/repo-names";
 import { visibleDatasetWhere, findByDatasetRef, latestModel } from "@/lib/mcp-tools";
+import { previewModelRef } from "@/lib/repo-previews";
 import { aboutFirst } from "./about";
 import { imageHostsFromConfig } from "./image-hosts";
 
@@ -44,7 +45,14 @@ export interface DashboardDetail extends DashboardSummary {
   modelId: string;
   /** Set for a draft dashboard: its own files, laid over the model's, and a
       version that changes on every save (the runtime cache key must, too). */
-  draft?: { id: string; files: Record<string, string>; version: string };
+  draft?: {
+    id: string;
+    files: Record<string, string>;
+    version: string;
+    /** Who may delete it (with admins), and what it was promoted as, for the page's draft bar. */
+    authorId: string;
+    promotedAs: string | null;
+  };
 }
 
 /** Draft dashboards are addressed as `draft-<slug>` wherever a dashboard
@@ -108,7 +116,18 @@ export async function listDashboardsForModel(
 export async function listDashboards(userId: string, datasetId: string): Promise<DashboardSummary[]> {
   const found = await findByDatasetRef(userId, datasetId);
   if (!found) return [];
+  if ("preview" in found) return previewDashboards(found.preview.entry, datasetId, found.ds.name);
   return listDashboardsForModel(found.model.id, datasetId, found.ds.name);
+}
+
+/** A branch preview's dashboards: compiled at fetch time, not artifact rows. */
+function previewDashboards(entry: PreviewDataset, datasetId: string, datasetName: string): DashboardSummary[] {
+  const rows = (entry.artifacts ?? []).map((a) => ({
+    name: a.name,
+    title: a.title,
+    manifest: (a.manifest ?? {}) as Record<string, unknown>,
+  }));
+  return aboutFirst(rows).map((a) => summary(datasetId, datasetName, a));
 }
 
 /** One dataset's dashboards AND the drafts people made on it — what the home
@@ -118,10 +137,41 @@ export async function listDashboards(userId: string, datasetId: string): Promise
 export async function listDashboardsAndDrafts(userId: string, datasetRef: string): Promise<DashboardSummary[]> {
   const found = await findByDatasetRef(userId, datasetRef);
   if (!found) return [];
-  return [
-    ...(await listDashboardsForModel(found.model.id, found.ds.id, found.ds.name)),
-    ...(await listDraftsOnDataset(found.ds.id, found.ds.name)),
-  ];
+  // A preview has no drafts: drafts belong to the published dataset.
+  if ("preview" in found) return previewDashboards(found.preview.entry, datasetRef, found.ds.name);
+  const own = await listDashboardsForModel(found.model.id, found.ds.id, found.ds.name);
+  return [...own, ...(await listDraftsOnDataset(found.ds.id, found.ds.name, new Set(own.map((d) => d.name))))];
+}
+
+/** A draft whose promoted dashboard the dataset now publishes has BECOME that
+    dashboard: its URL forwards there (draftForward) and listings leave it out,
+    so nobody picks the stale copy from a menu. */
+function forwarded(draft: { promotedAs: string | null }, published: Set<string>): boolean {
+  return draft.promotedAs !== null && published.has(draft.promotedAs);
+}
+
+/**
+ * Where a draft's URL goes now that it has been promoted: the published
+ * dashboard's name, once the dataset's live model has it. Null while it hasn't
+ * been promoted, while the model carrying it isn't live yet (the draft is still
+ * the only copy), or for any name that isn't a draft.
+ *
+ * DB-only, so the dashboard PAGE can call it and redirect — a saved draft link
+ * then lands on the real dashboard instead of a copy that stopped changing.
+ */
+export async function draftForward(userId: string, datasetRef: string, name: string): Promise<string | null> {
+  const slug = draftSlug(name);
+  if (slug === null) return null;
+  const found = await findByDatasetRef(userId, datasetRef);
+  if (!found || "preview" in found) return null;
+  const [d] = await db
+    .select({ promotedAs: draftDashboards.promotedAs })
+    .from(draftDashboards)
+    .where(and(eq(draftDashboards.slug, slug), eq(draftDashboards.datasetId, found.ds.id)))
+    .limit(1);
+  if (!d?.promotedAs || draftSlug(d.promotedAs) !== null) return null;
+  const published = await getDashboard(userId, datasetRef, d.promotedAs);
+  return published ? d.promotedAs : null;
 }
 
 /** Every visible dataset's current dashboards — for the home page. */
@@ -232,9 +282,11 @@ export async function allDashboardsByDataset(userId: string): Promise<{
     .leftJoin(users, eq(users.id, draftDashboards.userId))
     .where(inArray(draftDashboards.datasetId, ids))
     .orderBy(desc(draftDashboards.updatedAt));
+  const publishedNames = new Map([...byDataset].map(([id, list]) => [id, new Set(list.map((d) => d.name))]));
   for (const row of drafts) {
     const into = byDataset.get(row.draft.datasetId);
-    if (into) into.push(draftSummary(row.draft.datasetId, nameOf.get(row.draft.datasetId)!, row));
+    if (!into || forwarded(row.draft, publishedNames.get(row.draft.datasetId)!)) continue;
+    into.push(draftSummary(row.draft.datasetId, nameOf.get(row.draft.datasetId)!, row));
   }
 
   return { datasets: dsList, byDataset };
@@ -247,14 +299,19 @@ export async function allDashboardsByDataset(userId: string): Promise<{
  * rule its URL already follows (and the rule the dataset's own dashboards
  * follow).
  */
-export async function listDraftsOnDataset(datasetId: string, datasetName: string): Promise<DashboardSummary[]> {
+export async function listDraftsOnDataset(
+  datasetId: string,
+  datasetName: string,
+  /** The dataset's published dashboard names: drafts promoted into one of them are left out. */
+  published: Set<string> = new Set(),
+): Promise<DashboardSummary[]> {
   const rows = await db
     .select({ draft: draftDashboards, authorName: users.name, authorEmail: users.email })
     .from(draftDashboards)
     .leftJoin(users, eq(users.id, draftDashboards.userId))
     .where(eq(draftDashboards.datasetId, datasetId))
     .orderBy(desc(draftDashboards.updatedAt));
-  return rows.map((row) => draftSummary(datasetId, datasetName, row));
+  return rows.filter((row) => !forwarded(row.draft, published)).map((row) => draftSummary(datasetId, datasetName, row));
 }
 
 /** One draft row as a listing entry — shared by the per-dataset listing and the
@@ -284,6 +341,19 @@ function draftSummary(
 export async function getDashboard(userId: string, datasetId: string, name: string): Promise<DashboardDetail | null> {
   const found = await findByDatasetRef(userId, datasetId);
   if (!found) return null;
+  if ("preview" in found) {
+    const a = (found.preview.entry.artifacts ?? []).find((x) => x.name === name);
+    if (!a) return null;
+    return {
+      datasetId,
+      datasetName: found.ds.name,
+      name: a.name,
+      title: a.title ?? a.name,
+      manifest: (a.manifest ?? {}) as Record<string, unknown>,
+      source: a.source,
+      modelId: found.model.id,
+    };
+  }
   const slug = draftSlug(name);
   if (slug !== null) {
     // Visibility is the dataset's (checked above); the slug must belong to it.
@@ -312,6 +382,8 @@ export async function getDashboard(userId: string, datasetId: string, name: stri
           id: d.id,
           files: d.malloy.trim() ? { [entryFile]: d.malloy } : {},
           version: d.updatedAt.toISOString(),
+          authorId: d.userId,
+          promotedAs: d.promotedAs,
         },
       };
     }
@@ -350,6 +422,11 @@ export const isCustomDashboard = (dash: Pick<DashboardDetail, "source">): boolea
  * text; callers parse what they need (image-hosts.ts, and poolSizeFromConfig's
  * reader in @/lib/malloy, are both shaped that way). */
 export async function modelConfigJson(modelId: string): Promise<string | undefined> {
+  const preview = previewModelRef(modelId);
+  if (preview) {
+    const { modelFileMap } = await import("@/lib/mcp-tools");
+    return (await modelFileMap(preview)).get("malloy-config.json");
+  }
   const [model] = await db
     .select({
       id: malloyModels.id,

@@ -38,6 +38,7 @@ type QueryRunResult = WithHostOnly<RunResult & { model_ref?: string }>;
 import { listDashboardsForModel } from "./dashboards";
 import { withModelRuntime } from "./malloy";
 import { leaseScope } from "./tenancy";
+import { parsePreviewRef } from "./repo-previews";
 import { qualifiedName } from "./repo-names";
 import { rolesOf } from "./roles";
 import { isAdmin } from "./admin";
@@ -45,6 +46,7 @@ import { logger, serializeErr } from "./logger";
 import {
   canReadDataset,
   findByDatasetRef,
+  findPreview,
   latestModel,
   loadSharedQuery,
   modelFileMap,
@@ -73,14 +75,19 @@ const TAG = `[${env.INSTANCE_NAME}]`;
 // already interpolated (no token).
 const HOST_POLICY =
   `Tools are tagged ${TAG} — if several instances are connected, ` +
-  `route to the one the user means. On every tool call, set \`model\` to your own ` +
+  `route to the one the user means; ${TAG} is the instance at ${env.APP_BASE_URL}. On every tool call, set \`model\` to your own ` +
   `model identifier (e.g. "claude-opus-4-8") so runs can be attributed by model.\n\n` +
   `This hosted connector serves models already PUBLISHED to ${TAG} — not files on ` +
-  `disk — so it is NOT the right tool for developing or editing Malloy models locally ` +
-  `with the CLI: on-disk edits are invisible here until you \`malloyyo publish\`. For ` +
-  `local model development, use the malloyyo CLI's own MCP server ` +
-  `(\`malloyyo mcp -C <model-dir>\`), which reads the working directory; validate edits ` +
-  `with \`malloyyo lint\`. Use this connector only to explore already-published data.`;
+  `disk: edits in a working copy are invisible here until they are sent. ` +
+  (env.REPO_AUTHORING
+    ? `AUTHORING (admins): in a session with a clone of one of ${TAG}'s model repos — e.g. ` +
+      `Claude Code on the web — this connector IS the authoring loop: preview_changes sends ` +
+      `your edits and compiles them here, with real data and dashboard links, before anything ` +
+      `is pushed. Read yo_help("authoring/start") first. Without that tool, use the malloyyo ` +
+      `CLI's own MCP server (\`malloyyo mcp -C <model-dir>\`) for local development.`
+    : `For model development, use the malloyyo CLI's own MCP server ` +
+      `(\`malloyyo mcp -C <model-dir>\`), which reads the working directory; validate edits ` +
+      `with \`malloyyo lint\`.`);
 
 function text(value: unknown): ToolResult {
   return { content: [{ type: "text", text: typeof value === "string" ? value : JSON.stringify(value, null, 2) }] };
@@ -119,7 +126,7 @@ function ltoolLink(baseUrl: string, slug: string | null): LtoolLink | undefined 
 /** Where a person opens a dashboard: the trusted page that renders it. The
     inline route is show_dashboard (src/app/mcp/route.ts), which only a client
     that renders MCP Apps can use; this link works in every client. */
-function dashboardUrl(baseUrl: string, modelRef: string, name: string): string {
+export function dashboardUrl(baseUrl: string, modelRef: string, name: string): string {
   const base = baseUrl.replace(/\/$/, "");
   return `${base}/datasets/${encodeURIComponent(modelRef)}/dashboard/${encodeURIComponent(name)}`;
 }
@@ -178,7 +185,9 @@ async function visibleDatasets(userId: string): Promise<DatasetRow[]> {
  */
 async function findModelByRef(userId: string, ref: string) {
   const found = await findByDatasetRef(userId, ref);
-  return found ? { ds: found.ds, model: found.model, ref: found.ref } : null;
+  return found
+    ? { ds: found.ds, model: found.model, ref: found.ref, preview: "preview" in found ? found.preview : undefined }
+    : null;
 }
 
 // Lease a pooled Runtime over one dataset's latest model and hand the engine a
@@ -213,6 +222,12 @@ function makeExploreHost(user: User, baseUrl: string): ExploreHost {
   return {
     withModel: async (ref, fn) => {
       const found = await findModelByRef(userId, ref);
+      // A branch preview says why it isn't there (not fetched, admins only): its
+      // address names a repo and branch, not a dataset a probe could learn of.
+      if (!found && parsePreviewRef(ref)) {
+        const why = await findPreview(userId, ref);
+        throw new Error(why.ok ? `no model '${ref}'` : why.error);
+      }
       // Same message for "absent" and "not visible" — a probe must not tell them
       // apart (the engine surfaces this thrown text to the agent).
       if (!found) throw new Error(`no model '${ref}' (unknown, or not visible to you)`);
@@ -533,10 +548,15 @@ export function buildHostedExploreSurface(
       // For query calls, resolve the dataset (1:1 with the model_ref the engine
       // reported) — needed on the history row for every query call, run or not.
       let datasetId: string | null = null;
+      // A branch preview: recorded, but never as a share link — a link would
+      // later open the published model, not this snapshot — and never against a
+      // dataset the branch is still adding (its id is a stand-in).
+      let isPreview = false;
       if (isQuery) {
         const modelRef = String(qr.model_ref ?? args.model_ref ?? "");
         const found = modelRef ? await findModelByRef(user.id, modelRef) : null;
-        datasetId = found?.ds.id ?? null;
+        isPreview = Boolean(found?.preview);
+        datasetId = found?.preview?.isNew ? null : (found?.ds.id ?? null);
       }
 
       const runOk = isQuery && executing && succeeded;
@@ -551,7 +571,7 @@ export function buildHostedExploreSurface(
         durationMs: runOk ? qr.total_time_ms : Date.now() - start,
         executed: isQuery ? executing : null,
         error: succeeded ? undefined : resultError(result),
-        mintSlug: runOk && mintSlugs,
+        mintSlug: runOk && mintSlugs && !isPreview,
       });
 
       // Decorate a successful executed query with the share link as the
@@ -562,7 +582,7 @@ export function buildHostedExploreSurface(
       if (runOk) {
         // host_only carried the SQL for recording; it must NOT reach the agent.
         const { [HOST_ONLY]: _hostOnly, ...rest } = qr;
-        const withLink = { ...rest, ltool_link: ltoolLink(baseUrl, rec.slug) };
+        const withLink = isPreview ? { ...rest } : { ...rest, ltool_link: ltoolLink(baseUrl, rec.slug) };
         // Two channels: `content` (human-facing text) and `structuredContent`
         // (machine-readable JSON). Clients that file structuredContent away and
         // cite only a snippet (ChatGPT) get a compact markdown TABLE in content

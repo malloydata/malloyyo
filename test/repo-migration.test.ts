@@ -79,11 +79,19 @@ const PRE_REWRITE_LAST = MIGRATION;
  *    column already granted, so no deploy window can hide a dataset.
  *  - 0028_drop_failed_datasets — data only (DELETE of `status = 'failed'`).
  *    No schema change; the live version simply stops listing debris.
+ *  - 0029_repo_revision_previews — additive: `repo_revisions.preview` (NOT NULL
+ *    DEFAULT false) and `preview_datasets` (nullable), plus a partial index.
+ *    The live version inserts revisions without naming either, and gets a
+ *    published (`preview = false`) row exactly as before.
  *
- * Neither drops a column, which is the thing that cannot ride along in a
+ * None drops a column, which is the thing that cannot ride along in a
  * build-time migration.
  */
-const REVIEWED_AFTER_REWRITE = ["0027_public_to_user_role", "0028_drop_failed_datasets"];
+const REVIEWED_AFTER_REWRITE = [
+  "0027_public_to_user_role",
+  "0028_drop_failed_datasets",
+  "0029_repo_revision_previews",
+];
 
 /** What the journal should currently end with. */
 const JOURNAL_TIP = REVIEWED_AFTER_REWRITE.at(-1) ?? PRE_REWRITE_LAST;

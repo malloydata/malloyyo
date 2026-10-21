@@ -21,9 +21,11 @@
 // what a query can. The stored text is the validated text; every save
 // re-validates.
 
+import { createHash } from "node:crypto";
 import { and, desc, eq } from "drizzle-orm";
 import { modelArtifact, validateRestricted, type Problem } from "@malloyyo/mcp-engine";
 import { db, draftDashboards } from "@/db";
+import { hasRole, MALLOYYO_ADMIN, type RoleBearing } from "@/lib/roles";
 import { findByDatasetRef, modelFileMap } from "@/lib/mcp-tools";
 import { fileUrl, runNamedMalloyFiles, withModelRuntime } from "@/lib/malloy";
 import { newDatasetSlug } from "@/lib/slug";
@@ -132,6 +134,14 @@ export async function saveDraftDashboard(
 
   const found = await findByDatasetRef(userId, datasetRef);
   if (!found) return { ok: false, error: `dataset '${datasetRef}' not found` };
+  // A draft belongs to a published dataset and is listed to its readers; one
+  // validated against an unpublished preview's model would land there anyway.
+  if ("preview" in found) {
+    return {
+      ok: false,
+      error: "Drafts are saved on a published dataset, not a branch preview. In a clone, add the dashboard to the repo and preview_changes instead.",
+    };
+  }
 
   // The canonical ref, for the `dataset` and `url` this returns: the caller's
   // own `datasetRef` may be any spelling — a uuid, an alias, a bare name — so
@@ -426,7 +436,10 @@ export async function recordPromotion(
   userId: string,
   datasetRef: string,
   slug: string,
-  promoted: { name: string; hash: string },
+  /** `hash` is of what was written; the CLI knows it. Without one (a chat that
+      wrote the files into its clone) the draft's own content is hashed —
+      "promoted from this version" — which is what a divergence check compares. */
+  promoted: { name: string; hash?: string },
 ): Promise<"recorded" | "not-found" | "not-yours"> {
   const found = await findByDatasetRef(userId, datasetRef);
   if (!found) return "not-found";
@@ -439,7 +452,46 @@ export async function recordPromotion(
   if (row.userId !== userId) return "not-yours";
   await db
     .update(draftDashboards)
-    .set({ promotedAs: promoted.name, promotedHash: promoted.hash, promotedAt: new Date() })
+    .set({
+      promotedAs: promoted.name,
+      promotedHash: promoted.hash ?? draftHash(row),
+      promotedAt: new Date(),
+    })
     .where(eq(draftDashboards.id, row.id));
   return "recorded";
+}
+
+/** The CLI's hash shape (sha256 over each file then a NUL, first 16 hex), over the draft's own files. */
+function draftHash(row: { malloy: string; source: string }): string {
+  const hash = createHash("sha256");
+  for (const content of [row.malloy, row.source]) if (content.trim()) hash.update(content).update("\0");
+  return hash.digest("hex").slice(0, 16);
+}
+
+/**
+ * Delete a draft. Its author may, and so may an admin — a draft is listed to
+ * everyone who can see the dataset, so a stale one is everyone's clutter and
+ * someone has to be able to clear it.
+ *
+ * A real delete: the row goes, and its URL 404s. A promoted draft whose
+ * dashboard is published doesn't need deleting — listings already leave it
+ * out and its URL forwards — and deleting it gives up that forward, which is
+ * why the result says so.
+ */
+export async function deleteDraft(
+  user: RoleBearing & { id: string },
+  datasetRef: string,
+  slug: string,
+): Promise<{ outcome: "deleted"; promotedAs: string | null } | { outcome: "not-found" | "not-yours" }> {
+  const found = await findByDatasetRef(user.id, datasetRef);
+  if (!found) return { outcome: "not-found" };
+  const [row] = await db
+    .select()
+    .from(draftDashboards)
+    .where(and(eq(draftDashboards.slug, slug), eq(draftDashboards.datasetId, found.ds.id)))
+    .limit(1);
+  if (!row) return { outcome: "not-found" };
+  if (row.userId !== user.id && !hasRole(user, MALLOYYO_ADMIN)) return { outcome: "not-yours" };
+  await db.delete(draftDashboards).where(eq(draftDashboards.id, row.id));
+  return { outcome: "deleted", promotedAs: row.promotedAs };
 }

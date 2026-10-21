@@ -46,6 +46,8 @@ export async function setupStatus(): Promise<SetupStatus> {
     secretsHow:
       platform === "cloud"
         ? "Malloyyo Cloud: the setup page saves secrets for you; the instance restarts (about a minute) to pick them up."
+        : platform === "dev"
+          ? "Local dev server: the setup page saves secrets for you (into its dev secrets file); they take effect at once."
         : manualInstructions(platform, ["the variables the page names"]),
     authoring: env.REPO_AUTHORING,
     datasets: Number(n),

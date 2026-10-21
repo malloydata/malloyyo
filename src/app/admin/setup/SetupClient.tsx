@@ -76,7 +76,8 @@ function Outcome({ r }: { r: Result | null }) {
 }
 
 export default function SetupClient({ status, kinds, manual, initial }: Props) {
-  const cloud = status.platform === "cloud";
+  // Cloud and a local dev server both save secrets from this page.
+  const cloud = status.platform === "cloud" || status.platform === "dev";
   const focus = (step: string) => (initial.step === step ? "ring-2 ring-blue-400" : "");
 
   // ── authoring ──
@@ -132,7 +133,7 @@ export default function SetupClient({ status, kinds, manual, initial }: Props) {
     <div className="space-y-6 text-xs">
       <p className="text-gray-600 dark:text-gray-400">
         Setting up <strong>{status.instance}</strong>{" "}
-        {cloud ? "on Malloyyo Cloud: secrets you save here are stored in the instance's environment, never shown again." : status.platform === "vercel" ? "on Vercel: secrets go in the project's Environment Variables." : "self-hosted: secrets go in the instance's environment."}{" "}
+        {status.platform === "dev" ? "on a local dev server: secrets you save here go in its dev secrets file and take effect at once." : cloud ? "on Malloyyo Cloud: secrets you save here are stored in the instance's environment, never shown again." : status.platform === "vercel" ? "on Vercel: secrets go in the project's Environment Variables." : "self-hosted: secrets go in the instance's environment."}{" "}
         Claude walks you through this; each step tells you when to come back.
       </p>
 

@@ -28,7 +28,7 @@ import { requireAdmin } from "@/lib/admin";
 import { envNameFor, isConnectionKind, KIND_SPECS } from "@/lib/connection-kinds";
 import { testConnection } from "@/lib/connection-setup";
 import { newWebhookSecret, testGitHubToken } from "@/lib/github-setup";
-import { hostedOperation, instancePlatform, setHostedSecrets } from "@/lib/instance-platform";
+import { hostedOperation, instancePlatform, savesSecrets, setHostedSecrets } from "@/lib/instance-platform";
 import { logger } from "@/lib/logger";
 import { setupStatus } from "@/lib/setup-status";
 import { UnauthorizedError } from "@/lib/user";
@@ -86,7 +86,8 @@ export async function POST(req: Request) {
   if (!(req.headers.get("content-type") ?? "").includes("application/json")) return json({ ok: false, error: "send JSON" }, 415);
   const body = (await req.json().catch(() => null)) as Body | null;
   if (!body?.action) return json({ ok: false, error: "no action" }, 400);
-  const cloud = instancePlatform() === "cloud";
+  // Cloud saves through its Secrets page; a local dev server into its env file.
+  const cloud = savesSecrets(instancePlatform());
 
   switch (body.action) {
     case "test-connection": {

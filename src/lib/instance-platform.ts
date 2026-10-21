@@ -17,13 +17,29 @@
 //                redeploys.
 //   self-hosted  Docker or any other host: `-e NAME=…` or an env file, then a
 //                restart.
+//   dev          Local development only (MALLOYYO_DEV_SECRETS_FILE, never in a
+//                production build): saves like Cloud does, into that gitignored
+//                env file and the running process — no restart — so the whole
+//                flow can be exercised on localhost.
 //
 // Values are never read back from anywhere: presence is all this reports.
 
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
 import { hostedIntegration } from "./hosted-auth-integration";
 
-export type Platform = "cloud" | "vercel" | "self-hosted";
+export type Platform = "cloud" | "dev" | "vercel" | "self-hosted";
+
+/** The local dev secrets file, when this is a dev server that has one. */
+function devSecretsFile(): string | null {
+  const f = process.env.MALLOYYO_DEV_SECRETS_FILE?.trim();
+  return f && process.env.NODE_ENV !== "production" ? f : null;
+}
+
+/** Can the Setup page save a secret itself (rather than name it for an operator)? */
+export function savesSecrets(p: Platform): boolean {
+  return p === "cloud" || p === "dev";
+}
 
 /** The hosted Secrets page, when this build has one. */
 function hostedSecretsPage() {
@@ -32,6 +48,7 @@ function hostedSecretsPage() {
 
 export function instancePlatform(): Platform {
   if (hostedSecretsPage()) return "cloud";
+  if (devSecretsFile()) return "dev";
   if (process.env.VERCEL) return "vercel";
   return "self-hosted";
 }
@@ -88,7 +105,22 @@ async function hostedCall(request: Request, init: { method: string; search?: str
 export async function setHostedSecrets(request: Request, values: Record<string, string>): Promise<HostedResult> {
   const bad = Object.keys(values).filter((n) => !settableName(n));
   if (bad.length) return { ok: false, status: 400, error: `not settable here: ${bad.join(", ")}` };
+  const dev = devSecretsFile();
+  if (dev && !hostedSecretsPage()) return saveDevSecrets(dev, values);
   return hostedCall(request, { method: "POST", body: { secrets: values } });
+}
+
+/** Dev only: merge into the env file (one NAME=value per line) and the live process. */
+function saveDevSecrets(file: string, values: Record<string, string>): HostedResult {
+  const lines = fs.existsSync(file) ? fs.readFileSync(file, "utf8").split("\n") : [];
+  const kept = lines.filter((l) => l.trim() && !Object.keys(values).some((n) => l.startsWith(`${n}=`)));
+  for (const [n, v] of Object.entries(values)) {
+    // Single quotes: the env-file loader takes them literally (a key's JSON, its \n escapes).
+    kept.push(`${n}=${v.includes("'") ? JSON.stringify(v) : `'${v}'`}`);
+    process.env[n] = v;
+  }
+  fs.writeFileSync(file, `${kept.join("\n")}\n`, { mode: 0o600 });
+  return { ok: true, operation: null };
 }
 
 /** A Cloud secrets operation's status (`running`, `succeeded`, `failed`, …). */

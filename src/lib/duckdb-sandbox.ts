@@ -97,17 +97,21 @@ export function sandboxConnectionOptions(scratch: string, setupSQL?: string): Re
   };
 }
 
-function isAllowedDatabasePath(p: unknown): boolean {
-  if (p === undefined || p === ":memory:" || p === "") return true;
-  return typeof p === "string" && (p.startsWith("md:") || p.startsWith("motherduck:"));
+/** A local database FILE, as opposed to in-memory or MotherDuck. */
+function isLocalDatabasePath(p: string): boolean {
+  return p !== "" && p !== ":memory:" && !p.startsWith("md:") && !p.startsWith("motherduck:");
 }
 
 /**
  * Apply the recipe to every `duckdb` connection in a config's JSON.
  *
- * Throws DuckDBSandboxError for what can't be sandboxed: a local `databasePath`
- * (DuckDB opens it with full access, before any of this applies) or a
- * `setupSQL`/`databasePath` given as a reference, which this can't see into.
+ * A local `databasePath` is the one file DuckDB opens before the sandbox
+ * applies, so it is opened READ-ONLY: a missing path then fails instead of
+ * creating a file, and an existing DuckDB file can't be modified. All it can
+ * reach is another DuckDB-format file this process can read; anything else
+ * (an env file, credentials) fails to open as a database, without echoing its
+ * contents. Throws DuckDBSandboxError for `setupSQL`/`databasePath` given as a
+ * reference, which this can't see into before lookup.
  * A connection that already asks for Malloy's `securityPolicy: "sandboxed"` is
  * left alone — it confines the filesystem itself, more tightly.
  */
@@ -124,14 +128,13 @@ export function sandboxDuckDBConnections(configJson: string, scratchRoot: string
     if (!entry || typeof entry !== "object" || entry.is !== "duckdb") continue;
     if (entry.securityPolicy === "sandboxed") continue;
     const where = `connection "${name}"`;
-    if (entry.databasePath !== undefined && !isAllowedDatabasePath(entry.databasePath)) {
-      throw new DuckDBSandboxError(
-        `${where}: databasePath must be :memory: or a MotherDuck path (md:…) on this server — ` +
-          `a local database file would be opened before the file sandbox applies`,
-      );
-    }
-    if (entry.path !== undefined && !isAllowedDatabasePath(entry.path)) {
-      throw new DuckDBSandboxError(`${where}: path must be :memory: or a MotherDuck path (md:…) on this server`);
+    for (const key of ["databasePath", "path"]) {
+      const value = entry[key];
+      if (value === undefined) continue;
+      if (typeof value !== "string") {
+        throw new DuckDBSandboxError(`${where}: ${key} must be written out, not a reference`);
+      }
+      if (isLocalDatabasePath(value)) entry.readOnly = true;
     }
     if (entry.setupSQL !== undefined && typeof entry.setupSQL !== "string") {
       throw new DuckDBSandboxError(`${where}: setupSQL must be written out, not a reference`);

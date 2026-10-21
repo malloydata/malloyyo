@@ -51,11 +51,31 @@ test("every duckdb connection gets the recipe, with the repo's setupSQL after it
   }
 });
 
-test("what can't be sandboxed is refused, and an explicitly sandboxed connection is left alone", () => {
+test("a local databasePath opens read-only; in-memory and MotherDuck are untouched", () => {
   const root = makeScratchRoot();
   try {
-    assert.throws(() => transform({ d: { is: "duckdb", databasePath: "/srv/app.duckdb" } }, root), DuckDBSandboxError);
-    assert.throws(() => transform({ d: { is: "duckdb", path: "data.duckdb" } }, root), DuckDBSandboxError);
+    const out = transform(
+      {
+        file: { is: "duckdb", databasePath: "/srv/app.duckdb", readOnly: false },
+        rel: { is: "duckdb", path: "data.duckdb" },
+        mem: { is: "duckdb", databasePath: ":memory:" },
+        md: { is: "duckdb", databasePath: "md:mayolo" },
+      },
+      root,
+    );
+    assert.equal(out.file.readOnly, true);
+    assert.equal(out.rel.readOnly, true);
+    assert.equal(out.mem.readOnly, undefined);
+    assert.equal(out.md.readOnly, undefined);
+  } finally {
+    discardScratchRoot(root);
+  }
+});
+
+test("references can't be checked, so they're refused; an explicitly sandboxed connection is left alone", () => {
+  const root = makeScratchRoot();
+  try {
+    assert.throws(() => transform({ d: { is: "duckdb", databasePath: { env: "DB" } } }, root), DuckDBSandboxError);
     assert.throws(() => transform({ d: { is: "duckdb", setupSQL: { env: "SETUP" } } }, root), DuckDBSandboxError);
     const strict = { is: "duckdb", securityPolicy: "sandboxed", workingDirectory: "/w" };
     assert.deepEqual(transform({ d: strict }, root).d, strict);
@@ -92,6 +112,40 @@ test("through MalloyConfig and the real connector: local files refused, scratch 
     // And the boundary can't be moved from SQL.
     await assert.rejects(conn.runSQL("SET allowed_directories=['/']"), /lock|Cannot change/);
     await assert.rejects(conn.runSQL("SET enable_external_access=true"), /lock|Cannot change/);
+  } finally {
+    await config.shutdown("close");
+    discardScratchRoot(root);
+  }
+});
+
+test("a local database file: readable, not writable, and a missing one isn't created", async () => {
+  const { DuckDBInstance } = await import("@duckdb/node-api");
+  await import("@malloydata/db-duckdb/native");
+  const root = makeScratchRoot();
+  const dbFile = path.join(root, "shipped.duckdb");
+  const seed = await DuckDBInstance.create(dbFile);
+  const sc = await seed.connect();
+  await sc.run("CREATE TABLE t AS SELECT 7 AS v");
+  sc.closeSync();
+  seed.closeSync();
+  const missing = path.join(root, "never-created.duckdb");
+  const config = new malloy.MalloyConfig(
+    sandboxDuckDBConnections(
+      JSON.stringify({
+        connections: { file: { is: "duckdb", databasePath: dbFile }, gone: { is: "duckdb", databasePath: missing } },
+      }),
+      root,
+    ),
+    { overlays: malloy.defaultConfigOverlays() },
+  );
+  type Conn = { runSQL(sql: string): Promise<{ rows: Record<string, unknown>[] }> };
+  try {
+    const file = (await config.connections.lookupConnection("file")) as unknown as Conn;
+    assert.equal(Number((await file.runSQL("SELECT v FROM t")).rows[0].v), 7);
+    await assert.rejects(file.runSQL("INSERT INTO t VALUES (8)"), /read-only|read only/i);
+    const gone = (await config.connections.lookupConnection("gone")) as unknown as Conn;
+    await assert.rejects(gone.runSQL("SELECT 1"));
+    assert.equal(fs.existsSync(missing), false, "a read-only open creates nothing");
   } finally {
     await config.shutdown("close");
     discardScratchRoot(root);

@@ -42,6 +42,16 @@ If you have no filesystem or git (a claude.ai chat):
 
 Stop there; the Claude Code session continues from step 1.
 
+If you're in Claude Code **with a shell but no repo yet** (a local session in an
+empty folder), make the repo here:
+
+1. Ask what to call it (default `malloy-models`) and which account or
+   organization should own it. Mention that it can be transferred later.
+2. Check `gh auth status`. If the GitHub CLI isn't signed in, ask them to run
+   `gh auth login`.
+3. `gh repo create <owner>/<name> --private --add-readme --clone`, then work
+   inside the new folder.
+
 If you're in Claude Code on a repo, check it's the right one (`git remote get-url origin`).
 
 ## 1. Turn on authoring

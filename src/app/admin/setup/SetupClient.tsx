@@ -18,7 +18,7 @@ type Props = {
   status: SetupStatus;
   kinds: KindRow[];
   manual: { authoring: string; github: string; webhook: string; connection: string };
-  initial: { step: string; kind: string; name: string; repo: string };
+  initial: { step: string; kind: string; name: string; repo: string; settings: Record<string, string> };
 };
 
 type Result = { ok: boolean; error?: string; config?: string; dialect?: string; ms?: number; [k: string]: unknown };
@@ -86,7 +86,7 @@ export default function SetupClient({ status, kinds, manual, initial }: Props) {
   // ── connection ──
   const [kind, setKind] = useState(kinds.some((k) => k.kind === initial.kind) ? initial.kind : kinds[0].kind);
   const [name, setName] = useState(initial.name || "warehouse");
-  const [settings, setSettings] = useState<Record<string, string>>({});
+  const [settings, setSettings] = useState<Record<string, string>>(initial.settings);
   const [secrets, setSecrets] = useState<Record<string, string>>({});
   const [connBusy, setConnBusy] = useState(false);
   const [connResult, setConnResult] = useState<Result | null>(null);

@@ -1,0 +1,4 @@
+malloy-config-local.json
+.env
+.env.*
+node_modules/

@@ -33,7 +33,19 @@ export default async function SetupPage({
         webhook: manualInstructions(status.platform, ["GITHUB_WEBHOOK_SECRET"]),
         connection: manualInstructions(status.platform, ["{names}"]),
       }}
-      initial={{ step: one("step"), kind: one("kind"), name: one("name"), repo: one("repo") }}
+      initial={{
+        step: one("step"),
+        kind: one("kind"),
+        name: one("name"),
+        repo: one("repo"),
+        // Non-secret settings Claude already has (host, project id…) prefill the
+        // form; a secret is never taken from a URL.
+        settings: Object.fromEntries(
+          CONNECTION_KINDS.flatMap((k) => KIND_SPECS[k].fields)
+            .filter((f) => !f.secret && one(f.key))
+            .map((f) => [f.key, one(f.key)]),
+        ),
+      }}
     />
   );
 }

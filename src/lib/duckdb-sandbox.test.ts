@@ -72,13 +72,11 @@ test("a local databasePath opens read-only; in-memory and MotherDuck are untouch
   }
 });
 
-test("references can't be checked, so they're refused; an explicitly sandboxed connection is left alone", () => {
+test("references can't be checked, so they're refused", () => {
   const root = makeScratchRoot();
   try {
     assert.throws(() => transform({ d: { is: "duckdb", databasePath: { env: "DB" } } }, root), DuckDBSandboxError);
     assert.throws(() => transform({ d: { is: "duckdb", setupSQL: { env: "SETUP" } } }, root), DuckDBSandboxError);
-    const strict = { is: "duckdb", securityPolicy: "sandboxed", workingDirectory: "/w" };
-    assert.deepEqual(transform({ d: strict }, root).d, strict);
   } finally {
     discardScratchRoot(root);
   }
@@ -146,6 +144,49 @@ test("a local database file: readable, not writable, and a missing one isn't cre
     const gone = (await config.connections.lookupConnection("gone")) as unknown as Conn;
     await assert.rejects(gone.runSQL("SELECT 1"));
     assert.equal(fs.existsSync(missing), false, "a read-only open creates nothing");
+  } finally {
+    await config.shutdown("close");
+    discardScratchRoot(root);
+  }
+});
+
+test("a repo can't opt out: its own 'sandboxed' policy, its extension switches, its default connections", () => {
+  const root = makeScratchRoot();
+  try {
+    const out = transform(
+      {
+        own: { is: "duckdb", securityPolicy: "sandboxed", allowedDirectories: ["/"], workingDirectory: "/" },
+        ext: { is: "duckdb", allowCommunityExtensions: true, allowUnsignedExtensions: true, additionalExtensions: "x" },
+      },
+      root,
+    );
+    assert.equal(out.own.securityPolicy, undefined, "the repo's policy is replaced by the recipe");
+    assert.equal(out.own.allowedDirectories, undefined, "and so is its allowlist");
+    assert.match(out.own.setupSQL, /enable_external_access=false/);
+    assert.equal(out.ext.allowCommunityExtensions, false);
+    assert.equal(out.ext.allowUnsignedExtensions, false);
+
+    const withDefaults = JSON.parse(
+      sandboxDuckDBConnections(JSON.stringify({ includeDefaultConnections: true, connections: { pg: { is: "postgres" } } }), root),
+    );
+    assert.equal(withDefaults.connections.duckdb.lockConfiguration, true, "the default duckdb exists, sandboxed");
+  } finally {
+    discardScratchRoot(root);
+  }
+});
+
+test("includeDefaultConnections, end to end: the duckdb Malloy would fabricate is the sandboxed one", async () => {
+  await import("@malloydata/db-duckdb/native");
+  const root = makeScratchRoot();
+  const config = new malloy.MalloyConfig(
+    sandboxDuckDBConnections(JSON.stringify({ includeDefaultConnections: true }), root),
+    { overlays: malloy.defaultConfigOverlays() },
+  );
+  try {
+    const conn = (await config.connections.lookupConnection("duckdb")) as unknown as {
+      runSQL(sql: string): Promise<unknown>;
+    };
+    await assert.rejects(conn.runSQL("SELECT * FROM read_text('/etc/hosts')"), /Permission Error/);
   } finally {
     await config.shutdown("close");
     discardScratchRoot(root);

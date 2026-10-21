@@ -53,8 +53,21 @@ const REMOTE_PREFIXES = [
   "motherduck:",
 ] as const;
 
-/** Connection properties OURS to set: a repo's value would undo the recipe. */
-const OVERRIDDEN = ["enableExternalAccess", "allowedDirectories", "lockConfiguration", "tempDirectory", "extensionDirectory"];
+/**
+ * Connection properties OURS to set: a repo's value would undo the recipe.
+ * `securityPolicy` included — a repo's "sandboxed" comes with the repo's own
+ * `allowedDirectories`, which could be `["/"]`.
+ */
+const OVERRIDDEN = [
+  "securityPolicy",
+  "enableExternalAccess",
+  "allowedDirectories",
+  "lockConfiguration",
+  "tempDirectory",
+  "extensionDirectory",
+  "allowCommunityExtensions",
+  "allowUnsignedExtensions",
+];
 
 export class DuckDBSandboxError extends Error {}
 
@@ -94,6 +107,11 @@ export function sandboxConnectionOptions(scratch: string, setupSQL?: string): Re
     extensionDirectory: extensionDirectory(),
     setupSQL: setupSQL ? `${sandboxSetupSQL(scratch)};\n${setupSQL}` : sandboxSetupSQL(scratch),
     lockConfiguration: true,
+    // Extensions load BEFORE the restriction, as native code in this process
+    // — so only DuckDB's own signed ones. A community or unsigned extension
+    // would run with the process's full reach, environment included.
+    allowCommunityExtensions: false,
+    allowUnsignedExtensions: false,
   };
 }
 
@@ -112,8 +130,14 @@ function isLocalDatabasePath(p: string): boolean {
  * (an env file, credentials) fails to open as a database, without echoing its
  * contents. Throws DuckDBSandboxError for `setupSQL`/`databasePath` given as a
  * reference, which this can't see into before lookup.
- * A connection that already asks for Malloy's `securityPolicy: "sandboxed"` is
- * left alone — it confines the filesystem itself, more tightly.
+ * Every duckdb connection gets the recipe, including one that asks for
+ * Malloy's `securityPolicy: "sandboxed"`: that policy takes its boundary from
+ * the repo's own `allowedDirectories`, which the repo could set to `["/"]`.
+ *
+ * `includeDefaultConnections: true` makes Malloy fabricate, AFTER this runs,
+ * a bare connection named after each registered type that no connection is
+ * named after — an unsandboxed `duckdb`. So when it is set, the `duckdb`
+ * entry is created here first, and sandboxed with the rest.
  */
 export function sandboxDuckDBConnections(configJson: string, scratchRoot: string): string {
   let parsed: { connections?: Record<string, Record<string, unknown>> } & Record<string, unknown>;
@@ -123,10 +147,12 @@ export function sandboxDuckDBConnections(configJson: string, scratchRoot: string
     // The model won't load either, and the compiler says why far better.
     return configJson;
   }
-  const connections = parsed.connections ?? {};
+  const connections = (parsed.connections ??= {});
+  if (parsed.includeDefaultConnections === true && connections.duckdb === undefined) {
+    connections.duckdb = { is: "duckdb" };
+  }
   for (const [name, entry] of Object.entries(connections)) {
     if (!entry || typeof entry !== "object" || entry.is !== "duckdb") continue;
-    if (entry.securityPolicy === "sandboxed") continue;
     const where = `connection "${name}"`;
     for (const key of ["databasePath", "path"]) {
       const value = entry[key];
@@ -142,10 +168,6 @@ export function sandboxDuckDBConnections(configJson: string, scratchRoot: string
     const scratch = path.join(scratchRoot, name.replace(/[^A-Za-z0-9_-]/g, "_") || "duckdb");
     fs.mkdirSync(scratch, { recursive: true });
     for (const key of OVERRIDDEN) delete entry[key];
-    // "local" only cuts the network; the recipe confines files and needs the
-    // network for the extensions. Ordinary DuckDB plus the recipe is stricter
-    // where it matters here.
-    delete entry.securityPolicy;
     Object.assign(entry, sandboxConnectionOptions(scratch, (entry.setupSQL as string | undefined)?.trim() || undefined));
   }
   return JSON.stringify(parsed);

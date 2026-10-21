@@ -180,3 +180,4 @@ export { guidance, assembleInstructions } from './guidance';
 // Prompt surfaces — the typed tree over the text in content/prompts/**.md
 // (tool titles/descriptions + server instructions).
 export { prompts } from './prompts';
+export { scaffoldFiles } from './content/generated';

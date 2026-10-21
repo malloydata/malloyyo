@@ -18,7 +18,12 @@ export type AdminTab = {
 export function adminTabs(
   integration: Pick<HostedAuthIntegration, "adminPages"> | null,
 ): AdminTab[] {
-  const tabs: AdminTab[] = [{ href: "/admin", label: "General", exact: true }];
+  // Setup second: on a fresh instance it is the page that matters, and later it
+  // is where a connection or the GitHub token is added or replaced.
+  const tabs: AdminTab[] = [
+    { href: "/admin", label: "General", exact: true },
+    { href: "/admin/setup", label: "Setup" },
+  ];
 
   // One people surface per deployment. With no integration, the application's users
   // list is the admin's people page. When an integration owns sign-in, membership lives

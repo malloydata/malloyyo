@@ -56,6 +56,9 @@ FROM mcr.microsoft.com/devcontainers/base:2-bookworm
 # Functions runtime), so a dashboard's React/TypeScript build behaves here the
 # way it will on the instance that serves it.
 ARG NODE_MAJOR=24
+# The exact release the image installs, from NodeSource's node_${NODE_MAJOR}.x
+# repository. Bump alongside the FROM line in the root Dockerfile.
+ARG NODE_VERSION=24.22.1
 
 # npm's global prefix, moved off /usr/local/lib and handed to `vscode`, so
 # `npm i -g @malloydata/malloyyo@latest` mid-session works without sudo. This is
@@ -108,7 +111,7 @@ RUN install -d -m 0755 /usr/share/keyrings \
     && echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
         > /etc/apt/sources.list.d/google-cloud-sdk.list \
     && apt-get update \
-    && apt-get install -y --no-install-recommends nodejs gh google-cloud-cli \
+    && apt-get install -y --no-install-recommends "nodejs=${NODE_VERSION}-1nodesource1" gh google-cloud-cli \
     && rm -rf /var/lib/apt/lists/*
 
 # The global CLIs.

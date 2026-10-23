@@ -23,6 +23,7 @@ import { askEnabled, askForMalloy } from "@/lib/ask";
 import { runQueryForWeb } from "@/lib/mcp-tools";
 import { originFromRequest } from "@/lib/oauth/base-url";
 import { logger } from "@/lib/logger";
+import { clampRowLimit } from "@/lib/row-limit";
 
 export const runtime = "nodejs";
 
@@ -125,7 +126,8 @@ export async function POST(req: Request) {
     user,
     source,
     asked.malloy,
-    body.maxRows ?? 1000,
+    // Bounded: a request-supplied limit never reaches the engine unchecked.
+    clampRowLimit(body.maxRows),
     body.dataset ?? null,
     // Title from the model's own synopsis of the query it settled on, falling
     // back to what was typed. Both describe the same thing, but the synopsis

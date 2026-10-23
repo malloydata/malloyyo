@@ -4,6 +4,7 @@
 import { NextResponse } from "next/server";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { runQueryForWeb, saveWebQuery, resolveLtoolAuthor } from "@/lib/mcp-tools";
+import { clampRowLimit } from "@/lib/row-limit";
 
 export const runtime = "nodejs";
 
@@ -19,7 +20,10 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "invalid JSON" }, { status: 400 });
   }
 
-  const { source, malloy, maxRows = 1000, save = false, title, dataset, baseSlug, question } = body;
+  const { source, malloy, save = false, title, dataset, baseSlug, question } = body;
+  // Bounded to [1, 10000], like the MCP query tool's max_rows: the body used to
+  // hand any number (or non-number) straight to DuckDB as the row limit.
+  const maxRows = clampRowLimit(body.maxRows);
   if (!source || !malloy) {
     return NextResponse.json({ error: "source and malloy are required" }, { status: 400 });
   }

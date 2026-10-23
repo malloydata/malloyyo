@@ -93,5 +93,8 @@ async function handleRefreshToken(body: TokenRequest): Promise<Response> {
     if (result.reason === "replayed") logger.warn("oauth token replay detected; grant revoked", { clientId: client_id });
     return err("invalid_grant", `Refresh token ${result.reason}`);
   }
-  return tokenResponse(result.tokens.accessToken, result.tokens.refreshToken, result.tokens.expiresIn, "mcp");
+  // The grant's OWN scope, not a literal: a `malloyyo login` grant carries
+  // "mcp publish", and echoing "mcp" told the CLI it had lost publishing on
+  // every refresh while the stored tokens still carried it.
+  return tokenResponse(result.tokens.accessToken, result.tokens.refreshToken, result.tokens.expiresIn, result.scope);
 }

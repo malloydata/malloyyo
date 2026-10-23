@@ -56,7 +56,7 @@ export async function issueTokenPair(params: IssueParams): Promise<IssuedTokens>
 }
 
 export type RotateResult =
-  | { ok: true; tokens: IssuedTokens; clientId: string }
+  | { ok: true; tokens: IssuedTokens; clientId: string; scope: string }
   | { ok: false; reason: "not_found" | "revoked" | "expired" | "replayed" };
 
 export async function rotateRefreshToken(rawToken: string, presentedClientId: string): Promise<RotateResult> {
@@ -98,7 +98,7 @@ export async function rotateRefreshToken(rawToken: string, presentedClientId: st
     scope: old.scope, resource: old.resource, expiresAt: new Date(now.getTime() + REFRESH_TTL_SEC * 1000),
   });
 
-  return { ok: true, clientId: old.clientId, tokens: { accessToken: newAccess.raw, refreshToken: newRefresh.raw, expiresIn: ACCESS_TTL_SEC } };
+  return { ok: true, clientId: old.clientId, scope: old.scope, tokens: { accessToken: newAccess.raw, refreshToken: newRefresh.raw, expiresIn: ACCESS_TTL_SEC } };
 }
 
 export type AccessValidationResult =

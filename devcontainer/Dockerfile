@@ -56,6 +56,9 @@ FROM mcr.microsoft.com/devcontainers/base:2-bookworm
 # Functions runtime), so a dashboard's React/TypeScript build behaves here the
 # way it will on the instance that serves it.
 ARG NODE_MAJOR=24
+# The exact release the image installs, from NodeSource's node_${NODE_MAJOR}.x
+# repository. Bump alongside the FROM line in the root Dockerfile.
+ARG NODE_VERSION=24.22.1
 
 # npm's global prefix, moved off /usr/local/lib and handed to `vscode`, so
 # `npm i -g @malloydata/malloyyo@latest` mid-session works without sudo. This is
@@ -108,7 +111,7 @@ RUN install -d -m 0755 /usr/share/keyrings \
     && echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" \
         > /etc/apt/sources.list.d/google-cloud-sdk.list \
     && apt-get update \
-    && apt-get install -y --no-install-recommends nodejs gh google-cloud-cli \
+    && apt-get install -y --no-install-recommends "nodejs=${NODE_VERSION}-1nodesource1" gh google-cloud-cli \
     && rm -rf /var/lib/apt/lists/*
 
 # The global CLIs.
@@ -143,23 +146,29 @@ RUN apt-get update \
 #
 # `releases/latest/download` rather than a pinned version: this is a developer
 # convenience, and a pinned version here would rot silently between rebuilds
-# with nobody noticing. The asset name changed across DuckDB's arm64 releases,
-# hence the fallback.
+# with nobody noticing. The asset name has changed across releases — 2.0 ships
+# `duckdb-cli-linux-<arch>.tar.gz`, 1.x shipped `duckdb_cli-linux-<arch>.zip`,
+# and early arm64 builds said `aarch64` — so try each in turn and unpack
+# whichever answered. Both archives hold a single `duckdb` binary at the root.
 ARG TARGETARCH
 RUN set -eux; \
     arch="${TARGETARCH:-amd64}"; \
     base="https://github.com/duckdb/duckdb/releases/latest/download"; \
     case "$arch" in \
-      amd64) assets="duckdb_cli-linux-amd64.zip" ;; \
-      arm64) assets="duckdb_cli-linux-arm64.zip duckdb_cli-linux-aarch64.zip" ;; \
+      amd64) assets="duckdb-cli-linux-amd64.tar.gz duckdb_cli-linux-amd64.zip" ;; \
+      arm64) assets="duckdb-cli-linux-arm64.tar.gz duckdb_cli-linux-arm64.zip duckdb_cli-linux-aarch64.zip" ;; \
       *) echo "no DuckDB CLI build for $arch" >&2; exit 1 ;; \
     esac; \
+    got=""; \
     for a in $assets; do \
-      if curl -fsSL -o /tmp/duckdb.zip "$base/$a"; then break; fi; \
+      if curl -fsSL -o "/tmp/$a" "$base/$a"; then got="$a"; break; fi; \
     done; \
-    test -s /tmp/duckdb.zip; \
-    unzip -o -d /usr/local/bin /tmp/duckdb.zip; \
-    rm /tmp/duckdb.zip; \
+    test -n "$got" && test -s "/tmp/$got"; \
+    case "$got" in \
+      *.tar.gz) tar -xzf "/tmp/$got" -C /usr/local/bin duckdb ;; \
+      *.zip) unzip -o -d /usr/local/bin "/tmp/$got" ;; \
+    esac; \
+    rm "/tmp/$got"; \
     chmod +x /usr/local/bin/duckdb; \
     duckdb -c "select 'duckdb ' || version()"
 

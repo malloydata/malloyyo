@@ -1,6 +1,6 @@
 # Self-hosting with Docker
 
-The repo ships a production `Dockerfile` — a multi-stage build (`node:22`) that
+The repo ships a production `Dockerfile` — a multi-stage build (`node:24`) that
 produces a minimal Next.js **standalone** image (`node server.js`, ~450 MB). Use
 it to self-host Malloyyo anywhere that runs containers, instead of deploying to
 Vercel.

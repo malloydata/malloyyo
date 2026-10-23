@@ -10,10 +10,12 @@ import { requestHasCookie, renewAppSessionInPlace } from "@/lib/app-session";
 import { hostedIntegration } from "@/lib/hosted-auth-integration";
 import {
   ALWAYS_ALLOW,
+  crossSiteWriteRefusal,
   reauthPath,
   renewalApplies,
   shouldUseReauth,
 } from "@/lib/proxy-paths";
+import { configuredOrigin } from "@/lib/oauth/base-url";
 
 const STYTCH_SESSION_COOKIE = "stytch_session_jwt";
 
@@ -69,6 +71,28 @@ const handleAuth = auth(async (req: NextAuthRequest, _event: NextFetchEvent) => 
   // the browser to the sign-in screen.
   if (pathname.startsWith("/api/")) {
     logRequest();
+    // A cookie-authenticated WRITE must come from this instance's own pages.
+    // The routes parse request.json() whatever the Content-Type, so until this
+    // check the session cookie's SameSite=Lax default was the only thing
+    // keeping a cross-site page from posting as the visitor (see
+    // crossSiteWriteRefusal). Bearer-authenticated and cookieless requests —
+    // the CLI, claude.ai, GitHub's webhook delivery — are not browser writes
+    // and pass untouched.
+    const refusal = crossSiteWriteRefusal(
+      {
+        method: req.method,
+        pathname,
+        origin: req.headers.get("origin"),
+        secFetchSite: req.headers.get("sec-fetch-site"),
+        hasAuthorization: req.headers.has("authorization"),
+        cookie: req.headers.get("cookie"),
+      },
+      allowedOrigins(req),
+    );
+    if (refusal) {
+      logger.warn("cross-site api write refused", { requestId, path: pathname, origin: req.headers.get("origin") });
+      return NextResponse.json({ error: refusal }, { status: 403 });
+    }
     return next();
   }
 
@@ -110,6 +134,25 @@ const handleAuth = auth(async (req: NextAuthRequest, _event: NextFetchEvent) => 
   // provider had just admitted.
   return next();
 });
+
+/**
+ * The origins this instance answers as, for the cross-site write check: the
+ * configured public URL (APP_BASE_URL, when set) and the Host the request
+ * arrived on — X-Forwarded-Host first, as originFromRequest reads it, so a
+ * deployment behind a proxy that rewrites Host still recognizes its own pages.
+ */
+function allowedOrigins(req: NextRequest): string[] {
+  const out = new Set<string>();
+  const configured = configuredOrigin();
+  if (configured) out.add(configured);
+  const host = req.headers.get("x-forwarded-host") ?? req.headers.get("host");
+  const proto = req.headers.get("x-forwarded-proto")?.split(",")[0].trim();
+  if (host) {
+    for (const scheme of proto ? [proto] : ["https", "http"]) out.add(`${scheme}://${host}`);
+  }
+  out.add(req.nextUrl.origin);
+  return [...out];
+}
 
 export default async function proxy(req: NextRequest, event: NextFetchEvent) {
   const renewSession = hostedIntegration()?.renewSession;

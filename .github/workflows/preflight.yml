@@ -34,5 +34,11 @@ jobs:
       - name: Install
         run: npm ci
 
+      # Fails only on a high/critical production advisory whose fix is already
+      # within package.json's ranges — i.e. `npm audit fix` would take it. Major
+      # bumps and unfixed advisories are printed, not failed (see the script).
+      - name: Audit gate
+        run: node scripts/audit-gate.mjs
+
       - name: Preflight
         run: bash scripts/preflight.sh

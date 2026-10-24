@@ -59,7 +59,14 @@ say what each deployment got.
 bash scripts/preflight.sh   # everything offline-verifiable (what CI runs)
 npm run test:hosted         # the DB-backed integration tests
 npm test -w packages/cli    # CLI unit tests (pretest builds the bundle)
+node scripts/audit-gate.mjs # CI's dependency gate (needs the registry)
 ```
+
+The audit gate fails only when `npm audit fix` would change the lockfile —
+an advisory whose fix is already inside package.json's ranges. Advisories
+that need a major bump or have no fix are printed, not failed, so the gate
+is never red over something nobody can act on. `preflight.yml` runs it
+before the preflight script.
 
 `test:hosted` (`scripts/hosted-test.sh`) runs `test/hosted-explore.test.ts` (the
 hosted explore surface) and `test/publish-flow.test.ts` (the CLI publish flow:

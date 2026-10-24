@@ -13,6 +13,11 @@
 export async function register(): Promise<void> {
   if (process.env.NEXT_RUNTIME !== "nodejs") return;
 
+  // One line per boot naming the runtime, so a deployment's logs say which Node
+  // it actually ran on — platforms that manage the patch level never put it
+  // anywhere else.
+  console.log(`[startup] node ${process.version}`);
+
   // Refuse to serve a misconfigured instance rather than serving one that
   // advertises whatever origin a caller asks it to. Scoped to the deployments
   // where the fronting proxy is untrusted — see baseUrlStartupError().

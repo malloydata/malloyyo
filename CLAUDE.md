@@ -47,6 +47,11 @@ repo has none); the extensions and ports ride along in the image's
 node 24, and `mise.toml` pins the checkout to it. A machine whose global default
 is older will otherwise build and test on a different runtime than ships.
 Non-interactive shells don't run mise's activate hook — use `mise exec -- <cmd>`.
+The two images pin an exact release — `Dockerfile` (`FROM node:<x.y.z>`) and
+`devcontainer/Dockerfile` (`NODE_VERSION`) — so what they run is readable from
+the tree rather than from a publish date; bump both together, and Vercel's
+build log (`node -v` in `vercel-build`) and the `[startup] node` line at boot
+say what each deployment got.
 
 ## Tests
 

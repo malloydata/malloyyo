@@ -19,6 +19,8 @@ import { env } from "./env";
 import type { GitHubURLReader } from "./github";
 import { logger, serializeErr } from "./logger";
 import { readModelDef, writeModelDef, packModelDef, unpackModelDef, extractModelDef, rehydrateModel } from "./model-cache";
+import { configEnvOverlay } from "./config-env";
+import { discardScratchRoot, makeScratchRoot, sandboxConnectionOptions, sandboxDuckDBConnections } from "./duckdb-sandbox";
 
 // DuckDB extension autoloading requires a writable home directory. Vercel/Lambda
 // functions may have HOME unset or empty — default to /tmp which is always writable.
@@ -91,21 +93,31 @@ function ensureConnectionTypes(): Promise<void> {
   return _connectionTypesReady;
 }
 
-function makeConnection(): MalloyDuckDBConnection {
+/**
+ * A one-off DuckDB connection, confined to its own scratch directory
+ * (duckdb-sandbox.ts) — which is also where it spills, since on Vercel only
+ * /tmp is writable. `close()` closes it and removes the directory.
+ */
+function makeConnection(): { conn: MalloyDuckDBConnection; close: () => Promise<void> } {
   // With a MotherDuck token, connect to md:; otherwise plain in-memory DuckDB
   // (models define their own sources — http/parquet/attached DBs).
   const token = env.MOTHERDUCK_TOKEN;
-  return new MalloyDuckDBConnection({
+  const scratch = makeScratchRoot();
+  const conn = new MalloyDuckDBConnection({
     name: "duckdb",
     ...(token ? { databasePath: "md:", motherDuckToken: token } : {}),
-    // On Vercel the working dir is READ-ONLY; only /tmp is writable. DuckDB
-    // defaults its spill dir to `.tmp` in the CWD, so any query that spills
-    // (large sort/aggregation, httpfs-buffered parquet) dies with
-    // "Failed to create directory .tmp: Read-only file system". Point both the
-    // home dir (extensions) and the temp/spill dir at /tmp.
-    setupSQL: `SET home_directory='/tmp'; SET temp_directory='/tmp';`,
-    enableExternalAccess: true,
+    ...sandboxConnectionOptions(scratch),
   });
+  return {
+    conn,
+    close: async () => {
+      try {
+        await conn.close();
+      } finally {
+        discardScratchRoot(scratch);
+      }
+    },
+  };
 }
 
 export type CompileResult =
@@ -117,7 +129,7 @@ export async function compileMalloy(
   query: string,
 ): Promise<CompileResult> {
   logger.debug("compileMalloy start", { sourceLen: modelSource.length, query });
-  const conn = makeConnection();
+  const { conn, close } = makeConnection();
   try {
     const runtime = new malloy.SingleConnectionRuntime({ connection: conn });
     const runner = runtime.loadQuery(`${modelSource}\n${query}`);
@@ -129,7 +141,7 @@ export async function compileMalloy(
     logger.error("compileMalloy failed", { error, sourcePreview: modelSource.slice(0, 200) });
     return { ok: false, error };
   } finally {
-    await conn.close();
+    await close();
   }
 }
 
@@ -149,7 +161,7 @@ export async function runMalloy(
   query: string,
   opts: { rowLimit?: number } = {},
 ): Promise<RunResult> {
-  const conn = makeConnection();
+  const { conn, close } = makeConnection();
   try {
     const runtime = new malloy.SingleConnectionRuntime({ connection: conn });
     const runner = runtime.loadQuery(`${modelSource}\n${query}`);
@@ -159,7 +171,7 @@ export async function runMalloy(
     const stableResult = API.util.wrapResult(result);
     return { sql, rows, rowCount: rows.length, stableResult };
   } finally {
-    await conn.close();
+    await close();
   }
 }
 
@@ -313,10 +325,9 @@ function splitFiles(files: Map<string, string>): {
  * The DuckDB world a model gets when it ships no malloy-config.json, expressed
  * as a config rather than as a hand-built connection.
  *
- * Everything here reproduces what `makeConnection()` used to build directly:
- * external access (models read https:// parquet), a /tmp spill and extension
- * directory (on Vercel the working dir is READ-ONLY, and DuckDB otherwise dies
- * with "Failed to create directory .tmp"), and MotherDuck when a token is set.
+ * In-memory DuckDB, or MotherDuck when a token is set. Its file sandbox, its
+ * spill directory and its extension directory are applied with every other
+ * DuckDB connection, in buildPartsWithReader (duckdb-sandbox.ts).
  *
  * It is a config because `finalizeGivens` — the lock that stops a caller
  * choosing their own identity — lives on MalloyConfig, and a
@@ -329,8 +340,6 @@ function fallbackConfigJson(): string {
     connections: {
       duckdb: {
         is: "duckdb",
-        enableExternalAccess: true,
-        setupSQL: "SET home_directory='/tmp'; SET temp_directory='/tmp';",
         ...(token ? { databasePath: "md:", motherDuckToken: token } : {}),
       },
     },
@@ -375,6 +384,15 @@ type RuntimeParts = {
   cleanup: () => Promise<void>;
 };
 
+/**
+ * The overlays every server-side MalloyConfig gets: Malloy's defaults, with
+ * `env` replaced so a model's config reads only what config-env.ts allows —
+ * never this server's own secrets.
+ */
+export function serverConfigOverlays(): malloy.ConfigOverlays {
+  return { ...malloy.defaultConfigOverlays(), env: configEnvOverlay() };
+}
+
 async function buildPartsWithReader(
   reader: malloy.URLReader,
   configJson: string | undefined,
@@ -382,11 +400,30 @@ async function buildPartsWithReader(
   cacheManager?: malloy.CacheManager,
 ): Promise<RuntimeParts> {
   await ensureConnectionTypes();
-  const config = new malloy.MalloyConfig(
-    withFinalizedGivens(configJson ?? fallbackConfigJson(), finalize),
-    { overlays: malloy.defaultConfigOverlays() },
-  );
-  return { config, urlReader: reader, cacheManager, cleanup: () => config.shutdown("close") };
+  // Every DuckDB connection in the config — the repo's own and the fallback —
+  // confined to a scratch directory under this root. Throws for one that
+  // can't be (a local databasePath), which fails the model's load with why.
+  const scratchRoot = makeScratchRoot();
+  let json: string;
+  try {
+    json = sandboxDuckDBConnections(withFinalizedGivens(configJson ?? fallbackConfigJson(), finalize), scratchRoot);
+  } catch (err) {
+    discardScratchRoot(scratchRoot);
+    throw err;
+  }
+  const config = new malloy.MalloyConfig(json, { overlays: serverConfigOverlays() });
+  return {
+    config,
+    urlReader: reader,
+    cacheManager,
+    cleanup: async () => {
+      try {
+        await config.shutdown("close");
+      } finally {
+        discardScratchRoot(scratchRoot);
+      }
+    },
+  };
 }
 
 /**

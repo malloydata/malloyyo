@@ -7,6 +7,20 @@ function required(name: string): string {
   return v;
 }
 
+/**
+ * The server's own MotherDuck token, taken OUT of the process environment.
+ *
+ * DuckDB's MotherDuck extension reads `motherduck_token` from the environment
+ * by itself, so while it sat there any model's `md:` connection with no token
+ * of its own signed in as this server's MotherDuck account. Captured once at
+ * load, before any DuckDB connection can exist, and handed only to the
+ * server's own fallback connection (src/lib/malloy.ts) as an explicit option.
+ * A repo that uses MotherDuck names its own token.
+ */
+const SERVER_MOTHERDUCK_TOKEN = process.env.MOTHERDUCK_TOKEN ?? process.env.motherduck_token ?? "";
+delete process.env.MOTHERDUCK_TOKEN;
+delete process.env.motherduck_token;
+
 export const env = {
   get DATABASE_URL() {
     return required("DATABASE_URL");
@@ -14,7 +28,7 @@ export const env = {
   // Optional — when unset, Malloy runs against plain (in-memory) DuckDB
   // instead of MotherDuck; models supply their own sources/attachments.
   get MOTHERDUCK_TOKEN() {
-    return process.env.MOTHERDUCK_TOKEN ?? "";
+    return SERVER_MOTHERDUCK_TOKEN;
   },
   get MOTHERDUCK_DATABASE() {
     return process.env.MOTHERDUCK_DATABASE ?? "mayolo";

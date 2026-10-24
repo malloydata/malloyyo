@@ -18,23 +18,41 @@ interface RpcResponse {
   error?: unknown;
 }
 
-/** Send a batch of JSON-RPC messages over stdio, end stdin (the server exits on
-    EOF), and return responses keyed by id. */
+/** Send a batch of JSON-RPC messages over stdio, keep stdin open until every
+    request with an id has been answered, then end it (the server exits on EOF)
+    and return responses keyed by id. Stdin has to stay open that long: the SDK's
+    stdio transport closes on EOF and drops requests still in flight, as a real
+    client that closed its pipe would have asked for. */
 async function rpc(requests: object[]): Promise<Map<number, RpcResponse>> {
   const child = spawn('node', [CLI, 'mcp', '-C', FIXTURES], { stdio: ['pipe', 'pipe', 'pipe'] });
   let out = '';
   let err = '';
+  const awaiting = new Set(requests.map((r) => (r as { id?: number }).id).filter((id) => typeof id === 'number'));
+  let ended = false;
+  const endStdin = () => { if (!ended) { ended = true; child.stdin.end(); } };
   child.stdout.setEncoding('utf8');
-  child.stdout.on('data', (d: string) => { out += d; });
+  child.stdout.on('data', (d: string) => {
+    out += d;
+    // Count only complete lines; a response can arrive split across chunks.
+    for (const line of out.slice(0, out.lastIndexOf('\n') + 1).split('\n')) {
+      const s = line.trim();
+      if (!s) continue;
+      try { awaiting.delete((JSON.parse(s) as RpcResponse).id as number); } catch { /* partial */ }
+    }
+    if (awaiting.size === 0) endStdin();
+  });
   child.stderr.setEncoding('utf8');
   child.stderr.on('data', (d: string) => { err += d; });
   for (const r of requests) child.stdin.write(JSON.stringify(r) + '\n');
-  child.stdin.end();
+  // Safety valve so a server that never answers can't hang the suite.
+  const valve = setTimeout(endStdin, 30_000);
   const code = await new Promise<number>((resolve, reject) => {
     child.on('exit', (c) => resolve(c ?? 0));
     child.on('error', reject);
   });
+  clearTimeout(valve);
   assert.equal(code, 0, `server exited ${code}; stderr: ${err}`);
+  assert.equal(awaiting.size, 0, `unanswered ids: ${[...awaiting].join(', ')}; stderr: ${err}`);
   const byId = new Map<number, RpcResponse>();
   for (const line of out.split('\n')) {
     const s = line.trim();

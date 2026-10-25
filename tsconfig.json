@@ -33,5 +33,9 @@
     ".next/dev/types/**/*.ts",
     "**/*.mts"
   ],
-  "exclude": ["node_modules"]
+  // vendor/ is where a composed build drops a private package (vendor/hosted-auth):
+  // the files the app imports from it are still checked through the import graph,
+  // its own tests are not. Since Next 16.4 the build runs tsc over the whole
+  // project and no longer discards diagnostics from *.test.* files.
+  "exclude": ["node_modules", "vendor"]
 }

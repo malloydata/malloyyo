@@ -1,6 +1,6 @@
 {
   "name": "@malloyyo/server",
-  "version": "0.2.76",
+  "version": "0.2.77",
   "private": true,
   "license": "MIT",
   "workspaces": [

@@ -29,11 +29,23 @@ function npm(args) {
     return e.stdout;
   }
 }
-// The report is the first JSON object on stdout (npm may print a text line first).
-const parse = (s) => JSON.parse(s.slice(s.indexOf("{")));
+// The report is the first JSON object on stdout (npm may print a text line
+// first). npm also reports its OWN failures as JSON on stdout — a registry it
+// cannot reach, a blocked egress — and that must fail the gate, not pass it:
+// an error object has no report in it, so "nothing to apply" would be a lie.
+function parse(stdout, what) {
+  const start = stdout.indexOf("{");
+  if (start < 0) throw new Error(`npm ${what}: no JSON on stdout:\n${stdout}`);
+  const j = JSON.parse(stdout.slice(start));
+  if (j.error || j.message) {
+    throw new Error(`npm ${what} failed: ${j.message ?? j.error?.summary ?? JSON.stringify(j.error)}`);
+  }
+  return j;
+}
 
 // 1. What is out there, production deps only — for the record.
-const audit = parse(npm(["audit", "--omit=dev"]));
+const audit = parse(npm(["audit", "--omit=dev"]), "audit");
+if (!audit.metadata?.vulnerabilities) throw new Error("npm audit: no report in the output");
 const t = audit.metadata?.vulnerabilities ?? {};
 console.log(
   `audit (prod deps): ${t.critical ?? 0} critical, ${t.high ?? 0} high, ` +
@@ -60,7 +72,8 @@ list(
 );
 
 // 2. The gate: would `npm audit fix` change the lockfile?
-const plan = parse(npm(["audit", "fix", "--dry-run", "--package-lock-only"]));
+const plan = parse(npm(["audit", "fix", "--dry-run", "--package-lock-only"]), "audit fix --dry-run");
+if (!Array.isArray(plan.change)) throw new Error("npm audit fix --dry-run: no plan in the output");
 const changes = [
   ...(plan.add ?? []).map((p) => `add ${p.name}@${p.version}`),
   ...(plan.remove ?? []).map((p) => `remove ${p.name}@${p.version}`),

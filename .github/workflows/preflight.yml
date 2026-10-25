@@ -34,9 +34,10 @@ jobs:
       - name: Install
         run: npm ci
 
-      # Fails only on a high/critical production advisory whose fix is already
-      # within package.json's ranges — i.e. `npm audit fix` would take it. Major
-      # bumps and unfixed advisories are printed, not failed (see the script).
+      # Fails only when `npm audit fix` would change the lockfile — an advisory
+      # whose fix is already inside package.json's ranges, at any severity.
+      # Advisories that need a major bump or have no fix are printed, not
+      # failed, so the gate is never red over something nobody can act on.
       - name: Audit gate
         run: node scripts/audit-gate.mjs
 

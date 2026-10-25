@@ -25,20 +25,39 @@ interface RpcResponse {
     client that closed its pipe would have asked for. */
 async function rpc(requests: object[]): Promise<Map<number, RpcResponse>> {
   const child = spawn('node', [CLI, 'mcp', '-C', FIXTURES], { stdio: ['pipe', 'pipe', 'pipe'] });
-  let out = '';
-  let err = '';
   const awaiting = new Set(requests.map((r) => (r as { id?: number }).id).filter((id) => typeof id === 'number'));
+  const byId = new Map<number, RpcResponse>();
+  let out = '';
+  let scanned = 0; // out[0..scanned) has been split into lines and consumed
+  let badLine: string | undefined; // the first non-JSON line stdout produced
+  let err = '';
   let ended = false;
   const endStdin = () => { if (!ended) { ended = true; child.stdin.end(); } };
   child.stdout.setEncoding('utf8');
   child.stdout.on('data', (d: string) => {
     out += d;
-    // Count only complete lines; a response can arrive split across chunks.
-    for (const line of out.slice(0, out.lastIndexOf('\n') + 1).split('\n')) {
+    // Consume complete lines only; a message can arrive split across chunks.
+    const upTo = out.lastIndexOf('\n') + 1;
+    for (const line of out.slice(scanned, upTo).split('\n')) {
       const s = line.trim();
       if (!s) continue;
-      try { awaiting.delete((JSON.parse(s) as RpcResponse).id as number); } catch { /* partial */ }
+      let m: RpcResponse;
+      try { m = JSON.parse(s) as RpcResponse; } catch {
+        // Anything that is not JSON-RPC on stdout breaks the protocol: stop now
+        // and fail below with the line, rather than wait out the valve and
+        // choke on it later.
+        badLine ??= s;
+        endStdin();
+        return;
+      }
+      // Only a response settles a request. A server-initiated request would
+      // also carry an id (its own counter), and must not be mistaken for one.
+      if (typeof m.id === 'number' && ('result' in m || 'error' in m)) {
+        byId.set(m.id, m);
+        awaiting.delete(m.id);
+      }
     }
+    scanned = upTo;
     if (awaiting.size === 0) endStdin();
   });
   child.stderr.setEncoding('utf8');
@@ -51,16 +70,9 @@ async function rpc(requests: object[]): Promise<Map<number, RpcResponse>> {
     child.on('error', reject);
   });
   clearTimeout(valve);
+  assert.equal(badLine, undefined, `non-JSON line on the server's stdout: ${badLine}`);
   assert.equal(code, 0, `server exited ${code}; stderr: ${err}`);
   assert.equal(awaiting.size, 0, `unanswered ids: ${[...awaiting].join(', ')}; stderr: ${err}`);
-  const byId = new Map<number, RpcResponse>();
-  for (const line of out.split('\n')) {
-    const s = line.trim();
-    if (!s) continue;
-    const m = JSON.parse(s) as RpcResponse;
-    if (typeof m.id === 'number') byId.set(m.id, m);
-  }
-  assert.ok(byId.size > 0, `no responses; stderr: ${err}`);
   return byId;
 }
 

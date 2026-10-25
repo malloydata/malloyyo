@@ -18,31 +18,61 @@ interface RpcResponse {
   error?: unknown;
 }
 
-/** Send a batch of JSON-RPC messages over stdio, end stdin (the server exits on
-    EOF), and return responses keyed by id. */
+/** Send a batch of JSON-RPC messages over stdio, keep stdin open until every
+    request with an id has been answered, then end it (the server exits on EOF)
+    and return responses keyed by id. Stdin has to stay open that long: the SDK's
+    stdio transport closes on EOF and drops requests still in flight, as a real
+    client that closed its pipe would have asked for. */
 async function rpc(requests: object[]): Promise<Map<number, RpcResponse>> {
   const child = spawn('node', [CLI, 'mcp', '-C', FIXTURES], { stdio: ['pipe', 'pipe', 'pipe'] });
+  const awaiting = new Set(requests.map((r) => (r as { id?: number }).id).filter((id) => typeof id === 'number'));
+  const byId = new Map<number, RpcResponse>();
   let out = '';
+  let scanned = 0; // out[0..scanned) has been split into lines and consumed
+  let badLine: string | undefined; // the first non-JSON line stdout produced
   let err = '';
+  let ended = false;
+  const endStdin = () => { if (!ended) { ended = true; child.stdin.end(); } };
   child.stdout.setEncoding('utf8');
-  child.stdout.on('data', (d: string) => { out += d; });
+  child.stdout.on('data', (d: string) => {
+    out += d;
+    // Consume complete lines only; a message can arrive split across chunks.
+    const upTo = out.lastIndexOf('\n') + 1;
+    for (const line of out.slice(scanned, upTo).split('\n')) {
+      const s = line.trim();
+      if (!s) continue;
+      let m: RpcResponse;
+      try { m = JSON.parse(s) as RpcResponse; } catch {
+        // Anything that is not JSON-RPC on stdout breaks the protocol: stop now
+        // and fail below with the line, rather than wait out the valve and
+        // choke on it later.
+        badLine ??= s;
+        endStdin();
+        return;
+      }
+      // Only a response settles a request. A server-initiated request would
+      // also carry an id (its own counter), and must not be mistaken for one.
+      if (typeof m.id === 'number' && ('result' in m || 'error' in m)) {
+        byId.set(m.id, m);
+        awaiting.delete(m.id);
+      }
+    }
+    scanned = upTo;
+    if (awaiting.size === 0) endStdin();
+  });
   child.stderr.setEncoding('utf8');
   child.stderr.on('data', (d: string) => { err += d; });
   for (const r of requests) child.stdin.write(JSON.stringify(r) + '\n');
-  child.stdin.end();
+  // Safety valve so a server that never answers can't hang the suite.
+  const valve = setTimeout(endStdin, 30_000);
   const code = await new Promise<number>((resolve, reject) => {
     child.on('exit', (c) => resolve(c ?? 0));
     child.on('error', reject);
   });
+  clearTimeout(valve);
+  assert.equal(badLine, undefined, `non-JSON line on the server's stdout: ${badLine}`);
   assert.equal(code, 0, `server exited ${code}; stderr: ${err}`);
-  const byId = new Map<number, RpcResponse>();
-  for (const line of out.split('\n')) {
-    const s = line.trim();
-    if (!s) continue;
-    const m = JSON.parse(s) as RpcResponse;
-    if (typeof m.id === 'number') byId.set(m.id, m);
-  }
-  assert.ok(byId.size > 0, `no responses; stderr: ${err}`);
+  assert.equal(awaiting.size, 0, `unanswered ids: ${[...awaiting].join(', ')}; stderr: ${err}`);
   return byId;
 }
 

@@ -39,8 +39,8 @@
   "devDependencies": {
     "@malloydata/db-duckdb": "^0.0.431",
     "@malloydata/malloy": "^0.0.431",
-    "@modelcontextprotocol/client": "^2.0.0",
-    "@modelcontextprotocol/server": "^2.0.0",
+    "@modelcontextprotocol/client": "^2.4.0",
+    "@modelcontextprotocol/server": "^2.4.0",
     "@types/node": "^20",
     "esbuild": "^0.24.0",
     "tsx": "^4.21.0",

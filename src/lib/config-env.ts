@@ -21,7 +21,8 @@
  * Two rules:
  *
  *  - The server's own secrets NEVER resolve, listed or not (`isServerSecret`).
- *    A warehouse credential lives under its own name.
+ *    A warehouse credential lives under its own name. The one exception is
+ *    `MOTHERDUCK_TOKEN`, which a config may name on purpose (see below).
  *  - `MALLOY_CONFIG_ENV` (comma-separated names, `PREFIX_*` patterns) is the
  *    operator's allowlist. Unset, everything else resolves, so existing repos
  *    keep working; set it to make the boundary explicit.
@@ -31,7 +32,21 @@
  * leaking.
  */
 
+import { env as serverEnv } from "./env";
+
 type Env = Record<string, string | undefined>;
+
+/**
+ * The one server credential a config MAY name: `{"env": "MOTHERDUCK_TOKEN"}`.
+ *
+ * It is the obvious name, and on many instances the server's MotherDuck
+ * account is exactly the one the models are meant to use. src/lib/env.ts takes
+ * the variable out of the process environment at load (so a token-less `md:`
+ * connection cannot sign in as the server by accident), which is why the
+ * overlay answers this name from the captured value rather than from the
+ * environment: naming it is the explicit opt-in.
+ */
+const MOTHERDUCK_TOKEN = "MOTHERDUCK_TOKEN";
 
 /**
  * The server's own credentials, which no model config may name.
@@ -55,9 +70,6 @@ const SERVER_SECRET_PATTERNS: readonly RegExp[] = [
   /SECRET/,
   /^DASHBOARD_TOKEN/,
   /^MODEL_DEF_CACHE/,
-  // The server's own MotherDuck account (env.MOTHERDUCK_TOKEN). A repo that
-  // uses MotherDuck names its own token.
-  /^MOTHERDUCK_TOKEN$/,
 ];
 
 export function isServerSecret(name: string): boolean {
@@ -114,6 +126,7 @@ export function configEnvOverlay(
       onRefused(name);
       return undefined;
     }
+    if (name === MOTHERDUCK_TOKEN) return env[name] ?? (serverEnv.MOTHERDUCK_TOKEN || undefined);
     return env[name];
   };
 }

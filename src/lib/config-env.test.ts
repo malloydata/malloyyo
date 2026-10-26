@@ -25,7 +25,6 @@ test("the server's own secrets never resolve", () => {
     "GITHUB_WEBHOOK_SECRET",
     "ANTHROPIC_API_KEY",
     "VERCEL_OIDC_TOKEN",
-    "MOTHERDUCK_TOKEN",
     "SOME_NEW_PROVIDER_SECRET",
     "database_url",
   ]) {
@@ -39,6 +38,14 @@ test("warehouse credentials under their own names resolve by default", () => {
   for (const name of ["MALLOYYO_TOKEN", "WAREHOUSE_PG_PASSWORD", "BQ_SERVICE_ACCOUNT_JSON", "SNOWFLAKE_PASSWORD"]) {
     assert.equal(configMayRead(name, undefined), true, name);
   }
+});
+
+test("MOTHERDUCK_TOKEN is the one server credential a config may name", () => {
+  assert.equal(isServerSecret("MOTHERDUCK_TOKEN"), false);
+  assert.equal(configMayRead("MOTHERDUCK_TOKEN", undefined), true);
+  // ...and the operator's allowlist still governs it like any other name.
+  assert.equal(configMayRead("MOTHERDUCK_TOKEN", "WAREHOUSE_*"), false);
+  assert.equal(configMayRead("MOTHERDUCK_TOKEN", "WAREHOUSE_*,MOTHERDUCK_TOKEN"), true);
 });
 
 test("MALLOY_CONFIG_ENV narrows to listed names and PREFIX_* patterns", () => {

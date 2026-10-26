@@ -33,6 +33,12 @@ import { DRAFT_PREFIX, draftForward, draftSlug, getDashboard, listDashboards, vi
 import { deleteDraft, getDraftFiles, recordPromotion, saveDraftDashboard } from "@/lib/dashboards/draft";
 import { hasRole, MALLOYYO_ADMIN } from "@/lib/roles";
 import { checkRepo, describeTable, findRepo, listRepos, listTables, publishRepo } from "@/lib/repo-authoring";
+import { count, eq } from "drizzle-orm";
+import { db, datasets } from "@/db";
+import { configJsonFor, connectionEntry, validateConnection } from "@/lib/connection-kinds";
+import { testConnection } from "@/lib/connection-setup";
+import { addRepo, scaffoldFor } from "@/lib/setup-repo";
+import { setupStatus } from "@/lib/setup-status";
 import { fetchBranchPreview, previewChanges, type PreviewSummary } from "@/lib/repo-preview-store";
 import { createApiToken } from "@/lib/api-tokens";
 import { runDashboard } from "@/lib/dashboards/engine";
@@ -68,6 +74,8 @@ interface RequestScope {
   credentialKind: Credential["kind"];
   /** The credential's scopes — the repo tools need more than `mcp` from an API token. */
   credentialScopes: readonly string[];
+  /** An admin on an instance with no datasets yet: guided setup is the next step. */
+  emptyInstance: boolean;
 }
 
 type Json = Record<string, unknown>;
@@ -101,7 +109,11 @@ function buildServer(scope: RequestScope): McpServer {
   const server = new McpServer(
     { name: env.INSTANCE_NAME, version: VERSION },
     {
-      instructions: hosted.instructions,
+      // Kept short: clients truncate a server's instructions.
+      instructions: scope.emptyInstance
+        ? `${hosted.instructions}\n\nSETUP: this instance has no datasets yet. If the person wants to set it up, ` +
+          `follow yo_help("setup/start") (the /setup prompt does the same).`
+        : hosted.instructions,
       capabilities: {
         extensions: { [EXTENSION_ID]: { mimeTypes: [RESOURCE_MIME_TYPE] } },
         // No list-changed notifications: this server is built fresh for each
@@ -134,6 +146,10 @@ function buildServer(scope: RequestScope): McpServer {
   registerDashboardApp(server, scope, dashboardPanel(scope.origin));
 
   registerAuthoringTools(server, scope);
+
+  // Guided setup's entry points, for admins whether or not authoring is on yet
+  // — turning it on is setup's first step. Read-only: status and links.
+  if (hasRole(scope.user, MALLOYYO_ADMIN)) registerSetupTools(server, scope);
 
   // Admins only: these run SQL through a repo's connections and compile model
   // code nobody has reviewed — the power publishing already has, reached from
@@ -173,6 +189,53 @@ function previewResult(r: PreviewSummary, headline: string, again: string): Call
     `${headline} Preview addresses:\n${lines.join("\n")}\n\n` +
       `Pass an address as model_ref to describe_source and query, or as dataset to show_dashboard. ` +
       `Give the person the dashboard links. This is a snapshot: ${again}.`,
+  );
+}
+
+async function readyDatasetCount(): Promise<number> {
+  const [{ n }] = await db.select({ n: count() }).from(datasets).where(eq(datasets.status, "ready"));
+  return Number(n);
+}
+
+/**
+ * setup_status, and the /setup prompt (a slash command in Claude Code) that
+ * starts the guided setup in yo_help("setup/start").
+ */
+function registerSetupTools(server: McpServer, scope: RequestScope): void {
+  const tag = `[${env.INSTANCE_NAME}]`;
+  server.registerTool(
+    "setup_status",
+    {
+      title: "Where this instance is in setup",
+      description:
+        `${tag} Guided setup: where this instance runs (Malloyyo Cloud, Vercel, self-hosted) and how it takes ` +
+        `secrets, whether authoring is on, its datasets and repos, whether the GitHub token and webhook secret ` +
+        `are set, and the Setup page links to send the person to. Start setup here; yo_help("setup/start"). ` +
+        `Admins only.`,
+      annotations: { readOnlyHint: true },
+      inputSchema: fromJsonSchema<Json>({ type: "object", properties: {} }),
+    },
+    logged(scope, "setup_status", async () => result({ ok: true, ...(await setupStatus()) })),
+  );
+  server.registerPrompt(
+    "setup",
+    {
+      title: `Set up ${env.INSTANCE_NAME}`,
+      description: "Guided setup: connect a database, build a first model and dashboards, connect GitHub.",
+    },
+    () => ({
+      messages: [
+        {
+          role: "user" as const,
+          content: {
+            type: "text" as const,
+            text:
+              `Set up this Malloyyo instance (${env.INSTANCE_NAME}) with me. Read yo_help("setup/start") and ` +
+              `follow it step by step, starting with setup_status.`,
+          },
+        },
+      ],
+    }),
   );
 }
 
@@ -219,7 +282,27 @@ function registerRepoTools(server: McpServer, scope: RequestScope): void {
     }),
   );
 
-  type TablesArgs = { repo: string; connection: string; schema?: string; like?: string; dataset_dir?: string };
+  /** A connection from guided setup, before any repo has published: no secrets, only settings. */
+  type SetupConn = { kind: string; name: string; settings?: Record<string, unknown> };
+  const setupSource = (c: SetupConn) => {
+    const v = validateConnection(c.kind, c.name, c.settings ?? {});
+    if (!v.ok) return v;
+    return { configText: configJsonFor(v.name, connectionEntry(v.kind, v.name, v.settings)), label: `connection ${v.name}`, name: v.name };
+  };
+  const setupConnSchema = {
+    type: "object",
+    description:
+      "Instead of repo: a connection from guided setup (as test_connection took it), before anything is published. " +
+      "Secrets come from the instance's environment.",
+    properties: {
+      kind: { type: "string", description: "motherduck | bigquery | postgres" },
+      name: { type: "string", description: "The connection name, e.g. warehouse." },
+      settings: { type: "object", description: "Its non-secret settings." },
+    },
+    required: ["kind", "name"],
+  };
+
+  type TablesArgs = { repo?: string; connection?: string; setup_connection?: SetupConn; schema?: string; like?: string; dataset_dir?: string };
   server.registerTool(
     "list_tables",
     {
@@ -234,19 +317,25 @@ function registerRepoTools(server: McpServer, scope: RequestScope): void {
         properties: {
           repo: { type: "string", description: "The repo, as list_repos names it (slug or owner/name)." },
           connection: { type: "string", description: "A connection name from list_repos." },
+          setup_connection: setupConnSchema,
           schema: { type: "string", description: "Optional schema (BigQuery: dataset) to list." },
           like: { type: "string", description: "Optional table-name pattern, SQL LIKE." },
           dataset_dir: { type: "string", description: "Optional: use this dataset's own malloy-config.json." },
         },
-        required: ["repo", "connection"],
       }),
     },
-    logged(scope, "list_tables", async (a: TablesArgs) =>
-      result(await withRepo(a.repo, (repo) => listTables(repo, a.connection, { schema: a.schema, like: a.like, dir: a.dataset_dir }))),
-    ),
+    logged(scope, "list_tables", async (a: TablesArgs) => {
+      const opts = { schema: a.schema, like: a.like, dir: a.dataset_dir };
+      if (a.setup_connection) {
+        const src = setupSource(a.setup_connection);
+        return result("ok" in src ? src : await listTables(src, src.name, opts));
+      }
+      if (!a.repo || !a.connection) return result({ ok: false, error: "give repo and connection, or setup_connection" });
+      return result(await withRepo(a.repo, (repo) => listTables(repo, a.connection!, opts)));
+    }),
   );
 
-  type DescribeArgs = { repo: string; connection: string; table: string; dataset_dir?: string };
+  type DescribeArgs = { repo?: string; connection?: string; setup_connection?: SetupConn; table: string; dataset_dir?: string };
   server.registerTool(
     "describe_table",
     {
@@ -261,15 +350,21 @@ function registerRepoTools(server: McpServer, scope: RequestScope): void {
         properties: {
           repo: { type: "string", description: "The repo, as list_repos names it." },
           connection: { type: "string", description: "A connection name from list_repos." },
+          setup_connection: setupConnSchema,
           table: { type: "string", description: "Table as the model would name it: 'schema.table', or a path/URL on DuckDB." },
           dataset_dir: { type: "string", description: "Optional: use this dataset's own malloy-config.json." },
         },
-        required: ["repo", "connection", "table"],
+        required: ["table"],
       }),
     },
-    logged(scope, "describe_table", async (a: DescribeArgs) =>
-      result(await withRepo(a.repo, (repo) => describeTable(repo, a.connection, a.table, { dir: a.dataset_dir }))),
-    ),
+    logged(scope, "describe_table", async (a: DescribeArgs) => {
+      if (a.setup_connection) {
+        const src = setupSource(a.setup_connection);
+        return result("ok" in src ? src : await describeTable(src, src.name, a.table));
+      }
+      if (!a.repo || !a.connection) return result({ ok: false, error: "give repo and connection, or setup_connection" });
+      return result(await withRepo(a.repo, (repo) => describeTable(repo, a.connection!, a.table, { dir: a.dataset_dir })));
+    }),
   );
 
   type CheckArgs = {
@@ -354,7 +449,7 @@ function registerRepoTools(server: McpServer, scope: RequestScope): void {
     }),
   );
 
-  type ChangesArgs = { repo: string; label: string; base: string; files?: Record<string, string>; deleted?: string[] };
+  type ChangesArgs = { repo: string; label: string; base?: string; files?: Record<string, string>; deleted?: string[] };
   server.registerTool(
     "preview_changes",
     {
@@ -368,6 +463,8 @@ function registerRepoTools(server: McpServer, scope: RequestScope): void {
         `base = \`git merge-base HEAD origin/<published branch>\`; files = full text of every file in ` +
         `\`git diff --name-only --diff-filter=d <base>\` plus untracked files (\`git ls-files --others --exclude-standard\`); ` +
         `deleted = \`git diff --name-only --diff-filter=D <base>\`. With no files it previews the base itself. ` +
+        `Omit base for a repo this instance can't read from GitHub yet (new, or private before its token is ` +
+        `set) and send EVERY file. ` +
         `Read yo_help("authoring/start") first. Admins only.`,
       annotations: { readOnlyHint: false },
       inputSchema: fromJsonSchema<ChangesArgs>({
@@ -375,7 +472,10 @@ function registerRepoTools(server: McpServer, scope: RequestScope): void {
         properties: {
           repo: { type: "string", description: "The repo: `owner/name`, or `git remote get-url origin` as printed." },
           label: { type: "string", description: "Names the preview — the current branch (`git branch --show-current`)." },
-          base: { type: "string", description: "The commit SHA your changes are relative to; it must be on GitHub." },
+          base: {
+            type: "string",
+            description: "The commit SHA your changes are relative to; it must be on GitHub. Omit to send the whole repo.",
+          },
           files: {
             type: "object",
             description: "Changed or added files: repo-relative path → full new text.",
@@ -383,22 +483,106 @@ function registerRepoTools(server: McpServer, scope: RequestScope): void {
           },
           deleted: { type: "array", items: { type: "string" }, description: "Repo-relative paths deleted since base." },
         },
-        required: ["repo", "label", "base"],
+        required: ["repo", "label"],
       }),
     },
     logged(scope, "preview_changes", async (a: ChangesArgs) => {
       const out = await withRepo(a.repo, (repo) =>
-        previewChanges(repo, { label: a.label, base: a.base, files: a.files ?? {}, deleted: a.deleted ?? [] }, scope.userId),
+        previewChanges(repo, { label: a.label, base: a.base ?? null, files: a.files ?? {}, deleted: a.deleted ?? [] }, scope.userId),
       );
       if (!out.ok) return result(out);
       const r = out as PreviewSummary;
       const n = Object.keys(a.files ?? {}).length + (a.deleted?.length ?? 0);
       return previewResult(
         r,
-        `Previewed ${r.repo}@${r.branch}: ${r.commit?.slice(0, 7) ?? "?"} plus ${n} changed file(s).`,
+        r.commit
+          ? `Previewed ${r.repo}@${r.branch}: ${r.commit.slice(0, 7)} plus ${n} changed file(s).`
+          : `Previewed ${r.repo}@${r.branch}: the ${n} file(s) as sent (no base).`,
         "after your next edits, preview_changes again",
       );
     }),
+  );
+
+  type TestConnArgs = SetupConn;
+  server.registerTool(
+    "test_connection",
+    {
+      title: "Test a database connection",
+      description:
+        `${tag} Guided setup: tests a connection (motherduck, bigquery or postgres) with the secrets the instance ` +
+        `holds — the person enters them on the Setup page, never in the chat (setup_status has the link). ` +
+        `Returns the malloy-config.json to write (secrets as {"env": NAME} references), or what's missing. ` +
+        `Then list_tables / describe_table take it as setup_connection. Admins only.`,
+      annotations: { readOnlyHint: true },
+      inputSchema: fromJsonSchema<TestConnArgs>(setupConnSchema as Parameters<typeof fromJsonSchema>[0]),
+    },
+    logged(scope, "test_connection", async (a: TestConnArgs) => {
+      const r = await testConnection(a.kind, a.name, a.settings);
+      if (r.ok) return result(r, `Connected (${r.dialect}, ${r.ms} ms). Write this to malloy-config.json:\n${r.config}`);
+      return result({
+        ...r,
+        error:
+          `${r.error}` +
+          (r.env ? `\nEnvironment: ${Object.entries(r.env).map(([n, set]) => `${n} ${set ? "set" : "NOT set"}`).join(", ")}` : ""),
+      });
+    }),
+  );
+
+  type AddRepoArgs = { github: string; branch?: string };
+  server.registerTool(
+    "add_repo",
+    {
+      title: "Register a GitHub repo with this instance",
+      description:
+        `${tag} Guided setup: registers a new GitHub repo (the one this session works in) so previews, ` +
+        `check_repo and publishing can address it. Nothing is published or read from GitHub; a private repo ` +
+        `becomes readable once the GitHub token is set (Setup page). Returns the repo's name here and its ` +
+        `webhook URL. Already registered: says so. Admins only.`,
+      annotations: { readOnlyHint: false },
+      inputSchema: fromJsonSchema<AddRepoArgs>({
+        type: "object",
+        properties: {
+          github: { type: "string", description: "owner/name, or `git remote get-url origin` as printed." },
+          branch: { type: "string", description: "The branch that publishes. Default main." },
+        },
+        required: ["github"],
+      }),
+    },
+    logged(scope, "add_repo", async (a: AddRepoArgs) => {
+      const r = await addRepo(a.github, scope.userId, a.branch ?? "main");
+      if (!r.ok) return result(r);
+      const base = env.APP_BASE_URL.replace(/\/$/, "");
+      const out = {
+        ok: true as const,
+        repo: r.repo.slug,
+        github: r.repo.githubRepo,
+        branch: r.repo.githubBranch,
+        existed: r.existed,
+        webhookUrl: `${base}/api/repos/${r.repo.id}/webhook/github`,
+      };
+      return result(out, `${r.existed ? "Already registered" : "Registered"} as "${out.repo}" (${out.github}, publishes ${out.branch}).`);
+    }),
+  );
+
+  server.registerTool(
+    "get_scaffold",
+    {
+      title: "Starter files for a new model repo",
+      description:
+        `${tag} Guided setup's \`malloyyo init\`: the files a new model repo starts with — CLAUDE.md naming this ` +
+        `instance, the Malloyyo skills under .claude/skills/, .gitignore, datasets/, and a placeholder ` +
+        `malloy-config.json (replace it with what test_connection returns). Write them into the repo's root. ` +
+        `Never overwrite a file that already exists without asking. Admins only.`,
+      annotations: { readOnlyHint: true },
+      inputSchema: fromJsonSchema<{ repo: string }>({
+        type: "object",
+        properties: { repo: { type: "string", description: "The repo, as add_repo named it (or owner/name)." } },
+        required: ["repo"],
+      }),
+    },
+    logged(scope, "get_scaffold", async (a: { repo: string }) =>
+      result(await withRepo(a.repo, async (repo) => ({ ok: true as const, files: scaffoldFor(repo) }))),
+    ),
   );
 
   server.registerTool(
@@ -932,6 +1116,7 @@ async function serve(req: Request): Promise<Response> {
     origin: originFromRequest(req),
     credentialKind: auth.cred.kind,
     credentialScopes: auth.cred.scopes,
+    emptyInstance: hasRole(auth.user, MALLOYYO_ADMIN) && (await readyDatasetCount()) === 0,
   };
   const res = await handler.fetch(req, {
     authInfo: { token: raw, clientId: credentialLabel(auth.cred), scopes: ["mcp"], extra: { scope } },

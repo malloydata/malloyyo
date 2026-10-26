@@ -3,6 +3,7 @@
 
 import { NextResponse } from "next/server";
 import { db, oauthClients } from "@/db";
+import { API_TOKEN_SCOPES } from "@/lib/api-token-scopes";
 import { corsPreflight, withCors } from "@/lib/oauth/cors";
 
 export const runtime = "nodejs";
@@ -55,9 +56,15 @@ export async function POST(request: Request): Promise<Response> {
   if (responseTypes.some((t) => t !== "code"))
     return err("invalid_client_metadata", 'Only response_type="code" is supported');
 
+  // Any combination of the scopes the discovery metadata advertises
+  // (`mcp`, `publish`). Registration grants nothing — the stored scope stays
+  // `mcp`, and what a connection may do is decided at consent — so refusing
+  // an advertised scope here only made clients that ask for what they were
+  // told (mcp-remote, for one) fail their first registration.
   const requestedScope = typeof body.scope === "string" ? body.scope.trim() : "";
-  if (requestedScope && requestedScope !== "mcp")
-    return err("invalid_client_metadata", 'Only "mcp" scope is supported');
+  const unsupported = requestedScope.split(/\s+/).filter((s) => s && !(API_TOKEN_SCOPES as readonly string[]).includes(s));
+  if (unsupported.length)
+    return err("invalid_client_metadata", `Unsupported scope: ${unsupported.join(" ")} (supported: ${API_TOKEN_SCOPES.join(" ")})`);
 
   const name = (typeof body.client_name === "string" ? body.client_name.trim() : "Unnamed MCP client").slice(0, 100);
   const registeredFromIp = request.headers.get("x-forwarded-for")?.split(",")[0].trim() ?? request.headers.get("x-real-ip") ?? null;

@@ -13,9 +13,10 @@ function required(name: string): string {
  * DuckDB's MotherDuck extension reads `motherduck_token` from the environment
  * by itself, so while it sat there any model's `md:` connection with no token
  * of its own signed in as this server's MotherDuck account. Captured once at
- * load, before any DuckDB connection can exist, and handed only to the
- * server's own fallback connection (src/lib/malloy.ts) as an explicit option.
- * A repo that uses MotherDuck names its own token.
+ * load, before any DuckDB connection can exist, and handed out only
+ * explicitly: to the server's own fallback connection (src/lib/malloy.ts),
+ * and to a repo config that names it, `{"env": "MOTHERDUCK_TOKEN"}`
+ * (src/lib/config-env.ts). A connection that names no token gets none.
  */
 const SERVER_MOTHERDUCK_TOKEN = process.env.MOTHERDUCK_TOKEN ?? process.env.motherduck_token ?? "";
 delete process.env.MOTHERDUCK_TOKEN;

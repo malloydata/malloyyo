@@ -16,3 +16,20 @@ test("the server's MotherDuck token leaves the process environment and stays rea
   assert.equal(process.env.motherduck_token, undefined);
   assert.equal(env.MOTHERDUCK_TOKEN, "server-token");
 });
+
+test('a config that names it — {"env": "MOTHERDUCK_TOKEN"} — gets the server\'s token', async () => {
+  // env.ts captured "server-token" and cleared the variable in the test above
+  // (one module instance per process); the overlay must answer from the
+  // capture, with nothing left in the environment to read.
+  const { env } = await import("./env");
+  assert.equal(env.MOTHERDUCK_TOKEN, "server-token");
+  const { configEnvOverlay } = await import("./config-env");
+  const refused: string[] = [];
+  const read = configEnvOverlay(process.env, (n) => refused.push(n));
+  assert.equal(read(["MOTHERDUCK_TOKEN"]), "server-token");
+  assert.deepEqual(refused, []);
+  // Still not through the environment itself, and still not under a server name.
+  assert.equal(process.env.MOTHERDUCK_TOKEN, undefined);
+  assert.equal(read(["DATABASE_URL"]), undefined);
+  assert.deepEqual(refused, ["DATABASE_URL"]);
+});

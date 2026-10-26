@@ -96,10 +96,11 @@ glob, a union, any SQL — wrap it in `.sql()` (its paths are project-relative t
 The default `duckdb` connection is **in-memory** — nothing persists between runs;
 your data lives in the files (or the `databasePath` database) you read.
 
-**MotherDuck:** a DuckDB connection against an `md:` database, with its own
-token: `"motherDuckToken": { "env": "MY_MOTHERDUCK_TOKEN" }`. Name the token in
-the config. On a published instance, a connection with no `motherDuckToken`
-doesn't pick one up from the server's environment.
+**MotherDuck:** a DuckDB connection against an `md:` database, with its
+token named in the config: `"motherDuckToken": { "env": "MOTHERDUCK_TOKEN" }`.
+On a published instance that is the server's own MotherDuck token; any other
+name is a variable the operator set for this model. A connection with no
+`motherDuckToken` doesn't pick one up from the server's environment.
 
 ## Secrets — keep them out of the file
 

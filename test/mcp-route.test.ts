@@ -653,3 +653,55 @@ test("Malloy that defines things but runs nothing says so", async () => {
     await client.close();
   }
 });
+
+// A server built fresh for every request has no stream a list-changed
+// notification could ever ride on, so it must not advertise them: a 2026-07-28
+// client reads those bits and opens `subscriptions/listen` for them, and the
+// SDK then holds that request open with keepalives until the client goes away.
+// Observed on malloyyo.vercel.app as POST /mcp hitting the 300 s function
+// timeout 200 times a day, and on a Fly tenant as one of its 25 connections
+// held for nothing.
+for (const [label, negotiation] of MODES) {
+  test(`${label}: no list-changed notifications are advertised`, async () => {
+    const client = await connect(mcpToken, negotiation);
+    try {
+      const caps = client.getServerCapabilities();
+      assert.equal(caps?.tools?.listChanged, false);
+      assert.equal(caps?.resources?.listChanged, false);
+    } finally {
+      await client.close();
+    }
+  });
+}
+
+test("2026-07-28: subscriptions/listen completes at once instead of holding the request", async () => {
+  const meta = {
+    "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+    "io.modelcontextprotocol/clientCapabilities": {},
+    "io.modelcontextprotocol/clientInfo": { name: "route-test", version: "0.0.0" },
+  };
+  const started = Date.now();
+  const res = await routeFetch(MCP_URL, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${mcpToken}`,
+      "content-type": "application/json",
+      accept: "application/json, text/event-stream",
+      "mcp-protocol-version": "2026-07-28",
+      "mcp-method": "subscriptions/listen",
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "subscriptions/listen",
+      params: { notifications: { toolsListChanged: true, resourcesListChanged: true }, _meta: meta },
+    }),
+  });
+  assert.equal(res.status, 200);
+  // Reading the body to its end is the test: before the fix it never ends.
+  const body = await res.text();
+  assert.ok(Date.now() - started < 5_000, `listen held the request ${Date.now() - started} ms`);
+  assert.match(body, /"notifications\/subscriptions\/acknowledged"/);
+  assert.match(body, /"resultType":"complete"/);
+  assert.match(body, /"notifications":\{\}/, "nothing was agreed to");
+});

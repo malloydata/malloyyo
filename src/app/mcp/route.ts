@@ -104,6 +104,16 @@ function buildServer(scope: RequestScope): McpServer {
       instructions: hosted.instructions,
       capabilities: {
         extensions: { [EXTENSION_ID]: { mimeTypes: [RESOURCE_MIME_TYPE] } },
+        // No list-changed notifications: this server is built fresh for each
+        // request (stateless, below), so there is no stream a change could ever
+        // be delivered on. Left to the SDK's default of `true`, a 2026-07-28
+        // client reads these bits and opens `subscriptions/listen` to receive
+        // them — a request the SDK then holds open with keepalives for as long
+        // as the client stays. On Vercel that is a function burning until the
+        // 300 s timeout; on a Fly tenant it is one of the Machine's 25
+        // connections held for nothing, until dashboards' fan-out gets 503s.
+        tools: { listChanged: false },
+        resources: { listChanged: false },
       },
     },
   );

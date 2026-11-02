@@ -63,3 +63,36 @@ export function draftFile(malloy: string): string {
   }
   return `##! experimental.givens\n${malloy}`;
 }
+
+/** One find/replace change to a stored draft file: `source` unless `file` says `malloy`. */
+export interface DraftEdit {
+  find: string;
+  replace: string;
+  file?: "source" | "malloy";
+}
+
+/**
+ * Apply edits to a draft's stored files, in order, so a small change need not
+ * resend the whole file. Each `find` must match exactly once; any failing edit
+ * fails them all, and the error names it.
+ */
+export function applyDraftEdits(
+  files: { source: string; malloy: string },
+  edits: DraftEdit[],
+): { ok: true; source: string; malloy: string } | { ok: false; error: string } {
+  const out = { ...files };
+  for (const [i, e] of edits.entries()) {
+    const fail = (why: string) => ({ ok: false as const, error: `edit ${i + 1}: ${why}; nothing was saved` });
+    if (typeof e?.find !== "string" || typeof e.replace !== "string") return fail("expected { find, replace } strings");
+    if (!e.find) return fail("'find' is empty");
+    if (e.file !== undefined && e.file !== "source" && e.file !== "malloy") return fail("'file' must be source or malloy");
+    const file = e.file ?? "source";
+    const at = out[file].indexOf(e.find);
+    if (at < 0) return fail(`'find' is not in the draft's ${file}`);
+    if (out[file].indexOf(e.find, at + 1) >= 0) {
+      return fail(`'find' matches more than once in the draft's ${file}; include more of the text around it`);
+    }
+    out[file] = out[file].slice(0, at) + e.replace + out[file].slice(at + e.find.length);
+  }
+  return { ok: true, ...out };
+}

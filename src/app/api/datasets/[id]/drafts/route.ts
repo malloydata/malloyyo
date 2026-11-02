@@ -10,7 +10,7 @@ export const runtime = "nodejs";
 
 /**
  * POST /api/datasets/:ref/drafts — save a draft dashboard.
- * Body: { name, malloy?, source?, title?, description?, slug? }.
+ * Body: { name, malloy?, source?, title?, description?, slug?, edits? }.
  *
  * The `mcp` scope, not `publish`: a draft dashboard is a query-level act —
  * any member who can query the dataset may make one, and its .malloy passes
@@ -28,6 +28,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     title?: unknown;
     description?: unknown;
     slug?: unknown;
+    edits?: unknown;
   };
   try {
     body = await req.json();
@@ -45,6 +46,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       title: typeof body.title === "string" && body.title ? body.title : undefined,
       description: typeof body.description === "string" ? body.description : undefined,
       slug: typeof body.slug === "string" && body.slug ? body.slug : undefined,
+      edits: Array.isArray(body.edits) ? body.edits : undefined,
     },
     originFromRequest(req),
   );

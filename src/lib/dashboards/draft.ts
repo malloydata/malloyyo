@@ -33,9 +33,9 @@ import { bundleDashboard } from "./bundle";
 import { declaredRuns, explainProblems } from "./engine";
 import { artifactManifest } from "./manifest";
 import { DRAFT_PREFIX } from "./meta";
-import { draftBody, draftFile } from "./draft-text";
+import { applyDraftEdits, draftBody, draftFile, type DraftEdit } from "./draft-text";
 
-export { draftBody } from "./draft-text";
+export { draftBody, type DraftEdit } from "./draft-text";
 
 const NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 const MAX_TEXT = 256 * 1024;
@@ -57,6 +57,10 @@ export interface DraftInput {
   source?: string;
   /** Overwrite this draft dashboard (it must be the caller's) instead of making a new one. */
   slug?: string;
+  /** With `slug`: instead of resending a whole file, exact-match find/replace
+      edits applied to the stored draft. Each `find` must occur exactly once in
+      its file (`source` by default, or `malloy`). */
+  edits?: DraftEdit[];
 }
 
 export interface DraftTileReport {
@@ -123,13 +127,11 @@ export async function saveDraftDashboard(
   if (!NAME_RE.test(name)) {
     return { ok: false, error: "name must be letters, digits, '-' or '_' (the dashboard file's basename)" };
   }
-  const malloy = draftFile(String(input.malloy ?? ""));
-  const source = String(input.source ?? "");
-  if (!malloy.trim() && !source.trim()) {
-    return { ok: false, error: "give a component (source), a dashboards/<name>.malloy, or both" };
+  if (input.edits?.length && !input.slug) {
+    return { ok: false, error: "edits need the slug of the draft to change" };
   }
-  if (malloy.length > MAX_TEXT || source.length > MAX_TEXT) {
-    return { ok: false, error: `each file is limited to ${MAX_TEXT / 1024} KB` };
+  if (input.edits?.length && (input.source !== undefined || input.malloy !== undefined)) {
+    return { ok: false, error: "send edits or whole files, not both" };
   }
 
   const found = await findByDatasetRef(userId, datasetRef);
@@ -159,6 +161,21 @@ export async function saveDraftDashboard(
       .limit(1);
     if (!existing) return { ok: false, error: `no draft dashboard '${input.slug}' in '${found.ds.name}'` };
     if (existing.userId !== userId) return { ok: false, error: "that draft dashboard belongs to someone else" };
+  }
+
+  let malloy = draftFile(String(input.malloy ?? ""));
+  let source = String(input.source ?? "");
+  if (input.edits?.length) {
+    const r = applyDraftEdits({ source: existing!.source, malloy: existing!.malloy }, input.edits);
+    if (!r.ok) return { ok: false, error: r.error };
+    source = r.source;
+    malloy = draftFile(r.malloy);
+  }
+  if (!malloy.trim() && !source.trim()) {
+    return { ok: false, error: "give a component (source), a dashboards/<name>.malloy, or both" };
+  }
+  if (malloy.length > MAX_TEXT || source.length > MAX_TEXT) {
+    return { ok: false, error: `each file is limited to ${MAX_TEXT / 1024} KB` };
   }
 
   const baseFiles = await modelFileMap(found.model);

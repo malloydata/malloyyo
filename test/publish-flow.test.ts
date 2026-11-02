@@ -937,6 +937,23 @@ test("draft list shows what is on the instance, with the slug promotion takes", 
   assert.match(r.stdout, new RegExp(`${slug}\\s+By state\\s+\\(component,`));
 });
 
+test("a draft saved over REST takes edits, and edits mixed with a whole file are refused", async () => {
+  await draftFixture();
+  const { slug } = await makeDraft({ name: "by_state", title: "By state", source: DRAFT_COMPONENT });
+  await makeDraft({ name: "by_state", slug, edits: [{ find: "<ol>", replace: `<ol className="states">` }] });
+  const [row] = await db.select().from(draftDashboards).where(eq(draftDashboards.slug, slug));
+  assert.match(row.source, /<ol className="states">/);
+  assert.equal(row.title, "By state");
+
+  const res = await fetch(`${serverUrl}/api/datasets/${DS_DRAFT}/drafts`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+    body: JSON.stringify({ name: "by_state", slug, source: DRAFT_COMPONENT, edits: [{ find: "ol", replace: "ul" }] }),
+  });
+  assert.equal(res.status, 422);
+  assert.match(((await res.json()) as { error: string }).error, /edits or whole files, not both/);
+});
+
 test("draft promote writes the repo files, records what it became, and keeps the draft", async () => {
   const { dir, env } = await draftFixture();
   const { slug, dashboard } = await makeDraft({ name: "by_state", title: "By state", source: DRAFT_COMPONENT });

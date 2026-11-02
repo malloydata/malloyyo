@@ -378,6 +378,33 @@ test("save_draft_dashboard: saves a draft that every dashboard tool then serves"
     });
     assert.equal((again.structuredContent as { slug: string }).slug, out.slug);
     assert.match(JSON.stringify(again.content), /Animals v2/);
+
+    // A small change sends just the edit, applied to the stored draft.
+    const edited = await client.callTool({
+      name: "save_draft_dashboard",
+      arguments: {
+        dataset: "petshop",
+        name: "animals",
+        slug: out.slug,
+        edits: [{ file: "malloy", find: `title="Animals v2"`, replace: `title="Animals v3"` }],
+      },
+    });
+    assert.notEqual(edited.isError, true, JSON.stringify(edited.content));
+    assert.equal((edited.structuredContent as { slug: string }).slug, out.slug);
+    assert.match(JSON.stringify(edited.content), /Animals v3/);
+
+    // An edit whose text isn't there changes nothing.
+    const missed = await client.callTool({
+      name: "save_draft_dashboard",
+      arguments: { dataset: "petshop", name: "animals", slug: out.slug, edits: [{ file: "malloy", find: "Animals v2", replace: "x" }] },
+    });
+    assert.equal(missed.isError, true);
+    assert.match(JSON.stringify(missed.content), /is not in the draft's malloy; nothing was saved/);
+    const files = await client.callTool({
+      name: "dashboard_bundle",
+      arguments: { datasetId: "petshop", name: out.dashboard },
+    });
+    assert.equal((files.structuredContent as { title: string }).title, "Animals v3");
   } finally {
     await client.close();
   }

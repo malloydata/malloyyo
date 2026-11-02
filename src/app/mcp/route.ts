@@ -30,7 +30,7 @@ import {
 } from "@/lib/mcp-app-dashboard";
 import { dashboardPanel, type DashboardPanel } from "@/lib/mcp-app-panel";
 import { DRAFT_PREFIX, draftForward, draftSlug, getDashboard, listDashboards, visibleImageHosts } from "@/lib/dashboards";
-import { deleteDraft, getDraftFiles, recordPromotion, saveDraftDashboard } from "@/lib/dashboards/draft";
+import { deleteDraft, getDraftFiles, recordPromotion, saveDraftDashboard, type DraftEdit } from "@/lib/dashboards/draft";
 import { hasRole, MALLOYYO_ADMIN } from "@/lib/roles";
 import { checkRepo, describeTable, findRepo, listRepos, listTables, publishRepo } from "@/lib/repo-authoring";
 import { fetchBranchPreview, previewChanges, type PreviewSummary } from "@/lib/repo-preview-store";
@@ -521,6 +521,7 @@ function registerAuthoringTools(server: McpServer, scope: RequestScope): void {
     title?: string;
     description?: string;
     slug?: string;
+    edits?: DraftEdit[];
   };
   server.registerTool(
     SAVE_DRAFT_TOOL,
@@ -536,7 +537,9 @@ function registerAuthoringTools(server: McpServer, scope: RequestScope): void {
         `yo_help("dashboards/drafts") BEFORE writing one — it has the component shape, what you ` +
         `may import, and the query rules. Reports each query's result and any component compile error, ` +
         `so fix what it reports before showing the user. Pass \`slug\` to update a draft you ` +
-        `already saved; show_dashboard renders it by the returned \`dashboard\` name.`,
+        `already saved; show_dashboard renders it by the returned \`dashboard\` name. ` +
+        `For a small change to a saved draft, pass \`slug\` and \`edits\` ([{find, replace}], exact text, ` +
+        `each find unique) instead of resending the whole \`source\`.`,
       annotations: { readOnlyHint: false },
       inputSchema: fromJsonSchema<SaveArgs>({
         type: "object",
@@ -554,6 +557,19 @@ function registerAuthoringTools(server: McpServer, scope: RequestScope): void {
             description: "One line on what it answers, shown under the title in listings.",
           },
           slug: { type: "string", description: "Update this draft instead of creating one." },
+          edits: {
+            type: "array",
+            description: "With slug: exact find/replace edits to the stored draft instead of a new source. Each find must match once.",
+            items: {
+              type: "object",
+              properties: {
+                find: { type: "string" },
+                replace: { type: "string" },
+                file: { type: "string", enum: ["source", "malloy"], description: "Default source." },
+              },
+              required: ["find", "replace"],
+            },
+          },
         },
         required: ["dataset", "name"],
       }),

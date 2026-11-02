@@ -34,7 +34,10 @@ export default function Dashboard() {
 Save it with `save_draft_dashboard({ dataset, name, title, source })`. The
 result carries a `url` to open and a `dashboard` name that `show_dashboard`
 renders. Pass the returned `slug` back on the next save to update the same
-draft instead of making another.
+draft instead of making another. For a small change, send `slug` with
+`edits: [{ find, replace }]` instead of the whole `source`: each `find` is
+exact text from the saved draft and must match once (`file: "malloy"` edits
+the dashboard file).
 
 ## The queries
 
@@ -143,4 +146,4 @@ published doesn't need deleting, and deleting it ends the redirect.
 2. Validate each query with `query(execute:false)`.
 3. Save the draft; fix anything the report names.
 4. Show the user the URL (or `show_dashboard`), and ask what to change.
-5. Re-save with the same `slug`.
+5. Re-save with the same `slug`, as `edits` when the change is small.

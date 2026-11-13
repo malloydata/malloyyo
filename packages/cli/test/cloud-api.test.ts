@@ -73,6 +73,10 @@ const OPERATION = {
   createdAt: '2026-07-30T00:00:00.000Z',
   finishedAt: null,
 };
+const EGRESS = {
+  ipv4: ['209.71.112.170'],
+  ipv6: ['2a09:8280:e618:1::1'],
+};
 
 describe('createControlPlaneClient', () => {
   test('POSTs a create with the bearer token, an Idempotency-Key, and the slug body', async () => {
@@ -105,6 +109,18 @@ describe('createControlPlaneClient', () => {
 
     const op = harness(() => ({ body: { operation: OPERATION } }));
     assert.equal((await op.client.getOperation('op_1')).status, 'running');
+  });
+
+  test('gets an instance’s static outbound addresses by encoded name', async () => {
+    const { client, calls } = harness(() => ({
+      body: { instance: INSTANCE, egress: EGRESS },
+    }));
+
+    const result = await client.getInstanceEgress('acme/unsafe');
+
+    assert.deepEqual(result.egress, EGRESS);
+    assert.equal(calls[0]?.method, 'GET');
+    assert.equal(calls[0]?.url, 'https://api.example.com/v1/instances/acme%2Funsafe/egress');
   });
 
   test('sends DELETE with an Idempotency-Key', async () => {

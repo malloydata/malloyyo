@@ -153,6 +153,20 @@ export function registerCloudCommands(program: Command): void {
     });
 
   instance
+    .command("egress")
+    .argument(
+      "[instance]",
+      "instance name (the one in its URL) or ID; inferred from malloy-config.json when omitted",
+    )
+    .option("--json", "print the static outbound addresses as JSON")
+    .description("show the static outbound IP addresses used for database allowlists")
+    .action(async (instance: string | undefined, opts: { json?: boolean }) => {
+      const id = resolveOrInferInstance(instance);
+      if (id === null) return;
+      await dispatch({ command: "egress", id }, opts.json === true);
+    });
+
+  instance
     .command("list")
     .option("--json", "print the instances as JSON")
     .description("list your hosted instances")

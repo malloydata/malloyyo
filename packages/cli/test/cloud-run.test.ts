@@ -104,6 +104,7 @@ describe('runCloud', () => {
     // and the control plane gates that GET on `instances:read`.
     const cases: Array<[CloudInvocation, readonly string[]]> = [
       [{ command: 'list' }, ['instances:read']],
+      [{ command: 'egress', id: 'acme' }, ['instances:read']],
       [{ command: 'create', slug: 'acme' }, ['instances:create', 'instances:read']],
       [{ command: 'delete', id: 'ten_1' }, ['instances:delete', 'instances:read']],
       [

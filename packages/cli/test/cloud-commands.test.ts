@@ -12,6 +12,7 @@ import {
   type CommandContext,
   createCommand,
   deleteCommand,
+  egressCommand,
   InvalidSecretArgumentError,
   listCommand,
   parseSecretArguments,
@@ -62,6 +63,10 @@ function fakeClient(overrides: Partial<ControlPlaneClient> = {}): ControlPlaneCl
     createInstance: async () => ({ instance: instance(), operation: op({ status: 'running' }) }),
     getInstance: async () => instance(),
     listInstances: async () => [instance()],
+    getInstanceEgress: async () => ({
+      instance: instance(),
+      egress: { ipv4: ['209.71.112.170'], ipv6: ['2a09:8280:e618:1::1'] },
+    }),
     deleteInstance: async () => ({
       instance: instance(),
       operation: op({ status: 'running', kind: 'delete' }),
@@ -243,6 +248,47 @@ describe('instance status and list', () => {
     );
     assert.equal(await listCommand(emptyCtx), 0);
     assert.equal(emptyLines.join('\n'), 'no instances.');
+  });
+});
+
+describe('instance egress', () => {
+  test('prints every IPv4 and IPv6 address with their families', async () => {
+    const { ctx, lines } = contextFor(fakeClient());
+
+    assert.equal(await egressCommand(ctx, { id: 'acme' }), 0);
+
+    assert.deepEqual(lines, [
+      'acme outbound addresses:',
+      '  IPv4  209.71.112.170',
+      '  IPv6  2a09:8280:e618:1::1',
+    ]);
+  });
+
+  test('keeps the structured address lists under --json', async () => {
+    const { ctx, lines } = contextFor(fakeClient(), { json: true });
+
+    assert.equal(await egressCommand(ctx, { id: 'acme' }), 0);
+
+    const parsed = JSON.parse(lines.join('\n')) as {
+      instance: { slug: string };
+      egress: { ipv4: string[]; ipv6: string[] };
+    };
+    assert.equal(parsed.instance.slug, 'acme');
+    assert.deepEqual(parsed.egress.ipv4, ['209.71.112.170']);
+    assert.deepEqual(parsed.egress.ipv6, ['2a09:8280:e618:1::1']);
+  });
+
+  test('reports when provisioning has not assigned addresses yet', async () => {
+    const client = fakeClient({
+      getInstanceEgress: async () => ({
+        instance: instance(),
+        egress: { ipv4: [], ipv6: [] },
+      }),
+    });
+    const { ctx, lines } = contextFor(client);
+
+    assert.equal(await egressCommand(ctx, { id: 'acme' }), 0);
+    assert.equal(lines.join('\n'), 'no static outbound addresses are assigned to "acme" yet.');
   });
 });
 

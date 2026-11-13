@@ -142,6 +142,7 @@ and configure it.
 malloyyo cloud instance create acme    # provision acme.malloyyo.com, wait for it to come up
 malloyyo cloud instance list
 malloyyo cloud instance status acme
+malloyyo cloud instance egress acme    # static outbound IPs for database allowlists
 malloyyo cloud instance delete acme    # reversible until it is destroyed
 ```
 
@@ -153,6 +154,11 @@ fully destroyed, since its name is free for someone else to take.
 which is the same URL you then `malloyyo login`. It provisions real infrastructure, so it
 takes minutes; if the command stops waiting, the work continues and `instance status` picks
 it up. Every command takes `--json` for a parseable answer instead of progress lines.
+
+`instance egress` prints every static IPv4 and IPv6 address the instance may use for
+outbound connections. Add all returned addresses to a database or warehouse allowlist.
+The command accepts the instance name or ID and, like `status`, infers the hosted target
+from `malloy-config.json` when run without one.
 
 ### Warehouse secrets
 

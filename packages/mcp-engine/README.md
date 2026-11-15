@@ -53,6 +53,18 @@ import { attachSurface } from '@malloyyo/mcp-engine/mcp-sdk';
 attachSurface(server, surface, { registerSkillsAsPrompts: true });
 ```
 
+## Core entry: hosts outside malloyyo
+
+`@malloyyo/mcp-engine/core` is the part any Malloy host can use: compile, list
+and describe, run and restricted queries, problems, the explore surface, and the
+Malloy help topics. It holds nothing about malloyyo's datasets, repos,
+publishing or dashboards, and it bundles with esbuild's `platform: 'neutral'`,
+so it runs outside Node: the malloy-duckdb extension bundles it into QuickJS to
+answer `malloy sources` and `malloy describe`. `test/core.test.ts` holds that
+line. The full entry (`.`) is the core plus malloyyo's layers, and adds
+malloyyo's help topics (`content/help/{authoring,dashboards,repo,site}`) to
+`yo_help`; another host adds its own with `addHelpContent`.
+
 ## Build & test
 
 ```bash

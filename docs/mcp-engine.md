@@ -625,8 +625,9 @@ hosted endpoint. Fixed by folding skill content into the topic index.)
 - **`packages/mcp-engine`**, name **`@malloyyo/mcp-engine`**, `private: true`.
   Workspace-now / own-repo-later (Lloyd's `packages/cli` path); rename to
   `@malloydata/…` on extraction.
-- **Exports:** `.` (types + helpers + turnkey) and `./mcp-sdk` (the
-  `attachSurface` adapter).
+- **Exports:** `.` (types + helpers + turnkey), `./core` (the part with
+  no malloyyo product knowledge, which bundles for a neutral platform; see
+  the package README), and `./mcp-sdk` (the `attachSurface` adapter).
 - **`@malloydata/malloy` is a peerDependency — never bundled.** The
   architecture passes `Runtime` instances across the boundary and the error
   path does `instanceof MalloyError`; two copies of the package would make

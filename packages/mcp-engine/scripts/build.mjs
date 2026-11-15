@@ -4,7 +4,7 @@
 import { build } from 'esbuild';
 
 await build({
-  entryPoints: ['src/index.ts', 'src/mcp-sdk.ts'],
+  entryPoints: ['src/index.ts', 'src/core.ts', 'src/mcp-sdk.ts'],
   bundle: true,
   packages: 'external',
   platform: 'node',

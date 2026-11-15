@@ -10,5 +10,8 @@ await build({
   platform: 'node',
   format: 'esm',
   outdir: 'dist',
+  // index and core share modules (one help index, one set of surfaces), so
+  // shared code goes to chunks both import rather than into each bundle.
+  splitting: true,
   logLevel: 'info',
 });

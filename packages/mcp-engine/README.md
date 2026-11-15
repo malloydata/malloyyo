@@ -57,13 +57,19 @@ attachSurface(server, surface, { registerSkillsAsPrompts: true });
 
 `@malloyyo/mcp-engine/core` is the part any Malloy host can use: compile, list
 and describe, run and restricted queries, problems, the explore surface, and the
-Malloy help topics. It holds nothing about malloyyo's datasets, repos,
-publishing or dashboards, and it bundles with esbuild's `platform: 'neutral'`,
-so it runs outside Node: the malloy-duckdb extension bundles it into QuickJS to
-answer `malloy sources` and `malloy describe`. `test/core.test.ts` holds that
-line. The full entry (`.`) is the core plus malloyyo's layers, and adds
-malloyyo's help topics (`content/help/{authoring,dashboards,repo,site}`) to
-`yo_help`; another host adds its own with `addHelpContent`.
+Malloy help topics (`language/`, `explore/`). It holds none of malloyyo's product
+logic (datasets, repos, publishing, dashboard rendering; dashboards appear only
+as optional host-supplied wire fields), and `test/core.test.ts` checks it
+bundles with esbuild's `platform: 'neutral'`, reaches only its listed modules,
+and that its help never mentions malloyyo and never points at a topic it lacks.
+The malloy-duckdb extension bundles it into QuickJS to answer `malloy sources`
+and `malloy describe`.
+
+The full entry (`.`) is the core plus malloyyo's layers, and adds malloyyo's own
+help (`authoring/`, `dashboards/`, `develop/`, `repo/`, `site/`,
+`language/who-is-asking`) to `yo_help`; another host adds its own with
+`addHelpContent`. The two entries share one help index: `scripts/build.mjs`
+splits shared code into chunks.
 
 ## Build & test
 

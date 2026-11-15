@@ -1,5 +1,9 @@
 # Charts (`# bar_chart`, `# line_chart`, …)
 
+For answering one question with a picture, see `yo_help explore/charting-results`;
+this topic is about dashboard tiles, the dimension-counting rule, and sorting a
+named axis.
+
 The renderer's built-in chart tags cover most dashboard tiles. Tag a nested view
 and it draws:
 

@@ -48,10 +48,6 @@ Nothing warns you. The tag simply does not appear in the result's annotations,
 and the renderer has no chart to draw. If you tagged a query and got a table,
 this is why, before anything else.
 
-Related: `yo_help dashboards/charts` goes deeper on the dimension-counting rule
-and on sorting a named axis; this topic is about answering a question with a
-picture.
-
 ## Choose the shape from the question
 
 | The question is about… | Use | The x axis is |

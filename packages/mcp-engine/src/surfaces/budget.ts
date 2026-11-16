@@ -15,13 +15,36 @@ const REFINE_HINT =
   'Aggregate, filter, or do top-N in Malloy rather than fetching rows to ' +
   'post-process; select fewer columns if rows are wide.';
 
+/**
+ * UTF-8 byte length of a string, without Node's Buffer: the core runs outside
+ * Node (the malloy-duckdb extension runs it in QuickJS). A surrogate pair is
+ * one 4-byte character; a lone surrogate encodes as U+FFFD, 3 bytes, as
+ * Buffer counts it.
+ */
+export function utf8Length(text: string): number {
+  let bytes = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    if (c < 0x80) bytes += 1;
+    else if (c < 0x800) bytes += 2;
+    else if (c >= 0xd800 && c < 0xdc00 && i + 1 < text.length) {
+      const next = text.charCodeAt(i + 1);
+      if (next >= 0xdc00 && next < 0xe000) {
+        bytes += 4;
+        i++;
+      } else bytes += 3;
+    } else bytes += 3;
+  }
+  return bytes;
+}
+
 /** Largest prefix of rows whose serialized size fits the budget. */
 function fittingPrefix(rows: unknown[], maxBytes: number): number {
   let bytes = 2; // []
   for (let i = 0; i < rows.length; i++) {
     // Per-row serialized size + separator. Serializing row-by-row is O(total)
     // overall, same as serializing once, without building the giant string.
-    const rowBytes = Buffer.byteLength(JSON.stringify(rows[i]) ?? 'null', 'utf8');
+    const rowBytes = utf8Length(JSON.stringify(rows[i]) ?? 'null');
     if (bytes + rowBytes + 1 > maxBytes) return i;
     bytes += rowBytes + 1;
   }
@@ -80,5 +103,5 @@ export function fitsDescribeBudget(
 ): boolean {
   const maxBytes =
     policy?.maxDescribeBytes ?? policy?.maxResultBytes ?? DEFAULT_RESULT_BYTES;
-  return Buffer.byteLength(JSON.stringify(payload) ?? '', 'utf8') <= maxBytes;
+  return utf8Length(JSON.stringify(payload) ?? '') <= maxBytes;
 }

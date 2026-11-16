@@ -1,7 +1,10 @@
-// Generates src/content/generated.ts so the published package carries its
-// model-facing text as compiled-in strings — no runtime file reads (and
-// therefore no serverless file-tracing exposure). Two sources, one pipeline:
-//   • content/*.md          → contentFiles map (the yo_help language topics)
+// Generates src/content/generated.ts and src/content/generated-product.ts so
+// the published package carries its model-facing text as compiled-in strings —
+// no runtime file reads (and therefore no serverless file-tracing exposure).
+// Two sources, one pipeline:
+//   • content/help/**.md    → contentFiles maps (the yo_help topics): Malloy
+//                             topics to generated.ts, malloyyo's own
+//                             (PRODUCT_HELP below) to generated-product.ts
 //   • content/prompts/**.md → prompts tree     (tool titles/descriptions +
 //                             server instructions; the audit/edit surface)
 import fs from 'node:fs';

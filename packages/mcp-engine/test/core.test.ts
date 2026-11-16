@@ -9,11 +9,19 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as esbuild from 'esbuild';
-import { addHelpContent, getHelpTopic, listHelpTopics } from '../src/core';
+import {
+  addHelpContent,
+  assembleInstructions,
+  getHelpTopic,
+  guidance,
+  listHelpTopics,
+  prompts,
+} from '../src/core';
+import { utf8Length } from '../src/surfaces/budget';
 
 // Every module the core may reach. A module added to this list is a decision
-// that it holds nothing malloyyo-specific. (host-givens still carries the
-// MALLOYYO_ reserved prefix; see the PR that introduced the core.)
+// that it holds nothing malloyyo-specific. (host-givens is the one exception:
+// it reserves the MALLOYYO_ prefix for givens a host fills in.)
 const CORE_MODULES = [
   'src/catalog.ts',
   'src/content/generated.ts',
@@ -38,6 +46,10 @@ const CORE_MODULES = [
   'src/walker.ts',
 ];
 
+// Node's globals, renamed so a reference to one shows in the bundle's text.
+// Help text that mentions them is a string, which define leaves alone.
+const NODE_GLOBALS = { Buffer: '__NODE_GLOBAL_Buffer__', process: '__NODE_GLOBAL_process__' };
+
 test('core bundles for a neutral platform and reaches only its own modules', async () => {
   const result = await esbuild.build({
     entryPoints: ['src/core.ts'],
@@ -47,6 +59,7 @@ test('core bundles for a neutral platform and reaches only its own modules', asy
     platform: 'neutral',
     mainFields: ['module', 'main'],
     metafile: true,
+    define: NODE_GLOBALS,
     external: ['@malloydata/malloy', '@malloydata/malloy/*'],
     logLevel: 'silent',
   });
@@ -54,25 +67,56 @@ test('core bundles for a neutral platform and reaches only its own modules', asy
     (f) => !CORE_MODULES.includes(f),
   );
   assert.deepEqual(outside, []);
+  const globals = result.outputFiles[0]?.text.match(/__NODE_GLOBAL_\w+__/g) ?? [];
+  assert.deepEqual([...new Set(globals)], [], 'core uses a Node global');
 });
 
-test('core help is about Malloy, and every topic it names is in it', () => {
+test('utf8Length counts bytes as Buffer does', () => {
+  for (const text of ['', 'abc', 'é', '€', '😀', 'a\ud800b', '\udc00', 'x😀é€']) {
+    assert.equal(utf8Length(text), Buffer.byteLength(text, 'utf8'), JSON.stringify(text));
+  }
+});
+
+/** Every string in a nested object, with its path. */
+function strings(value: unknown, path: string): Array<[string, string]> {
+  if (typeof value === 'string') return [[path, value]];
+  if (typeof value !== 'object' || value === null) return [];
+  return Object.entries(value).flatMap(([k, v]) => strings(v, `${path}.${k}`));
+}
+
+test('core help, prompts and guidance are about Malloy, and every topic they name is in the core', () => {
   const names = listHelpTopics();
   assert.ok(names.includes('language/joins'));
-  const pointer = /yo_help\(?\s*["'`]?([a-z0-9-]+(?:\/[a-z0-9-]+)+)/g;
-  for (const name of names) {
-    const body = getHelpTopic(name)?.body ?? '';
-    assert.doesNotMatch(body, /malloyyo/i, `${name} mentions malloyyo`);
-    for (const [, target] of body.matchAll(pointer)) {
-      assert.ok(names.includes(target as string), `${name} points at ${target}, which core does not have`);
+  // yo_help("x"), yo_help('x/y'), `yo_help x/y`: a quoted name, or a bare one with a slash.
+  const pointer = /yo_help\(?\s*(?:["'`]([a-z0-9-]+(?:\/[a-z0-9-]+)*)|([a-z0-9-]+(?:\/[a-z0-9-]+)+))/g;
+  const texts: Array<[string, string]> = [
+    ...names.map((name) => [name, getHelpTopic(name)?.body ?? ''] as [string, string]),
+    ...strings(prompts, 'prompts'),
+    ...strings(guidance, 'guidance'),
+    ['assembleInstructions(explore)', assembleInstructions('explore')],
+  ];
+  for (const [where, text] of texts) {
+    assert.doesNotMatch(text, /malloyyo/i, `${where} mentions malloyyo`);
+    for (const [, quoted, bare] of text.matchAll(pointer)) {
+      const target = (quoted ?? bare) as string;
+      assert.ok(getHelpTopic(target), `${where} points at ${target}, which core does not have`);
     }
   }
 });
 
-test('added content joins the index without reordering it', () => {
+// Runs last: it changes the shared index.
+test('added content takes its place in the index, and replaces a topic it names', () => {
   const before = listHelpTopics();
-  addHelpContent({ 'zz-host/notes.md': 'Host notes.' });
+  // host/ sorts between the core's explore/ and language/ topics.
+  const firstLanguage = before.findIndex((n) => n.startsWith('language/'));
+  assert.ok(firstLanguage > 0);
+  addHelpContent({
+    'host/notes.md': 'Host notes.',
+    'explore/how-to.md': 'Replaced.',
+  });
   const after = listHelpTopics();
-  assert.equal(getHelpTopic('zz-host/notes')?.body, 'Host notes.');
-  assert.deepEqual(after.filter((n) => n !== 'zz-host/notes'), before);
+  assert.equal(getHelpTopic('host/notes')?.body, 'Host notes.');
+  assert.equal(after.indexOf('host/notes'), firstLanguage);
+  assert.deepEqual(after.filter((n) => n !== 'host/notes'), before);
+  assert.equal(getHelpTopic('explore/how-to')?.body, 'Replaced.');
 });

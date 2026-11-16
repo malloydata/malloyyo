@@ -10,10 +10,15 @@ Rules specific to this package:
   form.** Treat diffs to them as API changes, not test noise. After an
   intentional shape change: `UPDATE_GOLDENS=1 npm run test`, then review the
   golden diff like you'd review a public API diff.
-- **`src/content/generated.ts` is generated** (`npm run gen`, from
-  `content/*.md` and `content/prompts/**.md`) and gitignored. Edit the markdown
-  in `content/`, never the generated file. `test` and `build` both run gen
-  automatically.
+- **`src/content/generated.ts` and `generated-product.ts` are generated**
+  (`npm run gen`, from `content/help/**.md` and `content/prompts/**.md`) and
+  gitignored. Edit the markdown in `content/`, never the generated files. `test`
+  and `build` both run gen automatically.
+- **Help is split by audience.** Topics about Malloy go to `generated.ts`, which
+  the core entry (`src/core.ts`) carries; topics about malloyyo itself
+  (`PRODUCT_HELP` in `scripts/embed-content.ts`) go to `generated-product.ts`,
+  which only the full entry adds. A new topic that names malloyyo, or points at
+  one that does, belongs in `PRODUCT_HELP`; `test/core.test.ts` fails otherwise.
 - **All model-facing prose lives in `content/prompts/**.md`, not inline in
   `src/`.** Tool titles/descriptions and the per-surface server instructions
   are edited there as plain text (the human audit/edit surface) and read in code

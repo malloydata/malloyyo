@@ -10,6 +10,9 @@
 // identity/auth, and transport. (The MCP SDK adapter is the separate
 // './mcp-sdk' subpath export so the SDK stays an optional peer.)
 
+// malloyyo's own help topics, which the core entry (./core) leaves out.
+import './product-help';
+
 // Layer 1 — types
 export type {
   AccessModifier,
@@ -131,6 +134,7 @@ export {
   type ArtifactsResult,
 } from './artifacts';
 export {
+  addHelpContent,
   listHelpTopics,
   getHelpTopic,
   helpTopicForCode,

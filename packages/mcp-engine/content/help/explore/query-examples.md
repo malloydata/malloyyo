@@ -204,7 +204,7 @@ aggregated rows.
 
 When the answer is "here's the row, go look at it in the source system", tag a
 `group_by:`/`select:` field with `# link` so its cell renders as a hyperlink
-(in the shareable ltool view and in dashboards). Three forms:
+(wherever the host renders results). Three forms:
 
 ```malloy
 run: flights -> {

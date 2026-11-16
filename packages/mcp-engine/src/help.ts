@@ -14,6 +14,18 @@
 import { contentFiles } from './content/generated';
 import type { HelpTopic } from './types';
 
+// The engine's own topics (Malloy, and how to use it over MCP), then whatever a
+// host adds. malloyyo adds its product topics (src/product-help.ts).
+const packs: Array<Record<string, string>> = [contentFiles];
+let cachedIndex: HelpTopic[] | null = null;
+
+/** Add topics to the index: content keys (`<dir>/<file>.md`) to markdown, the
+    same shape as content/help. A key already present is replaced. */
+export function addHelpContent(files: Record<string, string>): void {
+  packs.push(files);
+  cachedIndex = null;
+}
+
 /** Lowercase kebab a single path segment / heading. */
 function slugify(s: string): string {
   return s
@@ -87,10 +99,14 @@ function splitReference(ns: string, raw: string, out: HelpTopic[]): void {
     (name = its path), except the language reference which fans out into sections. */
 function buildIndex(): HelpTopic[] {
   const topics: HelpTopic[] = [];
-  for (const [key, raw] of Object.entries(contentFiles)) {
+  const merged: Record<string, string> = Object.assign({}, ...packs);
+  const entries = Object.keys(merged)
+    .sort()
+    .map((key) => [key, merged[key] as string] as const);
+  for (const [key, raw] of entries) {
     if (key === LANGUAGE_REFERENCE) {
       const ns = nameFromKey(key.replace(/\/[^/]+$/, '')); // its directory → "language"
-      splitReference(ns, raw, topics);
+      splitReference(ns, parseFrontMatter(key, raw).body, topics);
     } else {
       topics.push({ name: nameFromKey(key), body: parseFrontMatter(key, raw).body.trim() });
     }
@@ -98,7 +114,6 @@ function buildIndex(): HelpTopic[] {
   return topics;
 }
 
-let cachedIndex: HelpTopic[] | null = null;
 function index(): HelpTopic[] {
   if (!cachedIndex) cachedIndex = buildIndex();
   return cachedIndex;

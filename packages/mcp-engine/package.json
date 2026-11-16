@@ -10,6 +10,10 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./core": {
+      "types": "./dist/core.d.ts",
+      "default": "./dist/core.js"
+    },
     "./mcp-sdk": {
       "types": "./dist/mcp-sdk.d.ts",
       "default": "./dist/mcp-sdk.js"

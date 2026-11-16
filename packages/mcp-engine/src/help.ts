@@ -106,7 +106,7 @@ function buildIndex(): HelpTopic[] {
   for (const [key, raw] of entries) {
     if (key === LANGUAGE_REFERENCE) {
       const ns = nameFromKey(key.replace(/\/[^/]+$/, '')); // its directory → "language"
-      splitReference(ns, raw, topics);
+      splitReference(ns, parseFrontMatter(key, raw).body, topics);
     } else {
       topics.push({ name: nameFromKey(key), body: parseFrontMatter(key, raw).body.trim() });
     }

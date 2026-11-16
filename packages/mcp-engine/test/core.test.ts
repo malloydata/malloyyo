@@ -104,6 +104,12 @@ test('core help, prompts and guidance are about Malloy, and every topic they nam
   }
 });
 
+test('no topic carries its file\'s front matter', () => {
+  for (const name of listHelpTopics()) {
+    assert.doesNotMatch(getHelpTopic(name)?.body ?? '', /^(---|description:)/, name);
+  }
+});
+
 // Runs last: it changes the shared index.
 test('added content takes its place in the index, and replaces a topic it names', () => {
   const before = listHelpTopics();

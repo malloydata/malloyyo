@@ -37,7 +37,10 @@ renders. Pass the returned `slug` back on the next save to update the same
 draft instead of making another. For a small change, send `slug` with
 `edits: [{ find, replace }]` instead of the whole `source`: each `find` is
 exact text from the saved draft and must match once (`file: "malloy"` edits
-the dashboard file).
+the dashboard file). Copy it from the draft as stored — `get_draft_dashboard`
+returns it — not from what you sent: a dashboard file that uses givens is
+stored with an `##! experimental.givens` line added at the top. Edits keep
+the draft's name, so `name` can be left out.
 
 ## The queries
 

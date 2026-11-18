@@ -35,7 +35,7 @@ import { artifactManifest } from "./manifest";
 import { DRAFT_PREFIX } from "./meta";
 import { applyDraftEdits, draftBody, draftFile, type DraftEdit } from "./draft-text";
 
-export { draftBody, type DraftEdit } from "./draft-text";
+export { draftBody, MAX_DRAFT_EDITS, type DraftEdit } from "./draft-text";
 
 const NAME_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
 const MAX_TEXT = 256 * 1024;
@@ -43,7 +43,8 @@ const MAX_TEXT = 256 * 1024;
 const TILE_SAMPLE_ROWS = 3;
 
 export interface DraftInput {
-  /** The dashboard's name — its file basename, e.g. "trend". */
+  /** The dashboard's name — its file basename, e.g. "trend". With `edits` it
+      may be left out (the draft keeps its name), and must match if given. */
   name: string;
   /** dashboards/<name>.malloy. Optional: a component that runs its own
       queries inline (useQuery({malloy})) needs no dashboard file at all. */
@@ -117,21 +118,41 @@ function isNoQueriesProblem(p: Problem): boolean {
   return /Model has no queries/.test(p.message);
 }
 
+/** Why a draft's files can't be saved as they are, or null. */
+function fileProblem(malloy: string, source: string): string | null {
+  if (!malloy.trim() && !source.trim()) return "give a component (source), a dashboards/<name>.malloy, or both";
+  if (malloy.length > MAX_TEXT || source.length > MAX_TEXT) return `each file is limited to ${MAX_TEXT / 1024} KB`;
+  return null;
+}
+
 export async function saveDraftDashboard(
   userId: string,
   datasetRef: string,
   input: DraftInput,
   origin: string,
 ): Promise<DraftSaveResult> {
-  const name = String(input.name ?? "").trim();
-  if (!NAME_RE.test(name)) {
+  const editing = !!input.edits?.length;
+  // An empty file sent alongside edits is a client filling an optional field,
+  // not a second instruction — only real text conflicts with them.
+  const hasText = (s: unknown) => typeof s === "string" && s.trim() !== "";
+  let name = String(input.name ?? "").trim();
+  if ((name || !editing) && !NAME_RE.test(name)) {
     return { ok: false, error: "name must be letters, digits, '-' or '_' (the dashboard file's basename)" };
   }
-  if (input.edits?.length && !input.slug) {
+  if (editing && !input.slug) {
     return { ok: false, error: "edits need the slug of the draft to change" };
   }
-  if (input.edits?.length && (input.source !== undefined || input.malloy !== undefined)) {
+  if (editing && (hasText(input.source) || hasText(input.malloy))) {
     return { ok: false, error: "send edits or whole files, not both" };
+  }
+
+  // Whole files are checked here, before any database work; edited ones once
+  // the stored draft they apply to has been read.
+  let malloy = draftFile(String(input.malloy ?? ""));
+  let source = String(input.source ?? "");
+  if (!editing) {
+    const bad = fileProblem(malloy, source);
+    if (bad) return { ok: false, error: bad };
   }
 
   const found = await findByDatasetRef(userId, datasetRef);
@@ -163,19 +184,25 @@ export async function saveDraftDashboard(
     if (existing.userId !== userId) return { ok: false, error: "that draft dashboard belongs to someone else" };
   }
 
-  let malloy = draftFile(String(input.malloy ?? ""));
-  let source = String(input.source ?? "");
-  if (input.edits?.length) {
-    const r = applyDraftEdits({ source: existing!.source, malloy: existing!.malloy }, input.edits);
+  if (editing) {
+    // `slug` is required with edits, and a missing draft returned above.
+    const base = existing!;
+    // An edit changes the text, not which file it is: a different name here
+    // would quietly rename the dashboard (its file, its artifact, what a
+    // promote writes), so it is refused rather than taken.
+    if (name && name !== base.name) {
+      return {
+        ok: false,
+        error: `this draft is named '${base.name}'; edits keep its name (leave name out, or send whole files to rename it)`,
+      };
+    }
+    name = base.name;
+    const r = applyDraftEdits({ source: base.source, malloy: base.malloy }, input.edits!, MAX_TEXT);
     if (!r.ok) return { ok: false, error: r.error };
     source = r.source;
     malloy = draftFile(r.malloy);
-  }
-  if (!malloy.trim() && !source.trim()) {
-    return { ok: false, error: "give a component (source), a dashboards/<name>.malloy, or both" };
-  }
-  if (malloy.length > MAX_TEXT || source.length > MAX_TEXT) {
-    return { ok: false, error: `each file is limited to ${MAX_TEXT / 1024} KB` };
+    const bad = fileProblem(malloy, source);
+    if (bad) return { ok: false, error: bad };
   }
 
   const baseFiles = await modelFileMap(found.model);
@@ -290,12 +317,32 @@ export async function saveDraftDashboard(
     source,
     updatedAt: new Date(),
   };
+  // Edits were applied to the text read above, and the checks since then take
+  // a while. Write only if the draft still holds that text: a save that
+  // landed in between must not be overwritten with a result computed from
+  // what it replaced. (A whole-file save states the entire draft, so it stays
+  // last-writer-wins.)
+  const target = existing
+    ? editing
+      ? and(
+          eq(draftDashboards.id, existing.id),
+          eq(draftDashboards.source, existing.source),
+          eq(draftDashboards.malloy, existing.malloy),
+        )
+      : eq(draftDashboards.id, existing.id)
+    : undefined;
   const [row] = existing
-    ? await db.update(draftDashboards).set(values).where(eq(draftDashboards.id, existing.id)).returning()
+    ? await db.update(draftDashboards).set(values).where(target).returning()
     : await db
         .insert(draftDashboards)
         .values({ ...values, slug: newDatasetSlug(), userId, datasetId: found.ds.id })
         .returning();
+  if (!row) {
+    return {
+      ok: false,
+      error: "the draft changed while these edits were being checked; nothing was saved — re-read it (get_draft_dashboard) and send the edits again",
+    };
+  }
 
   // 5. Test-run every tile under the key the dashboard will render with, so the
   //    first view reuses this compile. Givens without defaults fail here, and

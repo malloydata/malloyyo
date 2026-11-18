@@ -952,6 +952,30 @@ test("a draft saved over REST takes edits, and edits mixed with a whole file are
   });
   assert.equal(res.status, 422);
   assert.match(((await res.json()) as { error: string }).error, /edits or whole files, not both/);
+
+  const refused = async (body: Record<string, unknown>) => {
+    const r = await fetch(`${serverUrl}/api/datasets/${DS_DRAFT}/drafts`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify(body),
+    });
+    assert.equal(r.status, 422);
+    return ((await r.json()) as { error: string }).error;
+  };
+  const edit = [{ find: `<ol className="states">`, replace: `<ol className="all-states">` }];
+
+  // Edits need a slug to apply to.
+  assert.match(await refused({ name: "by_state", edits: edit }), /edits need the slug/);
+
+  // An edit never renames: a different name is refused, not taken.
+  assert.match(await refused({ name: "by_state_v2", slug, edits: edit }), /named 'by_state'; edits keep its name/);
+
+  // Name left out, and an empty whole-file field alongside the edits, both
+  // read as "keep it": the edit lands and the draft keeps its name.
+  await makeDraft({ slug, source: "", malloy: "", edits: edit });
+  const [after] = await db.select().from(draftDashboards).where(eq(draftDashboards.slug, slug));
+  assert.match(after.source, /<ol className="all-states">/);
+  assert.equal(after.name, "by_state");
 });
 
 test("draft promote writes the repo files, records what it became, and keeps the draft", async () => {

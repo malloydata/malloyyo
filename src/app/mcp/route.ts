@@ -30,7 +30,7 @@ import {
 } from "@/lib/mcp-app-dashboard";
 import { dashboardPanel, type DashboardPanel } from "@/lib/mcp-app-panel";
 import { DRAFT_PREFIX, draftForward, draftSlug, getDashboard, listDashboards, visibleImageHosts } from "@/lib/dashboards";
-import { deleteDraft, getDraftFiles, recordPromotion, saveDraftDashboard, type DraftEdit } from "@/lib/dashboards/draft";
+import { deleteDraft, getDraftFiles, recordPromotion, saveDraftDashboard, MAX_DRAFT_EDITS, type DraftEdit } from "@/lib/dashboards/draft";
 import { hasRole, MALLOYYO_ADMIN } from "@/lib/roles";
 import { checkRepo, describeTable, findRepo, listRepos, listTables, publishRepo } from "@/lib/repo-authoring";
 import { fetchBranchPreview, previewChanges, type PreviewSummary } from "@/lib/repo-preview-store";
@@ -515,7 +515,7 @@ function registerAuthoringTools(server: McpServer, scope: RequestScope): void {
 
   type SaveArgs = {
     dataset: string;
-    name: string;
+    name?: string;
     source?: string;
     malloy?: string;
     title?: string;
@@ -538,14 +538,18 @@ function registerAuthoringTools(server: McpServer, scope: RequestScope): void {
         `may import, and the query rules. Reports each query's result and any component compile error, ` +
         `so fix what it reports before showing the user. Pass \`slug\` to update a draft you ` +
         `already saved; show_dashboard renders it by the returned \`dashboard\` name. ` +
-        `For a small change to a saved draft, pass \`slug\` and \`edits\` ([{find, replace}], exact text, ` +
-        `each find unique) instead of resending the whole \`source\`.`,
+        `For a small change to a saved draft, pass \`slug\` and \`edits\` ([{find, replace}], exact text ` +
+        `from the stored draft as get_draft_dashboard returns it, each find unique) instead of resending ` +
+        `the whole \`source\`; name may then be left out.`,
       annotations: { readOnlyHint: false },
       inputSchema: fromJsonSchema<SaveArgs>({
         type: "object",
         properties: {
           dataset: { type: "string", description: "Dataset name (the model_ref list_sources reports)." },
-          name: { type: "string", description: 'A short name, e.g. "revenue_trend".' },
+          name: {
+            type: "string",
+            description: 'A short name, e.g. "revenue_trend". Required unless sending edits, which keep the draft\'s name.',
+          },
           source: { type: "string", description: "The React component (JSX/TSX), default-exported." },
           malloy: {
             type: "string",
@@ -559,7 +563,9 @@ function registerAuthoringTools(server: McpServer, scope: RequestScope): void {
           slug: { type: "string", description: "Update this draft instead of creating one." },
           edits: {
             type: "array",
-            description: "With slug: exact find/replace edits to the stored draft instead of a new source. Each find must match once.",
+            description:
+              "With slug: exact find/replace edits to the stored draft (its text as get_draft_dashboard returns it) " +
+              `instead of a new source. Each find must match once; at most ${MAX_DRAFT_EDITS} edits.`,
             items: {
               type: "object",
               properties: {
@@ -571,11 +577,11 @@ function registerAuthoringTools(server: McpServer, scope: RequestScope): void {
             },
           },
         },
-        required: ["dataset", "name"],
+        required: ["dataset"],
       }),
     },
     logged(scope, SAVE_DRAFT_TOOL, async (a: SaveArgs) => {
-      const r = await saveDraftDashboard(userId, a.dataset, a, origin);
+      const r = await saveDraftDashboard(userId, a.dataset, { ...a, name: a.name ?? "" }, origin);
       if (!r.ok) {
         const detail = r.problems?.map((p) => `  - ${p.message}`).join("\n");
         return {

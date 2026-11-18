@@ -6,7 +6,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { applyDraftEdits } from "./draft-text";
+import { applyDraftEdits, MAX_DRAFT_EDITS } from "./draft-text";
 
 const FILES = {
   source: `export default function D() {\n  return <h1>Sales</h1>;\n}\n`,
@@ -51,4 +51,29 @@ test("an edit that is missing, empty, ambiguous or malformed fails the whole cal
 
   const notObject = applyDraftEdits(FILES, [null as unknown as { find: string; replace: string }]);
   assert.deepEqual(notObject, { ok: false, error: "edit 1: expected { find, replace } strings; nothing was saved" });
+});
+
+test("the edit count and every intermediate file size are bounded", () => {
+  const tooMany = applyDraftEdits(
+    FILES,
+    Array.from({ length: MAX_DRAFT_EDITS + 1 }, () => ({ find: "Sales", replace: "Sales" })),
+  );
+  assert.ok(!tooMany.ok && /at most \d+ edits per save/.test(tooMany.error));
+
+  // A chain that grows the file fails at the edit that crosses the limit, not
+  // after building the whole result: edit 2 would take the source past 1 KB.
+  const big = "x".repeat(600);
+  const grown = applyDraftEdits(
+    FILES,
+    [
+      { find: "Sales", replace: `${big}A` },
+      { find: "A<", replace: `${big}B<` },
+      { find: "B<", replace: "C<" },
+    ],
+    1024,
+  );
+  assert.deepEqual(grown, { ok: false, error: "edit 2: the draft's source would exceed 1 KB; nothing was saved" });
+
+  const fits = applyDraftEdits(FILES, [{ find: "Sales", replace: big }], 1024);
+  assert.ok(fits.ok);
 });

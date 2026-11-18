@@ -35,10 +35,11 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, isNull, sql } from "drizzle-orm";
 import { modelArtifact, layoutFromListing, type ArtifactInfo } from "@malloyyo/mcp-engine";
 import {
   db,
+  datasetAliases,
   datasets,
   malloyArtifacts,
   malloyModels,
@@ -67,6 +68,7 @@ import {
   fsLister,
   writeDatasetWorkspace,
 } from "./repo-workspace";
+import { missingEnvRefs } from "./publish-diagnosis";
 import { qualifiedName } from "./repos";
 import { requirementForPublish } from "./tenancy";
 
@@ -112,6 +114,11 @@ export type PublishedDataset = {
   dir: string;
   version: number;
   created: boolean;
+  /** A repo-less dataset this publish attached to the repo (`adoptRoot`). */
+  adopted?: true;
+  /** Reserved givens the model declares that this dataset is not scoped by —
+      nothing supplies them, so their filters use the declaration default. */
+  declaredButUnused?: string[];
 };
 
 export type PublishResult =
@@ -138,6 +145,12 @@ export type PublishResult =
       failures?: PublishFailure[];
       /** Directories with no dataset, when that is why the publish was refused. */
       missing?: Array<{ name: string; dir: string }>;
+      /**
+       * On a compile failure: env vars the repo's malloy-config.json references
+       * that are NOT set on this server. Malloy resolves them to empty, so the
+       * compile error is a bare connect failure that never names the secret.
+       */
+      missingEnv?: string[];
     };
 
 export type PublishInput = {
@@ -177,15 +190,20 @@ export type PublishInput = {
    */
   rootDatasetName?: string;
   /**
-   * Refuse a repo whose layout is a ROOT `index.malloy` (one dataset).
+   * A REPO-LESS dataset to bring into this repo as its root dataset.
    *
-   * A wire-level decision, not a design one: `malloyyo publish --repo` has
-   * always been the multi-dataset flag and `--dataset <name>` the single one,
-   * and the server's refusal is what names the right flag when someone reaches
-   * it anyway. The pipeline itself handles both layouts, which is what the
-   * GitHub path needs — every repo on this instance today is the single shape.
+   * `malloyyo publish --dataset x` used to push a file list that belonged to no
+   * repo at all. That path is gone from the CLI, and the repo it moves to has to
+   * keep serving the SAME row — saved queries, share links, drafts, roles and
+   * scoping all hang off its id. So the first repo publish of a single-dataset
+   * repo whose name matches a repo-less dataset attaches that row (repo_id,
+   * repo_dir "") inside the activation transaction, instead of creating a
+   * second dataset that would shadow nothing and orphan everything.
+   *
+   * Only consulted for a SINGLE-dataset layout with no dataset at its root yet.
+   * Who may adopt it is the caller's decision (src/app/api/repos/push/route.ts).
    */
-  refuseRootLayout?: boolean;
+  adoptRoot?: Dataset;
 };
 
 /**
@@ -548,18 +566,6 @@ async function readShape(
   const layout = await layoutFromListing(fsLister(repoRoot), label);
   if (!layout.ok) return { ...empty, layoutError: layout.error };
 
-  if (layout.kind === "single" && input.refuseRootLayout) {
-    return {
-      refusal: {
-        ok: false,
-        kind: "request",
-        error:
-          `${label} publishes a single dataset (index.malloy at its root), so it has no name of ` +
-          `its own here. Publish it with --dataset <name> instead.`,
-      },
-    };
-  }
-
   const declared =
     layout.kind === "single"
       ? [{ name: "", dir: "" }]
@@ -575,6 +581,12 @@ async function readShape(
     .where(and(eq(datasets.repoId, input.repo.id), eq(datasets.status, "ready")));
   const byDir = new Map<string, Dataset[]>();
   for (const d of live) byDir.set(d.repoDir, [...(byDir.get(d.repoDir) ?? []), d]);
+  // A repo-less dataset this publish brings in (see `adoptRoot`). It counts as
+  // covering the root, so it is compiled and written like any live dataset and
+  // attached to the repo in the same transaction that activates it.
+  if (layout.kind === "single" && input.adoptRoot && !byDir.has("")) {
+    byDir.set("", [input.adoptRoot]);
+  }
 
   const missing = declared.filter((d) => !byDir.has(d.dir));
   if (missing.length > 0 && !input.createDatasets && (input.onMissing ?? "report") === "refuse") {
@@ -659,6 +671,7 @@ async function verifyAndActivate(
     create?: { name: string; dir: string };
     compiled: CompiledDir;
     requiredGivens: string[] | null;
+    declaredButUnused?: string[];
   }> = [];
   for (const c of compiled) {
     const existing = byDir.get(c.dir) ?? [];
@@ -678,7 +691,7 @@ async function verifyAndActivate(
         failures.push({ name: ds.name, dir: c.dir, error: req.error });
         continue;
       }
-      plans.push({ dataset: ds, compiled: c, requiredGivens: null });
+      plans.push({ dataset: ds, compiled: c, requiredGivens: null, declaredButUnused: req.declaredButUnused });
     }
   }
 
@@ -693,7 +706,15 @@ async function verifyAndActivate(
       failures,
       stillServing: live.length,
     });
-    return { ok: false, kind: "compile", error, revisionId: revision.id, failures };
+    const missingEnv = missingEnvRefs(readIfPresent(path.join(repoRoot, "malloy-config.json")));
+    return {
+      ok: false,
+      kind: "compile",
+      error,
+      revisionId: revision.id,
+      failures,
+      ...(missingEnv.length > 0 ? { missingEnv } : {}),
+    };
   }
 
   // ── 6. activate ───────────────────────────────────────────────────────────
@@ -749,6 +770,7 @@ async function activate(
     create?: { name: string; dir: string };
     compiled: CompiledDir;
     requiredGivens: string[] | null;
+    declaredButUnused?: string[];
   }>,
 ): Promise<{ ok: true; datasets: PublishedDataset[] } | (PublishResult & { ok: false })> {
   const ownerId = input.datasetOwnerId ?? input.repo.ownerId;
@@ -769,6 +791,7 @@ async function activate(
       const published: PublishedDataset[] = [];
       for (const plan of plans) {
         let target = plan.dataset;
+        const adopting = !!target && target.repoId === null;
         if (!target) {
           const [row] = await tx
             .insert(datasets)
@@ -789,6 +812,21 @@ async function activate(
             })
             .returning();
           target = row;
+        } else if (target.repoId === null) {
+          // Adoption (`adoptRoot`): the repo-less row becomes this repo's root
+          // dataset. Its bare name keeps resolving through an alias — once it
+          // has a repo, a second repo publishing the same name would otherwise
+          // make every old link to it ambiguous.
+          [target] = await tx
+            .update(datasets)
+            .set({ repoId: input.repo.id, repoDir: "" })
+            .where(and(eq(datasets.id, target.id), isNull(datasets.repoId)))
+            .returning();
+          if (!target) throw new Error(`dataset "${plan.dataset!.name}" was attached to another repo mid-publish`);
+          await tx
+            .insert(datasetAliases)
+            .values({ alias: target.name, datasetId: target.id })
+            .onConflictDoNothing();
         }
 
         const [{ next }] = await tx.execute<{ next: number }>(
@@ -854,6 +892,8 @@ async function activate(
           dir: target.repoDir,
           version: Number(next),
           created: !plan.dataset,
+          ...(adopting ? { adopted: true as const } : {}),
+          ...(plan.declaredButUnused?.length ? { declaredButUnused: plan.declaredButUnused } : {}),
         });
       }
 
@@ -904,5 +944,13 @@ async function activate(
       };
     }
     throw err;
+  }
+}
+
+function readIfPresent(file: string): string | undefined {
+  try {
+    return fs.readFileSync(file, "utf8");
+  } catch {
+    return undefined;
   }
 }

@@ -166,6 +166,34 @@ export function gitInfo(dir: string): GitInfo {
 }
 
 /**
+ * `owner/name` from the checkout's `origin` remote — what `publish` names the repo
+ * when `--repo` isn't given. Separate from `gitInfo`, which gives up on a repo with
+ * no commits yet; the remote is there from the first `git remote add`.
+ */
+export function originRepo(dir: string): string | undefined {
+  let url: string;
+  try {
+    url = execFileSync("git", ["remote", "get-url", "origin"], {
+      cwd: dir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    return undefined;
+  }
+  // git@host:owner/name.git | https://host/owner/name(.git)/ | ssh://git@host/owner/name
+  const path = url
+    .replace(/\.git\/?$/, "")
+    .replace(/\/+$/, "")
+    .replace(/^[a-z+]+:\/\/[^/]*\//i, "")
+    .replace(/^[^@/]+@[^:/]+:/, "");
+  const parts = path.split("/").filter(Boolean);
+  if (parts.length < 2) return undefined;
+  const [owner, name] = parts.slice(-2);
+  return /^[\w.-]+$/.test(owner) && /^[\w.-]+$/.test(name) ? `${owner}/${name}` : undefined;
+}
+
+/**
  * Every file in the repo the server could need, repo-relative.
  *
  * `gatherDirectory` answers this for ONE dataset and returns only `.malloy`,

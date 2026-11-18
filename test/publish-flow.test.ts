@@ -33,6 +33,7 @@ import {
   malloyModelFiles,
   malloyArtifacts,
   repos,
+  repoRevisions,
   oauthClients,
   oauthAccessTokens,
   apiTokens,
@@ -42,6 +43,7 @@ import {
 } from "@/db";
 import { createApiToken } from "@/lib/api-tokens";
 import { latestModel } from "@/lib/mcp-tools";
+import { resolveDatasetRef } from "@/lib/repos";
 import { POST as pushRoute } from "@/app/api/datasets/[id]/model/push/route";
 import { GET as statusRoute } from "@/app/api/datasets/[id]/model/status/route";
 import { POST as repoPushRoute } from "@/app/api/repos/push/route";
@@ -220,7 +222,14 @@ const seededUsers: string[] = [];
 /** Publish dirs made by makeProject(), cleaned up in after(). */
 const projects: string[] = [];
 
-/** A publishable model directory whose malloyyo target points at the test server. */
+/** The repo each makeProject() directory publishes as — one per dataset name, so
+    tests that publish the same dataset share its repo, and no others do. */
+const projectRepos = new Map<string, string>();
+/** `--repo <owner/name>` for a makeProject() directory. Every publish names a repo. */
+const repoArg = (dir: string) => ["--repo", projectRepos.get(dir)!];
+
+/** A publishable single-dataset repo (index.malloy at its root) whose malloyyo
+    target points at the test server and names `dataset`. */
 function makeProject(
   dataset: string,
   opts: {
@@ -237,6 +246,10 @@ function makeProject(
   // stamp this repo's commit onto the payload and make assertions drift.
   const dir = mkdtempSync(join(tmpdir(), "malloyyo-publish-"));
   projects.push(dir);
+  // A publish packs what GIT tracks, so a fixture has to be a git repo — the
+  // same requirement a real model repo already meets.
+  execFileSync("git", ["init", "-q"], { cwd: dir, stdio: ["ignore", "pipe", "pipe"] });
+  projectRepos.set(dir, `t/proj_${dataset.toLowerCase().replace(/[^a-z0-9_]+/g, "_")}`);
   writeFileSync(
     join(dir, "malloy-config.json"),
     JSON.stringify(
@@ -379,24 +392,23 @@ after(async () => {
 
 // ── tests ────────────────────────────────────────────────────────────────────
 
-test("publish to a missing dataset fails, creates nothing, and points at --create-dataset", async () => {
+test("publish to a missing dataset fails, creates nothing, and points at --create-datasets", async () => {
   const dir = makeProject(`ghost_ds_${RUN}`);
-  const r = await runCli(["publish", "test", dir, "--token", token], dir);
+  const r = await runCli(["publish", "test", dir, ...repoArg(dir), "--token", token], dir);
 
   assert.notEqual(r.code, 0, `expected a non-zero exit\n${r.stdout}\n${r.stderr}`);
   const out = r.stdout + r.stderr;
-  assert.match(out, new RegExp(`dataset "ghost_ds_${RUN}" not found`));
-  assert.match(out, /--create-dataset/);
+  assert.match(out, new RegExp(`ghost_ds_${RUN}: not on this instance yet`));
+  assert.match(out, /--create-datasets/);
   assert.equal((await datasetRows(`ghost_ds_${RUN}`)).length, 0);
 });
 
-test("publish --create-dataset creates a private dataset owned by the token's user, with v1", async () => {
+test("publish --create-datasets creates a private dataset owned by the token's user, with v1", async () => {
   const dir = makeProject(DS_MAIN, { dashboard: true });
-  const r = await runCli(["publish", "test", dir, "--token", token, "--create-dataset"], dir);
+  const r = await runCli(["publish", "test", dir, ...repoArg(dir), "--token", token, "--create-datasets"], dir);
 
   assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`);
-  assert.match(r.stdout, new RegExp(`created dataset ${DS_MAIN} \\(private\\)`));
-  assert.match(r.stdout, /published version 1/);
+  assert.match(r.stdout, new RegExp(`✓ ${DS_MAIN}  v1  \\(created\\)`));
 
   const rows = await datasetRows(DS_MAIN);
   assert.equal(rows.length, 1);
@@ -415,14 +427,16 @@ test("publish --create-dataset creates a private dataset owned by the token's us
     ["sales"],
   );
 
-  // The whole payload landed: model files (incl. the dashboard's .malloy and
-  // malloy-config.json) and the dashboard artifact.
-  const files = await db
+  // It belongs to a repo — the whole point: no dataset is published repo-less.
+  // Its files live in the revision's archive, not in per-model file rows.
+  assert.ok(ds.repoId, "the dataset belongs to a repo");
+  assert.equal(ds.repoDir, "", "…as its root dataset");
+  assert.ok(model.revisionId, "the model was compiled out of a repo revision");
+  const fileRows = await db
     .select({ path: malloyModelFiles.path })
     .from(malloyModelFiles)
     .where(eq(malloyModelFiles.modelId, model.id));
-  const paths = files.map((f) => f.path).sort();
-  assert.deepEqual(paths, ["dashboards/totals.malloy", "index.malloy", "malloy-config.json"]);
+  assert.deepEqual(fileRows, [], "…so there are no repo-less file rows");
 
   const arts = await db
     .select({ name: malloyArtifacts.name, title: malloyArtifacts.title })
@@ -431,13 +445,13 @@ test("publish --create-dataset creates a private dataset owned by the token's us
   assert.deepEqual(arts, [{ name: "totals", title: "Totals" }]);
 });
 
-test("--create-dataset on an existing dataset publishes a new version instead of a second dataset", async () => {
+test("--create-datasets on an existing dataset publishes a new version instead of a second dataset", async () => {
   const dir = makeProject(DS_MAIN);
-  const r = await runCli(["publish", "test", dir, "--token", token, "--create-dataset"], dir);
+  const r = await runCli(["publish", "test", dir, ...repoArg(dir), "--token", token, "--create-datasets"], dir);
 
   assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`);
-  assert.doesNotMatch(r.stdout, /created dataset/);
-  assert.match(r.stdout, /published version 2/);
+  assert.doesNotMatch(r.stdout, /\(created\)/);
+  assert.match(r.stdout, /  v2/);
 
   const rows = await datasetRows(DS_MAIN);
   assert.equal(rows.length, 1, "the flag must be idempotent — no duplicate dataset");
@@ -473,9 +487,17 @@ test("a publish ACTIVATES what it wrote — or the instance serves the previous 
     .returning();
 
   const dir = makeProject(name);
-  const r = await runCli(["publish", "test", dir, "--token", token], dir);
+  const r = await runCli(["publish", "test", dir, ...repoArg(dir), "--token", token], dir);
   assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`);
-  assert.match(r.stdout, /published version 2/);
+  // A dataset an older `publish --dataset` left repo-less is MOVED into the
+  // repo, not shadowed by a second one: same row, so its links keep working.
+  assert.match(r.stdout, /  v2  \(moved into this repo/);
+  const [adopted] = await datasetRows(name);
+  assert.equal(adopted.id, ds.id, "the same dataset row");
+  assert.ok(adopted.repoId, "…now belonging to a repo");
+  assert.equal(adopted.repoDir, "");
+  const ref = await resolveDatasetRef(name);
+  assert.ok(ref.ok && ref.dataset.id === ds.id, "and its bare name still resolves to it");
 
   const rows = await models(ds.id);
   assert.equal(rows.length, 2);
@@ -495,7 +517,7 @@ test("…and a dataset created by that route is servable at once", async () => {
   // `--dataset x` would have appeared in the catalogue with NO SOURCES.
   const name = `pf_active_new_${RUN}`;
   const dir = makeProject(name);
-  const r = await runCli(["publish", "test", dir, "--token", token, "--create-dataset"], dir);
+  const r = await runCli(["publish", "test", dir, ...repoArg(dir), "--token", token, "--create-datasets"], dir);
   assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`);
   const [ds] = await datasetRows(name);
   const rows = await models(ds.id);
@@ -505,21 +527,22 @@ test("…and a dataset created by that route is servable at once", async () => {
 
 test("a plain publish keeps working against the dataset the flag created", async () => {
   const dir = makeProject(DS_MAIN);
-  const r = await runCli(["publish", "test", dir, "--token", token], dir);
+  const r = await runCli(["publish", "test", dir, ...repoArg(dir), "--token", token], dir);
 
   assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`);
-  assert.match(r.stdout, /published version 3/);
+  // The same bytes as the live revision: nothing new to write, and it says so.
+  assert.match(r.stdout, /unchanged — already live/);
 
   const status = await runCli(["status", "test", "--token", token], dir);
   assert.equal(status.code, 0, `${status.stdout}\n${status.stderr}`);
   assert.match(status.stdout, new RegExp(`dataset=${DS_MAIN}`));
-  assert.match(status.stdout, /version 3/);
+  assert.match(status.stdout, /version 2/);
   assert.match(status.stdout, /✓ compiled/);
 });
 
-test("--create-dataset on a model that doesn't compile leaves no dataset behind", async () => {
+test("--create-datasets on a model that doesn't compile leaves no dataset behind", async () => {
   const dir = makeProject(`broken_ds_${RUN}`, { model: BROKEN });
-  const r = await runCli(["publish", "test", dir, "--token", token, "--create-dataset"], dir);
+  const r = await runCli(["publish", "test", dir, ...repoArg(dir), "--token", token, "--create-datasets"], dir);
 
   assert.notEqual(r.code, 0, `expected a non-zero exit\n${r.stdout}\n${r.stderr}`);
   assert.equal(
@@ -549,7 +572,7 @@ test("a model whose config needs an unset secret says WHICH secret, not just the
   // raw error never mentions the secret. Both ends check for it explicitly.
   // Locally first — the CLI lints before it sends, and that's where a developer
   // meets the error.
-  const local = await runCli(["publish", "test", dir, "--token", token, "--create-dataset"], dir);
+  const local = await runCli(["publish", "test", dir, ...repoArg(dir), "--token", token, "--create-datasets"], dir);
   assert.notEqual(local.code, 0, `expected a non-zero exit\n${local.stdout}\n${local.stderr}`);
   const localOut = local.stdout + local.stderr;
   assert.match(localOut, /\$MALLOYYO_TEST_SECRET_UNSET/);
@@ -558,7 +581,7 @@ test("a model whose config needs an unset secret says WHICH secret, not just the
   // …and again from the server, for the case where the secret is set locally but
   // not on the deployment (--skip-lint stands in for "it compiled here").
   const remote = await runCli(
-    ["publish", "test", dir, "--token", token, "--create-dataset", "--skip-lint"],
+    ["publish", "test", dir, ...repoArg(dir), "--token", token, "--create-datasets", "--skip-lint"],
     dir,
   );
   assert.notEqual(remote.code, 0, `expected a non-zero exit\n${remote.stdout}\n${remote.stderr}`);
@@ -570,13 +593,13 @@ test("a model whose config needs an unset secret says WHICH secret, not just the
   assert.equal((await datasetRows(`secret_ds_${RUN}`)).length, 0);
 });
 
-test("--create-dataset rejects a name that isn't a usable dataset slug", async () => {
+test("a target dataset name that isn't a usable slug is refused, not silently renamed", async () => {
   const dir = makeProject(`Pet Shop ${RUN}`);
-  const r = await runCli(["publish", "test", dir, "--token", token, "--create-dataset"], dir);
+  const r = await runCli(["publish", "test", dir, ...repoArg(dir), "--token", token, "--create-datasets"], dir);
 
   assert.notEqual(r.code, 0, `expected a non-zero exit\n${r.stdout}\n${r.stderr}`);
   const out = r.stdout + r.stderr;
-  assert.match(out, new RegExp(`cannot create dataset "Pet Shop ${RUN}"`));
+  assert.match(out, new RegExp(`"Pet Shop ${RUN}" is not a usable dataset name`));
   assert.match(out, new RegExp(`use "pet_shop_${RUN}"`));
   assert.equal((await datasetRows(`Pet Shop ${RUN}`)).length, 0);
   assert.equal(
@@ -588,7 +611,7 @@ test("--create-dataset rejects a name that isn't a usable dataset slug", async (
 
 test("a bad token can't create anything, and the error says how to fix it", async () => {
   const dir = makeProject(`unauth_ds_${RUN}`);
-  const r = await runCli(["publish", "test", dir, "--token", "not-a-real-token", "--create-dataset"], dir);
+  const r = await runCli(["publish", "test", dir, ...repoArg(dir), "--token", "not-a-real-token", "--create-datasets"], dir);
 
   assert.notEqual(r.code, 0, `expected a non-zero exit\n${r.stdout}\n${r.stderr}`);
   const out = r.stdout + r.stderr;
@@ -602,7 +625,7 @@ test("a bad token can't create anything, and the error says how to fix it", asyn
 
 test("a bad token from the config's env var names that var, and still points at login", async () => {
   const dir = makeProject(`envtoken_ds_${RUN}`, { tokenEnv: "MALLOYYO_TEST_TOKEN" });
-  const r = await runCli(["publish", "test", dir, "--create-dataset"], dir, {
+  const r = await runCli(["publish", "test", dir, ...repoArg(dir), "--create-datasets"], dir, {
     MALLOYYO_TEST_TOKEN: "not-a-real-token",
   });
 
@@ -632,7 +655,7 @@ test("a non-admin token can't create a dataset", async () => {
   const raw = await seedOAuthToken(member.id, "mcp publish");
 
   const dir = makeProject(`nonadmin_ds_${RUN}`);
-  const r = await runCli(["publish", "test", dir, "--token", raw, "--create-dataset"], dir);
+  const r = await runCli(["publish", "test", dir, ...repoArg(dir), "--token", raw, "--create-datasets"], dir);
 
   assert.notEqual(r.code, 0, `expected a non-zero exit\n${r.stdout}\n${r.stderr}`);
   const out = r.stdout + r.stderr;
@@ -652,7 +675,7 @@ test("an MCP-only OAuth grant cannot publish, however privileged its owner", asy
   const raw = await seedOAuthToken(admin.id, "mcp");
 
   const dir = makeProject(name);
-  const r = await runCli(["publish", "test", dir, "--token", raw], dir);
+  const r = await runCli(["publish", "test", dir, ...repoArg(dir), "--token", raw], dir);
 
   assert.notEqual(r.code, 0, `expected a non-zero exit\n${r.stdout}\n${r.stderr}`);
   const out = r.stdout + r.stderr;
@@ -684,7 +707,7 @@ test("a login stored before publish scopes existed is told to sign in again", as
 
   const dir = makeProject(name);
   // No --token and no env var: this is the stored-login branch of the precedence.
-  const r = await runCli(["publish", "test", dir], dir, { XDG_CONFIG_HOME: configHome });
+  const r = await runCli(["publish", "test", dir, ...repoArg(dir)], dir, { XDG_CONFIG_HOME: configHome });
 
   assert.notEqual(r.code, 0, `expected a non-zero exit\n${r.stdout}\n${r.stderr}`);
   const out = r.stdout + r.stderr;
@@ -703,10 +726,10 @@ test("a minted API token publishes, and $MALLOYYO_TOKEN is enough on its own", a
   const minted = await mintFor(owner.id, ["publish"]);
 
   const dir = makeProject(name);
-  const r = await runCli(["publish", "test", dir], dir, { MALLOYYO_TOKEN: minted });
+  const r = await runCli(["publish", "test", dir, ...repoArg(dir)], dir, { MALLOYYO_TOKEN: minted });
 
   assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`);
-  assert.match(r.stdout, /published version 1/);
+  assert.match(r.stdout, /  v1/);
 
   const status = await runCli(["status", "test"], dir, { MALLOYYO_TOKEN: minted });
   assert.equal(status.code, 0, `${status.stdout}\n${status.stderr}`);
@@ -724,7 +747,7 @@ test("a token without the publish scope is refused, and told which scope it lack
   const minted = await mintFor(owner.id, ["mcp"]);
 
   const dir = makeProject(name);
-  const r = await runCli(["publish", "test", dir], dir, { MALLOYYO_TOKEN: minted });
+  const r = await runCli(["publish", "test", dir, ...repoArg(dir)], dir, { MALLOYYO_TOKEN: minted });
 
   assert.notEqual(r.code, 0, `expected a non-zero exit\n${r.stdout}\n${r.stderr}`);
   const out = r.stdout + r.stderr;
@@ -742,7 +765,7 @@ test("a token can't publish to someone else's dataset", async () => {
   const minted = await mintFor(outsider.id, ["publish"]);
 
   const dir = makeProject(name);
-  const r = await runCli(["publish", "test", dir], dir, { MALLOYYO_TOKEN: minted });
+  const r = await runCli(["publish", "test", dir, ...repoArg(dir)], dir, { MALLOYYO_TOKEN: minted });
 
   assert.notEqual(r.code, 0, `expected a non-zero exit\n${r.stdout}\n${r.stderr}`);
   assert.match(r.stdout + r.stderr, /doesn't own dataset/);
@@ -757,10 +780,10 @@ test("an admin's token publishes to a dataset owned by someone else", async () =
   const minted = await mintFor(admin.id, ["publish"]);
 
   const dir = makeProject(name);
-  const r = await runCli(["publish", "test", dir], dir, { MALLOYYO_TOKEN: minted });
+  const r = await runCli(["publish", "test", dir, ...repoArg(dir)], dir, { MALLOYYO_TOKEN: minted });
 
   assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`);
-  assert.match(r.stdout, /published version 1/);
+  assert.match(r.stdout, /  v1/);
 });
 
 test("a revoked token stops working immediately", async () => {
@@ -774,7 +797,7 @@ test("a revoked token stops working immediately", async () => {
     .where(eq(apiTokens.userId, owner.id));
 
   const dir = makeProject(name);
-  const r = await runCli(["publish", "test", dir], dir, { MALLOYYO_TOKEN: minted });
+  const r = await runCli(["publish", "test", dir, ...repoArg(dir)], dir, { MALLOYYO_TOKEN: minted });
 
   assert.notEqual(r.code, 0, `expected a non-zero exit\n${r.stdout}\n${r.stderr}`);
   const out = r.stdout + r.stderr;
@@ -791,7 +814,7 @@ test("a token minted on another instance says so instead of just failing", async
   await seedDataset(name, owner.id);
 
   const dir = makeProject(name);
-  const r = await runCli(["publish", "test", dir], dir, {
+  const r = await runCli(["publish", "test", dir, ...repoArg(dir)], dir, {
     MALLOYYO_TOKEN: `myo_somewhereelse_${randomBytes(32).toString("base64url")}`,
   });
 
@@ -803,7 +826,7 @@ test("a value that isn't a token at all is diagnosed as the wrong secret", async
   // The MotherDuck-rename hazard: MALLOYYO_TOKEN used to hold a warehouse
   // secret in some configs, and a bare 401 points nowhere near that.
   const dir = makeProject(`wrongsecret_ds_${RUN}`);
-  const r = await runCli(["publish", "test", dir], dir, {
+  const r = await runCli(["publish", "test", dir, ...repoArg(dir)], dir, {
     MALLOYYO_TOKEN: "eyJhbGciOiJIUzI1NiJ9.eyJzZXNzaW9uIjoiYWJjIn0.sig",
   });
 
@@ -813,9 +836,9 @@ test("a value that isn't a token at all is diagnosed as the wrong secret", async
   assert.match(out, /warehouse password/);
 });
 
-test("--dry-run never reaches the server, even with --create-dataset", async () => {
+test("--dry-run never reaches the server, even with --create-datasets", async () => {
   const dir = makeProject(`dryrun_ds_${RUN}`);
-  const r = await runCli(["publish", "test", dir, "--token", token, "--create-dataset", "--dry-run"], dir);
+  const r = await runCli(["publish", "test", dir, ...repoArg(dir), "--token", token, "--create-datasets", "--dry-run"], dir);
 
   assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`);
   assert.match(r.stdout, /dry run — not sending/);
@@ -839,36 +862,27 @@ test("the dataset the flag created is addressable by name and unique among ready
 test("a repo's dev container is published with the model", async () => {
   const ds = `${DS_MAIN}_devcontainer`;
   const dir = makeProject(ds, { devcontainer: true });
-  const r = await runCli(["publish", "test", dir, "--token", token, "--create-dataset"], dir);
+  const r = await runCli(["publish", "test", dir, ...repoArg(dir), "--token", token, "--create-datasets"], dir);
   assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`);
 
   const [row] = await datasetRows(ds);
   const [model] = await models(row.id);
-  const files = await db
-    .select({ path: malloyModelFiles.path, content: malloyModelFiles.content })
-    .from(malloyModelFiles)
-    .where(eq(malloyModelFiles.modelId, model.id));
-
-  const found = files.find((f) => f.path === ".devcontainer/devcontainer.json");
-  assert.ok(found, `devcontainer.json published — got ${files.map((f) => f.path).join(", ")}`);
-  assert.match(found.content, /malloyyo-devcontainer/);
+  const [rev] = await db.select().from(repoRevisions).where(eq(repoRevisions.id, model.revisionId!));
+  assert.equal(rev.hasDevcontainer, true, "the revision records the dev container");
 });
 
 test("a repo without a dev container publishes without one", async () => {
   const ds = `${DS_MAIN}_nodevcontainer`;
   const dir = makeProject(ds);
-  const r = await runCli(["publish", "test", dir, "--token", token, "--create-dataset"], dir);
+  const r = await runCli(["publish", "test", dir, ...repoArg(dir), "--token", token, "--create-datasets"], dir);
   assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`);
 
   const [row] = await datasetRows(ds);
   const [model] = await models(row.id);
-  const files = await db
-    .select({ path: malloyModelFiles.path })
-    .from(malloyModelFiles)
-    .where(eq(malloyModelFiles.modelId, model.id));
-  assert.equal(files.some((f) => f.path === ".devcontainer/devcontainer.json"), false);
-  // And the model itself still published, so this is not a vacuous pass.
-  assert.ok(files.some((f) => f.path === "index.malloy"));
+  // The model itself published, so this is not a vacuous pass.
+  assert.ok(model.revisionId, "published from a revision");
+  const [rev] = await db.select().from(repoRevisions).where(eq(repoRevisions.id, model.revisionId!));
+  assert.equal(rev.hasDevcontainer, false);
 });
 
 // ── draft dashboards: login --token-stdin, draft list, draft promote ─────────
@@ -888,7 +902,7 @@ export default function D() {
     store (so a developer's real ~/.config/malloyyo is never read). */
 async function draftProject(): Promise<{ dir: string; env: Record<string, string> }> {
   const dir = makeProject(DS_DRAFT);
-  const published = await runCli(["publish", "--create-dataset", "--token", token], dir);
+  const published = await runCli(["publish", ...repoArg(dir), "--create-datasets", "--token", token], dir);
   assert.equal(published.code, 0, published.stderr);
   const xdg = mkdtempSync(join(tmpdir(), "malloyyo-xdg-"));
   projects.push(xdg);
@@ -1068,7 +1082,7 @@ source: sales is duckdb.sql("""
 test("a dataset created by a publish takes its scoping from that model", async () => {
   const name = `${DS_MAIN}_scoped`;
   const dir = makeProject(name, { model: SCOPED_MODEL });
-  const r = await runCli(["publish", "test", dir, "--token", token, "--create-dataset"], dir);
+  const r = await runCli(["publish", "test", dir, ...repoArg(dir), "--token", token, "--create-datasets"], dir);
   assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`);
 
   const [ds] = await datasetRows(name);
@@ -1079,14 +1093,14 @@ test("a model that stops declaring what the dataset is scoped by is REFUSED", as
   const name = `${DS_MAIN}_sticky`;
   const scoped = makeProject(name, { model: SCOPED_MODEL });
   assert.equal(
-    (await runCli(["publish", "test", scoped, "--token", token, "--create-dataset"], scoped)).code,
+    (await runCli(["publish", "test", scoped, ...repoArg(scoped), "--token", token, "--create-datasets"], scoped)).code,
     0,
   );
 
   // The accident: the given and its filter are gone. Publishing this would
   // return every buyer's rows to every user.
   const plain = makeProject(name, { model: MODEL });
-  const r = await runCli(["publish", "test", plain, "--token", token], plain);
+  const r = await runCli(["publish", "test", plain, ...repoArg(plain), "--token", token], plain);
 
   assert.notEqual(r.code, 0, "the publish must fail");
   assert.match(`${r.stdout}${r.stderr}`, /does not declare it/);
@@ -1103,13 +1117,13 @@ test("publishing does not add to what a dataset is scoped by", async () => {
   const name = `${DS_MAIN}_extra`;
   const plain = makeProject(name, { model: MODEL });
   assert.equal(
-    (await runCli(["publish", "test", plain, "--token", token, "--create-dataset"], plain)).code,
+    (await runCli(["publish", "test", plain, ...repoArg(plain), "--token", token, "--create-datasets"], plain)).code,
     0,
   );
   assert.deepEqual((await datasetRows(name))[0].requiredGivens, [], "created unscoped");
 
   const scoped = makeProject(name, { model: SCOPED_MODEL });
-  const r = await runCli(["publish", "test", scoped, "--token", token], scoped);
+  const r = await runCli(["publish", "test", scoped, ...repoArg(scoped), "--token", token], scoped);
   assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`);
   assert.match(r.stdout, /declares MALLOYYO_EMAIL, which this dataset is NOT scoped by/);
   assert.deepEqual((await datasetRows(name))[0].requiredGivens, [], "still unscoped");
@@ -1121,7 +1135,7 @@ test("a reserved given this server does not fill is refused at publish", async (
     model: SCOPED_MODEL.replace("MALLOYYO_EMAIL :: string is ''", "MALLOYYO_ROLE :: string is ''")
       .replace("buyer = $MALLOYYO_EMAIL", "buyer = $MALLOYYO_ROLE"),
   });
-  const r = await runCli(["publish", "test", dir, "--token", token, "--create-dataset"], dir);
+  const r = await runCli(["publish", "test", dir, ...repoArg(dir), "--token", token, "--create-datasets"], dir);
 
   assert.notEqual(r.code, 0);
   assert.match(`${r.stdout}${r.stderr}`, /reserved/);
@@ -1260,16 +1274,89 @@ test("a dataset the instance does not have is refused until --create-datasets", 
   assert.equal((await datasetRows(`rf_e_${RUN}`)).length, 0, "and nothing was created");
 });
 
-test("--dataset and --repo each refuse the layout they cannot address", async () => {
-  // Backward compatibility is the requirement: --dataset still means one dataset,
-  // and says so plainly when the repo holds several.
-  const multi = makeRepo([`rf_f_${RUN}`, `rf_g_${RUN}`]);
-  const a = await runCli(["publish", "-i", serverUrl, "--dataset", "whatever", "--token", token], multi);
+test("publish --dataset is gone: it says what replaced it, and publishes nothing", async () => {
+  // Every dataset is published as part of a repo. The flag is refused — not
+  // ignored, which would publish somewhere other than the dataset it named.
+  const name = `rf_h_${RUN}`;
+  const single = makeProject(name);
+  const a = await runCli(
+    ["publish", "-i", serverUrl, "--dataset", name, "--create-dataset", "--token", token],
+    single,
+  );
   assert.notEqual(a.code, 0);
-  assert.match(`${a.stdout}${a.stderr}`, /--dataset cannot say which/);
+  assert.match(`${a.stdout}${a.stderr}`, /--dataset is no longer a publish option/);
+  assert.match(`${a.stdout}${a.stderr}`, /--repo <owner\/name>/);
 
-  const single = makeProject(`rf_h_${RUN}`);
-  const b = await runCli(["publish", "-i", serverUrl, "--repo", REPO_SLUG, "--token", token], single);
+  // Neither layout publishes without naming its repo.
+  const b = await runCli(["publish", "test", single, "--token", token], single);
   assert.notEqual(b.code, 0);
-  assert.match(`${b.stdout}${b.stderr}`, /--repo has nothing to name/);
+  assert.match(`${b.stdout}${b.stderr}`, /every dataset is published as part of a repo/);
+  const multi = makeRepo([`rf_f_${RUN}`, `rf_g_${RUN}`]);
+  const c = await runCli(["publish", "-i", serverUrl, "--token", token], multi);
+  assert.notEqual(c.code, 0);
+  assert.match(`${c.stdout}${c.stderr}`, /--repo <owner\/name>/);
+  assert.equal((await datasetRows(name)).length, 0, "nothing was created");
+
+  // With an `origin` remote, the repo is named by it: a bare publish works.
+  execFileSync("git", ["remote", "add", "origin", `https://github.com/t/origin_${RUN}.git`], {
+    cwd: single,
+    stdio: "ignore",
+  });
+  const o = await runCli(["publish", "test", single, "--create-datasets", "--token", token, "--dry-run"], single);
+  assert.equal(o.code, 0, `${o.stdout}\n${o.stderr}`);
+  assert.match(o.stdout, new RegExp(`repo t/origin_${RUN} \\(from git remote origin`));
+
+  // --create-dataset only ever meant "create what this publishes": still honoured.
+  const d = await runCli(["publish", "test", single, ...repoArg(single), "--create-dataset", "--token", token], single);
+  assert.equal(d.code, 0, `${d.stdout}\n${d.stderr}`);
+  assert.match(d.stderr, /--create-dataset is now --create-datasets/);
+  const [ds] = await datasetRows(name);
+  assert.ok(ds?.repoId, "created, inside a repo");
+});
+
+test("the legacy dataset push still answers an older CLI", async () => {
+  // No current CLI path reaches it, so nothing else here would notice it break —
+  // and a CI job pinned to an old `malloyyo` would, on the next server upgrade.
+  const name = `legacy_push_${RUN}`;
+  const res = await fetch(`${serverUrl}/api/datasets/${name}/model/push?create=1`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+    body: JSON.stringify({
+      files: [{ path: "index.malloy", content: MODEL }],
+      config: JSON.stringify({ connections: { duckdb: { is: "duckdb" } } }),
+      git: {},
+      dashboards: [],
+    }),
+  });
+  const out = (await res.json()) as { ok?: boolean; error?: string; version?: number };
+  assert.equal(out.ok, true, out.error);
+  const [ds] = await datasetRows(name);
+  assert.equal(ds.repoId, null, "repo-less, as it always was");
+
+  // …and the current CLI then moves that dataset into a repo.
+  const dir = makeProject(name);
+  const r = await runCli(["publish", "test", dir, ...repoArg(dir), "--token", token], dir);
+  assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`);
+  assert.match(r.stdout, /moved into this repo/);
+  const [after] = await datasetRows(name);
+  assert.equal(after.id, ds.id);
+  assert.ok(after.repoId);
+});
+
+test("a dataset someone else owns can't be moved into your repo", async () => {
+  // Adoption is a publish to that dataset, so it carries a publish's authority:
+  // the dataset's owner, or an admin. A repo the publisher owns does not widen it.
+  const owner = await seedMember(`adopt-owner-${RUN}@test.local`);
+  const other = await seedMember(`adopt-other-${RUN}@test.local`);
+  const name = `adopt_other_${RUN}`;
+  const ds = await seedDataset(name, owner.id);
+  const minted = await mintFor(other.id, ["publish"]);
+
+  const dir = makeProject(name);
+  const r = await runCli(["publish", "test", dir, ...repoArg(dir)], dir, { MALLOYYO_TOKEN: minted });
+  assert.notEqual(r.code, 0);
+  assert.match(`${r.stdout}${r.stderr}`, /doesn't own dataset/);
+  const [after] = await datasetRows(name);
+  assert.equal(after.repoId, null, "still repo-less");
+  assert.equal((await models(ds.id)).length, 0);
 });

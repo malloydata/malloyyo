@@ -21,8 +21,9 @@
  */
 
 import { NextResponse } from "next/server";
+import { and, eq, isNull } from "drizzle-orm";
 import { nameToSlug } from "@malloyyo/mcp-engine";
-import { db, repos } from "@/db";
+import { datasets, db, repos } from "@/db";
 import { isAdmin } from "@/lib/admin";
 import { env } from "@/lib/env";
 import { credentialLabel, requireBearer } from "@/lib/bearer-auth";
@@ -47,6 +48,14 @@ type Body = {
   archive?: string;
   /** Create any dataset the repo publishes that does not exist here yet. */
   createDatasets?: boolean;
+  /**
+   * The name of a SINGLE-dataset repo's one dataset (a root `index.malloy`, which
+   * has no directory to be named after). Optional and additive: the CLI sends the
+   * config target's `dataset`. A repo-less dataset of that name — one an older
+   * `malloyyo publish --dataset` pushed — is ADOPTED into the repo rather than
+   * shadowed by a new one (see `adoptRoot` in src/lib/repo-publish.ts).
+   */
+  dataset?: string;
   /** Name the repo explicitly. Optional; nothing sends it yet. */
   repoSlug?: string;
   git?: { sha?: string | null; branch?: string | null; dirty?: boolean | null };
@@ -75,6 +84,28 @@ export async function POST(req: Request) {
   }
   const raw = Buffer.from(body.archive, "base64");
   if (raw.length === 0) return bad("the repo archive is empty", 400);
+
+  // The root dataset's name, held to the same rule `--create-dataset` held it to:
+  // it has to resolve to itself on every later publish, so it is never quietly
+  // slugified into something else.
+  const rootName = typeof body.dataset === "string" ? body.dataset.trim() : "";
+  if (rootName && nameToSlug(rootName) !== rootName) {
+    return bad(
+      `"${rootName}" is not a usable dataset name: dataset names are lowercase letters, digits ` +
+        `and underscores — use "${nameToSlug(rootName)}"`,
+      400,
+      { kind: "request" },
+    );
+  }
+  // A dataset no repo publishes, under that name: what `publish --dataset` left.
+  const [orphan] = rootName
+    ? await db
+        .select()
+        .from(datasets)
+        .where(and(eq(datasets.name, rootName), isNull(datasets.repoId), eq(datasets.status, "ready")))
+        .limit(1)
+    : [];
+  const ownsOrphan = !!orphan && (orphan.userId === auth.user.id || isAdmin(auth.user));
 
   const found = await findRepoForPublish({ githubRepo, repoSlug: body.repoSlug });
   if ("error" in found) return bad(found.error, 409, { kind: "request" });
@@ -113,6 +144,17 @@ export async function POST(req: Request) {
     }
   }
 
+  // Named first, because it is the real reason: whatever the repo's state, this
+  // publish would take over a dataset that belongs to someone else.
+  if (orphan && !ownsOrphan && !("repo" in found)) {
+    return bad(
+      `that account doesn't own dataset "${rootName}" and isn't an admin on this instance — ` +
+        `publishing is limited to a dataset's owner`,
+      403,
+      { kind: "request" },
+    );
+  }
+
   let repo;
   if ("repo" in found) {
     repo = found.repo;
@@ -133,8 +175,12 @@ export async function POST(req: Request) {
     }
   } else {
     // Creating a repo names a codebase this server will compile, which is the
-    // same reach `POST /api/datasets` is admin-only for.
-    if (!canAuthor(auth.user)) {
+    // same reach `POST /api/datasets` is admin-only for — with one exception.
+    // The owner of a repo-less dataset could always publish to it (that was
+    // `--dataset`'s rule: the dataset's owner or an admin), and moving it into a
+    // repo is how they keep doing so. Their reach is the dataset they already
+    // had, nothing wider.
+    if (!canAuthor(auth.user) && !(orphan && orphan.userId === auth.user.id)) {
       return bad(
         `"${githubRepo}" is not a repo on this instance yet, and creating one is admin-only — ` +
           `ask an admin to add it`,
@@ -174,6 +220,28 @@ export async function POST(req: Request) {
     }
   }
 
+  // Adopt only into a repo with no root dataset yet; after that, the repo's own
+  // row is the root and `dataset` names nothing new.
+  let adoptRoot: typeof orphan | undefined;
+  if (orphan) {
+    const [root] = await db
+      .select({ id: datasets.id })
+      .from(datasets)
+      .where(and(eq(datasets.repoId, repo.id), eq(datasets.repoDir, ""), eq(datasets.status, "ready")))
+      .limit(1);
+    if (!root) {
+      if (!ownsOrphan) {
+        return bad(
+          `"${rootName}" is a dataset on this instance that belongs to no repo, and that account ` +
+            `doesn't own it and isn't an admin — only its owner can move it into a repo`,
+          403,
+          { kind: "request" },
+        );
+      }
+      adoptRoot = orphan;
+    }
+  }
+
   try {
     const result = await publishRevision({
       repo,
@@ -186,9 +254,10 @@ export async function POST(req: Request) {
       // not to whoever happens to own the repo — a repo's owner may be an admin
       // who added it, and the publisher is who will maintain the dataset.
       datasetOwnerId: auth.user.id,
-      // `--repo` is the multi-dataset flag; a root `index.malloy` is
-      // `--dataset <name>`'s business, and the refusal names it.
-      refuseRootLayout: true,
+      // A root `index.malloy` publishes like any other repo now: named by
+      // `dataset` when the caller sent one, else after the repo.
+      ...(rootName ? { rootDatasetName: rootName } : {}),
+      ...(adoptRoot ? { adoptRoot } : {}),
       // Someone is reading an exit code: name the flag rather than publishing
       // what happens to be covered and leaving a directory behind silently.
       onMissing: "refuse",
@@ -219,12 +288,21 @@ export async function POST(req: Request) {
           : result.kind === "stale" || result.kind === "clash"
             ? 409
             : 400;
+      // A compile failure that is really a connection the server cannot open —
+      // usually a secret set on the author's machine and not on this one. The
+      // CLI names the variable when `kind` says so (its `failureHint`).
+      const connection =
+        result.kind === "compile" &&
+        ((result.missingEnv?.length ?? 0) > 0 ||
+          /No connection named|Invalid SQL, (connect |getaddrinfo|Error: connect)/i.test(result.error));
       return bad(
         result.kind === "compile" ? `nothing was published — ${result.error}` : result.error,
         status,
         {
-          kind:
-            result.kind === "layout" || result.kind === "archive"
+          ...(connection ? { missingEnv: result.missingEnv ?? [] } : {}),
+          kind: connection
+            ? "connection"
+            : result.kind === "layout" || result.kind === "archive"
               ? "compile"
               : result.kind === "clash"
                 ? "request"
@@ -262,12 +340,17 @@ export async function POST(req: Request) {
       repo: githubRepo || repo.slug,
       branch,
       revision: result.revision,
+      // Additive: these exact bytes were already live, so no version was written
+      // (each dataset's `version` is 0).
+      ...(result.unchanged ? { unchanged: true } : {}),
       datasets: result.datasets.map((d) => ({
         name: d.name,
         // Additive: the new public identity, for a CLI that wants to print it.
         qualified: d.qualified,
         version: d.version,
         created: d.created,
+        ...(d.adopted ? { adopted: true } : {}),
+        ...(d.declaredButUnused ? { declaredButUnused: d.declaredButUnused } : {}),
       })),
       ...(result.unclaimed.length > 0 ? { unclaimed: result.unclaimed.map((u) => u.name) } : {}),
     });

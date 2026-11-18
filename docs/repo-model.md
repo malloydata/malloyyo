@@ -258,7 +258,16 @@ exists or by its own backfill, so the migration cannot fail on data it did not
 choose. `test/repo-migration.test.ts` replays the journal to 0025, seeds the
 shapes the fork actually held, and checks all of it.
 
-## `--dataset x` is still repo-less, and that cost something
+## `--dataset x` was repo-less, and that cost something
+
+**Update: the CLI no longer has this path.** `malloyyo publish` always sends a
+repo (`POST /api/repos/push`), single-dataset layout included — the root
+dataset is named by the target's `dataset` (the request's additive `dataset`
+field). A repo-less dataset of that name is ADOPTED: attached to the repo
+(`repo_id`, `repo_dir ""`) inside the activation transaction, with an alias for
+its bare name, so its id and everything hanging off it survive
+(`adoptRoot` in src/lib/repo-publish.ts; owner or admin only). The route below
+stays for CLIs installed before the change. What follows is why it went.
 
 `POST /api/datasets/:id/model/push` sends a file list, not an archive, so it
 writes `malloy_model_files` rows and no revision. Keeping it is right — the wire

@@ -320,12 +320,12 @@ export async function initCmd(dir: string): Promise<void> {
   console.log("");
   console.log("Next:");
   if (repo.oldLayout) {
-    // This repo publishes one dataset from its root, and the flags that address
-    // it are the single-dataset ones. `lint` is where converting is explained.
+    // This repo publishes one dataset from its root, named by its target's
+    // "dataset". `lint` is where converting is explained.
     console.log("  claude              # author mode");
     console.log("  malloyyo lint                        # what this repo publishes");
     console.log("  malloyyo dashboard dev               # see it render");
-    console.log("  malloyyo publish --dataset <name>");
+    console.log("  malloyyo publish --repo <owner/name>");
     return;
   }
   console.log("  claude              # author mode — ask it to add a dataset");

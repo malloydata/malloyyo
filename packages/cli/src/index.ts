@@ -1,16 +1,14 @@
 #!/usr/bin/env node
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import { noticeOnExit, runUpdateCheck, UPDATE_CHECK_ARGV } from "./update-check.js";
 import { resolve, relative, sep } from "node:path";
 import { resolveTarget, resolveInstance, resolvePublishTarget, type Target } from "./config.js";
-import { gatherDirectory, gatherDashboards, gitArchiveZip, gitInfo } from "./gather.js";
+import { gatherDirectory, gitArchiveZip, gitInfo, originRepo } from "./gather.js";
 import { layoutFromListing } from "@malloyyo/mcp-engine";
 import { fsLister, repoRootOf } from "./repo.js";
 import {
   OLD_LAYOUT_NOTICE,
-  lintDashboards,
   lintRepo,
-  printLintReport,
   printRepoLintReport,
 } from "./lint.js";
 import { missingEnvRefs, missingEnvHint } from "./shared/env-refs.js";
@@ -32,7 +30,7 @@ import { launchCmd } from "./launch.js";
 import { clearCreds } from "./store.js";
 import { draftDelete, draftList, draftPromote, loginWithToken } from "./draft.js";
 import { registerCloudCommands } from "./cloud/index.js";
-import type { PublishRequest, ModelStatus } from "./protocol.js";
+import type { ModelStatus } from "./protocol.js";
 // Single source of truth: the build runs after the release bump, so esbuild
 // inlines the current package.json version (tree-shaken to just the string).
 // Feeds both `malloyyo --version` and the MCP server's serverInfo.version.
@@ -141,32 +139,33 @@ function requestFailed(
 }
 
 /**
- * Named after the flags it explains, since `--instance`/`--dataset` are the part of this
- * command that isn't guessable from the argument list alone.
+ * Named after the flags it explains, since `--repo`/`--instance` are the part of
+ * this command that isn't guessable from the argument list alone.
  */
-const PUBLISH_HELP = `One dataset, or several:
-  The repo's shape decides, so you don't declare it:
+const PUBLISH_HELP = `Every publish is a repo:
+  A dataset always belongs to a repo, named by --repo or, without it, by the
+  checkout's git remote "origin". The repo's shape decides what it publishes,
+  so you don't declare it:
 
-    index.malloy                    one dataset
-    dashboards/                     publish --dataset movies
-                                    --create-dataset to make it
+    index.malloy                    one dataset, named by the target's
+    dashboards/                     "dataset" in malloy-config.json
 
     datasets/finance/index.malloy   one dataset per directory
-    datasets/sales/index.malloy     publish --repo owner/name
-    malloy-config.json              --create-datasets to make them
+    datasets/sales/index.malloy
 
-  Use the wrong flag for your layout and the error says which to use.
+  --create-datasets creates any dataset the repo publishes that this instance
+  doesn't have yet. A dataset published with the old --dataset flag is moved
+  into the repo on its first repo publish: same dataset, same links.
 
   A repo publishes as a unit: every dataset is linted, and the server writes
   all of them or none. \`malloyyo lint\` shows what yours publishes.
 
 Target resolution:
-  The instance and dataset normally come from the \`malloyyo\` block in
-  malloy-config.json. Either can be overridden, and giving BOTH means the
-  config is never read — so a repo with no targets (or none for this
-  instance) can be published without editing its committed config:
+  The instance normally comes from the \`malloyyo\` block in malloy-config.json.
+  -i overrides it, so a repo with no target for this instance can be published
+  without editing its committed config:
 
-    malloyyo publish -i https://gravity.malloyyo.com --dataset movies --create-dataset
+    malloyyo publish -i https://gravity.malloyyo.com --repo owner/name --create-datasets
 
   -i takes what \`login\` takes: a URL, or the name of a configured target
   whose url should be borrowed. Authenticate the same way as always:
@@ -200,10 +199,14 @@ type PublishRepoOptions = {
   instance?: string;
   /** Upload as a branch preview instead of publishing; `true` = the current git branch. */
   branch?: string | boolean;
+  /** A single-dataset repo's one dataset's name (see `configuredDataset`). */
+  rootDataset?: string;
 };
 
 /**
- * Publish a multi-dataset repo — every dataset in it, as one unit.
+ * Publish a repo — every dataset in it, as one unit. `datasetNames` is empty for
+ * a single-dataset repo (a root `index.malloy`), whose one dataset is named by
+ * `rootDataset`, or by the server after the repo.
  *
  * The repo is packed into the same archive GitHub hands the server for a repo it
  * pulls, so there is one ingestion path on the other side rather than a
@@ -219,6 +222,7 @@ async function publishRepo(
   opts: PublishRepoOptions,
 ): Promise<void> {
   const t = resolvePublishTarget(root, target, { instance: opts.instance, dataset: opts.repo });
+  const source = tokenSource(t, { tokenFlag: opts.token });
   const bearer = await getAccessToken(t, { tokenFlag: opts.token });
 
   if (!opts.skipLint) {
@@ -257,7 +261,11 @@ async function publishRepo(
     `→ ${t.url}  repo=${opts.repo}` +
       (previewBranch ? `  preview of branch ${previewBranch}` : opts.createDatasets ? " (create missing)" : ""),
   );
-  console.log(`  ${datasetNames.length} dataset(s): ${datasetNames.join(", ")}`);
+  console.log(
+    datasetNames.length > 0
+      ? `  ${datasetNames.length} dataset(s): ${datasetNames.join(", ")}`
+      : `  1 dataset, at the repo root: ${opts.rootDataset ?? "(named after the repo)"}`,
+  );
   console.log(`  ${fileCount} file(s), ${(archive.length / 1024).toFixed(0)}KB archive  ${provenance}`);
   // The request carries the archive base64'd inside JSON. Not refused here —
   // a self-hosted instance takes more — but said before the send, because a
@@ -279,6 +287,7 @@ async function publishRepo(
       branch: previewBranch ?? git.branch ?? "main",
       archive: archive.toString("base64"),
       createDatasets: opts.createDatasets ?? false,
+      ...(opts.rootDataset ? { dataset: opts.rootDataset } : {}),
       git: previewBranch ? { ...git, branch: previewBranch } : git,
       ...(previewBranch ? { preview: true } : {}),
     }),
@@ -287,15 +296,35 @@ async function publishRepo(
   const out = (await res.json().catch(() => null)) as {
     ok?: boolean;
     error?: string;
-    datasets?: { name: string; version: number; created?: boolean }[];
+    unchanged?: boolean;
+    datasets?: {
+      name: string;
+      version: number;
+      created?: boolean;
+      adopted?: boolean;
+      declaredButUnused?: string[];
+    }[];
   } | null;
 
   if (res.status === 413) throw new Error(`publish refused by ${t.url} (413): ${tooLarge}`);
   if (!res.ok || !out?.ok) {
-    throw new Error(out?.error ?? `publish failed (${res.status})`);
+    // The same diagnosis a dataset push always gave: which credential, from
+    // where, and what to do about it — not a bare "403".
+    throw requestFailed("publish", res, (out ?? {}) as ModelStatus, t, source, bearer);
   }
   for (const d of out.datasets ?? []) {
-    console.log(`  ✓ ${d.name}  v${d.version}${d.created ? "  (created)" : ""}`);
+    console.log(
+      `  ✓ ${d.name}  ${out.unchanged ? "unchanged — already live" : `v${d.version}`}` +
+        (d.created ? "  (created)" : d.adopted ? "  (moved into this repo — same dataset, same links)" : ""),
+    );
+    if (d.declaredButUnused?.length) {
+      const many = d.declaredButUnused.length > 1;
+      console.log(
+        `    ↳ this model declares ${d.declaredButUnused.join(", ")}, which this dataset is NOT ` +
+          `scoped by. Nothing supplies ${many ? "them" : "it"}, so ${many ? "those filters" : "that filter"} ` +
+          `will use the declaration default. An admin ticks ${many ? "them" : "it"} on the dataset.`,
+      );
+    }
   }
   console.log(`published ${out.datasets?.length ?? 0} dataset(s) to ${t.url}`);
 }
@@ -325,6 +354,22 @@ async function reportPreview(res: Response, url: string, tooLarge: string): Prom
   if (failed) process.exitCode = 1;
 }
 
+/**
+ * What `--dataset` on `publish` used to do, and what to type instead.
+ *
+ * It pushed a file list into a dataset that belonged to NO repo — a second
+ * storage path beside the repo one, with its own activation and file rows, and
+ * the source of the bugs docs/repo-model.md records. Every layout publishes as a
+ * repo now. Refused rather than ignored: silently publishing somewhere other than
+ * the dataset that was named would be worse than stopping.
+ */
+const DATASET_FLAG_REMOVED =
+  "--dataset is no longer a publish option: a dataset is always published as part of a repo.\n" +
+  "  Publish the repo:  malloyyo publish   (named by git remote origin, or --repo <owner/name>)\n" +
+  "  A single-dataset repo's dataset takes its name from the target's \"dataset\" in\n" +
+  "  malloy-config.json, and one you published with --dataset before is moved into\n" +
+  "  the repo — same dataset, same links.";
+
 async function publish(
   target: string | undefined,
   dir: string,
@@ -342,6 +387,13 @@ async function publish(
 ): Promise<void> {
   const root = resolve(dir);
 
+  if (opts.dataset !== undefined) throw new Error(DATASET_FLAG_REMOVED);
+  if (opts.createDataset) {
+    // Harmless to honour — it only ever meant "create what this publishes".
+    console.warn("note: --create-dataset is now --create-datasets");
+    opts = { ...opts, createDatasets: true };
+  }
+
   // A URL typed where a target NAME goes. It is the obvious thing to type and
   // the obvious intent, and failing it with `Unknown target "http://…"` sends
   // someone looking for a config problem they do not have. `-i` is the flag
@@ -351,50 +403,20 @@ async function publish(
     target = undefined;
   }
 
-  // Which shape is this repo? The answer decides which flags mean anything, so
-  // it is read from the repo rather than from what the caller typed — a repo
-  // that grew a `datasets/` directory should say so, not publish its root.
+  // Which shape is this repo? Read from the repo rather than from what the caller
+  // typed — it decides what the publish names and what it prints.
   //
   // A LISTING, not a lint: the lint compiles every dataset, and `--skip-lint`
   // exists to not pay for that. Reading the layout through `lintRepo` here made
   // the flag suppress only the printing.
   const layout = await layoutFromListing(fsLister(root), root);
   if (!layout.ok) throw new Error(layout.error);
-  // Two separate questions: which flags this layout accepts, and whether to nag
-  // about converting. A dataset directory pointed at directly reads as the
-  // single-dataset shape, and its repo is already converted.
-  const oldLayout = layout.kind === "single" && repoRootOf(root) === root;
 
-  if (layout.kind !== "single") {
-    const names = layout.datasets.map((d) => d.name);
-    if (opts.dataset) {
-      throw new Error(
-        `${root} publishes ${names.length} datasets (${names.join(", ")}), so --dataset cannot say which.\n` +
-          `Publish the repo instead:  malloyyo publish --repo <owner/name>` +
-          (opts.createDataset ? " --create-datasets" : ""),
-      );
-    }
-    if (!opts.repo) {
-      throw new Error(
-        `${root} publishes ${names.length} datasets, and a repo is ${opts.branch !== undefined ? "previewed" : "published"} as one unit.\n` +
-          `Name it:  malloyyo publish --repo <owner/name>`,
-      );
-    }
-    return publishRepo(root, names, target, opts as PublishRepoOptions);
-  }
-  if (opts.branch !== undefined) {
-    throw new Error(`--branch previews a repo with a datasets/ directory; ${root} publishes one dataset from its root.`);
-  }
-  // FIRST, because this one is about WHERE you are standing and the next is about
-  // which flag you typed. The other order made the two refusals a loop: pointed
-  // at a dataset directory, `--repo` was refused with "use --dataset", and
-  // `--dataset` was refused with "publish the repo instead".
-  //
-  // A dataset of a repo is not independently publishable, and allowing it fails
-  // in the worst available shape: the model compiles here, because the config
-  // search walks up to the repo's `malloy-config.json` — but only the files UNDER
-  // this directory are uploaded, so the server receives a model with no
-  // connections at all. Lint passes, publish ships something broken.
+  // FIRST, because this one is about WHERE you are standing. A dataset of a repo
+  // is not independently publishable: the model compiles here, because the
+  // config search walks up to the repo's `malloy-config.json` — but only the
+  // files UNDER this directory would be packed, so the server would receive a
+  // model with no connections at all. Lint passes, publish ships something broken.
   const repoRoot = repoRootOf(root);
   if (repoRoot !== root) {
     const rel = relative(repoRoot, root).split(sep).join("/");
@@ -403,92 +425,53 @@ async function publish(
         `Publish the repo:  cd ${repoRoot} && malloyyo publish --repo <owner/name>`,
     );
   }
-  if (opts.repo) {
+
+  const single = layout.kind === "single";
+  // The repo is named by `--repo`, else by the checkout's own `origin` — which is
+  // what a model repo cloned from GitHub already has, so a bare `malloyyo publish`
+  // keeps working without anyone learning a new flag.
+  if (!opts.repo) {
+    const origin = originRepo(root);
+    if (origin) {
+      console.log(`repo ${origin} (from git remote origin; --repo overrides)`);
+      opts = { ...opts, repo: origin };
+    }
+  }
+  if (!opts.repo) {
     throw new Error(
-      `${root} publishes a single dataset (index.malloy at its root), so --repo has nothing to name.\n` +
-        `Use --dataset <name>.`,
+      (single
+        ? `${root} publishes one dataset, and every dataset is published as part of a repo.\n`
+        : `${root} publishes ${layout.datasets.length} datasets, and a repo is ${opts.branch !== undefined ? "previewed" : "published"} as one unit.\n`) +
+        `This checkout has no git remote "origin" to name it by. Name it:  malloyyo publish --repo <owner/name>`,
     );
   }
-  if (opts.createDatasets) {
-    throw new Error("--create-datasets is for a repo with a datasets/ directory; use --create-dataset.");
-  }
 
-  const t = resolvePublishTarget(root, target, {
-    instance: opts.instance,
-    dataset: opts.dataset,
-  });
-  // Transitional — see OLD_LAYOUT_NOTICE. AFTER the target resolves: printing
-  // it first buried the actual error under five lines of layout advice.
-  if (oldLayout) console.log(`\n${OLD_LAYOUT_NOTICE}\n`);
-
-  const source = tokenSource(t, { tokenFlag: opts.token });
-  const bearer = await getAccessToken(t, { tokenFlag: opts.token });
-
-  const { files, config } = gatherDirectory(root);
-  if (files.length === 0) {
-    throw new Error(`No .malloy files found under ${root}`);
-  }
-
-  // Lint dashboards before sending — a broken dashboard shouldn't reach the server.
-  if (!opts.skipLint) {
-    const report = await lintDashboards(root, { repoRoot: repoRootOf(root) });
-    if (report.dashboards.length > 0) {
-      console.log("dashboards:");
-      printLintReport(report);
-    }
-    if (!report.ok) {
-      // A lint failure whose real cause is an unset secret reads as an
-      // inexplicable connection error — name the variable.
-      throw new Error(
-        "dashboard lint failed — fix the above, or pass --skip-lint" +
-          missingEnvHint(missingEnvRefs(config), "this shell"),
-      );
-    }
-  }
-
-  const git = gitInfo(root);
-  const dashboards = await gatherDashboards(root);
-  const body: PublishRequest = { files, config, git, dashboards };
-
-  const provenance = git.sha
-    ? `${git.branch}@${shortSha(git.sha)}${git.dirty ? " (dirty)" : ""}`
-    : "(no git)";
-  console.log(`→ ${t.url}  dataset=${t.dataset}${opts.createDataset ? " (create if missing)" : ""}`);
-  console.log(`  ${files.length} file(s)  ${provenance}`);
-
-  if (opts.dryRun) {
-    console.log("dry run — not sending");
-    return;
-  }
-
-  // ?create=1 makes the server create the dataset when it doesn't exist yet — but
-  // only after the model compiles, so a failed publish still creates nothing.
-  const push = `${t.url}/api/datasets/${t.dataset}/model/push${opts.createDataset ? "?create=1" : ""}`;
-  const res = await apiFetch(push, {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${bearer}` },
-    body: JSON.stringify(body),
-  });
-  const out = (await res.json().catch(() => ({}))) as ModelStatus;
-
-  if (!res.ok || !out.ok) {
-    throw requestFailed("publish", res, out, t, source, bearer);
-  }
-  if (out.created) {
-    console.log(`✓ created dataset ${out.dataset ?? t.dataset} (private) — ${t.url}/datasets/${out.dataset ?? t.dataset}`);
-  }
-  console.log(
-    `✓ published version ${out.version} — ${out.sources?.length ?? 0} source(s)` +
-      (dashboards.length ? `, ${dashboards.length} dashboard(s)` : "") +
-      (out.requiredGivens?.length ? `, scoped by ${out.requiredGivens.join(", ")}` : ""),
+  await publishRepo(
+    root,
+    single ? [] : layout.datasets.map((d) => d.name),
+    target,
+    { ...opts, rootDataset: single ? configuredDataset(root, target) : undefined },
   );
-  if (out.declaredButUnused?.length) {
-    const many = out.declaredButUnused.length > 1;
-    console.log(
-      `  ↳ this model declares ${out.declaredButUnused.join(", ")}, which this dataset is NOT ` +
-        `scoped by. Nothing supplies ${many ? "them" : "it"}, so ${many ? "those filters" : "that filter"} ` +
-        `will use the declaration default. An admin ticks ${many ? "them" : "it"} on the dataset.`,
-    );
+  // Transitional — see OLD_LAYOUT_NOTICE. The layout still publishes; this only
+  // says it can be converted. AFTER the publish: printed first, it buried the
+  // actual error under five lines of layout advice.
+  if (single) console.log(`\n${OLD_LAYOUT_NOTICE}`);
+}
+
+/**
+ * The name a single-dataset repo's one dataset goes by: the config target's
+ * `dataset`, the field `publish --dataset` overrode. It is what such a repo's
+ * malloy-config.json already says, so an existing repo needs no edit — and it is
+ * how the server finds a dataset an older CLI pushed, to move it into the repo.
+ *
+ * Absent (no target, or more than one and none named) is not an error: the server
+ * names the dataset after the repo, and the publish prints which.
+ */
+function configuredDataset(root: string, target: string | undefined): string | undefined {
+  try {
+    return resolveTarget(root, target).dataset || undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -595,20 +578,20 @@ program
     "-i, --instance <instance>",
     "instance URL, or a configured target name to borrow the url from; overrides the config",
   )
-  .option("--dataset <dataset>", "dataset to publish into; overrides the config")
   .option("--token <token>", "bearer token (overrides login/env)")
   .option("--dry-run", "gather and report what would be sent, but don't POST")
   .option("--skip-lint", "skip the pre-publish dashboard lint")
-  .option("--create-dataset", "create the target dataset if it doesn't exist yet (private)")
-  .option(
-    "--repo <owner/name>",
-    "publish a repo with a datasets/ directory — every dataset in it, as one unit",
-  )
-  .option("--create-datasets", "with --repo: create any dataset the repo publishes that doesn't exist yet")
+  .option("--repo <owner/name>", "the repo being published — every dataset in it, as one unit (default: git remote origin)")
+  .option("--create-datasets", "create any dataset the repo publishes that doesn't exist yet")
   .option(
     "--branch [name]",
-    "with --repo: upload the working tree as an admin-only PREVIEW of <name> (default: the current git branch) instead of publishing",
+    "upload the working tree as an admin-only PREVIEW of <name> (default: the current git branch) instead of publishing",
   )
+  // REMOVED, kept only to answer. `--dataset` published into a dataset that
+  // belonged to no repo; commander would otherwise say "unknown option" and
+  // leave someone's CI script with no idea what replaced it.
+  .addOption(new Option("--dataset <dataset>").hideHelp())
+  .addOption(new Option("--create-dataset").hideHelp())
   .description('push the Malloy model in <dir> (default ".") to <target>')
   .addHelpText("after", `\n${PUBLISH_HELP}\n`)
   .action(publish);

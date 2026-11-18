@@ -81,8 +81,10 @@ malloyyo publish            # bundle *.malloy + malloy-config.json and push
 
 Both take a target name (`malloyyo publish prod`) when the repo defines more than one.
 
-The dataset must exist first — create it in the UI, or add `--create-dataset` to the first
-publish (it creates a private dataset, and only once the model compiles).
+Every publish is a repo, named by the checkout's git remote `origin` (or `--repo
+<owner/name>`). The dataset must exist first — create it in the UI, or add
+`--create-datasets` to the first publish (it creates a private dataset, and only once the
+model compiles).
 
 **In CI there is no browser to sign in with**, so mint an API token instead — in the UI at
 `/settings/tokens` (any member can, for themselves) — and hand it over in the environment:

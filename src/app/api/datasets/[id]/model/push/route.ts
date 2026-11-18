@@ -1,7 +1,18 @@
 // Copyright (c) The Malloy Foundation
 // SPDX-License-Identifier: MIT
 
+/**
+ * `POST /api/datasets/:id/model/push` — LEGACY: the repo-less dataset push.
+ *
+ * Kept only for `malloyyo` binaries installed before `publish --dataset` was
+ * removed, so a CI job on an old CLI does not break on a server upgrade. The
+ * current CLI never calls it: every publish is a repo (`POST /api/repos/push`),
+ * and its first publish adopts a dataset this route created. Nothing new should
+ * be built on it; docs/repo-model.md says why it went.
+ */
+
 import { NextResponse } from "next/server";
+import { classifyCompileError, missingEnvRefs, type FailureKind } from "@/lib/publish-diagnosis";
 import { and, desc, eq } from "drizzle-orm";
 import { db, datasets, malloyModels, malloyModelFiles, malloyArtifacts } from "@/db";
 import { credentialLabel, requireBearer } from "@/lib/bearer-auth";
@@ -41,54 +52,6 @@ interface PushBody {
 
 function json(status: number, body: Record<string, unknown>) {
   return NextResponse.json(body, { status });
-}
-
-type FailureKind = "missing-import" | "connection" | "compile";
-
-// Best-effort: an unresolved import surfaces as an error mentioning a file URL that
-// isn't in the uploaded set; a connection problem names the connection or fails at
-// connect time. The CLI turns `kind` into a next step — "which file didn't upload"
-// and "which secret isn't set here" are very different fixes from "fix the Malloy".
-function classifyCompileError(error: string, paths: Set<string>, missingEnv: string[]): FailureKind {
-  for (const m of error.matchAll(/file:\/\/\/([^\s'"]+)/g)) {
-    if (!paths.has(m[1])) return "missing-import";
-  }
-  if (missingEnv.length > 0) return "connection";
-  if (/No connection named|Invalid SQL, (connect |getaddrinfo|Error: connect)/i.test(error)) {
-    return "connection";
-  }
-  return "compile";
-}
-
-/**
- * Env vars that malloy-config.json references as `{"env": "NAME"}` but that
- * aren't set HERE. Malloy resolves a missing one to empty rather than failing,
- * so the symptom is a baffling connection error ("connect ECONNREFUSED",
- * "password authentication failed") with no mention of the secret. The config
- * ships from the repo but the values are per-deployment, so this is the single
- * likeliest reason a model that works locally fails on publish.
- *
- * The CLI runs the same check against its own shell before sending
- * (packages/cli/src/shared/env-refs.ts) — separate package, so it's duplicated.
- */
-function missingEnvRefs(configJson: string | undefined): string[] {
-  if (!configJson) return [];
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(configJson);
-  } catch {
-    return []; // Malloy will report the bad JSON itself.
-  }
-  const missing = new Set<string>();
-  const walk = (node: unknown): void => {
-    if (Array.isArray(node)) return void node.forEach(walk);
-    if (typeof node !== "object" || node === null) return;
-    const rec = node as Record<string, unknown>;
-    if (typeof rec.env === "string" && !process.env[rec.env]) missing.add(rec.env);
-    for (const v of Object.values(rec)) walk(v);
-  };
-  walk(parsed);
-  return [...missing];
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;

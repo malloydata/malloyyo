@@ -268,7 +268,9 @@ export function resolveInstance(dir: string, arg?: string): { name: string; url:
 }
 
 /**
- * The target `publish` will push to: the config's, with `--instance`/`--dataset` on top.
+ * The target `publish` will push to: the config's, with `--instance` on top. (`dataset`
+ * is the CLI's internal second half of a target: `publish` passes its `--repo` here,
+ * and the `draft` commands their own `--dataset`.)
  *
  * A target is two independent facts — WHICH instance and WHICH dataset — so each is
  * overridable on its own, and supplying BOTH skips the config entirely. That last case is
@@ -277,7 +279,7 @@ export function resolveInstance(dir: string, arg?: string): { name: string; url:
  * malloy-config.json, which is the author's committed file and usually not what they want
  * to change to run one command.
  *
- *   malloyyo publish -i https://gravity.malloyyo.com --dataset movies --create-dataset
+ *   malloyyo publish -i https://gravity.malloyyo.com --repo owner/name --create-datasets
  *
  * `--instance` takes the same argument `login` does — a URL, used as-is with no config
  * read, or the name of a configured target, whose url is borrowed.

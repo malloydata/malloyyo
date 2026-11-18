@@ -124,7 +124,7 @@ Concretely, with a `publish` token:
 - **Publish to a dataset you own**, or to any dataset if you are an admin.
 - **Not** publish to someone else's dataset. The CLI says whose problem it is:
   `that account doesn't own dataset "x" and isn't an admin on this instance`.
-- **Not** create a dataset. `--create-dataset` is admin-only, the same as
+- **Not** create a dataset. `--create-datasets` is admin-only, the same as
   creating one in the UI — a token must not be a way around that gate.
 
 ## Expiry, rotation, revocation

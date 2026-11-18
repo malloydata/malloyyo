@@ -132,9 +132,14 @@ changes are untouched.
   is unchanged. You will want the new one for the publish behaviour above.
 - **Roles and scoping are untouched.** Who may open a dataset, and the givens it
   is scoped by, work exactly as before and stay per dataset.
-- **`malloyyo publish --dataset x` still works** and still behaves the old way —
-  those datasets stay outside the repo model for now, with their files stored as
-  before.
+- **`malloyyo publish --dataset x` is gone** (CLI, since this change). Every
+  publish is a repo, named by `--repo` or the checkout's git remote `origin`. A
+  dataset an older CLI published with `--dataset` is **moved into the repo** on its
+  first repo publish whose target names it: the same row, so share links, saved
+  queries, drafts and scoping carry over, and its bare name keeps resolving through
+  an alias. Only its owner (or an admin) can move it. The server's
+  `POST /api/datasets/:id/model/push` still answers, for CLIs installed before
+  this — nothing new should reach it.
 - **Existing dashboards, saved queries and share links** keep resolving.
 
 ---

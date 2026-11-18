@@ -22,7 +22,7 @@
 // re-validates.
 
 import { createHash } from "node:crypto";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import { modelArtifact, validateRestricted, type Problem } from "@malloyyo/mcp-engine";
 import { db, draftDashboards } from "@/db";
 import { hasRole, MALLOYYO_ADMIN, type RoleBearing } from "@/lib/roles";
@@ -116,6 +116,29 @@ export function inlineQueries(source: string): string[] {
     it expects a `run:`, and a dashboard file has none. Anything else is real. */
 function isNoQueriesProblem(p: Problem): boolean {
   return /Model has no queries/.test(p.message);
+}
+
+/**
+ * Overwrite a stored draft with `values`, returning the new row, or undefined
+ * when nothing was written. With `ifUnchanged`, the write lands only if the
+ * row is still the version `read` was: every save stamps `updatedAt`, so it is
+ * the draft's version. Compared at millisecond precision, which is all a JS
+ * Date holds of the microseconds Postgres stores.
+ */
+export async function updateDraftRow(
+  read: { id: string; updatedAt: Date },
+  values: Partial<typeof draftDashboards.$inferInsert> & { updatedAt: Date },
+  { ifUnchanged }: { ifUnchanged: boolean },
+): Promise<typeof draftDashboards.$inferSelect | undefined> {
+  const byId = eq(draftDashboards.id, read.id);
+  const where = ifUnchanged
+    ? and(
+        byId,
+        sql`date_trunc('milliseconds', ${draftDashboards.updatedAt}) = ${read.updatedAt.toISOString()}::timestamptz`,
+      )
+    : byId;
+  const [row] = await db.update(draftDashboards).set(values).where(where).returning();
+  return row;
 }
 
 /** Why a draft's files can't be saved as they are, or null. */
@@ -317,30 +340,25 @@ export async function saveDraftDashboard(
     source,
     updatedAt: new Date(),
   };
-  // Edits were applied to the text read above, and the checks since then take
-  // a while. Write only if the draft still holds that text: a save that
-  // landed in between must not be overwritten with a result computed from
-  // what it replaced. (A whole-file save states the entire draft, so it stays
-  // last-writer-wins.)
-  const target = existing
-    ? editing
-      ? and(
-          eq(draftDashboards.id, existing.id),
-          eq(draftDashboards.source, existing.source),
-          eq(draftDashboards.malloy, existing.malloy),
-        )
-      : eq(draftDashboards.id, existing.id)
-    : undefined;
-  const [row] = existing
-    ? await db.update(draftDashboards).set(values).where(target).returning()
-    : await db
-        .insert(draftDashboards)
-        .values({ ...values, slug: newDatasetSlug(), userId, datasetId: found.ds.id })
-        .returning();
+  // Edits were applied to the draft read above, and the checks since then take
+  // a while, so an edit save writes only if no other save landed in between —
+  // else it would put back that save's text, title and description with a
+  // result computed from what it replaced. (A whole-file save states the
+  // entire draft, so it stays last-writer-wins.)
+  const row = existing
+    ? await updateDraftRow(existing, values, { ifUnchanged: editing })
+    : (
+        await db
+          .insert(draftDashboards)
+          .values({ ...values, slug: newDatasetSlug(), userId, datasetId: found.ds.id })
+          .returning()
+      )[0];
   if (!row) {
     return {
       ok: false,
-      error: "the draft changed while these edits were being checked; nothing was saved — re-read it (get_draft_dashboard) and send the edits again",
+      error: editing
+        ? "the draft changed or was deleted while these edits were being checked; nothing was saved. Re-read the draft and send the edits again."
+        : "the draft was deleted while this save was being checked; nothing was saved",
     };
   }
 

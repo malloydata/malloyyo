@@ -24,7 +24,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash, randomBytes } from "node:crypto";
-import { and, desc, eq } from "drizzle-orm";
+import { and, desc, eq, sql } from "drizzle-orm";
 import {
   db,
   users,
@@ -41,6 +41,7 @@ import {
   type User,
 } from "@/db";
 import { createApiToken } from "@/lib/api-tokens";
+import { updateDraftRow } from "@/lib/dashboards/draft";
 import { latestModel } from "@/lib/mcp-tools";
 import { POST as pushRoute } from "@/app/api/datasets/[id]/model/push/route";
 import { GET as statusRoute } from "@/app/api/datasets/[id]/model/status/route";
@@ -935,6 +936,71 @@ test("draft list shows what is on the instance, with the slug promotion takes", 
   const r = await runCli(["draft", "list", ".", "--token", token], dir, env);
   assert.equal(r.code, 0, r.stderr);
   assert.match(r.stdout, new RegExp(`${slug}\\s+By state\\s+\\(component,`));
+});
+
+test("a draft saved over REST takes edits, and edits mixed with a whole file are refused", async () => {
+  await draftFixture();
+  const { slug } = await makeDraft({ name: "by_state", title: "By state", source: DRAFT_COMPONENT });
+  await makeDraft({ name: "by_state", slug, edits: [{ find: "<ol>", replace: `<ol className="states">` }] });
+  const [row] = await db.select().from(draftDashboards).where(eq(draftDashboards.slug, slug));
+  assert.match(row.source, /<ol className="states">/);
+  assert.equal(row.title, "By state");
+
+  const res = await fetch(`${serverUrl}/api/datasets/${DS_DRAFT}/drafts`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+    body: JSON.stringify({ name: "by_state", slug, source: DRAFT_COMPONENT, edits: [{ find: "ol", replace: "ul" }] }),
+  });
+  assert.equal(res.status, 422);
+  assert.match(((await res.json()) as { error: string }).error, /edits or whole files, not both/);
+
+  const refused = async (body: Record<string, unknown>) => {
+    const r = await fetch(`${serverUrl}/api/datasets/${DS_DRAFT}/drafts`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify(body),
+    });
+    assert.equal(r.status, 422);
+    return ((await r.json()) as { error: string }).error;
+  };
+  const edit = [{ find: `<ol className="states">`, replace: `<ol className="all-states">` }];
+
+  // Edits need a slug to apply to.
+  assert.match(await refused({ name: "by_state", edits: edit }), /edits need the slug/);
+
+  // An edit never renames: a different name is refused, not taken.
+  assert.match(await refused({ name: "by_state_v2", slug, edits: edit }), /named 'by_state'; edits keep its name/);
+
+  // Name left out, and an empty whole-file field alongside the edits, both
+  // read as "keep it": the edit lands and the draft keeps its name.
+  await makeDraft({ slug, source: "", malloy: "", edits: edit });
+  const [after] = await db.select().from(draftDashboards).where(eq(draftDashboards.slug, slug));
+  assert.match(after.source, /<ol className="all-states">/);
+  assert.equal(after.name, "by_state");
+});
+
+test("an edit save does not overwrite a save that landed after its read", async () => {
+  await draftFixture();
+  const { slug } = await makeDraft({ name: "by_state", title: "By state", source: DRAFT_COMPONENT });
+  const bySlug = eq(draftDashboards.slug, slug);
+  const [stale] = await db.select().from(draftDashboards).where(bySlug);
+
+  // Another save lands in between: same files, new title. Stamped by the
+  // database, so updated_at carries microseconds a JS Date can't hold.
+  await db.update(draftDashboards).set({ title: "Renamed", updatedAt: sql`now()` }).where(bySlug);
+
+  const lost = await updateDraftRow(stale, { title: "By state", updatedAt: new Date() }, { ifUnchanged: true });
+  assert.equal(lost, undefined, "a write from the stale read must not land");
+  const [kept] = await db.select().from(draftDashboards).where(bySlug);
+  assert.equal(kept.title, "Renamed");
+
+  // Read fresh, it lands, microseconds and all.
+  const won = await updateDraftRow(kept, { title: "Edited", updatedAt: new Date() }, { ifUnchanged: true });
+  assert.equal(won?.title, "Edited");
+
+  // Without the guard (a whole-file save), last writer wins.
+  const over = await updateDraftRow(stale, { title: "Whole file", updatedAt: new Date() }, { ifUnchanged: false });
+  assert.equal(over?.title, "Whole file");
 });
 
 test("draft promote writes the repo files, records what it became, and keeps the draft", async () => {

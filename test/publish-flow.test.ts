@@ -1274,18 +1274,16 @@ test("a dataset the instance does not have is refused until --create-datasets", 
   assert.equal((await datasetRows(`rf_e_${RUN}`)).length, 0, "and nothing was created");
 });
 
-test("publish --dataset is gone: it says what replaced it, and publishes nothing", async () => {
-  // Every dataset is published as part of a repo. The flag is refused — not
-  // ignored, which would publish somewhere other than the dataset it named.
+test("publish has no --dataset: every dataset is published as part of a repo", async () => {
+  // Not an option at all — commander refuses it before anything is sent.
   const name = `rf_h_${RUN}`;
   const single = makeProject(name);
   const a = await runCli(
-    ["publish", "-i", serverUrl, "--dataset", name, "--create-dataset", "--token", token],
+    ["publish", "-i", serverUrl, "--dataset", name, "--token", token],
     single,
   );
   assert.notEqual(a.code, 0);
-  assert.match(`${a.stdout}${a.stderr}`, /--dataset is no longer a publish option/);
-  assert.match(`${a.stdout}${a.stderr}`, /--repo <owner\/name>/);
+  assert.match(`${a.stdout}${a.stderr}`, /unknown option '--dataset'/);
 
   // Neither layout publishes without naming its repo.
   const b = await runCli(["publish", "test", single, "--token", token], single);
@@ -1306,10 +1304,9 @@ test("publish --dataset is gone: it says what replaced it, and publishes nothing
   assert.equal(o.code, 0, `${o.stdout}\n${o.stderr}`);
   assert.match(o.stdout, new RegExp(`repo t/origin_${RUN} \\(from git remote origin`));
 
-  // --create-dataset only ever meant "create what this publishes": still honoured.
-  const d = await runCli(["publish", "test", single, ...repoArg(single), "--create-dataset", "--token", token], single);
+  // A single-dataset repo is still a supported layout: it publishes with --repo.
+  const d = await runCli(["publish", "test", single, ...repoArg(single), "--create-datasets", "--token", token], single);
   assert.equal(d.code, 0, `${d.stdout}\n${d.stderr}`);
-  assert.match(d.stderr, /--create-dataset is now --create-datasets/);
   const [ds] = await datasetRows(name);
   assert.ok(ds?.repoId, "created, inside a repo");
 });

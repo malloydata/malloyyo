@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { Command, Option } from "commander";
+import { Command } from "commander";
 import { noticeOnExit, runUpdateCheck, UPDATE_CHECK_ARGV } from "./update-check.js";
 import { resolve, relative, sep } from "node:path";
 import { resolveTarget, resolveInstance, resolvePublishTarget, type Target } from "./config.js";
@@ -154,8 +154,7 @@ const PUBLISH_HELP = `Every publish is a repo:
     datasets/sales/index.malloy
 
   --create-datasets creates any dataset the repo publishes that this instance
-  doesn't have yet. A dataset published with the old --dataset flag is moved
-  into the repo on its first repo publish: same dataset, same links.
+  doesn't have yet.
 
   A repo publishes as a unit: every dataset is linted, and the server writes
   all of them or none. \`malloyyo lint\` shows what yours publishes.
@@ -354,22 +353,6 @@ async function reportPreview(res: Response, url: string, tooLarge: string): Prom
   if (failed) process.exitCode = 1;
 }
 
-/**
- * What `--dataset` on `publish` used to do, and what to type instead.
- *
- * It pushed a file list into a dataset that belonged to NO repo — a second
- * storage path beside the repo one, with its own activation and file rows, and
- * the source of the bugs docs/repo-model.md records. Every layout publishes as a
- * repo now. Refused rather than ignored: silently publishing somewhere other than
- * the dataset that was named would be worse than stopping.
- */
-const DATASET_FLAG_REMOVED =
-  "--dataset is no longer a publish option: a dataset is always published as part of a repo.\n" +
-  "  Publish the repo:  malloyyo publish   (named by git remote origin, or --repo <owner/name>)\n" +
-  "  A single-dataset repo's dataset takes its name from the target's \"dataset\" in\n" +
-  "  malloy-config.json, and one you published with --dataset before is moved into\n" +
-  "  the repo — same dataset, same links.";
-
 async function publish(
   target: string | undefined,
   dir: string,
@@ -377,22 +360,13 @@ async function publish(
     token?: string;
     dryRun?: boolean;
     skipLint?: boolean;
-    createDataset?: boolean;
     createDatasets?: boolean;
     repo?: string;
     instance?: string;
-    dataset?: string;
     branch?: string | boolean;
   },
 ): Promise<void> {
   const root = resolve(dir);
-
-  if (opts.dataset !== undefined) throw new Error(DATASET_FLAG_REMOVED);
-  if (opts.createDataset) {
-    // Harmless to honour — it only ever meant "create what this publishes".
-    console.warn("note: --create-dataset is now --create-datasets");
-    opts = { ...opts, createDatasets: true };
-  }
 
   // A URL typed where a target NAME goes. It is the obvious thing to type and
   // the obvious intent, and failing it with `Unknown target "http://…"` sends
@@ -460,9 +434,9 @@ async function publish(
 
 /**
  * The name a single-dataset repo's one dataset goes by: the config target's
- * `dataset`, the field `publish --dataset` overrode. It is what such a repo's
- * malloy-config.json already says, so an existing repo needs no edit — and it is
- * how the server finds a dataset an older CLI pushed, to move it into the repo.
+ * `dataset`. It is what such a repo's malloy-config.json already says, so an
+ * existing repo needs no edit — and it is how the server finds a repo-less
+ * dataset of that name, to move it into the repo.
  *
  * Absent (no target, or more than one and none named) is not an error: the server
  * names the dataset after the repo, and the publish prints which.
@@ -587,11 +561,6 @@ program
     "--branch [name]",
     "upload the working tree as an admin-only PREVIEW of <name> (default: the current git branch) instead of publishing",
   )
-  // REMOVED, kept only to answer. `--dataset` published into a dataset that
-  // belonged to no repo; commander would otherwise say "unknown option" and
-  // leave someone's CI script with no idea what replaced it.
-  .addOption(new Option("--dataset <dataset>").hideHelp())
-  .addOption(new Option("--create-dataset").hideHelp())
   .description('push the Malloy model in <dir> (default ".") to <target>')
   .addHelpText("after", `\n${PUBLISH_HELP}\n`)
   .action(publish);

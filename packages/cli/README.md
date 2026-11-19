@@ -81,9 +81,8 @@ malloyyo status main            # what's live: version, commit, compile state
 `--repo <owner/name>`, or — without the flag — by the checkout's git remote `origin`. A
 repo with `datasets/<name>/index.malloy` publishes one dataset per directory; a repo with
 `index.malloy` at its root publishes one dataset, named by the target's `dataset` in the
-config. (The old `--dataset` flag, which pushed into a dataset that belonged to no repo, is
-gone. A dataset published that way is moved into the repo on its first repo publish — the
-same dataset, so its links, saved queries and scoping carry over.)
+config. A repo-less dataset already on the instance under that name is moved into the repo
+on its first publish — the same dataset, so its links, saved queries and scoping carry over.
 
 Datasets must already exist; publishing to a missing one fails rather than inventing it (a
 config typo would otherwise spawn junk datasets). To provision them from the CLI instead of

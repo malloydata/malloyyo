@@ -1,5 +1,5 @@
 import { readFileSync, existsSync, readdirSync, statSync, mkdtempSync, rmSync } from "node:fs";
-import { join, relative, sep, dirname } from "node:path";
+import { join, relative, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { SKIP_DIRS } from "./repo.js";
@@ -240,15 +240,26 @@ export type ArchiveBuild = {
  * that out of the author's real index — running this never changes what they
  * have staged.
  */
-export function gitArchiveZip(dir: string): ArchiveBuild {
-  const tmpIndex = join(
-    mkdtempSync(join(tmpdir(), "malloyyo-index-")),
-    "index",
-  );
+export function gitArchiveZip(
+  dir: string,
+  opts: {
+    /**
+     * Outside a git checkout, pack the directory through a THROWAWAY git dir
+     * instead of refusing. Git still decides what is in the archive — the
+     * directory's own .gitignore files apply — so nothing a skip list would get
+     * wrong comes back. For a single-dataset repo published from a checkout
+     * with no .git: an exported tarball in CI, a vendored copy.
+     */
+    allowNonGit?: boolean;
+  } = {},
+): ArchiveBuild {
+  const scratch = mkdtempSync(join(tmpdir(), "malloyyo-index-"));
+  const tmpIndex = join(scratch, "index");
+  const env: NodeJS.ProcessEnv = { ...process.env, GIT_INDEX_FILE: tmpIndex };
   const git = (args: string[], encoding: "utf8" | "buffer" = "utf8") =>
     execFileSync("git", args, {
       cwd: dir,
-      env: { ...process.env, GIT_INDEX_FILE: tmpIndex },
+      env,
       maxBuffer: 256 * 1024 * 1024,
       ...(encoding === "utf8" ? { encoding: "utf8" as const } : {}),
       stdio: ["ignore", "pipe", "pipe"],
@@ -258,11 +269,17 @@ export function gitArchiveZip(dir: string): ArchiveBuild {
     try {
       git(["rev-parse", "--is-inside-work-tree"]);
     } catch {
-      throw new Error(
-        `${dir} is not a git repository.\n` +
-          `A repo publishes what git tracks, so there has to be a git repo to ask. ` +
-          `Run \`git init\` and commit, or publish from the repo's own directory.`,
-      );
+      if (!opts.allowNonGit) {
+        throw new Error(
+          `${dir} is not a git repository.\n` +
+            `A repo publishes what git tracks, so there has to be a git repo to ask. ` +
+            `Run \`git init\` and commit, or publish from the repo's own directory.`,
+        );
+      }
+      const gitDir = join(scratch, "git");
+      execFileSync("git", ["init", "-q", "--bare", gitDir], { stdio: "ignore" });
+      env.GIT_DIR = gitDir;
+      env.GIT_WORK_TREE = dir;
     }
     // A repo with no commits yet is ordinary — `malloyyo init` leaves one — so an
     // empty starting index is the right answer, not an error.
@@ -288,6 +305,6 @@ export function gitArchiveZip(dir: string): ArchiveBuild {
       .slice(0, 8);
     return { zip, fileCount, largest };
   } finally {
-    rmSync(dirname(tmpIndex), { recursive: true, force: true });
+    rmSync(scratch, { recursive: true, force: true });
   }
 }

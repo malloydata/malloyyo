@@ -221,3 +221,21 @@ test("originRepo reads owner/name from every remote URL shape git accepts", () =
     assert.equal(originRepo(root), want, url);
   }
 });
+
+// A single-dataset repo can be published from a directory that isn't a git
+// checkout (an exported tarball in CI). Git still decides what is packed.
+test("allowNonGit packs a plain directory through a throwaway git dir, honouring .gitignore", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "notgit-"));
+  try {
+    fs.writeFileSync(path.join(root, "index.malloy"), "source: a is b");
+    fs.writeFileSync(path.join(root, "malloy-config-local.json"), "{}");
+    fs.writeFileSync(path.join(root, ".gitignore"), "malloy-config-local.json\n");
+    const { zip, fileCount } = gitArchiveZip(root, { allowNonGit: true });
+    const names = Object.keys(unzipSync(new Uint8Array(zip))).sort();
+    assert.deepEqual(names, [".gitignore", "index.malloy"]);
+    assert.equal(fileCount, 2);
+    assert.equal(fs.existsSync(path.join(root, ".git")), false, "and no .git is left behind");
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

@@ -14,7 +14,7 @@
 import { NextResponse } from "next/server";
 import { classifyCompileError, missingEnvRefs, type FailureKind } from "@/lib/publish-diagnosis";
 import { and, desc, eq } from "drizzle-orm";
-import { db, datasets, malloyModels, malloyModelFiles, malloyArtifacts } from "@/db";
+import { db, datasets, malloyModels, malloyModelFiles, malloyArtifacts, repos } from "@/db";
 import { credentialLabel, requireBearer } from "@/lib/bearer-auth";
 import { isAdmin } from "@/lib/admin";
 import { resolveDatasetByRef } from "@/lib/mcp-tools";
@@ -117,6 +117,24 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     }
     const bad = creationError(id);
     if (bad) return json(400, { ok: false, kind: "request", error: bad });
+  }
+  // A dataset a REPO publishes is never written here. This route stores a model
+  // with no revision, so writing one would flip a repo dataset between two
+  // storage paths on every run — the state the repo model exists to end. It is
+  // what an old CLI pinned in CI does after the current CLI adopted the dataset
+  // (by name, through the alias adoption leaves). And because that alias makes
+  // the name resolve here, it also means no repo-less dataset can be created
+  // under a name an adopted one still answers to.
+  if (ds?.repoId) {
+    const [owner] = await db.select({ slug: repos.slug }).from(repos).where(eq(repos.id, ds.repoId)).limit(1);
+    return json(409, {
+      ok: false,
+      kind: "request",
+      error:
+        `dataset "${ds.name}" is published by the repo "${owner?.slug ?? "?"}", so it can't be ` +
+        `pushed to on its own. Upgrade malloyyo (npm i -g @malloydata/malloyyo) and run ` +
+        `\`malloyyo publish\` in that repo.`,
+    });
   }
   // Who may publish to an existing dataset: its owner, or an admin. This is the
   // loosening design §4.5 left open — publishing used to be admin-only, which

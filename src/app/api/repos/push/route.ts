@@ -110,6 +110,19 @@ export async function POST(req: Request) {
   const found = await findRepoForPublish({ githubRepo, repoSlug: body.repoSlug });
   if ("error" in found) return bad(found.error, 409, { kind: "request" });
 
+  // CREATING DATASETS IS ADMIN-ONLY, whichever way a publish reaches it — the
+  // rule `POST /api/datasets` and the dataset push both enforce. Owning a repo
+  // does not widen it: without this, the repo an owner of a repo-less dataset
+  // may create to hold it (below) would be a way to create any number more.
+  if (body.createDatasets && !body.preview && !canAuthor(auth.user)) {
+    return bad(
+      `creating datasets is admin-only on this instance — publish without --create-datasets, ` +
+        `or ask an admin to create them`,
+      403,
+      { kind: "request" },
+    );
+  }
+
   if (body.preview) {
     // Admin-only to start, like every other way in to a preview. A preview of
     // a repo that doesn't exist here has nothing to be a preview OF.
@@ -179,7 +192,8 @@ export async function POST(req: Request) {
     // The owner of a repo-less dataset could always publish to it (that was
     // `--dataset`'s rule: the dataset's owner or an admin), and moving it into a
     // repo is how they keep doing so. Their reach is the dataset they already
-    // had, nothing wider.
+    // had, nothing wider: they cannot create datasets (refused above), so the
+    // only thing such a repo can publish is the adopted one.
     if (!canAuthor(auth.user) && !(orphan && orphan.userId === auth.user.id)) {
       return bad(
         `"${githubRepo}" is not a repo on this instance yet, and creating one is admin-only — ` +
@@ -291,10 +305,14 @@ export async function POST(req: Request) {
       // A compile failure that is really a connection the server cannot open —
       // usually a secret set on the author's machine and not on this one. The
       // CLI names the variable when `kind` says so (its `failureHint`).
-      const connection =
-        result.kind === "compile" &&
-        ((result.missingEnv?.length ?? 0) > 0 ||
-          /No connection named|Invalid SQL, (connect |getaddrinfo|Error: connect)/i.test(result.error));
+      //
+      // EVERY failure has to look like one: in a repo where one dataset cannot
+      // connect and another has a typo, connection advice is wrong for half of it.
+      const connectionLike = (e: string) =>
+        /No connection named|Invalid SQL, (connect |getaddrinfo|Error: connect)/i.test(e) ||
+        ((result.missingEnv?.length ?? 0) > 0 && /connect|authentication|password/i.test(e));
+      const failureErrors = result.failures?.length ? result.failures.map((f) => f.error) : [result.error];
+      const connection = result.kind === "compile" && failureErrors.every(connectionLike);
       return bad(
         result.kind === "compile" ? `nothing was published — ${result.error}` : result.error,
         status,

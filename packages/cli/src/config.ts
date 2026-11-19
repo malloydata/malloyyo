@@ -154,6 +154,42 @@ function readMalloyyoBlock(dir: string): Record<string, unknown> | null {
   return null;
 }
 
+/**
+ * The `dataset` a single-dataset repo's one dataset is published as.
+ *
+ * A named target answers for itself. Unnamed, the targets have to AGREE: two
+ * targets naming the same dataset on two instances (prod, staging) is the
+ * ordinary case and is unambiguous here, because a repo publish already has its
+ * instance from `-i`. Targets that name DIFFERENT datasets are refused rather
+ * than guessed at — the fallback (a dataset named after the repo) would create
+ * a duplicate instead of publishing to the one that exists.
+ *
+ * No config, or no target naming a dataset, is `undefined`: the server names the
+ * dataset after the repo.
+ */
+export function targetDataset(dir: string, name?: string): string | undefined {
+  if (!readMalloyyoBlock(dir)) return undefined;
+  const targets = readTargetMap(dir);
+  if (name !== undefined) {
+    const cfg = targets[name];
+    if (!cfg) {
+      const available = Object.keys(targets).join(", ") || "(none defined)";
+      throw new Error(`Unknown target "${name}". Available: ${available}`);
+    }
+    return cfg.dataset || undefined;
+  }
+  const named = Object.entries(targets).filter(([, c]) => c.dataset);
+  const distinct = [...new Set(named.map(([, c]) => c.dataset))];
+  if (distinct.length > 1) {
+    throw new Error(
+      `The targets in malloy-config.json name different datasets ` +
+        `(${named.map(([n, c]) => `${n}: ${c.dataset}`).join(", ")}), so this repo's dataset is ambiguous.\n` +
+        `Name the target:  malloyyo publish <target>`,
+    );
+  }
+  return distinct[0];
+}
+
 /** Site settings from the `malloyyo` block. Unlike target resolution this NEVER
     throws: publishing a static site does not require a malloyyo block at all,
     so a missing or malformed config just means no settings. */

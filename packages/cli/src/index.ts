@@ -2,7 +2,7 @@
 import { Command } from "commander";
 import { noticeOnExit, runUpdateCheck, UPDATE_CHECK_ARGV } from "./update-check.js";
 import { resolve, relative, sep } from "node:path";
-import { resolveTarget, resolveInstance, resolvePublishTarget, type Target } from "./config.js";
+import { resolveTarget, resolveInstance, resolvePublishTarget, targetDataset, type Target } from "./config.js";
 import { gatherDirectory, gitArchiveZip, gitInfo, originRepo } from "./gather.js";
 import { layoutFromListing } from "@malloyyo/mcp-engine";
 import { fsLister, repoRootOf } from "./repo.js";
@@ -198,7 +198,7 @@ type PublishRepoOptions = {
   instance?: string;
   /** Upload as a branch preview instead of publishing; `true` = the current git branch. */
   branch?: string | boolean;
-  /** A single-dataset repo's one dataset's name (see `configuredDataset`). */
+  /** A single-dataset repo's one dataset's name (see `targetDataset`). */
   rootDataset?: string;
 };
 
@@ -242,7 +242,9 @@ async function publishRepo(
   // directory was called `docs/`, and uploaded the gitignored
   // `malloy-config-local.json` where the real credentials live. Both stop being
   // possible here rather than being patched one at a time.
-  const { zip: archive, fileCount, largest } = gitArchiveZip(root);
+  // A single-dataset repo may be published from a directory that isn't a git
+  // checkout (an exported tarball in CI); git still decides what is packed.
+  const { zip: archive, fileCount, largest } = gitArchiveZip(root, { allowNonGit: datasetNames.length === 0 });
   if (fileCount === 0) throw new Error(`${root} has no files git tracks — nothing to publish`);
 
   const git = gitInfo(root);
@@ -424,29 +426,12 @@ async function publish(
     root,
     single ? [] : layout.datasets.map((d) => d.name),
     target,
-    { ...opts, rootDataset: single ? configuredDataset(root, target) : undefined },
+    { ...opts, rootDataset: single ? targetDataset(root, target) : undefined },
   );
   // Transitional — see OLD_LAYOUT_NOTICE. The layout still publishes; this only
   // says it can be converted. AFTER the publish: printed first, it buried the
   // actual error under five lines of layout advice.
   if (single) console.log(`\n${OLD_LAYOUT_NOTICE}`);
-}
-
-/**
- * The name a single-dataset repo's one dataset goes by: the config target's
- * `dataset`. It is what such a repo's malloy-config.json already says, so an
- * existing repo needs no edit — and it is how the server finds a repo-less
- * dataset of that name, to move it into the repo.
- *
- * Absent (no target, or more than one and none named) is not an error: the server
- * names the dataset after the repo, and the publish prints which.
- */
-function configuredDataset(root: string, target: string | undefined): string | undefined {
-  try {
-    return resolveTarget(root, target).dataset || undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 async function status(target: string | undefined, opts: { token?: string }): Promise<void> {

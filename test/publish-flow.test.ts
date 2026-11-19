@@ -659,7 +659,7 @@ test("a non-admin token can't create a dataset", async () => {
 
   assert.notEqual(r.code, 0, `expected a non-zero exit\n${r.stdout}\n${r.stderr}`);
   const out = r.stdout + r.stderr;
-  assert.match(out, /creating one is admin-only/);
+  assert.match(out, /creating datasets is admin-only/);
   // A 403 is a different problem from a 401 — logging in again won't help.
   assert.match(out, /isn't allowed to do this/);
   assert.doesNotMatch(out, /malloyyo login/);
@@ -1338,7 +1338,123 @@ test("the legacy dataset push still answers an older CLI", async () => {
   const [after] = await datasetRows(name);
   assert.equal(after.id, ds.id);
   assert.ok(after.repoId);
+
+  // From now on the old route refuses it — otherwise the pinned CI job would
+  // flip it back to a repo-less model on every run.
+  const modelsBefore = (await models(ds.id)).length;
+  const again = await fetch(`${serverUrl}/api/datasets/${name}/model/push`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+    body: JSON.stringify({
+      files: [{ path: "index.malloy", content: MODEL }],
+      config: JSON.stringify({ connections: { duckdb: { is: "duckdb" } } }),
+      git: {},
+      dashboards: [],
+    }),
+  });
+  assert.equal(again.status, 409);
+  const refused = (await again.json()) as { error?: string };
+  assert.match(refused.error ?? "", /is published by the repo/);
+  assert.equal((await models(ds.id)).length, modelsBefore, "nothing written");
 });
+
+test("owning a repo-less dataset lets a member move it into a repo — and create nothing else", async () => {
+  // The exception that lets a dataset's owner create the repo to hold it must
+  // not become a way for a member to create datasets.
+  const member = await seedMember(`adopt-member-${RUN}@test.local`);
+  const name = `adopt_member_${RUN}`;
+  const ds = await seedDataset(name, member.id);
+  const minted = await mintFor(member.id, ["publish"]);
+
+  // Asking to create datasets is refused outright for a non-admin.
+  const multi = makeRepo([`adopt_member_a_${RUN}`]);
+  const asCreate = await runCli(
+    ["publish", "-i", serverUrl, "--repo", `t/adopt_member_multi_${RUN}`, "--create-datasets"],
+    multi,
+    { MALLOYYO_TOKEN: minted },
+  );
+  assert.notEqual(asCreate.code, 0);
+  assert.match(`${asCreate.stdout}${asCreate.stderr}`, /creating datasets is admin-only/);
+  assert.equal((await datasetRows(`adopt_member_a_${RUN}`)).length, 0);
+
+  // Adopting their own dataset works.
+  const dir = makeProject(name);
+  const r = await runCli(["publish", "test", dir, ...repoArg(dir)], dir, { MALLOYYO_TOKEN: minted });
+  assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`);
+  const [after] = await datasetRows(name);
+  assert.equal(after.id, ds.id);
+  assert.ok(after.repoId, "moved into a repo the member now owns");
+});
+
+test("a single-dataset repo publishes from a directory that isn't a git checkout", async () => {
+  // CI that publishes from an exported tarball has no .git.
+  const name = `nogit_${RUN}`;
+  const dir = makeProject(name);
+  rmSync(join(dir, ".git"), { recursive: true, force: true });
+  const r = await runCli(["publish", "test", dir, ...repoArg(dir), "--create-datasets", "--token", token], dir);
+  assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`);
+  const [ds] = await datasetRows(name);
+  assert.ok(ds?.repoId, "published, into a repo");
+});
+
+test("adopting into a repo that already has a dataset by that name says so", async () => {
+  // The repo once published datasets/<name>; a repo-less dataset of the same
+  // name cannot move in beside it.
+  const name = `adopt_clash_${RUN}`;
+  const slug = `t/adopt_clash_repo_${RUN}`;
+  const multi = makeRepo([name]);
+  const first = await runCli(["publish", "-i", serverUrl, "--repo", slug, "--create-datasets", "--token", token], multi);
+  assert.equal(first.code, 0, `${first.stdout}\n${first.stderr}`);
+  const orphan = await seedDataset(name, admin.id);
+
+  const single = makeProject(name);
+  const r = await runCli(["publish", "test", single, "--repo", slug, "--token", token], single);
+  assert.notEqual(r.code, 0);
+  assert.match(`${r.stdout}${r.stderr}`, new RegExp(`"${name}" can't move into this repo`));
+  const [still] = await db.select().from(datasets).where(eq(datasets.id, orphan.id));
+  assert.equal(still.repoId, null, "nothing moved");
+});
+
+test("re-publishing bytes that are already live still adopts", async () => {
+  // Same bytes live, but the repo's root dataset is gone and a repo-less one
+  // of that name is waiting: `unchanged` would leave it repo-less and say ok.
+  const name = `adopt_same_${RUN}`;
+  const dir = makeProject(name);
+  const first = await runCli(["publish", "test", dir, ...repoArg(dir), "--create-datasets", "--token", token], dir);
+  assert.equal(first.code, 0, `${first.stdout}\n${first.stderr}`);
+  await db.delete(datasets).where(eq(datasets.name, name));
+  const orphan = await seedDataset(name, admin.id);
+
+  const r = await runCli(["publish", "test", dir, ...repoArg(dir), "--token", token], dir);
+  assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`);
+  assert.match(r.stdout, /moved into this repo/);
+  const [after] = await db.select().from(datasets).where(eq(datasets.id, orphan.id));
+  assert.ok(after.repoId);
+});
+
+test("connection advice only when every failing dataset is a connection failure", async () => {
+  const dir = makeRepo([`conn_a_${RUN}`, `conn_b_${RUN}`], { broken: `conn_b_${RUN}` });
+  writeFileSync(
+    join(dir, "malloy-config.json"),
+    JSON.stringify({
+      connections: {
+        duckdb: { is: "duckdb" },
+        pg: { is: "postgres", host: "127.0.0.1", port: 1, database: "n", user: "n" },
+      },
+      malloyyo: { targets: { test: { url: serverUrl } } },
+    }),
+  );
+  writeFileSync(join(dir, "datasets", `conn_a_${RUN}`, "index.malloy"), `source: x is pg.sql("select 1 as one")\n`);
+  const r = await runCli(
+    ["publish", "-i", serverUrl, "--repo", `t/conn_${RUN}`, "--create-datasets", "--skip-lint", "--token", token],
+    dir,
+  );
+  assert.notEqual(r.code, 0);
+  const out = `${r.stdout}${r.stderr}`;
+  assert.match(out, /ECONNREFUSED/, "the connection failure is reported");
+  assert.doesNotMatch(out, /couldn't open the connection/, "but not as the cause of the whole publish");
+});
+
 
 test("a dataset someone else owns can't be moved into your repo", async () => {
   // Adoption is a publish to that dataset, so it carries a publish's authority:

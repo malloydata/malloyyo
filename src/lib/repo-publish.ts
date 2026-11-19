@@ -432,7 +432,12 @@ export async function publishRevision(input: PublishInput): Promise<PublishResul
     .from(repoRevisions)
     .where(and(eq(repoRevisions.repoId, input.repo.id), eq(repoRevisions.active, true)))
     .limit(1);
-  if (live && live.archiveSha256 === archive.sha256 && !input.createDatasets) {
+  //
+  // Nor when there is a dataset to ADOPT, for the same reason: that, too, acts on
+  // rows and not on content — the same bytes can be live while the repo has no
+  // root dataset, and returning `unchanged` would leave the dataset repo-less
+  // and report success.
+  if (live && live.archiveSha256 === archive.sha256 && !input.createDatasets && !input.adoptRoot) {
     logger.info("repo publish: identical to the live revision", {
       repo: input.repo.slug,
       revision: live.revision,
@@ -930,16 +935,22 @@ async function activate(
     const msg = err instanceof Error ? err.message : String(err);
     await recordFailure(revision.id, msg).catch(() => {});
     if (isNameClash(err)) {
-      const names = plans
-        .filter((p) => p.create)
-        .map((p) => `"${p.create!.name}"`)
-        .join(", ");
+      // Both kinds of plan take a name in this repo: a dataset being CREATED, and
+      // a repo-less one being ADOPTED — which can collide with a dataset the repo
+      // already has under that name at another directory.
+      const created = plans.filter((p) => p.create).map((p) => `"${p.create!.name}"`);
+      const adopted = plans
+        .filter((p) => p.dataset && p.dataset.repoId === null)
+        .map((p) => `"${p.dataset!.name}"`);
+      const names = [...created, ...adopted].join(", ");
       return {
         ok: false,
         kind: "clash",
-        error:
-          `another publish claimed ${names || "a dataset name"} in this repo first — ` +
-          `nothing was activated; re-run to see which names are still free`,
+        error: adopted.length
+          ? `${adopted.join(", ")} can't move into this repo: the repo already has a dataset ` +
+            `by that name. Nothing was activated — rename one of them.`
+          : `another publish claimed ${names || "a dataset name"} in this repo first — ` +
+            `nothing was activated; re-run to see which names are still free`,
         revisionId: revision.id,
       };
     }

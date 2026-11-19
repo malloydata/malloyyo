@@ -17,6 +17,7 @@ import { hostedIntegration } from "./hosted-auth-integration.js";
 test("no integration: exactly the application's own tabs", () => {
   assert.deepEqual(adminTabs(null), [
     { href: "/admin", label: "General", exact: true },
+    { href: "/admin/setup", label: "Setup" },
     { href: "/admin/users", label: "Users" },
     { href: "/admin/roles", label: "Roles" },
   ]);
@@ -46,6 +47,7 @@ test("an integration's pages follow General, and the Users tab yields to them", 
   });
   assert.deepEqual(tabs, [
     { href: "/admin", label: "General", exact: true },
+    { href: "/admin/setup", label: "Setup" },
     { href: "/admin/roles", label: "Roles" },
     { href: "/admin/x/members", label: "Members" },
     { href: "/admin/x/session", label: "Session" },
@@ -57,6 +59,7 @@ test("an integration's pages follow General, and the Users tab yields to them", 
 test("an integration with no pages still supplants the Users tab", () => {
   assert.deepEqual(adminTabs({ adminPages: [] }), [
     { href: "/admin", label: "General", exact: true },
+    { href: "/admin/setup", label: "Setup" },
     { href: "/admin/roles", label: "Roles" },
   ]);
 });

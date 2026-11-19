@@ -197,6 +197,19 @@ async function liveConfig(repo: Repo, dir: string): Promise<{ text?: string } | 
   }
 }
 
+/**
+ * Where list_tables / describe_table get their connections: a repo's published
+ * config, or — during guided setup, before anything is published — one built
+ * from a tested connection (src/lib/connection-kinds.ts), secrets as env refs.
+ */
+export type ConnectionSource = Repo | { configText: string; label: string };
+
+async function sourceConfig(source: ConnectionSource, dir: string): Promise<{ text?: string; label: string } | Fail> {
+  if ("configText" in source) return { text: source.configText, label: source.label };
+  const cfg = await liveConfig(source, dir);
+  return "ok" in cfg ? cfg : { text: cfg.text, label: source.slug };
+}
+
 export type TableList = {
   ok: true;
   connection: string;
@@ -207,19 +220,19 @@ export type TableList = {
 };
 
 export async function listTables(
-  repo: Repo,
+  source: ConnectionSource,
   connection: string,
   opts: { schema?: string; like?: string; dir?: string } = {},
 ): Promise<TableList | Fail> {
   if (!IDENT.test(connection)) return { ok: false, error: `"${connection}" is not a connection name.` };
-  const cfg = await liveConfig(repo, opts.dir ?? "");
+  const cfg = await sourceConfig(source, opts.dir ?? "");
   if ("ok" in cfg) return cfg;
   const known = connectionsOf(cfg.text);
   if (!known.some((c) => c.name === connection)) {
     return {
       ok: false,
       error:
-        `${repo.slug} has no connection "${connection}". Its malloy-config.json defines: ` +
+        `${cfg.label} has no connection "${connection}". Its malloy-config.json defines: ` +
         (known.map((c) => `${c.name} (${c.kind})`).join(", ") || "none"),
     };
   }
@@ -227,7 +240,11 @@ export async function listTables(
     return await withConfigConnection(cfg.text, connection, async (conn) => {
       const sql = listTablesSql(conn.dialectName, opts);
       if (typeof sql !== "string") return sql;
-      const res = await conn.runSQL(sql, { rowLimit: TABLE_LIMIT + 1 });
+      // Malloy's Postgres connector un-wraps each row from a `row` JSON column —
+      // the shape Malloy's own SQL produces. Plain catalog SQL has to be put in
+      // that shape, or every row comes back undefined.
+      const run = conn.dialectName === "postgres" ? `SELECT row_to_json(q) AS row FROM (${sql}) q` : sql;
+      const res = await conn.runSQL(run, { rowLimit: TABLE_LIMIT + 1 });
       const rows = res.rows.slice(0, TABLE_LIMIT).map((r) => {
         const v = (k: string) => {
           const hit = Object.entries(r).find(([key]) => key.toLowerCase() === k);
@@ -265,17 +282,17 @@ export type TableDescription = {
 
 /** One table — or, on DuckDB, a file path or URL — through Malloy's own `conn.table()`. */
 export async function describeTable(
-  repo: Repo,
+  source: ConnectionSource,
   connection: string,
   table: string,
   opts: { dir?: string } = {},
 ): Promise<TableDescription | Fail> {
   if (!IDENT.test(connection)) return { ok: false, error: `"${connection}" is not a connection name.` };
   if (!table.trim() || table.includes("\n")) return { ok: false, error: "table must be a name, path or URL." };
-  const cfg = await liveConfig(repo, opts.dir ?? "");
+  const cfg = await sourceConfig(source, opts.dir ?? "");
   if ("ok" in cfg) return cfg;
   if (!connectionsOf(cfg.text).some((c) => c.name === connection)) {
-    return { ok: false, error: `${repo.slug} has no connection "${connection}" (see list_repos).` };
+    return { ok: false, error: `${cfg.label} has no connection "${connection}" (see list_repos).` };
   }
   const entry = fileUrl("describe.malloy");
   const text = `source: t is ${connection}.table(${sqlString(table.trim()).replace(/\\/g, "\\\\")})\n`;

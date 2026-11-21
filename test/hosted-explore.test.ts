@@ -199,8 +199,11 @@ test("describe_source resolves a bare source: schema (block 0) + verbatim text (
   // engine's contract, pinned by its golden tests (packages/mcp-engine/test) —
   // don't re-pin it here, or every engine reshape breaks this test for nothing.
   // A trailing timing block (withTiming, src/lib/mcp-host.ts) rides along on
-  // every tool result — block 2 here, not asserted on.
-  const r = await host().call("describe_source", { source: "sales" });
+  // every tool result — block 2 here, not asserted on. The verbatim text is
+  // opt-in (include_source): without it, schema + timing only.
+  const plain = await host().call("describe_source", { source: "sales" });
+  assert.equal(plain.content.length, 2, "no source text unless asked: schema + timing");
+  const r = await host().call("describe_source", { source: "sales", include_source: true });
   assert.equal(r.content.length, 3, "schema + source text + trailing timing block");
   const schema = JSON.parse(blockText(r, 0)) as { ok: boolean; model_ref: string; source: string };
   assert.equal(schema.ok, true);
@@ -300,7 +303,7 @@ test("query without a question is refused (host policy)", async () => {
 });
 
 test("multi-file model: compiles across the import; block 1 slices the entry source", async () => {
-  const r = await host().call("describe_source", { source: "pets" });
+  const r = await host().call("describe_source", { source: "pets", include_source: true });
   assert.equal(r.content.length, 3, "schema + source text + trailing timing block, even for a multi-file model");
   // Host-seam check only: the import resolved and `pets` was described. The exact
   // schema shape is the engine's contract (see the describe_source test above).

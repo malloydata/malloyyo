@@ -32,6 +32,9 @@ export type {
   ExploreJoin,
   ExploreModelInfo,
   ExploreSourceDescribe,
+  ExploreDescribedPath,
+  JoinOutline,
+  DescribedView,
   ExploreSourceInfo,
   ExploreView,
   JoinEntry,
@@ -71,6 +74,7 @@ export { compile, listRuns, type CompileOptions, type RunListing } from './walke
 export { selectSource, describeSource } from './select';
 export {
   projectModel, projectDescription, buildSourceDescribe,
+  describeSourceOutline, describeSourcePath, type PathDescribe,
   publicGroups, publicSource, publicOnlyModel,
 } from './project';
 export {

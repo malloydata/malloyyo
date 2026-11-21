@@ -26,7 +26,10 @@
       }
     },
     "views": {
-      "by_team": "Appearances by team name."
+      "by_team": {
+        "description": "Appearances by team name.",
+        "code": "by_team is { group_by: team.team_name; aggregate: appearance_count }"
+      }
     }
   },
   "joins": {

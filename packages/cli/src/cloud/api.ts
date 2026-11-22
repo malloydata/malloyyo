@@ -105,6 +105,12 @@ export interface SecretListing {
   readonly digest: string | null;
 }
 
+/** Every stable source address the instance may use for outbound connections. */
+export interface InstanceEgress {
+  readonly ipv4: readonly string[];
+  readonly ipv6: readonly string[];
+}
+
 export interface ControlPlaneClient {
   createInstance(input: {
     readonly slug: string;
@@ -112,6 +118,7 @@ export interface ControlPlaneClient {
   }): Promise<{ instance: Instance; operation: Operation }>;
   getInstance(id: string): Promise<Instance>;
   listInstances(): Promise<readonly Instance[]>;
+  getInstanceEgress(id: string): Promise<{ instance: Instance; egress: InstanceEgress }>;
   /**
    * `operation` is nullable here and nowhere else, mirroring the control plane exactly: a
    * DELETE of an instance already in a terminal delete state answers with the operation
@@ -327,6 +334,15 @@ export function createControlPlaneClient(options: ControlPlaneClientOptions): Co
     async listInstances() {
       const body = expectRecord(await request("GET", "/v1/instances"));
       return expectField<Instance[]>(body, "instances");
+    },
+    async getInstanceEgress(id) {
+      const body = expectRecord(
+        await request("GET", `/v1/instances/${encodeURIComponent(id)}/egress`),
+      );
+      return {
+        instance: expectField<Instance>(body, "instance"),
+        egress: expectField<InstanceEgress>(body, "egress"),
+      };
     },
     async deleteInstance({ id, idempotencyKey }) {
       const body = expectRecord(

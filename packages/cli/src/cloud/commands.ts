@@ -44,6 +44,7 @@ const STEP_LABELS: Readonly<Record<string, string>> = {
 export const COMMAND_SCOPES = {
   create: ["instances:create", "instances:read"],
   status: ["instances:read"],
+  egress: ["instances:read"],
   list: ["instances:read"],
   delete: ["instances:delete", "instances:read"],
   // `secrets:write` is deliberately not an `instances:*` scope: it can replace the
@@ -599,6 +600,25 @@ export async function statusCommand(ctx: CommandContext, args: { id: string }): 
   } else {
     printInstance(ctx, instance);
   }
+  return 0;
+}
+
+export async function egressCommand(ctx: CommandContext, args: { id: string }): Promise<number> {
+  const { instance, egress } = await ctx.client.getInstanceEgress(args.id);
+  if (ctx.json) {
+    ctx.out(JSON.stringify({ instance, egress }, null, 2));
+    return 0;
+  }
+  const addresses = [
+    ...egress.ipv4.map((address) => ({ family: "IPv4", address })),
+    ...egress.ipv6.map((address) => ({ family: "IPv6", address })),
+  ];
+  if (addresses.length === 0) {
+    ctx.out(`no static outbound addresses are assigned to "${instance.slug}" yet.`);
+    return 0;
+  }
+  ctx.out(`${instance.slug} outbound addresses:`);
+  for (const { family, address } of addresses) ctx.out(`  ${family}  ${address}`);
   return 0;
 }
 

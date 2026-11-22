@@ -14,6 +14,7 @@ import {
   type CommandContext,
   createCommand,
   deleteCommand,
+  egressCommand,
   InvalidSecretArgumentError,
   listCommand,
   secretsListCommand,
@@ -30,6 +31,7 @@ export type CloudCommand = keyof typeof COMMAND_SCOPES;
 export type CloudInvocation =
   | { readonly command: "create"; readonly slug: string }
   | { readonly command: "status"; readonly id: string }
+  | { readonly command: "egress"; readonly id: string }
   | { readonly command: "list" }
   | { readonly command: "delete"; readonly id: string }
   | {
@@ -121,6 +123,8 @@ export async function runCloud(
         return await createCommand(ctx, { slug: invocation.slug });
       case "status":
         return await statusCommand(ctx, { id: invocation.id });
+      case "egress":
+        return await egressCommand(ctx, { id: invocation.id });
       case "list":
         return await listCommand(ctx);
       case "delete":

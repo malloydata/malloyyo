@@ -1394,8 +1394,12 @@ test("a dataset can't be moved into a repo that already has one by that name or 
   assert.equal(first.code, 0, `${first.stdout}\n${first.stderr}`);
   const orphan = await seedDataset(name, admin.id);
 
-  const byName = await attachDatasetToRepo({ dataset: orphan.id, repo: slug, dir: "", userId: admin.id });
-  assert.ok(!byName.ok && /already has a dataset named/.test(byName.error));
+  // The repo publishes datasets/<name>, not a root dataset: a root move would
+  // never be refreshed, so it is refused and says what the repo does publish.
+  const atRoot = await attachDatasetToRepo({ dataset: orphan.id, repo: slug, dir: "", userId: admin.id });
+  assert.ok(!atRoot.ok && new RegExp(`publishes datasets/${name}, not a root dataset`).test(atRoot.error), atRoot.ok ? "" : atRoot.error);
+  const elsewhere = await attachDatasetToRepo({ dataset: orphan.id, repo: slug, dir: "datasets/nope", userId: admin.id });
+  assert.ok(!elsewhere.ok && /not datasets\/nope/.test(elsewhere.error));
   const byDir = await attachDatasetToRepo({ dataset: orphan.id, repo: slug, dir: `datasets/${name}`, userId: admin.id });
   assert.ok(!byDir.ok && /already has dataset/.test(byDir.error));
   const badDir = await attachDatasetToRepo({ dataset: orphan.id, repo: slug, dir: "lib/x", userId: admin.id });
@@ -1428,6 +1432,16 @@ test("connection advice only when every failing dataset is a connection failure"
   assert.doesNotMatch(out, /couldn't open the connection/, "but not as the cause of the whole publish");
 });
 
+
+test("a move into a single-dataset repo must be to its root", async () => {
+  const name = `single_move_${RUN}`;
+  const dir = makeProject(`single_move_root_${RUN}`);
+  const first = await runCli(["publish", "test", dir, ...repoArg(dir), "--create-datasets", "--token", token], dir);
+  assert.equal(first.code, 0, `${first.stdout}\n${first.stderr}`);
+  await seedDataset(name, admin.id);
+  const r = await attachDatasetToRepo({ dataset: name, repo: projectRepos.get(dir)!, dir: `datasets/${name}`, userId: admin.id });
+  assert.ok(!r.ok && /publishes one dataset from its root \(index\.malloy\)/.test(r.error), r.ok ? "" : r.error);
+});
 
 test("a single-dataset repo publishes ONE dataset: a different target name is refused", async () => {
   // prod → mdw and dev → mdw_dev on one instance are two datasets. Once the

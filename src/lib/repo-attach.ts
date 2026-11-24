@@ -22,7 +22,7 @@
 
 import { and, eq, isNull } from "drizzle-orm";
 import { nameToSlug } from "@malloyyo/mcp-engine";
-import { db, datasetAliases, datasets, repos, type Repo } from "@/db";
+import { db, datasetAliases, datasets, repoRevisions, repos, type Repo } from "@/db";
 import { findRepoForPublish, repoSlugFromGitHub, resolveDatasetRef } from "./repos";
 
 export type AttachResult =
@@ -65,6 +65,30 @@ export async function attachDatasetToRepo(opts: {
     let createdRepo = false;
     if ("repo" in found) {
       repo = found.repo;
+      // THE DIRECTORY HAS TO BE ONE THE REPO PUBLISHES. A publish matches
+      // datasets to the directories the repo actually has, so a dataset
+      // recorded anywhere else is never refreshed — silently, with every
+      // publish reporting success — and once it is in a repo it cannot be moved
+      // again. The live revision says what the repo publishes; a repo with none
+      // yet has nothing to check against, and the UI says the checkout must match.
+      const [live] = await tx
+        .select({ datasets: repoRevisions.datasets })
+        .from(repoRevisions)
+        .where(and(eq(repoRevisions.repoId, repo.id), eq(repoRevisions.active, true)))
+        .limit(1);
+      const dirs = live?.datasets?.map((d) => d.dir);
+      if (dirs && !dirs.includes(dir)) {
+        const what = dirs.length === 0
+          ? "no datasets"
+          : dirs.map((d) => (d === "" ? "one dataset from its root (index.malloy)" : d)).join(", ");
+        return {
+          ok: false as const,
+          status: 400,
+          error:
+            `the repo "${repo.slug}" publishes ${what}, not ${dir || "a root dataset"}. ` +
+            `Pick one of those, or publish the repo with ${dir || "index.malloy at its root"} first.`,
+        };
+      }
     } else {
       const slug = repoSlugFromGitHub(repoName);
       if (!slug) return { ok: false as const, status: 400, error: `could not make a repo name out of "${repoName}"` };

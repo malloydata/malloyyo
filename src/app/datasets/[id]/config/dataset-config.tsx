@@ -324,6 +324,11 @@ function MoveToRepo({ datasetId, datasetName }: { datasetId: string; datasetName
         same dataset — its links, saved queries, drafts and history — and it keeps serving its
         current model until the repo&apos;s first <code>malloyyo publish</code>.
       </p>
+      <p className="text-xs text-gray-600 dark:text-gray-400 leading-relaxed">
+        Pick where its model lives in that repo: <code>index.malloy</code> at the root, or{" "}
+        <code>datasets/{datasetName}/</code>. A repo that has been published is checked; for a new
+        one, the checkout you publish from has to match what you pick here.
+      </p>
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <input
           value={repo}

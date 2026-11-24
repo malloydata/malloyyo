@@ -260,14 +260,15 @@ shapes the fork actually held, and checks all of it.
 
 ## `--dataset x` was repo-less, and that cost something
 
-**Update: the CLI no longer has this path.** `malloyyo publish` always sends a
-repo (`POST /api/repos/push`), single-dataset layout included — the root
-dataset is named by the target's `dataset` (the request's additive `dataset`
-field). A repo-less dataset of that name is ADOPTED: attached to the repo
-(`repo_id`, `repo_dir ""`) inside the activation transaction, with an alias for
-its bare name, so its id and everything hanging off it survive
-(`adoptRoot` in src/lib/repo-publish.ts; owner or admin only). The route below
-stays for CLIs installed before the change. What follows is why it went.
+**Update: this path is gone.** `malloyyo publish` always sends a repo
+(`POST /api/repos/push`), single-dataset layout included — the root dataset is
+named by the target's `dataset` (the request's additive `dataset` field). The
+route below answers 410 with an upgrade message. A dataset it left repo-less is
+moved into a repo by an admin, once, on its page ("Move into a repo",
+src/lib/repo-attach.ts): `repo_id`/`repo_dir` are set and an alias keeps its
+bare name, so its id — and every saved query, draft and history row keyed by it
+— survives. The publish itself never matches repo-less datasets; it refuses to
+create a name one of them still holds. What follows is why the path went.
 
 `POST /api/datasets/:id/model/push` sends a file list, not an archive, so it
 writes `malloy_model_files` rows and no revision. Keeping it is right — the wire

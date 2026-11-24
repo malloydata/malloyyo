@@ -44,6 +44,7 @@ import {
 import { createApiToken } from "@/lib/api-tokens";
 import { latestModel } from "@/lib/mcp-tools";
 import { resolveDatasetRef } from "@/lib/repos";
+import { attachDatasetToRepo } from "@/lib/repo-attach";
 import { POST as pushRoute } from "@/app/api/datasets/[id]/model/push/route";
 import { GET as statusRoute } from "@/app/api/datasets/[id]/model/status/route";
 import { POST as repoPushRoute } from "@/app/api/repos/push/route";
@@ -305,6 +306,13 @@ async function seedDataset(name: string, userId: string) {
   return ds;
 }
 
+/** Move a repo-less dataset into the repo a makeProject() directory publishes
+    as — what an admin does with "Move into a repo" on the dataset's page. */
+async function moveIntoRepo(name: string, dir: string, repoDir = "") {
+  const r = await attachDatasetToRepo({ dataset: name, repo: projectRepos.get(dir)!, dir: repoDir, userId: admin.id });
+  assert.ok(r.ok, r.ok ? "" : r.error);
+}
+
 /** An OAuth access token like the one a browser sign-in produces. `scope` is
     what the client asked for: "mcp publish" is `malloyyo login`, plain "mcp" is
     a claude.ai connection (and every grant issued before publishing had a scope
@@ -486,16 +494,14 @@ test("a publish ACTIVATES what it wrote — or the instance serves the previous 
     })
     .returning();
 
+  // A pre-repo dataset: moved into the repo once, then published like any other.
   const dir = makeProject(name);
+  await moveIntoRepo(name, dir);
   const r = await runCli(["publish", "test", dir, ...repoArg(dir), "--token", token], dir);
   assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`);
-  // A dataset an older `publish --dataset` left repo-less is MOVED into the
-  // repo, not shadowed by a second one: same row, so its links keep working.
-  assert.match(r.stdout, /  v2  \(moved into this repo/);
-  const [adopted] = await datasetRows(name);
-  assert.equal(adopted.id, ds.id, "the same dataset row");
-  assert.ok(adopted.repoId, "…now belonging to a repo");
-  assert.equal(adopted.repoDir, "");
+  assert.match(r.stdout, /  v2/);
+  const [moved] = await datasetRows(name);
+  assert.equal(moved.id, ds.id, "the same dataset row");
   const ref = await resolveDatasetRef(name);
   assert.ok(ref.ok && ref.dataset.id === ds.id, "and its bare name still resolves to it");
 
@@ -721,13 +727,11 @@ test("a login stored before publish scopes existed is told to sign in again", as
 test("a minted API token publishes, and $MALLOYYO_TOKEN is enough on its own", async () => {
   // The whole point of the feature: no --token, no stored login, no browser.
   // Publishing is admin-only, so it is an admin's token.
-  const owner = await seedMember(`owner-${RUN}@test.local`);
   const name = `owned_ds_${RUN}`;
-  await seedDataset(name, owner.id);
   const minted = await mintFor(admin.id, ["publish"]);
 
   const dir = makeProject(name);
-  const r = await runCli(["publish", "test", dir, ...repoArg(dir)], dir, { MALLOYYO_TOKEN: minted });
+  const r = await runCli(["publish", "test", dir, ...repoArg(dir), "--create-datasets"], dir, { MALLOYYO_TOKEN: minted });
 
   assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`);
   assert.match(r.stdout, /  v1/);
@@ -773,21 +777,13 @@ test("a member's token can't publish — not even to a dataset they own", async 
   assert.match(r.stdout + r.stderr, /publishing is admin-only/);
   assert.equal((await models(ds.id)).length, 0, "nothing is written for a refused publish");
   const [after] = await datasetRows(name);
-  assert.equal(after.repoId, null, "and nothing was adopted");
+  assert.equal(after.repoId, null, "and nothing was moved");
   assert.equal(
     (await db.select().from(repos).where(eq(repos.slug, projectRepos.get(dir)!.split("/")[1]))).length,
     0,
     "and no repo row was left behind",
   );
 
-  // The old dataset push says the same, before saying anything about the dataset.
-  const legacy = await fetch(`${serverUrl}/api/datasets/${name}/model/push`, {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${minted}` },
-    body: JSON.stringify({ files: [{ path: "index.malloy", content: MODEL }] }),
-  });
-  assert.equal(legacy.status, 403);
-  assert.match(((await legacy.json()) as { error?: string }).error ?? "", /publishing is admin-only/);
 });
 
 test("an admin's token publishes to a dataset owned by someone else", async () => {
@@ -798,6 +794,7 @@ test("an admin's token publishes to a dataset owned by someone else", async () =
   const minted = await mintFor(admin.id, ["publish"]);
 
   const dir = makeProject(name);
+  await moveIntoRepo(name, dir);
   const r = await runCli(["publish", "test", dir, ...repoArg(dir)], dir, { MALLOYYO_TOKEN: minted });
 
   assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`);
@@ -1329,112 +1326,84 @@ test("publish has no --dataset: every dataset is published as part of a repo", a
   assert.ok(ds?.repoId, "created, inside a repo");
 });
 
-test("the legacy dataset push still answers an older CLI", async () => {
-  // No current CLI path reaches it, so nothing else here would notice it break —
-  // and a CI job pinned to an old `malloyyo` would, on the next server upgrade.
+test("the retired dataset push tells an old CLI to upgrade, and writes nothing", async () => {
   const name = `legacy_push_${RUN}`;
   const res = await fetch(`${serverUrl}/api/datasets/${name}/model/push?create=1`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-    body: JSON.stringify({
-      files: [{ path: "index.malloy", content: MODEL }],
-      config: JSON.stringify({ connections: { duckdb: { is: "duckdb" } } }),
-      git: {},
-      dashboards: [],
-    }),
+    body: JSON.stringify({ files: [{ path: "index.malloy", content: MODEL }] }),
   });
-  const out = (await res.json()) as { ok?: boolean; error?: string; version?: number };
-  assert.equal(out.ok, true, out.error);
-  const [ds] = await datasetRows(name);
-  assert.equal(ds.repoId, null, "repo-less, as it always was");
-
-  // …and the current CLI then moves that dataset into a repo.
-  const dir = makeProject(name);
-  const r = await runCli(["publish", "test", dir, ...repoArg(dir), "--token", token], dir);
-  assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`);
-  assert.match(r.stdout, /moved into this repo/);
-  const [after] = await datasetRows(name);
-  assert.equal(after.id, ds.id);
-  assert.ok(after.repoId);
-
-  // From now on the old route refuses it — otherwise the pinned CI job would
-  // flip it back to a repo-less model on every run.
-  const modelsBefore = (await models(ds.id)).length;
-  const again = await fetch(`${serverUrl}/api/datasets/${name}/model/push`, {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
-    body: JSON.stringify({
-      files: [{ path: "index.malloy", content: MODEL }],
-      config: JSON.stringify({ connections: { duckdb: { is: "duckdb" } } }),
-      git: {},
-      dashboards: [],
-    }),
-  });
-  assert.equal(again.status, 409);
-  const refused = (await again.json()) as { error?: string };
-  assert.match(refused.error ?? "", /is published by the repo/);
-  assert.equal((await models(ds.id)).length, modelsBefore, "nothing written");
+  assert.equal(res.status, 410);
+  assert.match(((await res.json()) as { error?: string }).error ?? "", /too old[\s\S]*Upgrade/);
+  assert.equal((await datasetRows(name)).length, 0);
 });
 
-test("an admin's publish adopts a member's repo-less dataset, and the member keeps it", async () => {
-  const member = await seedMember(`adopt-member-${RUN}@test.local`);
-  const name = `adopt_member_${RUN}`;
+test("moving a repo-less dataset into a repo keeps the dataset — and its owner", async () => {
+  // The point of moving rather than deleting and republishing: the row, and so
+  // every saved query, draft and history entry keyed by its id, survives.
+  const member = await seedMember(`move-member-${RUN}@test.local`);
+  const name = `move_member_${RUN}`;
   const ds = await seedDataset(name, member.id);
 
   const dir = makeProject(name);
+  await moveIntoRepo(name, dir);
   const r = await runCli(["publish", "test", dir, ...repoArg(dir), "--token", token], dir);
   assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`);
   const [after] = await datasetRows(name);
   assert.equal(after.id, ds.id, "the same dataset");
   assert.ok(after.repoId, "now in a repo");
-  assert.equal(after.userId, member.id, "still the member's dataset — adoption moves it, it doesn't take it");
+  assert.equal(after.userId, member.id, "still the member's dataset");
+
+  // Once is enough: a second move is refused.
+  const again = await attachDatasetToRepo({ dataset: name, repo: "t/elsewhere", dir: "", userId: admin.id });
+  assert.equal(again.ok, false);
 });
 
-test("a single-dataset repo publishes from a directory that isn't a git checkout", async () => {
-  // CI that publishes from an exported tarball has no .git.
+test("a repo-less dataset holding a name blocks creating that name, and says how to move it", async () => {
+  // Creating beside it would be legal, but the bare name would keep resolving
+  // to the old dataset — the new one published and unreachable.
+  const name = `held_${RUN}`;
+  const old = await seedDataset(name, admin.id);
+  const dir = makeProject(name);
+  const r = await runCli(["publish", "test", dir, ...repoArg(dir), "--create-datasets", "--token", token], dir);
+  assert.notEqual(r.code, 0);
+  assert.match(`${r.stdout}${r.stderr}`, /already exists on this instance outside any repo[\s\S]*Move into a repo/);
+  assert.equal((await datasetRows(name)).length, 1, "nothing created beside it");
+
+  await moveIntoRepo(name, dir);
+  const ok = await runCli(["publish", "test", dir, ...repoArg(dir), "--token", token], dir);
+  assert.equal(ok.code, 0, `${ok.stdout}\n${ok.stderr}`);
+  assert.equal((await datasetRows(name))[0].id, old.id);
+});
+
+test("a directory that isn't a git checkout is refused, and says why", async () => {
+  // A repo publishes what git tracks.
   const name = `nogit_${RUN}`;
   const dir = makeProject(name);
   rmSync(join(dir, ".git"), { recursive: true, force: true });
   const r = await runCli(["publish", "test", dir, ...repoArg(dir), "--create-datasets", "--token", token], dir);
-  assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`);
-  const [ds] = await datasetRows(name);
-  assert.ok(ds?.repoId, "published, into a repo");
+  assert.notEqual(r.code, 0);
+  assert.match(`${r.stdout}${r.stderr}`, /not a git repository/);
 });
 
-test("adopting into a repo that already has a dataset by that name says so", async () => {
-  // The repo once published datasets/<name>; a repo-less dataset of the same
-  // name cannot move in beside it.
-  const name = `adopt_clash_${RUN}`;
-  const slug = `t/adopt_clash_repo_${RUN}`;
+test("a dataset can't be moved into a repo that already has one by that name or at that directory", async () => {
+  const name = `move_clash_${RUN}`;
+  const slug = `t/move_clash_repo_${RUN}`;
   const multi = makeRepo([name]);
   const first = await runCli(["publish", "-i", serverUrl, "--repo", slug, "--create-datasets", "--token", token], multi);
   assert.equal(first.code, 0, `${first.stdout}\n${first.stderr}`);
   const orphan = await seedDataset(name, admin.id);
 
-  const single = makeProject(name);
-  const r = await runCli(["publish", "test", single, "--repo", slug, "--token", token], single);
-  assert.notEqual(r.code, 0);
-  assert.match(`${r.stdout}${r.stderr}`, new RegExp(`"${name}" can't move into this repo`));
+  const byName = await attachDatasetToRepo({ dataset: orphan.id, repo: slug, dir: "", userId: admin.id });
+  assert.ok(!byName.ok && /already has a dataset named/.test(byName.error));
+  const byDir = await attachDatasetToRepo({ dataset: orphan.id, repo: slug, dir: `datasets/${name}`, userId: admin.id });
+  assert.ok(!byDir.ok && /already has dataset/.test(byDir.error));
+  const badDir = await attachDatasetToRepo({ dataset: orphan.id, repo: slug, dir: "lib/x", userId: admin.id });
+  assert.ok(!badDir.ok && badDir.status === 400);
   const [still] = await db.select().from(datasets).where(eq(datasets.id, orphan.id));
   assert.equal(still.repoId, null, "nothing moved");
 });
 
-test("re-publishing bytes that are already live still adopts", async () => {
-  // Same bytes live, but the repo's root dataset is gone and a repo-less one
-  // of that name is waiting: `unchanged` would leave it repo-less and say ok.
-  const name = `adopt_same_${RUN}`;
-  const dir = makeProject(name);
-  const first = await runCli(["publish", "test", dir, ...repoArg(dir), "--create-datasets", "--token", token], dir);
-  assert.equal(first.code, 0, `${first.stdout}\n${first.stderr}`);
-  await db.delete(datasets).where(eq(datasets.name, name));
-  const orphan = await seedDataset(name, admin.id);
-
-  const r = await runCli(["publish", "test", dir, ...repoArg(dir), "--token", token], dir);
-  assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`);
-  assert.match(r.stdout, /moved into this repo/);
-  const [after] = await db.select().from(datasets).where(eq(datasets.id, orphan.id));
-  assert.ok(after.repoId);
-});
 
 test("connection advice only when every failing dataset is a connection failure", async () => {
   const dir = makeRepo([`conn_a_${RUN}`, `conn_b_${RUN}`], { broken: `conn_b_${RUN}` });
@@ -1486,16 +1455,3 @@ test("a single-dataset repo publishes ONE dataset: a different target name is re
   }
 });
 
-test("a target naming its dataset by id adopts that repo-less dataset", async () => {
-  // The legacy push accepted a uuid ref; the repo publish must not answer it
-  // with "not a usable dataset name".
-  const name = `by_id_${RUN}`;
-  const ds = await seedDataset(name, admin.id);
-  const dir = makeProject(ds.id);
-  const r = await runCli(["publish", "test", dir, ...repoArg(dir), "--token", token], dir);
-  assert.equal(r.code, 0, `${r.stdout}\n${r.stderr}`);
-  assert.match(r.stdout, /moved into this repo/);
-  const [after] = await datasetRows(name);
-  assert.equal(after.id, ds.id);
-  assert.ok(after.repoId);
-});

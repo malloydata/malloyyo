@@ -241,9 +241,7 @@ async function publishRepo(
   // directory was called `docs/`, and uploaded the gitignored
   // `malloy-config-local.json` where the real credentials live. Both stop being
   // possible here rather than being patched one at a time.
-  // A single-dataset repo may be published from a directory that isn't a git
-  // checkout (an exported tarball in CI); git still decides what is packed.
-  const { zip: archive, fileCount, largest } = gitArchiveZip(root, { allowNonGit: datasetNames.length === 0 });
+  const { zip: archive, fileCount, largest } = gitArchiveZip(root);
   if (fileCount === 0) throw new Error(`${root} has no files git tracks — nothing to publish`);
 
   const git = gitInfo(root);
@@ -301,7 +299,6 @@ async function publishRepo(
       name: string;
       version: number;
       created?: boolean;
-      adopted?: boolean;
       declaredButUnused?: string[];
     }[];
   } | null;
@@ -315,7 +312,7 @@ async function publishRepo(
   for (const d of out.datasets ?? []) {
     console.log(
       `  ✓ ${d.name}  ${out.unchanged ? "unchanged — already live" : `v${d.version}`}` +
-        (d.created ? "  (created)" : d.adopted ? "  (moved into this repo — same dataset, same links)" : ""),
+        (d.created ? "  (created)" : ""),
     );
     if (d.declaredButUnused?.length) {
       const many = d.declaredButUnused.length > 1;

@@ -6,6 +6,13 @@ description: Move an old single-dataset repo (index.malloy at the root) to the d
 
 The old layout put `index.malloy` at the repo root. To move it under `datasets/`:
 
+> **Only before the dataset is published from this repo.** The instance knows a
+> repo's datasets by their DIRECTORY, not their name, so once the root dataset
+> has been published, moving it to `datasets/<name>/` reads as a new dataset: the
+> publish refuses (`not on this instance yet`), and `--create-datasets` would make
+> a second dataset rather than move the first. A published single-dataset repo
+> keeps the root layout, which stays fully supported.
+
 1. **Pick the dataset's name.** It becomes the directory name and the published
    name, so use what the dataset is already called on the instance — renaming it
    here would publish a second dataset rather than update the first.
@@ -35,9 +42,10 @@ The old layout put `index.malloy` at the repo root. To move it under `datasets/`
 
        malloyyo publish --repo <owner/name>
 
-   The dataset already exists on the instance, so no `--create-datasets`. The
-   name matching is what connects the moved directory to the dataset that was
-   already there — which is why step 1 matters.
+   A dataset that is not on the instance yet needs `--create-datasets`. One that
+   is there but belongs to no repo is moved into this one first, by an admin on
+   its page ("Move into a repo", choosing `datasets/<name>/`) — then this
+   publish refreshes it.
 
 ### If the dataset is backed by GitHub rather than pushed
 

@@ -63,7 +63,7 @@ The MCP endpoint speaks OAuth 2.1, so claude.ai's remote MCP integration can con
 
 ## Code map
 
-1. **`packages/cli`** + **`src/app/api/datasets/[id]/model/push`** — the `malloyyo publish` path: the CLI bundles and uploads model files; the route compiles, introspects, and stores a versioned model (git provenance in `malloy_models.git_*`).
+1. **`packages/cli`** + **`src/app/api/repos/push`** — the `malloyyo publish` path: the CLI packs the repo (what git tracks) and uploads it; the route stores it as a revision, compiles every dataset in it, and activates them together (src/lib/repo-publish.ts).
 2. **`src/lib/github.ts`** + **`src/lib/github-refresh.ts`** — the GitHub *pull* path: model loading and webhook-triggered refresh.
 3. **`src/lib/malloy.ts`** — single-file and multi-file Malloy compilation and execution via `InMemoryURLReader`.
 4. **`src/lib/mcp-tools.ts`** + **`src/app/mcp/route.ts`** — the MCP server. Tools are pure functions; the route is a JSON-RPC dispatcher.

@@ -478,8 +478,8 @@ export const datasets = pgTable(
      *
      * NULL is a dataset that no repo publishes: a Claude-authored one, or the
      * single-dataset `malloyyo publish --dataset x` path of an older CLI, which
-     * sent no repo. The current CLI always sends one, and its first publish
-     * adopts such a dataset (`adoptRoot`, src/lib/repo-publish.ts).
+     * sent no repo. Such a dataset is moved into a repo by an admin
+     * (src/lib/repo-attach.ts); the publish never matches it.
      */
     repoId: uuid("repo_id").references(() => repos.id, { onDelete: "cascade" }),
     /**

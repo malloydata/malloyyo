@@ -35,11 +35,10 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { modelArtifact, layoutFromListing, type ArtifactInfo } from "@malloyyo/mcp-engine";
 import {
   db,
-  datasetAliases,
   datasets,
   malloyArtifacts,
   malloyModels,
@@ -87,19 +86,9 @@ import { requirementForPublish } from "./tenancy";
  * the loser's unique violation became an opaque 500 instead of "another publish
  * claimed that name; re-run".
  */
-/** The unique indexes that hold dataset NAMES. Any other 23505 — the one-active
-    model index, say — is a different problem and must not be reported as a
-    name being taken. */
-const NAME_INDEXES = new Set(["datasets_repo_name_ready_unique", "datasets_unscoped_name_ready_unique"]);
-
 function isNameClash(err: unknown): boolean {
-  type PgErr = { code?: unknown; constraint_name?: unknown; constraint?: unknown };
-  const e = err as (PgErr & { cause?: PgErr }) | null;
-  const pg = e?.code === "23505" ? e : e?.cause?.code === "23505" ? e.cause : null;
-  if (!pg) return false;
-  const constraint = pg.constraint_name ?? pg.constraint;
-  // A driver that does not say which constraint: keep the old reading.
-  return typeof constraint !== "string" || NAME_INDEXES.has(constraint);
+  const e = err as { code?: unknown; cause?: { code?: unknown } } | null;
+  return e?.code === "23505" || e?.cause?.code === "23505";
 }
 
 export type CompiledDir = {
@@ -124,8 +113,6 @@ export type PublishedDataset = {
   dir: string;
   version: number;
   created: boolean;
-  /** A repo-less dataset this publish attached to the repo (`adoptRoot`). */
-  adopted?: true;
   /** Reserved givens the model declares that this dataset is not scoped by —
       nothing supplies them, so their filters use the declaration default. */
   declaredButUnused?: string[];
@@ -199,21 +186,6 @@ export type PublishInput = {
    * no dataset at its root yet.
    */
   rootDatasetName?: string;
-  /**
-   * A REPO-LESS dataset to bring into this repo as its root dataset.
-   *
-   * `malloyyo publish --dataset x` used to push a file list that belonged to no
-   * repo at all. That path is gone from the CLI, and the repo it moves to has to
-   * keep serving the SAME row — saved queries, share links, drafts, roles and
-   * scoping all hang off its id. So the first repo publish of a single-dataset
-   * repo whose name matches a repo-less dataset attaches that row (repo_id,
-   * repo_dir "") inside the activation transaction, instead of creating a
-   * second dataset that would shadow nothing and orphan everything.
-   *
-   * Only consulted for a SINGLE-dataset layout with no dataset at its root yet.
-   * Who may adopt it is the caller's decision (src/app/api/repos/push/route.ts).
-   */
-  adoptRoot?: Dataset;
 };
 
 /**
@@ -442,12 +414,7 @@ export async function publishRevision(input: PublishInput): Promise<PublishResul
     .from(repoRevisions)
     .where(and(eq(repoRevisions.repoId, input.repo.id), eq(repoRevisions.active, true)))
     .limit(1);
-  //
-  // Nor when there is a dataset to ADOPT, for the same reason: that, too, acts on
-  // rows and not on content — the same bytes can be live while the repo has no
-  // root dataset, and returning `unchanged` would leave the dataset repo-less
-  // and report success.
-  if (live && live.archiveSha256 === archive.sha256 && !input.createDatasets && !input.adoptRoot) {
+  if (live && live.archiveSha256 === archive.sha256 && !input.createDatasets) {
     logger.info("repo publish: identical to the live revision", {
       repo: input.repo.slug,
       revision: live.revision,
@@ -596,16 +563,38 @@ async function readShape(
     .where(and(eq(datasets.repoId, input.repo.id), eq(datasets.status, "ready")));
   const byDir = new Map<string, Dataset[]>();
   for (const d of live) byDir.set(d.repoDir, [...(byDir.get(d.repoDir) ?? []), d]);
-  // A repo-less dataset this publish brings in (see `adoptRoot`). It counts as
-  // covering the root, so it is compiled and written like any live dataset and
-  // attached to the repo in the same transaction that activates it.
-  if (layout.kind === "single" && input.adoptRoot && !byDir.has("")) {
-    byDir.set("", [input.adoptRoot]);
-  }
 
   const missing = declared.filter((d) => !byDir.has(d.dir));
+  const missingNames = missing.map((m) => m.name || (input.rootDatasetName ?? input.repo.slug));
+
+  // A REPO-LESS DATASET ALREADY HOLDS THE NAME. Creating a second one beside it
+  // would be legal — names are unique within a repo, and repo-less ones among
+  // themselves — but the bare name keeps resolving to the old one, so the new
+  // dataset would publish fine and nobody would ever reach it by name. Such a
+  // dataset is moved into the repo instead (src/lib/repo-attach.ts), which keeps
+  // its id and everything hanging off it.
+  if (missing.length > 0 && (input.createDatasets || input.onMissing === "refuse")) {
+    const held = await db
+      .select({ name: datasets.name })
+      .from(datasets)
+      .where(and(inArray(datasets.name, missingNames), isNull(datasets.repoId), eq(datasets.status, "ready")));
+    if (held.length > 0) {
+      const list = held.map((h) => `"${h.name}"`).join(", ");
+      return {
+        refusal: {
+          ok: false,
+          kind: "request",
+          error:
+            `${list} already ${held.length > 1 ? "exist" : "exists"} on this instance outside any repo. ` +
+            `Move ${held.length > 1 ? "them" : "it"} into this repo first (an admin, on the dataset's page: ` +
+            `/datasets/${encodeURIComponent(held[0].name)}/config → "Move into a repo"), then publish again.`,
+        },
+      };
+    }
+  }
+
   if (missing.length > 0 && !input.createDatasets && (input.onMissing ?? "report") === "refuse") {
-    const names = missing.map((m) => m.name || (input.rootDatasetName ?? input.repo.slug));
+    const names = missingNames;
     return {
       refusal: {
         ok: false,
@@ -806,7 +795,6 @@ async function activate(
       const published: PublishedDataset[] = [];
       for (const plan of plans) {
         let target = plan.dataset;
-        const adopting = !!target && target.repoId === null;
         if (!target) {
           const [row] = await tx
             .insert(datasets)
@@ -827,21 +815,6 @@ async function activate(
             })
             .returning();
           target = row;
-        } else if (target.repoId === null) {
-          // Adoption (`adoptRoot`): the repo-less row becomes this repo's root
-          // dataset. Its bare name keeps resolving through an alias — once it
-          // has a repo, a second repo publishing the same name would otherwise
-          // make every old link to it ambiguous.
-          [target] = await tx
-            .update(datasets)
-            .set({ repoId: input.repo.id, repoDir: "" })
-            .where(and(eq(datasets.id, target.id), isNull(datasets.repoId)))
-            .returning();
-          if (!target) throw new Error(`dataset "${plan.dataset!.name}" was attached to another repo mid-publish`);
-          await tx
-            .insert(datasetAliases)
-            .values({ alias: target.name, datasetId: target.id })
-            .onConflictDoNothing();
         }
 
         const [{ next }] = await tx.execute<{ next: number }>(
@@ -907,7 +880,6 @@ async function activate(
           dir: target.repoDir,
           version: Number(next),
           created: !plan.dataset,
-          ...(adopting ? { adopted: true as const } : {}),
           ...(plan.declaredButUnused?.length ? { declaredButUnused: plan.declaredButUnused } : {}),
         });
       }
@@ -945,22 +917,16 @@ async function activate(
     const msg = err instanceof Error ? err.message : String(err);
     await recordFailure(revision.id, msg).catch(() => {});
     if (isNameClash(err)) {
-      // Both kinds of plan take a name in this repo: a dataset being CREATED, and
-      // a repo-less one being ADOPTED — which can collide with a dataset the repo
-      // already has under that name at another directory.
-      const created = plans.filter((p) => p.create).map((p) => `"${p.create!.name}"`);
-      const adopted = plans
-        .filter((p) => p.dataset && p.dataset.repoId === null)
-        .map((p) => `"${p.dataset!.name}"`);
-      const names = [...created, ...adopted].join(", ");
+      const names = plans
+        .filter((p) => p.create)
+        .map((p) => `"${p.create!.name}"`)
+        .join(", ");
       return {
         ok: false,
         kind: "clash",
-        error: adopted.length
-          ? `${adopted.join(", ")} can't move into this repo: the repo already has a dataset ` +
-            `by that name. Nothing was activated — rename one of them.`
-          : `another publish claimed ${names || "a dataset name"} in this repo first — ` +
-            `nothing was activated; re-run to see which names are still free`,
+        error:
+          `another publish claimed ${names || "a dataset name"} in this repo first — ` +
+          `nothing was activated; re-run to see which names are still free`,
         revisionId: revision.id,
       };
     }

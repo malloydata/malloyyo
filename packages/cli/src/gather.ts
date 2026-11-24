@@ -1,5 +1,5 @@
-import { readFileSync, existsSync, readdirSync, statSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { join, relative, sep } from "node:path";
+import { readFileSync, existsSync, readdirSync, statSync, mkdtempSync, rmSync } from "node:fs";
+import { join, relative, sep, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { SKIP_DIRS } from "./repo.js";
@@ -249,26 +249,15 @@ export type ArchiveBuild = {
  * that out of the author's real index — running this never changes what they
  * have staged.
  */
-export function gitArchiveZip(
-  dir: string,
-  opts: {
-    /**
-     * Outside a git checkout, pack the directory through a THROWAWAY git dir
-     * instead of refusing. Git still decides what is in the archive — the
-     * directory's own .gitignore files apply — so nothing a skip list would get
-     * wrong comes back. For a single-dataset repo published from a checkout
-     * with no .git: an exported tarball in CI, a vendored copy.
-     */
-    allowNonGit?: boolean;
-  } = {},
-): ArchiveBuild {
-  const scratch = mkdtempSync(join(tmpdir(), "malloyyo-index-"));
-  const tmpIndex = join(scratch, "index");
-  const env: NodeJS.ProcessEnv = { ...process.env, GIT_INDEX_FILE: tmpIndex };
+export function gitArchiveZip(dir: string): ArchiveBuild {
+  const tmpIndex = join(
+    mkdtempSync(join(tmpdir(), "malloyyo-index-")),
+    "index",
+  );
   const git = (args: string[], encoding: "utf8" | "buffer" = "utf8") =>
     execFileSync("git", args, {
       cwd: dir,
-      env,
+      env: { ...process.env, GIT_INDEX_FILE: tmpIndex },
       maxBuffer: 256 * 1024 * 1024,
       ...(encoding === "utf8" ? { encoding: "utf8" as const } : {}),
       stdio: ["ignore", "pipe", "pipe"],
@@ -277,40 +266,12 @@ export function gitArchiveZip(
   try {
     try {
       git(["rev-parse", "--is-inside-work-tree"]);
-    } catch (err) {
-      // Only "not a git repository" means there is no checkout here. Anything
-      // else — git missing, a repository git refuses to read (dubious
-      // ownership) — is a real failure, and git's own words say what it is.
-      const stderr = String((err as { stderr?: unknown }).stderr ?? "");
-      if (stderr && !/not a git repository/i.test(stderr)) {
-        throw new Error(`git could not read ${dir}: ${stderr.trim()}`);
-      }
-      if (!opts.allowNonGit) {
-        throw new Error(
-          `${dir} is not a git repository.\n` +
-            `A repo publishes what git tracks, so there has to be a git repo to ask. ` +
-            `Run \`git init\` and commit, or publish from the repo's own directory.`,
-        );
-      }
-      const gitDir = join(scratch, "git");
-      try {
-        execFileSync("git", ["init", "-q", "--bare", gitDir], { stdio: "ignore" });
-      } catch (err) {
-        throw new Error(
-          `${dir} is not a git checkout, and packing it needs git, which could not be run: ` +
-            `${err instanceof Error ? err.message : String(err)}`,
-        );
-      }
-      // A checkout has its own .gitignore deciding this; a bare directory may
-      // not, and then everything in it would be uploaded. These are never model
-      // files and are often secrets: excluded whatever the directory says.
-      mkdirSync(join(gitDir, "info"), { recursive: true });
-      writeFileSync(
-        join(gitDir, "info", "exclude"),
-        [".env", ".env.*", "node_modules/", ".venv/", "venv/", "__pycache__/", ".DS_Store", ""].join("\n"),
+    } catch {
+      throw new Error(
+        `${dir} is not a git repository.\n` +
+          `A repo publishes what git tracks, so there has to be a git repo to ask. ` +
+          `Run \`git init\` and commit, or publish from the repo's own directory.`,
       );
-      env.GIT_DIR = gitDir;
-      env.GIT_WORK_TREE = dir;
     }
     // A repo with no commits yet is ordinary — `malloyyo init` leaves one — so an
     // empty starting index is the right answer, not an error.
@@ -336,6 +297,6 @@ export function gitArchiveZip(
       .slice(0, 8);
     return { zip, fileCount, largest };
   } finally {
-    rmSync(scratch, { recursive: true, force: true });
+    rmSync(dirname(tmpIndex), { recursive: true, force: true });
   }
 }

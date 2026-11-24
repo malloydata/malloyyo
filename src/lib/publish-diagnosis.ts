@@ -4,26 +4,9 @@
 /**
  * WHY A PUBLISH FAILED TO COMPILE, in terms the publisher can act on.
  *
- * Shared by both publish routes — the repo push and the older dataset push —
- * so "which secret isn't set here" reads the same whichever one a CLI reached.
+ * A config's `{"env": …}` secret that is unset here never shows up in Malloy's
+ * own error — the connection just fails — so it is looked for explicitly.
  */
-
-export type FailureKind = "missing-import" | "connection" | "compile";
-
-// Best-effort: an unresolved import surfaces as an error mentioning a file URL that
-// isn't in the uploaded set; a connection problem names the connection or fails at
-// connect time. The CLI turns `kind` into a next step — "which file didn't upload"
-// and "which secret isn't set here" are very different fixes from "fix the Malloy".
-export function classifyCompileError(error: string, paths: Set<string>, missingEnv: string[]): FailureKind {
-  for (const m of error.matchAll(/file:\/\/\/([^\s'"]+)/g)) {
-    if (!paths.has(m[1])) return "missing-import";
-  }
-  if (missingEnv.length > 0) return "connection";
-  if (/No connection named|Invalid SQL, (connect |getaddrinfo|Error: connect)/i.test(error)) {
-    return "connection";
-  }
-  return "compile";
-}
 
 /**
  * Env vars that malloy-config.json references as `{"env": "NAME"}` but that

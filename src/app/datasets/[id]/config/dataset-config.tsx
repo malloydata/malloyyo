@@ -4,6 +4,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 type DatasetDetail = {
   id: string;
@@ -166,6 +167,12 @@ export function DatasetConfig({ id }: { id: string }) {
         </p>
       )}
 
+      {/* The way a pre-repo dataset joins the repo model: every publish is a
+          repo now, and this keeps the dataset's id — and with it its saved
+          queries, drafts, history and roles — where deleting and republishing
+          would lose them. */}
+      {data.isAdmin && !data.repo && <MoveToRepo datasetId={data.id} datasetName={data.name} />}
+
       {/* Only for a dataset no repo publishes. For the rest this is the repo's,
           and lives on the repo's page. */}
       {data.isAdmin && !data.repo && data.githubRepo && (
@@ -283,6 +290,64 @@ function ModelReadOnly({ source, generatedBy, git }: { source: string; generated
       <pre className="text-[11px] bg-gray-50 dark:bg-gray-900 text-gray-700 dark:text-gray-300 border border-gray-200 dark:border-gray-800 rounded p-3 overflow-auto whitespace-pre">
         {source}
       </pre>
+    </section>
+  );
+}
+
+function MoveToRepo({ datasetId, datasetName }: { datasetId: string; datasetName: string }) {
+  const [repo, setRepo] = useState("");
+  const [atRoot, setAtRoot] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const router = useRouter();
+  const dir = atRoot ? "" : `datasets/${datasetName}`;
+
+  async function move() {
+    setBusy(true);
+    setError(null);
+    const res = await fetch(`/api/datasets/${datasetId}/repo`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ repo, dir }),
+    });
+    const out = (await res.json().catch(() => ({}))) as { error?: string; repo?: string };
+    setBusy(false);
+    if (!res.ok || !out.repo) return setError(out.error ?? `failed (${res.status})`);
+    router.push(`/repos/${encodeURIComponent(out.repo)}`);
+  }
+
+  return (
+    <section className="border border-gray-200 dark:border-gray-800 rounded p-4 space-y-3">
+      <h2 className="text-sm font-semibold">Move into a repo</h2>
+      <p className="text-xs text-gray-600 dark:text-gray-400 leading-relaxed">
+        This dataset belongs to no repo, and every publish is a repo now. Moving it keeps the
+        same dataset — its links, saved queries, drafts and history — and it keeps serving its
+        current model until the repo&apos;s first <code>malloyyo publish</code>.
+      </p>
+      <div className="flex flex-wrap items-center gap-2 text-xs">
+        <input
+          value={repo}
+          onChange={(e) => setRepo(e.target.value)}
+          placeholder="owner/name"
+          className="px-2 py-1.5 rounded border border-gray-300 dark:border-gray-700 bg-transparent w-56"
+        />
+        <select
+          value={atRoot ? "root" : "dir"}
+          onChange={(e) => setAtRoot(e.target.value === "root")}
+          className="px-2 py-1.5 rounded border border-gray-300 dark:border-gray-700 bg-transparent"
+        >
+          <option value="root">at the repo root (index.malloy)</option>
+          <option value="dir">in datasets/{datasetName}/</option>
+        </select>
+        <button
+          onClick={move}
+          disabled={busy || !repo.trim()}
+          className="px-3 py-1.5 rounded border border-gray-300 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-900 disabled:opacity-50"
+        >
+          {busy ? "moving…" : "move"}
+        </button>
+      </div>
+      {error && <p className="text-xs text-red-700 dark:text-red-300">{error}</p>}
     </section>
   );
 }

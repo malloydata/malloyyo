@@ -132,14 +132,22 @@ changes are untouched.
   is unchanged. You will want the new one for the publish behaviour above.
 - **Roles and scoping are untouched.** Who may open a dataset, and the givens it
   is scoped by, work exactly as before and stay per dataset.
-- **`malloyyo publish --dataset x` is gone** (CLI, since this change). Every
-  publish is a repo, named by `--repo` or the checkout's git remote `origin`. A
-  dataset an older CLI published with `--dataset` is **moved into the repo** on its
-  first repo publish whose target names it: the same row, so share links, saved
-  queries, drafts and scoping carry over, and its bare name keeps resolving through
-  an alias. Only its owner (or an admin) can move it. The server's
-  `POST /api/datasets/:id/model/push` still answers, for CLIs installed before
-  this — nothing new should reach it.
+- **`malloyyo publish --dataset x` is gone.** Every publish is a repo, named by
+  `--repo` or the checkout's git remote `origin`, and publishing is admin-only.
+  An older CLI gets a 410 telling it to upgrade.
+
+### Moving a dataset that isn't in a repo yet
+
+1. An admin opens the dataset's page (`/datasets/<name>/config`) and uses
+   **Move into a repo**: the repo (`owner/name`, created if new) and where the
+   dataset lives in it — the repo root, or `datasets/<name>/`.
+2. From the model's checkout, laid out to match, run `malloyyo publish`.
+
+It is the same dataset afterwards: share links, saved queries, favorites,
+drafts, history, roles and scoping all stay, and its bare name keeps
+resolving. Until the first publish it serves the model it had. A publish that
+would create a dataset under the name of one still outside a repo is refused
+and points here.
 - **Existing dashboards, saved queries and share links** keep resolving.
 
 ---

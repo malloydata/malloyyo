@@ -269,8 +269,9 @@ route: that skips the API-token path, the per-request `authorize()` re-read, and
 the scope check. Scopes are one vocabulary for both
 (`src/lib/api-token-scopes.ts`), so the consent screen and the token form
 render the same sentences. **Publishing is admin-only** (`canAuthor`, i.e. the
-admin role): publishing, creating repos and datasets, and branch previews, on
-both `POST /api/repos/push` and the legacy dataset push. There are no
+admin role): publishing, creating repos and datasets, branch previews, and
+moving a repo-less dataset into a repo (`src/lib/repo-attach.ts`). The old
+dataset push (`/api/datasets/:id/model/push`) is retired — it answers 410. There are no
 ownership exceptions — dataset ownership is only half-built, so it grants no
 publish rights. Full guide: `docs/api-tokens.md`.
 

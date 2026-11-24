@@ -21,15 +21,15 @@
  */
 
 import { NextResponse } from "next/server";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { nameToSlug } from "@malloyyo/mcp-engine";
-import { datasetAliases, datasets, db, repos, type Dataset } from "@/db";
+import { datasets, db, repos } from "@/db";
 import { env } from "@/lib/env";
 import { credentialLabel, requireBearer } from "@/lib/bearer-auth";
 import { logger, serializeErr } from "@/lib/logger";
 import { storePreview } from "@/lib/repo-preview-store";
 import { publishRevision } from "@/lib/repo-publish";
-import { findRepoForPublish, qualifiedName, repoSlugFromGitHub, resolveDatasetRef } from "@/lib/repos";
+import { findRepoForPublish, qualifiedName, repoSlugFromGitHub } from "@/lib/repos";
 import { canAuthor } from "@/lib/roles";
 import { captureTelemetry } from "@/lib/telemetry";
 
@@ -50,9 +50,7 @@ type Body = {
   /**
    * The name of a SINGLE-dataset repo's one dataset (a root `index.malloy`, which
    * has no directory to be named after). Optional and additive: the CLI sends the
-   * config target's `dataset`. A repo-less dataset of that name — one an older
-   * `malloyyo publish --dataset` pushed — is ADOPTED into the repo rather than
-   * shadowed by a new one (see `adoptRoot` in src/lib/repo-publish.ts).
+   * config target's `dataset`. See `rootDataset` below.
    */
   dataset?: string;
   /** Name the repo explicitly. Optional; nothing sends it yet. */
@@ -171,7 +169,6 @@ export async function POST(req: Request) {
     }
   }
   const rootName = root.name;
-  const adoptRoot = root.adopt;
 
   try {
     const result = await publishRevision({
@@ -188,7 +185,6 @@ export async function POST(req: Request) {
       // A root `index.malloy` publishes like any other repo now: named by
       // `dataset` when the caller sent one, else after the repo.
       ...(rootName ? { rootDatasetName: rootName } : {}),
-      ...(adoptRoot ? { adoptRoot } : {}),
       // Someone is reading an exit code: name the flag rather than publishing
       // what happens to be covered and leaving a directory behind silently.
       onMissing: "refuse",
@@ -284,7 +280,6 @@ export async function POST(req: Request) {
         qualified: d.qualified,
         version: d.version,
         created: d.created,
-        ...(d.adopted ? { adopted: true } : {}),
         ...(d.declaredButUnused ? { declaredButUnused: d.declaredButUnused } : {}),
       })),
       ...(result.unclaimed.length > 0 ? { unclaimed: result.unclaimed.map((u) => u.name) } : {}),
@@ -299,30 +294,26 @@ export async function POST(req: Request) {
   }
 }
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
 /**
  * What the CLI's `dataset` (a single-dataset repo's target) names, against the
  * repo being published.
  *
- * - The repo HAS a root dataset: `dataset` must name that one — its name, id,
- *   qualified name, or an alias of it. Anything else is refused. Silently
- *   publishing over the root would overwrite one dataset with a working tree
- *   meant for another: two targets on one instance (`prod → mdw`,
- *   `dev → mdw_dev`) are two datasets, and so are two projects whose repos share
- *   a leaf name.
- * - The repo has NO root dataset yet: a uuid or `repo:name` must name an
- *   existing REPO-LESS dataset, which is adopted. A bare name adopts the
- *   repo-less dataset of that name if there is one, and otherwise is the name a
- *   new dataset would be created under — the only case the slug rule applies.
+ * - The repo HAS a root dataset: `dataset` must name that one, by name, id or
+ *   qualified name. Anything else is refused: publishing over the root would
+ *   overwrite one dataset with a working tree meant for another — two targets on
+ *   one instance (`prod → mdw`, `dev → mdw_dev`) are two datasets, and so are two
+ *   projects whose repos share a leaf name.
+ * - It has none yet: `dataset` is the name the root dataset is created under, so
+ *   it has to resolve to itself on every later publish and is never quietly
+ *   slugified into something else.
+ *
+ * A dataset that exists outside any repo is never matched here. It is moved into
+ * the repo explicitly first (src/lib/repo-attach.ts); then it IS the root.
  */
 async function rootDataset(
   ref: string,
   found: Awaited<ReturnType<typeof findRepoForPublish>>,
-): Promise<
-  | { ok: true; name?: string; adopt?: Dataset }
-  | { ok: false; status: number; error: string }
-> {
+): Promise<{ ok: true; name?: string } | { ok: false; status: number; error: string }> {
   const repo = "repo" in found ? found.repo : null;
   const [current] = repo
     ? await db
@@ -333,13 +324,9 @@ async function rootDataset(
     : [];
 
   if (current) {
-    const [alias] = await db
-      .select({ id: datasetAliases.datasetId })
-      .from(datasetAliases)
-      .where(and(eq(datasetAliases.alias, ref), eq(datasetAliases.datasetId, current.id)))
-      .limit(1);
-    const names = [current.name, current.id, qualifiedName(repo!.slug, current.name)];
-    if (names.includes(ref) || alias) return { ok: true, name: current.name };
+    if ([current.name, current.id, qualifiedName(repo!.slug, current.name)].includes(ref)) {
+      return { ok: true, name: current.name };
+    }
     return {
       ok: false,
       status: 409,
@@ -350,30 +337,6 @@ async function rootDataset(
     };
   }
 
-  if (UUID_RE.test(ref) || ref.includes(":")) {
-    const r = await resolveDatasetRef(ref);
-    if (!r.ok) return { ok: false, status: 404, error: `the target's dataset "${ref}": ${r.error}` };
-    if (r.dataset.repoId !== null) {
-      return {
-        ok: false,
-        status: 409,
-        error:
-          `the target's dataset "${ref}" is "${r.dataset.name}" of the repo "${r.repo?.slug ?? "?"}", ` +
-          `so it can't be published from this one`,
-      };
-    }
-    return { ok: true, name: r.dataset.name, adopt: r.dataset };
-  }
-
-  const [orphan] = await db
-    .select()
-    .from(datasets)
-    .where(and(eq(datasets.name, ref), isNull(datasets.repoId), eq(datasets.status, "ready")))
-    .limit(1);
-  if (orphan) return { ok: true, name: orphan.name, adopt: orphan };
-
-  // Creating: the name has to resolve to itself on every later publish, so it
-  // is never quietly slugified into something else.
   if (nameToSlug(ref) !== ref) {
     return {
       ok: false,

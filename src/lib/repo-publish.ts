@@ -763,6 +763,17 @@ async function verifyAndActivate(
   };
 }
 
+/** A file of the materialized repo, or undefined. Above `activate()` on
+    purpose: the activation does no I/O, and src/lib/repos-push-atomic.test.ts
+    checks that by reading it. */
+function readIfPresent(file: string): string | undefined {
+  try {
+    return fs.readFileSync(file, "utf8");
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * THE ONE MUTATION THAT MAKES A PUBLISH VISIBLE.
  *
@@ -941,14 +952,6 @@ async function activate(
       };
     }
     throw err;
-  }
-}
-
-function readIfPresent(file: string): string | undefined {
-  try {
-    return fs.readFileSync(file, "utf8");
-  } catch {
-    return undefined;
   }
 }
 

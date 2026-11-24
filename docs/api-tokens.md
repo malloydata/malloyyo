@@ -121,11 +121,10 @@ CLI tells you to sign in once more.
 
 Concretely, with a `publish` token:
 
-- **Publish to a dataset you own**, or to any dataset if you are an admin.
-- **Not** publish to someone else's dataset. The CLI says whose problem it is:
-  `that account doesn't own dataset "x" and isn't an admin on this instance`.
-- **Not** create a dataset. `--create-datasets` is admin-only, the same as
-  creating one in the UI — a token must not be a way around that gate.
+- **Publishing is admin-only.** An admin's `publish` token can publish any repo
+  and create datasets (`--create-datasets`); a member's is refused with
+  `publishing is admin-only on this instance`, even for a dataset the member
+  owns. A token must not be a way around the role.
 
 ## Expiry, rotation, revocation
 
@@ -177,8 +176,7 @@ it holds only the *name* of an environment variable, never a value.
 | `…that value isn't shaped like a Malloyyo token…` | The variable holds something that is not a token at all. Check whether the name is still in use for another secret. |
 | `that token was minted on "x"; this instance is "y"` | Right token, wrong instance. Mint one at the instance you are publishing to. |
 | `this credential does not carry the "publish" scope` | The credential is fine; it was not given this permission. For a token: mint a new one with the scope ticked — scopes are fixed at creation. For a saved login from before publish scopes existed: run `malloyyo login` again. |
-| `that account doesn't own dataset "…"` | Ownership, not authentication. The dataset's owner or an admin can publish to it. |
-| `dataset "…" not found, and creating one is admin-only` | Ask an admin to create the dataset, then publish to it. |
+| `publishing is admin-only on this instance` | The role, not authentication. Ask an admin to publish, or to make you one. |
 | Publishing works by hand but not in CI | Almost always precedence: something in the shell profile is shadowing what you think you set. `malloyyo publish` names the source it used in any auth failure. |
 
 ## For operators

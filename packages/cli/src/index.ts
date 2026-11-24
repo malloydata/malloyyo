@@ -58,11 +58,10 @@ function authHint(
   if (status === 403) {
     // The server's own message says which of these it was; this says where the
     // fix lives. Both halves matter: a token can be perfectly valid and still
-    // lack the scope, or belong to someone who doesn't own the dataset.
+    // lack the scope, or belong to an account that isn't an admin.
     const why =
       `\n  The credential is valid, but it isn't allowed to do this on ${t.url}.` +
-      `\n  The model surface needs the "publish" scope, on an account that owns the` +
-      `\n  dataset (or is an admin there).`;
+      `\n  Publishing needs the "publish" scope, on an admin account there.`;
     // A saved login from before `login` asked for publishing carries "mcp"
     // alone, and no token page fixes that — signing in again does.
     return source === "login"
@@ -426,7 +425,14 @@ async function publish(
     root,
     single ? [] : layout.datasets.map((d) => d.name),
     target,
-    { ...opts, rootDataset: single ? targetDataset(root, target) : undefined },
+    {
+      ...opts,
+      // `-i` may name a configured target rather than a URL; that target then
+      // says which dataset, as a positional target would.
+      rootDataset: single
+        ? targetDataset(root, target ?? (opts.instance && !/^https?:\/\//i.test(opts.instance) ? opts.instance : undefined))
+        : undefined,
+    },
   );
   // Transitional — see OLD_LAYOUT_NOTICE. The layout still publishes; this only
   // says it can be converted. AFTER the publish: printed first, it buried the

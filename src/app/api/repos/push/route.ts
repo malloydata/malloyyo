@@ -23,14 +23,13 @@
 import { NextResponse } from "next/server";
 import { and, eq, isNull } from "drizzle-orm";
 import { nameToSlug } from "@malloyyo/mcp-engine";
-import { datasets, db, repos } from "@/db";
-import { isAdmin } from "@/lib/admin";
+import { datasetAliases, datasets, db, repos, type Dataset } from "@/db";
 import { env } from "@/lib/env";
 import { credentialLabel, requireBearer } from "@/lib/bearer-auth";
 import { logger, serializeErr } from "@/lib/logger";
 import { storePreview } from "@/lib/repo-preview-store";
 import { publishRevision } from "@/lib/repo-publish";
-import { findRepoForPublish, repoSlugFromGitHub } from "@/lib/repos";
+import { findRepoForPublish, qualifiedName, repoSlugFromGitHub, resolveDatasetRef } from "@/lib/repos";
 import { canAuthor } from "@/lib/roles";
 import { captureTelemetry } from "@/lib/telemetry";
 
@@ -85,48 +84,22 @@ export async function POST(req: Request) {
   const raw = Buffer.from(body.archive, "base64");
   if (raw.length === 0) return bad("the repo archive is empty", 400);
 
-  // The root dataset's name, held to the same rule `--create-dataset` held it to:
-  // it has to resolve to itself on every later publish, so it is never quietly
-  // slugified into something else.
-  const rootName = typeof body.dataset === "string" ? body.dataset.trim() : "";
-  if (rootName && nameToSlug(rootName) !== rootName) {
-    return bad(
-      `"${rootName}" is not a usable dataset name: dataset names are lowercase letters, digits ` +
-        `and underscores — use "${nameToSlug(rootName)}"`,
-      400,
-      { kind: "request" },
-    );
+  // PUBLISHING IS FOR ADMINS. Every way in — a publish, a branch preview,
+  // creating a repo or a dataset — runs a repo's model on this server: the
+  // archive's malloy-config.json names `{"env": …}` secrets resolved against
+  // THIS server's environment, and compiling runs SQL to resolve schemas. So
+  // there is one gate, the role, and no ownership exceptions beside it.
+  if (!canAuthor(auth.user)) {
+    return bad("publishing is admin-only on this instance — ask an admin to publish", 403, {
+      kind: "request",
+    });
   }
-  // A dataset no repo publishes, under that name: what `publish --dataset` left.
-  const [orphan] = rootName
-    ? await db
-        .select()
-        .from(datasets)
-        .where(and(eq(datasets.name, rootName), isNull(datasets.repoId), eq(datasets.status, "ready")))
-        .limit(1)
-    : [];
-  const ownsOrphan = !!orphan && (orphan.userId === auth.user.id || isAdmin(auth.user));
 
   const found = await findRepoForPublish({ githubRepo, repoSlug: body.repoSlug });
   if ("error" in found) return bad(found.error, 409, { kind: "request" });
 
-  // CREATING DATASETS IS ADMIN-ONLY, whichever way a publish reaches it — the
-  // rule `POST /api/datasets` and the dataset push both enforce. Owning a repo
-  // does not widen it: without this, the repo an owner of a repo-less dataset
-  // may create to hold it (below) would be a way to create any number more.
-  if (body.createDatasets && !body.preview && !canAuthor(auth.user)) {
-    return bad(
-      `creating datasets is admin-only on this instance — publish without --create-datasets, ` +
-        `or ask an admin to create them`,
-      403,
-      { kind: "request" },
-    );
-  }
-
   if (body.preview) {
-    // Admin-only to start, like every other way in to a preview. A preview of
-    // a repo that doesn't exist here has nothing to be a preview OF.
-    if (!isAdmin(auth.user)) return bad("Branch previews are for admins.", 403, { kind: "request" });
+    // A preview of a repo that doesn't exist here has nothing to be a preview OF.
     if (!env.REPO_AUTHORING) return bad(`Repo authoring is off on this instance (REPO_AUTHORING). An operator turns it on.`, 403, { kind: "request" });
     if (!("repo" in found)) {
       return bad(`"${githubRepo || body.repoSlug}" is not a repo on this instance — publish it before previewing a branch`, 404, {
@@ -157,51 +130,15 @@ export async function POST(req: Request) {
     }
   }
 
-  // Named first, because it is the real reason: whatever the repo's state, this
-  // publish would take over a dataset that belongs to someone else.
-  if (orphan && !ownsOrphan && !("repo" in found)) {
-    return bad(
-      `that account doesn't own dataset "${rootName}" and isn't an admin on this instance — ` +
-        `publishing is limited to a dataset's owner`,
-      403,
-      { kind: "request" },
-    );
-  }
+  // WHAT THE ROOT DATASET IS. Decided before anything is written, so a refusal
+  // here leaves no repo row behind.
+  const root = typeof body.dataset === "string" && body.dataset.trim() ? await rootDataset(body.dataset.trim(), found) : { ok: true as const };
+  if (!root.ok) return bad(root.error, root.status, { kind: "request" });
 
   let repo;
   if ("repo" in found) {
     repo = found.repo;
-    // WHO MAY PUBLISH TO A REPO: its owner, or an admin. The first
-    // implementation of this route shipped with no gate at all, because a repo
-    // had no owner to check — so any member holding a publish token could
-    // overwrite anyone's datasets. That is not defacement, it is code
-    // execution: the archive carries the repo's `malloy-config.json`, whose
-    // connection secrets are `{"env": …}` references resolved against THIS
-    // server's environment, and compiling resolves schemas by running SQL.
-    if (repo.ownerId !== auth.user.id && !isAdmin(auth.user)) {
-      return bad(
-        `that account doesn't own the repo "${repo.slug}" and isn't an admin on this instance — ` +
-          `publishing is limited to a repo's owner`,
-        403,
-        { kind: "request" },
-      );
-    }
   } else {
-    // Creating a repo names a codebase this server will compile, which is the
-    // same reach `POST /api/datasets` is admin-only for — with one exception.
-    // The owner of a repo-less dataset could always publish to it (that was
-    // `--dataset`'s rule: the dataset's owner or an admin), and moving it into a
-    // repo is how they keep doing so. Their reach is the dataset they already
-    // had, nothing wider: they cannot create datasets (refused above), so the
-    // only thing such a repo can publish is the adopted one.
-    if (!canAuthor(auth.user) && !(orphan && orphan.userId === auth.user.id)) {
-      return bad(
-        `"${githubRepo}" is not a repo on this instance yet, and creating one is admin-only — ` +
-          `ask an admin to add it`,
-        403,
-        { kind: "request" },
-      );
-    }
     const slug = body.repoSlug ? nameToSlug(body.repoSlug) : repoSlugFromGitHub(githubRepo);
     if (!slug) return bad(`could not make a repo name out of "${githubRepo}"`, 400, { kind: "request" });
     try {
@@ -233,28 +170,8 @@ export async function POST(req: Request) {
       );
     }
   }
-
-  // Adopt only into a repo with no root dataset yet; after that, the repo's own
-  // row is the root and `dataset` names nothing new.
-  let adoptRoot: typeof orphan | undefined;
-  if (orphan) {
-    const [root] = await db
-      .select({ id: datasets.id })
-      .from(datasets)
-      .where(and(eq(datasets.repoId, repo.id), eq(datasets.repoDir, ""), eq(datasets.status, "ready")))
-      .limit(1);
-    if (!root) {
-      if (!ownsOrphan) {
-        return bad(
-          `"${rootName}" is a dataset on this instance that belongs to no repo, and that account ` +
-            `doesn't own it and isn't an admin — only its owner can move it into a repo`,
-          403,
-          { kind: "request" },
-        );
-      }
-      adoptRoot = orphan;
-    }
-  }
+  const rootName = root.name;
+  const adoptRoot = root.adopt;
 
   try {
     const result = await publishRevision({
@@ -380,4 +297,91 @@ export async function POST(req: Request) {
       kind: "persist",
     });
   }
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * What the CLI's `dataset` (a single-dataset repo's target) names, against the
+ * repo being published.
+ *
+ * - The repo HAS a root dataset: `dataset` must name that one — its name, id,
+ *   qualified name, or an alias of it. Anything else is refused. Silently
+ *   publishing over the root would overwrite one dataset with a working tree
+ *   meant for another: two targets on one instance (`prod → mdw`,
+ *   `dev → mdw_dev`) are two datasets, and so are two projects whose repos share
+ *   a leaf name.
+ * - The repo has NO root dataset yet: a uuid or `repo:name` must name an
+ *   existing REPO-LESS dataset, which is adopted. A bare name adopts the
+ *   repo-less dataset of that name if there is one, and otherwise is the name a
+ *   new dataset would be created under — the only case the slug rule applies.
+ */
+async function rootDataset(
+  ref: string,
+  found: Awaited<ReturnType<typeof findRepoForPublish>>,
+): Promise<
+  | { ok: true; name?: string; adopt?: Dataset }
+  | { ok: false; status: number; error: string }
+> {
+  const repo = "repo" in found ? found.repo : null;
+  const [current] = repo
+    ? await db
+        .select()
+        .from(datasets)
+        .where(and(eq(datasets.repoId, repo.id), eq(datasets.repoDir, ""), eq(datasets.status, "ready")))
+        .limit(1)
+    : [];
+
+  if (current) {
+    const [alias] = await db
+      .select({ id: datasetAliases.datasetId })
+      .from(datasetAliases)
+      .where(and(eq(datasetAliases.alias, ref), eq(datasetAliases.datasetId, current.id)))
+      .limit(1);
+    const names = [current.name, current.id, qualifiedName(repo!.slug, current.name)];
+    if (names.includes(ref) || alias) return { ok: true, name: current.name };
+    return {
+      ok: false,
+      status: 409,
+      error:
+        `the repo "${repo!.slug}" publishes dataset "${current.name}" from its root, but this publish ` +
+        `targets "${ref}". Nothing was published — a single-dataset repo publishes one dataset. ` +
+        `Target "${current.name}", or publish "${ref}" from its own repo (--repo <owner/name>).`,
+    };
+  }
+
+  if (UUID_RE.test(ref) || ref.includes(":")) {
+    const r = await resolveDatasetRef(ref);
+    if (!r.ok) return { ok: false, status: 404, error: `the target's dataset "${ref}": ${r.error}` };
+    if (r.dataset.repoId !== null) {
+      return {
+        ok: false,
+        status: 409,
+        error:
+          `the target's dataset "${ref}" is "${r.dataset.name}" of the repo "${r.repo?.slug ?? "?"}", ` +
+          `so it can't be published from this one`,
+      };
+    }
+    return { ok: true, name: r.dataset.name, adopt: r.dataset };
+  }
+
+  const [orphan] = await db
+    .select()
+    .from(datasets)
+    .where(and(eq(datasets.name, ref), isNull(datasets.repoId), eq(datasets.status, "ready")))
+    .limit(1);
+  if (orphan) return { ok: true, name: orphan.name, adopt: orphan };
+
+  // Creating: the name has to resolve to itself on every later publish, so it
+  // is never quietly slugified into something else.
+  if (nameToSlug(ref) !== ref) {
+    return {
+      ok: false,
+      status: 400,
+      error:
+        `"${ref}" is not a usable dataset name: dataset names are lowercase letters, digits ` +
+        `and underscores — use "${nameToSlug(ref)}"`,
+    };
+  }
+  return { ok: true, name: ref };
 }

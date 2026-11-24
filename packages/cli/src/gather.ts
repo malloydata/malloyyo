@@ -1,4 +1,4 @@
-import { readFileSync, existsSync, readdirSync, statSync, mkdtempSync, rmSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync, statSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
@@ -182,12 +182,21 @@ export function originRepo(dir: string): string | undefined {
     return undefined;
   }
   // git@host:owner/name.git | https://host/owner/name(.git)/ | ssh://git@host/owner/name
+  //
+  // A HOSTED remote only. A local path or file:// URL has no owner, and making
+  // one up from its parent directory (`/srv/git/models` → `git/models`) would
+  // print and publish under a name nobody chose — so there is no default and
+  // --repo is asked for.
+  const hosted = /^[a-z+]+:\/\/[^/]+\//i.test(url) && !/^file:/i.test(url);
+  const scp = /^[^@/]+@[^:/]+:/.test(url);
+  if (!hosted && !scp) return undefined;
   const path = url
     .replace(/\.git\/?$/, "")
     .replace(/\/+$/, "")
     .replace(/^[a-z+]+:\/\/[^/]*\//i, "")
     .replace(/^[^@/]+@[^:/]+:/, "");
-  const parts = path.split("/").filter(Boolean);
+  // Azure DevOps puts `_git` between the project and the repo.
+  const parts = path.split("/").filter((p) => p && p !== "_git");
   if (parts.length < 2) return undefined;
   const [owner, name] = parts.slice(-2);
   return /^[\w.-]+$/.test(owner) && /^[\w.-]+$/.test(name) ? `${owner}/${name}` : undefined;
@@ -268,7 +277,14 @@ export function gitArchiveZip(
   try {
     try {
       git(["rev-parse", "--is-inside-work-tree"]);
-    } catch {
+    } catch (err) {
+      // Only "not a git repository" means there is no checkout here. Anything
+      // else — git missing, a repository git refuses to read (dubious
+      // ownership) — is a real failure, and git's own words say what it is.
+      const stderr = String((err as { stderr?: unknown }).stderr ?? "");
+      if (stderr && !/not a git repository/i.test(stderr)) {
+        throw new Error(`git could not read ${dir}: ${stderr.trim()}`);
+      }
       if (!opts.allowNonGit) {
         throw new Error(
           `${dir} is not a git repository.\n` +
@@ -277,7 +293,22 @@ export function gitArchiveZip(
         );
       }
       const gitDir = join(scratch, "git");
-      execFileSync("git", ["init", "-q", "--bare", gitDir], { stdio: "ignore" });
+      try {
+        execFileSync("git", ["init", "-q", "--bare", gitDir], { stdio: "ignore" });
+      } catch (err) {
+        throw new Error(
+          `${dir} is not a git checkout, and packing it needs git, which could not be run: ` +
+            `${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+      // A checkout has its own .gitignore deciding this; a bare directory may
+      // not, and then everything in it would be uploaded. These are never model
+      // files and are often secrets: excluded whatever the directory says.
+      mkdirSync(join(gitDir, "info"), { recursive: true });
+      writeFileSync(
+        join(gitDir, "info", "exclude"),
+        [".env", ".env.*", "node_modules/", ".venv/", "venv/", "__pycache__/", ".DS_Store", ""].join("\n"),
+      );
       env.GIT_DIR = gitDir;
       env.GIT_WORK_TREE = dir;
     }

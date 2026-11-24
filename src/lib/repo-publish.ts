@@ -87,9 +87,19 @@ import { requirementForPublish } from "./tenancy";
  * the loser's unique violation became an opaque 500 instead of "another publish
  * claimed that name; re-run".
  */
+/** The unique indexes that hold dataset NAMES. Any other 23505 — the one-active
+    model index, say — is a different problem and must not be reported as a
+    name being taken. */
+const NAME_INDEXES = new Set(["datasets_repo_name_ready_unique", "datasets_unscoped_name_ready_unique"]);
+
 function isNameClash(err: unknown): boolean {
-  const e = err as { code?: unknown; cause?: { code?: unknown } } | null;
-  return e?.code === "23505" || e?.cause?.code === "23505";
+  type PgErr = { code?: unknown; constraint_name?: unknown; constraint?: unknown };
+  const e = err as (PgErr & { cause?: PgErr }) | null;
+  const pg = e?.code === "23505" ? e : e?.cause?.code === "23505" ? e.cause : null;
+  if (!pg) return false;
+  const constraint = pg.constraint_name ?? pg.constraint;
+  // A driver that does not say which constraint: keep the old reading.
+  return typeof constraint !== "string" || NAME_INDEXES.has(constraint);
 }
 
 export type CompiledDir = {

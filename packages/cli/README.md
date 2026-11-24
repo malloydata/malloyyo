@@ -121,9 +121,8 @@ rather than recovered. It carries the scopes you tick:
 | `publish` | `malloyyo publish` and `malloyyo status` |
 | `mcp` | querying the instance's published models over MCP |
 
-A token never carries more than you do. Publishing works on datasets **you own** (admins may
-publish to any), creating a dataset with `--create-datasets` stays admin-only, and every
-request re-checks your account — so revoking the token, or the account, takes effect on the
+A token never carries more than you do. Publishing is **admin-only** — a member's token is
+refused, even for a dataset they own — and every request re-checks your account — so revoking the token, or the account, takes effect on the
 next request rather than at expiry. Expiry is your choice at mint time, including **never**:
 a credential that lapses on its own breaks the pipeline at the worst moment, and the token
 list shows when each was last used so a forgotten one is still visible.

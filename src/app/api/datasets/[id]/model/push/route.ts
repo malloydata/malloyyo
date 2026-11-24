@@ -82,6 +82,16 @@ function generatedBy(git: GitInfo): string {
 export async function POST(req: Request, ctx: { params: Promise<{ id: string }> }) {
   const auth = await requireBearer(req, { scope: "publish" });
   if (!auth.ok) return json(auth.status, { ok: false, error: auth.error });
+  // PUBLISHING IS FOR ADMINS — the same single gate as POST /api/repos/push.
+  // First, before the dataset is even looked up, so a refusal says nothing
+  // about which datasets exist or which repo publishes them.
+  if (!isAdmin(auth.user)) {
+    return json(403, {
+      ok: false,
+      kind: "request",
+      error: "publishing is admin-only on this instance — ask an admin to publish",
+    });
+  }
 
   const { id } = await ctx.params;
   const params = new URL(req.url).searchParams;
@@ -105,16 +115,6 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     });
   }
   if (!ds) {
-    // Creating a dataset is an admin act in the UI (POST /api/datasets), so it is
-    // one here too — otherwise a member's publish token would be a way around
-    // that gate rather than a way to use their own datasets.
-    if (!isAdmin(auth.user)) {
-      return json(403, {
-        ok: false,
-        kind: "request",
-        error: `dataset "${id}" not found, and creating one is admin-only — ask an admin to create it`,
-      });
-    }
     const bad = creationError(id);
     if (bad) return json(400, { ok: false, kind: "request", error: bad });
   }
@@ -136,19 +136,6 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
         `\`malloyyo publish\` in that repo.`,
     });
   }
-  // Who may publish to an existing dataset: its owner, or an admin. This is the
-  // loosening design §4.5 left open — publishing used to be admin-only, which
-  // made a member's token useless even for the datasets they own.
-  if (ds && ds.userId !== auth.user.id && !isAdmin(auth.user)) {
-    return json(403, {
-      ok: false,
-      kind: "request",
-      error:
-        `that account doesn't own dataset "${ds.name}" and isn't an admin on this ` +
-        `instance — publishing is limited to a dataset's owner`,
-    });
-  }
-
   let body: PushBody;
   try {
     body = (await req.json()) as PushBody;

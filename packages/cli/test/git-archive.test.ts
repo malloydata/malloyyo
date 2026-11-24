@@ -213,7 +213,11 @@ test("originRepo reads owner/name from every remote URL shape git accepts", () =
     ["git@github.com:acme/sales.git", "acme/sales"],
     ["ssh://git@github.com/acme/sales.git", "acme/sales"],
     ["https://x-access-token:abc@github.com/acme/my.repo.git", "acme/my.repo"],
+    ["https://dev.azure.com/acme/proj/_git/sales", "proj/sales"],
+    // Local remotes have no owner: no default, --repo is asked for.
     ["sales", undefined],
+    ["/srv/git/sales.git", undefined],
+    ["file:///home/me/src/sales", undefined],
   ];
   for (const [i, [url, want]] of cases.entries()) {
     const verb = i === 0 ? "add" : "set-url";
@@ -235,6 +239,15 @@ test("allowNonGit packs a plain directory through a throwaway git dir, honouring
     assert.deepEqual(names, [".gitignore", "index.malloy"]);
     assert.equal(fileCount, 2);
     assert.equal(fs.existsSync(path.join(root, ".git")), false, "and no .git is left behind");
+
+    // No .gitignore at all: secrets and dependency trees still stay home.
+    fs.rmSync(path.join(root, ".gitignore"));
+    fs.writeFileSync(path.join(root, ".env"), "SECRET=1");
+    fs.mkdirSync(path.join(root, "node_modules", "x"), { recursive: true });
+    fs.writeFileSync(path.join(root, "node_modules", "x", "i.js"), "");
+    const bare = gitArchiveZip(root, { allowNonGit: true });
+    const bareNames = Object.keys(unzipSync(new Uint8Array(bare.zip))).sort();
+    assert.deepEqual(bareNames, ["index.malloy", "malloy-config-local.json"]);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

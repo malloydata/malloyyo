@@ -23,7 +23,7 @@ export function isMalloyText(s: string): boolean {
  * `query`.
  *
  * This is the allow-list for the UNRESTRICTED run path. A manifest arrives from
- * a published repo, which only a dataset's owner or an admin can push, so its
+ * a published repo, which only an admin can push, so its
  * text carries the same authority as the model it ships beside. Text that
  * arrives in a REQUEST carries the authority of whoever is signed in, which is
  * much less.

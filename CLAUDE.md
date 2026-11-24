@@ -268,9 +268,11 @@ mistake:
 route: that skips the API-token path, the per-request `authorize()` re-read, and
 the scope check. Scopes are one vocabulary for both
 (`src/lib/api-token-scopes.ts`), so the consent screen and the token form
-render the same sentences. Publishing authority is **the dataset's owner or an admin**;
-creating a dataset stays admin-only, matching `POST /api/datasets`. Full guide:
-`docs/api-tokens.md`.
+render the same sentences. **Publishing is admin-only** (`canAuthor`, i.e. the
+admin role): publishing, creating repos and datasets, and branch previews, on
+both `POST /api/repos/push` and the legacy dataset push. There are no
+ownership exceptions — dataset ownership is only half-built, so it grants no
+publish rights. Full guide: `docs/api-tokens.md`.
 
 ## Vercel deployment notes
 

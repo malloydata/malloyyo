@@ -71,26 +71,34 @@ instance URL — so you can be logged in to several instances at once. Tokens au
 ## Use
 
 ```bash
-malloyyo publish main           # push the model in . to the "main" target
+malloyyo publish main           # push the repo in . to the "main" target
 malloyyo publish staging ./model
 malloyyo publish main --dry-run # show what would be sent
 malloyyo status main            # what's live: version, commit, compile state
 ```
 
-The target dataset must already exist; publishing to a missing one fails rather than
-inventing it (a config typo would otherwise spawn junk datasets). To provision it from the
-CLI instead of the UI, opt in explicitly:
+**Every publish is a repo.** A dataset always belongs to one: `publish` names it by
+`--repo <owner/name>`, or — without the flag — by the target's `"repo"` in malloy-config.json
+(never guessed from the git remote, so a fork can't publish over the repo it was forked from). A
+repo with `datasets/<name>/index.malloy` publishes one dataset per directory; a repo with
+`index.malloy` at its root publishes one dataset, named by the target's `dataset` in the
+config. A dataset already on the instance outside any repo is moved into one first, by an
+admin on its page ("Move into a repo"); after that `publish` refreshes it like any other.
+
+Datasets must already exist; publishing to a missing one fails rather than inventing it (a
+config typo would otherwise spawn junk datasets). To provision them from the CLI instead of
+the UI, opt in explicitly:
 
 ```bash
-malloyyo publish main --create-dataset   # create the dataset if it isn't there yet
+malloyyo publish main --create-datasets   # create any dataset that isn't there yet
 ```
 
-The dataset is created **only after the model compiles**, so a rejected publish still
+A dataset is created **only after the model compiles**, so a rejected publish still
 creates nothing, and it is created **private** — visibility is a deliberate act in the UI,
 and publishing never changes it. On an existing dataset the flag does nothing: you just get
-the next version. The dataset name comes from the target's `dataset` in the config, and must
-already be a valid name (lowercase letters, digits, underscores) — the CLI won't silently
-create it under a slugified variant that later publishes wouldn't find.
+the next version. A root dataset's name must already be a valid name (lowercase letters,
+digits, underscores) — the server won't silently create it under a slugified variant that
+later publishes wouldn't find.
 
 `publish` exits non-zero on a server-side compile failure, so it's safe to gate CI on.
 
@@ -114,9 +122,8 @@ rather than recovered. It carries the scopes you tick:
 | `publish` | `malloyyo publish` and `malloyyo status` |
 | `mcp` | querying the instance's published models over MCP |
 
-A token never carries more than you do. Publishing works on datasets **you own** (admins may
-publish to any), creating a dataset with `--create-dataset` stays admin-only, and every
-request re-checks your account — so revoking the token, or the account, takes effect on the
+A token never carries more than you do. Publishing is **admin-only** — a member's token is
+refused, even for a dataset they own — and every request re-checks your account — so revoking the token, or the account, takes effect on the
 next request rather than at expiry. Expiry is your choice at mint time, including **never**:
 a credential that lapses on its own breaks the pipeline at the worst moment, and the token
 list shows when each was last used so a forgotten one is still visible.

@@ -47,7 +47,7 @@ did exactly that, including through a shared `lib/` nobody read.
 
 The one exception is a dataset CREATED by a publish: there was no admin to have
 ticked anything, so it takes its list from that first model. **Both** creation
-paths do this — `malloyyo publish --create-dataset` and `POST /api/datasets`
+paths do this — `malloyyo publish --create-datasets` and `POST /api/datasets`
 (which passes `creating` to `refreshGitHubModel`). They have to agree: a dataset
 created without its list recorded is a dataset `finalizeGivens` never locks, and
 §3 below is then the only thing standing between a caller and another tenant's

@@ -21,15 +21,15 @@
  */
 
 import { NextResponse } from "next/server";
+import { and, eq } from "drizzle-orm";
 import { nameToSlug } from "@malloyyo/mcp-engine";
-import { db, repos } from "@/db";
-import { isAdmin } from "@/lib/admin";
+import { datasets, db, repos } from "@/db";
 import { env } from "@/lib/env";
 import { credentialLabel, requireBearer } from "@/lib/bearer-auth";
 import { logger, serializeErr } from "@/lib/logger";
 import { storePreview } from "@/lib/repo-preview-store";
 import { publishRevision } from "@/lib/repo-publish";
-import { findRepoForPublish, repoSlugFromGitHub } from "@/lib/repos";
+import { findRepoForPublish, qualifiedName, repoSlugFromGitHub } from "@/lib/repos";
 import { canAuthor } from "@/lib/roles";
 import { captureTelemetry } from "@/lib/telemetry";
 
@@ -47,6 +47,12 @@ type Body = {
   archive?: string;
   /** Create any dataset the repo publishes that does not exist here yet. */
   createDatasets?: boolean;
+  /**
+   * The name of a SINGLE-dataset repo's one dataset (a root `index.malloy`, which
+   * has no directory to be named after). Optional and additive: the CLI sends the
+   * config target's `dataset`. See `rootDataset` below.
+   */
+  dataset?: string;
   /** Name the repo explicitly. Optional; nothing sends it yet. */
   repoSlug?: string;
   git?: { sha?: string | null; branch?: string | null; dirty?: boolean | null };
@@ -76,13 +82,22 @@ export async function POST(req: Request) {
   const raw = Buffer.from(body.archive, "base64");
   if (raw.length === 0) return bad("the repo archive is empty", 400);
 
+  // PUBLISHING IS FOR ADMINS. Every way in — a publish, a branch preview,
+  // creating a repo or a dataset — runs a repo's model on this server: the
+  // archive's malloy-config.json names `{"env": …}` secrets resolved against
+  // THIS server's environment, and compiling runs SQL to resolve schemas. So
+  // there is one gate, the role, and no ownership exceptions beside it.
+  if (!canAuthor(auth.user)) {
+    return bad("publishing is admin-only on this instance — ask an admin to publish", 403, {
+      kind: "request",
+    });
+  }
+
   const found = await findRepoForPublish({ githubRepo, repoSlug: body.repoSlug });
   if ("error" in found) return bad(found.error, 409, { kind: "request" });
 
   if (body.preview) {
-    // Admin-only to start, like every other way in to a preview. A preview of
-    // a repo that doesn't exist here has nothing to be a preview OF.
-    if (!isAdmin(auth.user)) return bad("Branch previews are for admins.", 403, { kind: "request" });
+    // A preview of a repo that doesn't exist here has nothing to be a preview OF.
     if (!env.REPO_AUTHORING) return bad(`Repo authoring is off on this instance (REPO_AUTHORING). An operator turns it on.`, 403, { kind: "request" });
     if (!("repo" in found)) {
       return bad(`"${githubRepo || body.repoSlug}" is not a repo on this instance — publish it before previewing a branch`, 404, {
@@ -113,35 +128,15 @@ export async function POST(req: Request) {
     }
   }
 
+  // WHAT THE ROOT DATASET IS. Decided before anything is written, so a refusal
+  // here leaves no repo row behind.
+  const root = typeof body.dataset === "string" && body.dataset.trim() ? await rootDataset(body.dataset.trim(), found) : { ok: true as const };
+  if (!root.ok) return bad(root.error, root.status, { kind: "request" });
+
   let repo;
   if ("repo" in found) {
     repo = found.repo;
-    // WHO MAY PUBLISH TO A REPO: its owner, or an admin. The first
-    // implementation of this route shipped with no gate at all, because a repo
-    // had no owner to check — so any member holding a publish token could
-    // overwrite anyone's datasets. That is not defacement, it is code
-    // execution: the archive carries the repo's `malloy-config.json`, whose
-    // connection secrets are `{"env": …}` references resolved against THIS
-    // server's environment, and compiling resolves schemas by running SQL.
-    if (repo.ownerId !== auth.user.id && !isAdmin(auth.user)) {
-      return bad(
-        `that account doesn't own the repo "${repo.slug}" and isn't an admin on this instance — ` +
-          `publishing is limited to a repo's owner`,
-        403,
-        { kind: "request" },
-      );
-    }
   } else {
-    // Creating a repo names a codebase this server will compile, which is the
-    // same reach `POST /api/datasets` is admin-only for.
-    if (!canAuthor(auth.user)) {
-      return bad(
-        `"${githubRepo}" is not a repo on this instance yet, and creating one is admin-only — ` +
-          `ask an admin to add it`,
-        403,
-        { kind: "request" },
-      );
-    }
     const slug = body.repoSlug ? nameToSlug(body.repoSlug) : repoSlugFromGitHub(githubRepo);
     if (!slug) return bad(`could not make a repo name out of "${githubRepo}"`, 400, { kind: "request" });
     try {
@@ -173,6 +168,7 @@ export async function POST(req: Request) {
       );
     }
   }
+  const rootName = root.name;
 
   try {
     const result = await publishRevision({
@@ -186,9 +182,9 @@ export async function POST(req: Request) {
       // not to whoever happens to own the repo — a repo's owner may be an admin
       // who added it, and the publisher is who will maintain the dataset.
       datasetOwnerId: auth.user.id,
-      // `--repo` is the multi-dataset flag; a root `index.malloy` is
-      // `--dataset <name>`'s business, and the refusal names it.
-      refuseRootLayout: true,
+      // A root `index.malloy` publishes like any other repo now: named by
+      // `dataset` when the caller sent one, else after the repo.
+      ...(rootName ? { rootDatasetName: rootName } : {}),
       // Someone is reading an exit code: name the flag rather than publishing
       // what happens to be covered and leaving a directory behind silently.
       onMissing: "refuse",
@@ -219,12 +215,25 @@ export async function POST(req: Request) {
           : result.kind === "stale" || result.kind === "clash"
             ? 409
             : 400;
+      // A compile failure that is really a connection the server cannot open —
+      // usually a secret set on the author's machine and not on this one. The
+      // CLI names the variable when `kind` says so (its `failureHint`).
+      //
+      // EVERY failure has to look like one: in a repo where one dataset cannot
+      // connect and another has a typo, connection advice is wrong for half of it.
+      const connectionLike = (e: string) =>
+        /No connection named|Invalid SQL, (connect |getaddrinfo|Error: connect)/i.test(e) ||
+        ((result.missingEnv?.length ?? 0) > 0 && /connect|authentication|password/i.test(e));
+      const failureErrors = result.failures?.length ? result.failures.map((f) => f.error) : [result.error];
+      const connection = result.kind === "compile" && failureErrors.every(connectionLike);
       return bad(
         result.kind === "compile" ? `nothing was published — ${result.error}` : result.error,
         status,
         {
-          kind:
-            result.kind === "layout" || result.kind === "archive"
+          ...(connection ? { missingEnv: result.missingEnv ?? [] } : {}),
+          kind: connection
+            ? "connection"
+            : result.kind === "layout" || result.kind === "archive"
               ? "compile"
               : result.kind === "clash"
                 ? "request"
@@ -262,12 +271,16 @@ export async function POST(req: Request) {
       repo: githubRepo || repo.slug,
       branch,
       revision: result.revision,
+      // Additive: these exact bytes were already live, so no version was written
+      // (each dataset's `version` is 0).
+      ...(result.unchanged ? { unchanged: true } : {}),
       datasets: result.datasets.map((d) => ({
         name: d.name,
         // Additive: the new public identity, for a CLI that wants to print it.
         qualified: d.qualified,
         version: d.version,
         created: d.created,
+        ...(d.declaredButUnused ? { declaredButUnused: d.declaredButUnused } : {}),
       })),
       ...(result.unclaimed.length > 0 ? { unclaimed: result.unclaimed.map((u) => u.name) } : {}),
     });
@@ -279,4 +292,59 @@ export async function POST(req: Request) {
       kind: "persist",
     });
   }
+}
+
+/**
+ * What the CLI's `dataset` (a single-dataset repo's target) names, against the
+ * repo being published.
+ *
+ * - The repo HAS a root dataset: `dataset` must name that one, by name, id or
+ *   qualified name. Anything else is refused: publishing over the root would
+ *   overwrite one dataset with a working tree meant for another — two targets on
+ *   one instance (`prod → mdw`, `dev → mdw_dev`) are two datasets, and so are two
+ *   projects whose repos share a leaf name.
+ * - It has none yet: `dataset` is the name the root dataset is created under, so
+ *   it has to resolve to itself on every later publish and is never quietly
+ *   slugified into something else.
+ *
+ * A dataset that exists outside any repo is never matched here. It is moved into
+ * the repo explicitly first (src/lib/repo-attach.ts); then it IS the root.
+ */
+async function rootDataset(
+  ref: string,
+  found: Awaited<ReturnType<typeof findRepoForPublish>>,
+): Promise<{ ok: true; name?: string } | { ok: false; status: number; error: string }> {
+  const repo = "repo" in found ? found.repo : null;
+  const [current] = repo
+    ? await db
+        .select()
+        .from(datasets)
+        .where(and(eq(datasets.repoId, repo.id), eq(datasets.repoDir, ""), eq(datasets.status, "ready")))
+        .limit(1)
+    : [];
+
+  if (current) {
+    if ([current.name, current.id, qualifiedName(repo!.slug, current.name)].includes(ref)) {
+      return { ok: true, name: current.name };
+    }
+    return {
+      ok: false,
+      status: 409,
+      error:
+        `the repo "${repo!.slug}" publishes dataset "${current.name}" from its root, but this publish ` +
+        `targets "${ref}". Nothing was published — a single-dataset repo publishes one dataset. ` +
+        `Target "${current.name}", or publish "${ref}" from its own repo (--repo <owner/name>).`,
+    };
+  }
+
+  if (nameToSlug(ref) !== ref) {
+    return {
+      ok: false,
+      status: 400,
+      error:
+        `"${ref}" is not a usable dataset name: dataset names are lowercase letters, digits ` +
+        `and underscores — use "${nameToSlug(ref)}"`,
+    };
+  }
+  return { ok: true, name: ref };
 }

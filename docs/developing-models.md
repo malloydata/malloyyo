@@ -67,7 +67,7 @@ First tell the repo where it publishes to. Nothing writes this for you — `mall
 {
   "connections": { "warehouse": { "is": "postgres", "host": "…" } },
   "malloyyo": {
-    "targets": { "prod": { "url": "https://your-instance.example.com", "dataset": "orders" } }
+    "targets": { "prod": { "url": "https://your-instance.example.com", "dataset": "orders", "repo": "acme/orders-model" } }
   }
 }
 ```
@@ -76,13 +76,15 @@ Then:
 
 ```bash
 malloyyo login              # one-time browser sign-in
-malloyyo publish            # bundle *.malloy + malloy-config.json and push
+malloyyo publish            # pack the repo (what git tracks) and push it
 ```
 
 Both take a target name (`malloyyo publish prod`) when the repo defines more than one.
 
-The dataset must exist first — create it in the UI, or add `--create-dataset` to the first
-publish (it creates a private dataset, and only once the model compiles).
+Every publish is a repo, named by the target's `"repo"` (or `--repo <owner/name>`).
+Publishing is admin-only. The dataset must exist first — create it in the UI, or add
+`--create-datasets` to the first publish (it creates a private dataset, and only once the
+model compiles).
 
 **In CI there is no browser to sign in with**, so mint an API token instead — in the UI at
 `/settings/tokens` (any member can, for themselves) — and hand it over in the environment:

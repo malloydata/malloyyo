@@ -13,6 +13,8 @@ export interface Target {
 interface TargetConfig {
   url: string;
   dataset: string;
+  /** The repo `publish` sends (`owner/name`), so `--repo` needn't be typed. */
+  repo?: string;
   malloyyo_token?: { env: string };
 }
 
@@ -154,6 +156,50 @@ function readMalloyyoBlock(dir: string): Record<string, unknown> | null {
   return null;
 }
 
+/**
+ * A field `publish` reads from the targets — the repo it sends (`repo`), and a
+ * single-dataset repo's dataset name (`dataset`).
+ *
+ * A named target answers for itself. Unnamed, the targets have to AGREE: two
+ * targets naming the same value on two instances (prod, staging) is the
+ * ordinary case and is unambiguous here, because a repo publish already has its
+ * instance from `-i`. Targets that DISAGREE are refused rather than guessed at.
+ *
+ * No config, or no target setting the field, is `undefined`.
+ */
+function targetField(dir: string, field: "dataset" | "repo", name?: string): string | undefined {
+  if (!readMalloyyoBlock(dir)) return undefined;
+  const targets = readTargetMap(dir);
+  if (name !== undefined) {
+    const cfg = targets[name];
+    if (!cfg) {
+      const available = Object.keys(targets).join(", ") || "(none defined)";
+      throw new Error(`Unknown target "${name}". Available: ${available}`);
+    }
+    return cfg[field] || undefined;
+  }
+  const set = Object.entries(targets).filter(([, c]) => c[field]);
+  const distinct = [...new Set(set.map(([, c]) => c[field]))];
+  if (distinct.length > 1) {
+    throw new Error(
+      `The targets in malloy-config.json name different ${field === "repo" ? "repos" : "datasets"} ` +
+        `(${set.map(([n, c]) => `${n}: ${c[field]}`).join(", ")}), so this publish is ambiguous.\n` +
+        `Name the target:  malloyyo publish <target>`,
+    );
+  }
+  return distinct[0];
+}
+
+/** A single-dataset repo's dataset name. Unset, the server names it after the repo. */
+export function targetDataset(dir: string, name?: string): string | undefined {
+  return targetField(dir, "dataset", name);
+}
+
+/** The repo `publish` sends when `--repo` isn't given. */
+export function targetRepo(dir: string, name?: string): string | undefined {
+  return targetField(dir, "repo", name);
+}
+
 /** Site settings from the `malloyyo` block. Unlike target resolution this NEVER
     throws: publishing a static site does not require a malloyyo block at all,
     so a missing or malformed config just means no settings. */
@@ -268,7 +314,9 @@ export function resolveInstance(dir: string, arg?: string): { name: string; url:
 }
 
 /**
- * The target `publish` will push to: the config's, with `--instance`/`--dataset` on top.
+ * The target `publish` will push to: the config's, with `--instance` on top. (`dataset`
+ * is the CLI's internal second half of a target: `publish` passes its `--repo` here,
+ * and the `draft` commands their own `--dataset`.)
  *
  * A target is two independent facts — WHICH instance and WHICH dataset — so each is
  * overridable on its own, and supplying BOTH skips the config entirely. That last case is
@@ -277,7 +325,7 @@ export function resolveInstance(dir: string, arg?: string): { name: string; url:
  * malloy-config.json, which is the author's committed file and usually not what they want
  * to change to run one command.
  *
- *   malloyyo publish -i https://gravity.malloyyo.com --dataset movies --create-dataset
+ *   malloyyo publish -i https://gravity.malloyyo.com --repo owner/name --create-datasets
  *
  * `--instance` takes the same argument `login` does — a URL, used as-is with no config
  * read, or the name of a configured target, whose url is borrowed.

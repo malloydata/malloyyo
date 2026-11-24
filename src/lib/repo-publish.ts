@@ -35,7 +35,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { modelArtifact, layoutFromListing, type ArtifactInfo } from "@malloyyo/mcp-engine";
 import {
   db,
@@ -67,6 +67,7 @@ import {
   fsLister,
   writeDatasetWorkspace,
 } from "./repo-workspace";
+import { missingEnvRefs } from "./publish-diagnosis";
 import { qualifiedName } from "./repos";
 import { requirementForPublish } from "./tenancy";
 
@@ -112,6 +113,9 @@ export type PublishedDataset = {
   dir: string;
   version: number;
   created: boolean;
+  /** Reserved givens the model declares that this dataset is not scoped by —
+      nothing supplies them, so their filters use the declaration default. */
+  declaredButUnused?: string[];
 };
 
 export type PublishResult =
@@ -138,6 +142,12 @@ export type PublishResult =
       failures?: PublishFailure[];
       /** Directories with no dataset, when that is why the publish was refused. */
       missing?: Array<{ name: string; dir: string }>;
+      /**
+       * On a compile failure: env vars the repo's malloy-config.json references
+       * that are NOT set on this server. Malloy resolves them to empty, so the
+       * compile error is a bare connect failure that never names the secret.
+       */
+      missingEnv?: string[];
     };
 
 export type PublishInput = {
@@ -176,16 +186,6 @@ export type PublishInput = {
    * no dataset at its root yet.
    */
   rootDatasetName?: string;
-  /**
-   * Refuse a repo whose layout is a ROOT `index.malloy` (one dataset).
-   *
-   * A wire-level decision, not a design one: `malloyyo publish --repo` has
-   * always been the multi-dataset flag and `--dataset <name>` the single one,
-   * and the server's refusal is what names the right flag when someone reaches
-   * it anyway. The pipeline itself handles both layouts, which is what the
-   * GitHub path needs — every repo on this instance today is the single shape.
-   */
-  refuseRootLayout?: boolean;
 };
 
 /**
@@ -414,7 +414,17 @@ export async function publishRevision(input: PublishInput): Promise<PublishResul
     .from(repoRevisions)
     .where(and(eq(repoRevisions.repoId, input.repo.id), eq(repoRevisions.active, true)))
     .limit(1);
-  if (live && live.archiveSha256 === archive.sha256 && !input.createDatasets) {
+  //
+  // And only when every dataset the repo publishes is SERVING that revision.
+  // The bytes say the content is unchanged, not that each dataset has it: one
+  // moved into the repo since (src/lib/repo-attach.ts) still serves the model
+  // it had before, and `unchanged` would leave it there while reporting success.
+  if (
+    live &&
+    live.archiveSha256 === archive.sha256 &&
+    !input.createDatasets &&
+    (await everyDatasetServes(input.repo.id, live.id, (live.datasets ?? []).map((d) => d.dir)))
+  ) {
     logger.info("repo publish: identical to the live revision", {
       repo: input.repo.slug,
       revision: live.revision,
@@ -548,18 +558,6 @@ async function readShape(
   const layout = await layoutFromListing(fsLister(repoRoot), label);
   if (!layout.ok) return { ...empty, layoutError: layout.error };
 
-  if (layout.kind === "single" && input.refuseRootLayout) {
-    return {
-      refusal: {
-        ok: false,
-        kind: "request",
-        error:
-          `${label} publishes a single dataset (index.malloy at its root), so it has no name of ` +
-          `its own here. Publish it with --dataset <name> instead.`,
-      },
-    };
-  }
-
   const declared =
     layout.kind === "single"
       ? [{ name: "", dir: "" }]
@@ -577,8 +575,36 @@ async function readShape(
   for (const d of live) byDir.set(d.repoDir, [...(byDir.get(d.repoDir) ?? []), d]);
 
   const missing = declared.filter((d) => !byDir.has(d.dir));
+  const missingNames = missing.map((m) => m.name || (input.rootDatasetName ?? input.repo.slug));
+
+  // A REPO-LESS DATASET ALREADY HOLDS THE NAME. Creating a second one beside it
+  // would be legal — names are unique within a repo, and repo-less ones among
+  // themselves — but the bare name keeps resolving to the old one, so the new
+  // dataset would publish fine and nobody would ever reach it by name. Such a
+  // dataset is moved into the repo instead (src/lib/repo-attach.ts), which keeps
+  // its id and everything hanging off it.
+  if (missing.length > 0 && (input.createDatasets || input.onMissing === "refuse")) {
+    const held = await db
+      .select({ name: datasets.name })
+      .from(datasets)
+      .where(and(inArray(datasets.name, missingNames), isNull(datasets.repoId), eq(datasets.status, "ready")));
+    if (held.length > 0) {
+      const list = held.map((h) => `"${h.name}"`).join(", ");
+      return {
+        refusal: {
+          ok: false,
+          kind: "request",
+          error:
+            `${list} already ${held.length > 1 ? "exist" : "exists"} on this instance outside any repo. ` +
+            `Move ${held.length > 1 ? "them" : "it"} into this repo first (an admin, on the dataset's page: ` +
+            `/datasets/${encodeURIComponent(held[0].name)}/config → "Move into a repo"), then publish again.`,
+        },
+      };
+    }
+  }
+
   if (missing.length > 0 && !input.createDatasets && (input.onMissing ?? "report") === "refuse") {
-    const names = missing.map((m) => m.name || (input.rootDatasetName ?? input.repo.slug));
+    const names = missingNames;
     return {
       refusal: {
         ok: false,
@@ -659,6 +685,7 @@ async function verifyAndActivate(
     create?: { name: string; dir: string };
     compiled: CompiledDir;
     requiredGivens: string[] | null;
+    declaredButUnused?: string[];
   }> = [];
   for (const c of compiled) {
     const existing = byDir.get(c.dir) ?? [];
@@ -678,7 +705,7 @@ async function verifyAndActivate(
         failures.push({ name: ds.name, dir: c.dir, error: req.error });
         continue;
       }
-      plans.push({ dataset: ds, compiled: c, requiredGivens: null });
+      plans.push({ dataset: ds, compiled: c, requiredGivens: null, declaredButUnused: req.declaredButUnused });
     }
   }
 
@@ -693,7 +720,15 @@ async function verifyAndActivate(
       failures,
       stillServing: live.length,
     });
-    return { ok: false, kind: "compile", error, revisionId: revision.id, failures };
+    const missingEnv = missingEnvRefs(readIfPresent(path.join(repoRoot, "malloy-config.json")));
+    return {
+      ok: false,
+      kind: "compile",
+      error,
+      revisionId: revision.id,
+      failures,
+      ...(missingEnv.length > 0 ? { missingEnv } : {}),
+    };
   }
 
   // ── 6. activate ───────────────────────────────────────────────────────────
@@ -728,6 +763,17 @@ async function verifyAndActivate(
   };
 }
 
+/** A file of the materialized repo, or undefined. Above `activate()` on
+    purpose: the activation does no I/O, and src/lib/repos-push-atomic.test.ts
+    checks that by reading it. */
+function readIfPresent(file: string): string | undefined {
+  try {
+    return fs.readFileSync(file, "utf8");
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * THE ONE MUTATION THAT MAKES A PUBLISH VISIBLE.
  *
@@ -749,6 +795,7 @@ async function activate(
     create?: { name: string; dir: string };
     compiled: CompiledDir;
     requiredGivens: string[] | null;
+    declaredButUnused?: string[];
   }>,
 ): Promise<{ ok: true; datasets: PublishedDataset[] } | (PublishResult & { ok: false })> {
   const ownerId = input.datasetOwnerId ?? input.repo.ownerId;
@@ -854,6 +901,7 @@ async function activate(
           dir: target.repoDir,
           version: Number(next),
           created: !plan.dataset,
+          ...(plan.declaredButUnused?.length ? { declaredButUnused: plan.declaredButUnused } : {}),
         });
       }
 
@@ -905,4 +953,26 @@ async function activate(
     }
     throw err;
   }
+}
+
+/** Does every ready dataset in a directory this revision publishes serve a
+    model from it? A dataset whose directory is gone is left out: it is
+    `unpublished`, serves its last model on purpose, and would otherwise defeat
+    the short-circuit on every identical push. */
+async function everyDatasetServes(repoId: string, revisionId: string, dirs: string[]): Promise<boolean> {
+  if (dirs.length === 0) return true;
+  const [behind] = await db
+    .select({ id: datasets.id })
+    .from(datasets)
+    .leftJoin(malloyModels, and(eq(malloyModels.datasetId, datasets.id), eq(malloyModels.active, true)))
+    .where(
+      and(
+        eq(datasets.repoId, repoId),
+        eq(datasets.status, "ready"),
+        inArray(datasets.repoDir, dirs),
+        sql`${malloyModels.revisionId} is distinct from ${revisionId}`,
+      ),
+    )
+    .limit(1);
+  return !behind;
 }

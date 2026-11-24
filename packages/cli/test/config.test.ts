@@ -15,6 +15,8 @@ import {
   resolveTarget,
   resolveInstance,
   resolvePublishTarget,
+  targetDataset,
+  targetRepo,
 } from "../src/config.js";
 
 function withConfig(malloyyo: unknown, fn: (dir: string) => void) {
@@ -253,4 +255,49 @@ test("image_hosts is a known setting, not an unknown key or a target", () => {
       assert.equal(resolveInstance(dir).url, "https://x.dev");
     },
   );
+});
+
+// A single-dataset repo's dataset name, as `publish` sends it. Guessing wrong
+// here makes the server name the dataset after the repo — a duplicate, not a
+// publish to the dataset that exists.
+test("targetDataset: one name across targets is the name; different names are refused", () => {
+  withConfig(
+    { targets: { prod: { url: "https://a", dataset: "movies" }, stg: { url: "https://b", dataset: "movies" } } },
+    (dir) => {
+      assert.equal(targetDataset(dir), "movies", "prod and staging agree — unambiguous");
+      assert.equal(targetDataset(dir, "stg"), "movies");
+    },
+  );
+  withConfig(
+    { targets: { prod: { url: "https://a", dataset: "movies" }, stg: { url: "https://b", dataset: "films" } } },
+    (dir) => {
+      assert.throws(() => targetDataset(dir), /name different datasets[\s\S]*malloyyo publish <target>/);
+      assert.equal(targetDataset(dir, "stg"), "films", "naming the target settles it");
+      assert.throws(() => targetDataset(dir, "nope"), /Unknown target "nope"/);
+    },
+  );
+  withConfig({ targets: { prod: { url: "https://a" } } }, (dir) => {
+    assert.equal(targetDataset(dir), undefined, "no dataset named: the server names it after the repo");
+  });
+  const bare = fs.mkdtempSync(path.join(os.tmpdir(), "malloyyo-cfg-"));
+  try {
+    assert.equal(targetDataset(bare), undefined, "no config at all is not an error");
+  } finally {
+    fs.rmSync(bare, { recursive: true, force: true });
+  }
+});
+
+test("targetRepo: the repo publish sends, from the target — never guessed", () => {
+  withConfig(
+    { targets: { prod: { url: "https://a", dataset: "m", repo: "acme/models" }, stg: { url: "https://b", dataset: "m", repo: "acme/models" } } },
+    (dir) => assert.equal(targetRepo(dir), "acme/models"),
+  );
+  withConfig(
+    { targets: { prod: { url: "https://a", repo: "acme/models" }, stg: { url: "https://b", repo: "acme/models-dev" } } },
+    (dir) => {
+      assert.throws(() => targetRepo(dir), /name different repos/);
+      assert.equal(targetRepo(dir, "stg"), "acme/models-dev");
+    },
+  );
+  withConfig({ targets: { prod: { url: "https://a" } } }, (dir) => assert.equal(targetRepo(dir), undefined));
 });

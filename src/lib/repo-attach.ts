@@ -60,77 +60,95 @@ export async function attachDatasetToRepo(opts: {
   const found = await findRepoForPublish({ githubRepo: repoName });
   if ("error" in found) return { ok: false, status: 409, error: found.error };
 
-  return db.transaction(async (tx) => {
-    let repo: Repo;
-    let createdRepo = false;
-    if ("repo" in found) {
-      repo = found.repo;
-      // THE DIRECTORY HAS TO BE ONE THE REPO PUBLISHES. A publish matches
-      // datasets to the directories the repo actually has, so a dataset
-      // recorded anywhere else is never refreshed — silently, with every
-      // publish reporting success — and once it is in a repo it cannot be moved
-      // again. The live revision says what the repo publishes; a repo with none
-      // yet has nothing to check against, and the UI says the checkout must match.
-      const [live] = await tx
-        .select({ datasets: repoRevisions.datasets })
-        .from(repoRevisions)
-        .where(and(eq(repoRevisions.repoId, repo.id), eq(repoRevisions.active, true)))
-        .limit(1);
-      const dirs = live?.datasets?.map((d) => d.dir);
-      if (dirs && !dirs.includes(dir)) {
-        const what = dirs.length === 0
-          ? "no datasets"
-          : dirs.map((d) => (d === "" ? "one dataset from its root (index.malloy)" : d)).join(", ");
-        return {
-          ok: false as const,
-          status: 400,
-          error:
+  try {
+    return await db.transaction(async (tx) => {
+      let repo: Repo;
+      let createdRepo = false;
+      if ("repo" in found) {
+        repo = found.repo;
+        // THE DIRECTORY HAS TO BE ONE THE REPO PUBLISHES. A publish matches
+        // datasets to the directories the repo actually has, so a dataset
+        // recorded anywhere else is never refreshed — silently, with every
+        // publish reporting success — and once it is in a repo it cannot be moved
+        // again. The live revision says what the repo publishes; a repo with none
+        // yet has nothing to check against, and the UI says the checkout must match.
+        const [live] = await tx
+          .select({ datasets: repoRevisions.datasets })
+          .from(repoRevisions)
+          .where(and(eq(repoRevisions.repoId, repo.id), eq(repoRevisions.active, true)))
+          .limit(1);
+        const dirs = live?.datasets?.map((d) => d.dir);
+        if (dirs && !dirs.includes(dir)) {
+          const what = dirs.length === 0
+            ? "no datasets"
+            : dirs.map((d) => (d === "" ? "one dataset from its root (index.malloy)" : d)).join(", ");
+          throw new Refused(
+            400,
             `the repo "${repo.slug}" publishes ${what}, not ${dir || "a root dataset"}. ` +
-            `Pick one of those, or publish the repo with ${dir || "index.malloy at its root"} first.`,
-        };
+              `Pick one of those, or publish the repo with ${dir || "index.malloy at its root"} first.`,
+          );
+        }
+      } else {
+        const slug = repoSlugFromGitHub(repoName);
+        if (!slug) throw new Refused(400, `could not make a repo name out of "${repoName}"`);
+        // As a CLI publish creates one: NOT attached to GitHub. Attaching is its own act.
+        [repo] = await tx
+          .insert(repos)
+          .values({ slug, ownerId: opts.userId, githubRepo: null, githubBranch: null, githubUseToken: false })
+          .returning();
+        createdRepo = true;
       }
-    } else {
-      const slug = repoSlugFromGitHub(repoName);
-      if (!slug) return { ok: false as const, status: 400, error: `could not make a repo name out of "${repoName}"` };
-      // As a CLI publish creates one: NOT attached to GitHub. Attaching is its own act.
-      [repo] = await tx
-        .insert(repos)
-        .values({ slug, ownerId: opts.userId, githubRepo: null, githubBranch: null, githubUseToken: false })
-        .returning();
-      createdRepo = true;
-    }
 
-    // One dataset per directory here, though the schema allows two (the same
-    // model served twice, scoped differently): a single-dataset repo's publish
-    // has to know which dataset its root IS.
-    const [taken] = await tx
-      .select({ name: datasets.name, dir: datasets.repoDir })
-      .from(datasets)
-      .where(and(eq(datasets.repoId, repo.id), eq(datasets.status, "ready")))
-      .then((rows) => rows.filter((r) => r.dir === dir || r.name === ds.name));
-    if (taken) {
-      return {
-        ok: false as const,
-        status: 409,
-        error:
+      // One dataset per directory here, though the schema allows two (the same
+      // model served twice, scoped differently): a single-dataset repo's publish
+      // has to know which dataset its root IS.
+      const [taken] = await tx
+        .select({ name: datasets.name, dir: datasets.repoDir })
+        .from(datasets)
+        .where(and(eq(datasets.repoId, repo.id), eq(datasets.status, "ready")))
+        .then((rows) => rows.filter((r) => r.dir === dir || r.name === ds.name));
+      if (taken) {
+        throw new Refused(
+          409,
           taken.dir === dir
             ? `the repo "${repo.slug}" already has dataset "${taken.name}" at ${dir || "its root"}`
             : `the repo "${repo.slug}" already has a dataset named "${ds.name}"`,
-      };
+        );
+      }
+
+      const [moved] = await tx
+        .update(datasets)
+        .set({ repoId: repo.id, repoDir: dir })
+        .where(and(eq(datasets.id, ds.id), isNull(datasets.repoId)))
+        .returning({ id: datasets.id });
+      if (!moved) throw new Refused(409, `"${ds.name}" was moved into a repo meanwhile`);
+
+      // Its bare name was its whole identity until now, and links use it. Once it
+      // is in a repo, a second repo with a dataset of that name would make the bare
+      // name ambiguous; the alias keeps it pointing here.
+      await tx.insert(datasetAliases).values({ alias: ds.name, datasetId: ds.id }).onConflictDoNothing();
+
+      return { ok: true as const, repo, dir, createdRepo };
+    });
+  } catch (err) {
+    // A refusal THROWS, so the transaction rolls back: a repo created for this
+    // move does not survive a move that was then refused.
+    if (err instanceof Refused) return { ok: false, status: err.status, error: err.message };
+    // A unique index lost a race: two moves (or a move and a publish) creating
+    // the same new repo, or claiming the same name in it, at once.
+    const e = err as { code?: unknown; cause?: { code?: unknown } } | null;
+    if (e?.code === "23505" || e?.cause?.code === "23505") {
+      return { ok: false, status: 409, error: `someone else changed "${repoName}" at the same moment — try the move again` };
     }
+    throw err;
+  }
+}
 
-    const [moved] = await tx
-      .update(datasets)
-      .set({ repoId: repo.id, repoDir: dir })
-      .where(and(eq(datasets.id, ds.id), isNull(datasets.repoId)))
-      .returning({ id: datasets.id });
-    if (!moved) return { ok: false as const, status: 409, error: `"${ds.name}" was moved into a repo meanwhile` };
-
-    // Its bare name was its whole identity until now, and links use it. Once it
-    // is in a repo, a second repo with a dataset of that name would make the bare
-    // name ambiguous; the alias keeps it pointing here.
-    await tx.insert(datasetAliases).values({ alias: ds.name, datasetId: ds.id }).onConflictDoNothing();
-
-    return { ok: true as const, repo, dir, createdRepo };
-  });
+class Refused extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
 }

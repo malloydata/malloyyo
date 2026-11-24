@@ -414,7 +414,17 @@ export async function publishRevision(input: PublishInput): Promise<PublishResul
     .from(repoRevisions)
     .where(and(eq(repoRevisions.repoId, input.repo.id), eq(repoRevisions.active, true)))
     .limit(1);
-  if (live && live.archiveSha256 === archive.sha256 && !input.createDatasets) {
+  //
+  // And only when every dataset the repo publishes is SERVING that revision.
+  // The bytes say the content is unchanged, not that each dataset has it: one
+  // moved into the repo since (src/lib/repo-attach.ts) still serves the model
+  // it had before, and `unchanged` would leave it there while reporting success.
+  if (
+    live &&
+    live.archiveSha256 === archive.sha256 &&
+    !input.createDatasets &&
+    (await everyDatasetServes(input.repo.id, live.id, (live.datasets ?? []).map((d) => d.dir)))
+  ) {
     logger.info("repo publish: identical to the live revision", {
       repo: input.repo.slug,
       revision: live.revision,
@@ -940,4 +950,26 @@ function readIfPresent(file: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+/** Does every ready dataset in a directory this revision publishes serve a
+    model from it? A dataset whose directory is gone is left out: it is
+    `unpublished`, serves its last model on purpose, and would otherwise defeat
+    the short-circuit on every identical push. */
+async function everyDatasetServes(repoId: string, revisionId: string, dirs: string[]): Promise<boolean> {
+  if (dirs.length === 0) return true;
+  const [behind] = await db
+    .select({ id: datasets.id })
+    .from(datasets)
+    .leftJoin(malloyModels, and(eq(malloyModels.datasetId, datasets.id), eq(malloyModels.active, true)))
+    .where(
+      and(
+        eq(datasets.repoId, repoId),
+        eq(datasets.status, "ready"),
+        inArray(datasets.repoDir, dirs),
+        sql`${malloyModels.revisionId} is distinct from ${revisionId}`,
+      ),
+    )
+    .limit(1);
+  return !behind;
 }

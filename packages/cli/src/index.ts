@@ -2,8 +2,8 @@
 import { Command } from "commander";
 import { noticeOnExit, runUpdateCheck, UPDATE_CHECK_ARGV } from "./update-check.js";
 import { resolve, relative, sep } from "node:path";
-import { resolveTarget, resolveInstance, resolvePublishTarget, targetDataset, type Target } from "./config.js";
-import { gatherDirectory, gitArchiveZip, gitInfo, originRepo } from "./gather.js";
+import { resolveTarget, resolveInstance, resolvePublishTarget, targetDataset, targetRepo, type Target } from "./config.js";
+import { gatherDirectory, gitArchiveZip, gitInfo } from "./gather.js";
 import { layoutFromListing } from "@malloyyo/mcp-engine";
 import { fsLister, repoRootOf } from "./repo.js";
 import {
@@ -142,8 +142,8 @@ function requestFailed(
  * this command that isn't guessable from the argument list alone.
  */
 const PUBLISH_HELP = `Every publish is a repo:
-  A dataset always belongs to a repo, named by --repo or, without it, by the
-  checkout's git remote "origin". The repo's shape decides what it publishes,
+  A dataset always belongs to a repo, named by --repo or by the target's
+  "repo" in malloy-config.json. The repo's shape decides what it publishes,
   so you don't declare it:
 
     index.malloy                    one dataset, named by the target's
@@ -399,22 +399,19 @@ async function publish(
   }
 
   const single = layout.kind === "single";
-  // The repo is named by `--repo`, else by the checkout's own `origin` — which is
-  // what a model repo cloned from GitHub already has, so a bare `malloyyo publish`
-  // keeps working without anyone learning a new flag.
-  if (!opts.repo) {
-    const origin = originRepo(root);
-    if (origin) {
-      console.log(`repo ${origin} (from git remote origin; --repo overrides)`);
-      opts = { ...opts, repo: origin };
-    }
-  }
+  // The repo is named by `--repo`, else by the target's `"repo"` in
+  // malloy-config.json. Never guessed from the git remote: the server finds a
+  // CLI-published repo by the last part of its name, so `bob/models` guessed
+  // from a fork's `origin` would publish over `acme/models`.
+  const targetName = target ?? (opts.instance && !/^https?:\/\//i.test(opts.instance) ? opts.instance : undefined);
+  opts = { ...opts, repo: opts.repo ?? targetRepo(root, targetName) };
   if (!opts.repo) {
     throw new Error(
       (single
         ? `${root} publishes one dataset, and every dataset is published as part of a repo.\n`
         : `${root} publishes ${layout.datasets.length} datasets, and a repo is ${opts.branch !== undefined ? "previewed" : "published"} as one unit.\n`) +
-        `This checkout has no git remote "origin" to name it by. Name it:  malloyyo publish --repo <owner/name>`,
+        `Name it:  malloyyo publish --repo <owner/name>\n` +
+        `or once, in malloy-config.json:  "malloyyo": { "targets": { "<target>": { …, "repo": "<owner/name>" } } }`,
     );
   }
 
@@ -426,9 +423,7 @@ async function publish(
       ...opts,
       // `-i` may name a configured target rather than a URL; that target then
       // says which dataset, as a positional target would.
-      rootDataset: single
-        ? targetDataset(root, target ?? (opts.instance && !/^https?:\/\//i.test(opts.instance) ? opts.instance : undefined))
-        : undefined,
+      rootDataset: single ? targetDataset(root, targetName) : undefined,
     },
   );
   // Transitional — see OLD_LAYOUT_NOTICE. The layout still publishes; this only
@@ -543,7 +538,7 @@ program
   .option("--token <token>", "bearer token (overrides login/env)")
   .option("--dry-run", "gather and report what would be sent, but don't POST")
   .option("--skip-lint", "skip the pre-publish dashboard lint")
-  .option("--repo <owner/name>", "the repo being published — every dataset in it, as one unit (default: git remote origin)")
+  .option("--repo <owner/name>", "the repo being published — every dataset in it, as one unit (default: the target's \"repo\")")
   .option("--create-datasets", "create any dataset the repo publishes that doesn't exist yet")
   .option(
     "--branch [name]",

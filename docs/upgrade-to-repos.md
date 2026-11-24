@@ -133,7 +133,7 @@ changes are untouched.
 - **Roles and scoping are untouched.** Who may open a dataset, and the givens it
   is scoped by, work exactly as before and stay per dataset.
 - **`malloyyo publish --dataset x` is gone.** Every publish is a repo, named by
-  `--repo` or the checkout's git remote `origin`, and publishing is admin-only.
+  `--repo`, or by the target's `"repo"` in malloy-config.json, and publishing is admin-only.
   An older CLI gets a 410 telling it to upgrade.
 
 ### Moving a dataset that isn't in a repo yet

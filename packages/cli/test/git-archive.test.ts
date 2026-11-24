@@ -14,7 +14,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { unzipSync } from "fflate";
-import { gitArchiveZip, originRepo } from "../src/gather.js";
+import { gitArchiveZip } from "../src/gather.js";
 
 /** A git repo on disk. Signing is off: these are throwaway fixtures, and a
     machine configured to sign would otherwise block on a passphrase. */
@@ -198,30 +198,5 @@ test("a directory that is not a git repo says so, and says what to do", () => {
     assert.throws(() => gitArchiveZip(root), /not a git repository[\s\S]*git init/);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
-  }
-});
-
-// `publish` names the repo by `origin` when --repo isn't given — every dataset
-// belongs to a repo, so a bare `malloyyo publish` has to find one.
-test("originRepo reads owner/name from every remote URL shape git accepts", () => {
-  const root = repo({ "index.malloy": "" }, { commit: false });
-  assert.equal(originRepo(root), undefined, "no origin: nothing to name it by");
-  const cases: Array<[string, string | undefined]> = [
-    ["https://github.com/acme/sales.git", "acme/sales"],
-    ["https://github.com/acme/sales", "acme/sales"],
-    ["https://github.com/acme/sales/", "acme/sales"],
-    ["git@github.com:acme/sales.git", "acme/sales"],
-    ["ssh://git@github.com/acme/sales.git", "acme/sales"],
-    ["https://x-access-token:abc@github.com/acme/my.repo.git", "acme/my.repo"],
-    ["https://dev.azure.com/acme/proj/_git/sales", "proj/sales"],
-    // Local remotes have no owner: no default, --repo is asked for.
-    ["sales", undefined],
-    ["/srv/git/sales.git", undefined],
-    ["file:///home/me/src/sales", undefined],
-  ];
-  for (const [i, [url, want]] of cases.entries()) {
-    const verb = i === 0 ? "add" : "set-url";
-    execFileSync("git", ["remote", verb, "origin", url], { cwd: root, stdio: "ignore" });
-    assert.equal(originRepo(root), want, url);
   }
 });

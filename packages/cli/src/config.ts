@@ -13,6 +13,8 @@ export interface Target {
 interface TargetConfig {
   url: string;
   dataset: string;
+  /** The repo `publish` sends (`owner/name`), so `--repo` needn't be typed. */
+  repo?: string;
   malloyyo_token?: { env: string };
 }
 
@@ -155,19 +157,17 @@ function readMalloyyoBlock(dir: string): Record<string, unknown> | null {
 }
 
 /**
- * The `dataset` a single-dataset repo's one dataset is published as.
+ * A field `publish` reads from the targets — the repo it sends (`repo`), and a
+ * single-dataset repo's dataset name (`dataset`).
  *
  * A named target answers for itself. Unnamed, the targets have to AGREE: two
- * targets naming the same dataset on two instances (prod, staging) is the
+ * targets naming the same value on two instances (prod, staging) is the
  * ordinary case and is unambiguous here, because a repo publish already has its
- * instance from `-i`. Targets that name DIFFERENT datasets are refused rather
- * than guessed at — the fallback (a dataset named after the repo) would create
- * a duplicate instead of publishing to the one that exists.
+ * instance from `-i`. Targets that DISAGREE are refused rather than guessed at.
  *
- * No config, or no target naming a dataset, is `undefined`: the server names the
- * dataset after the repo.
+ * No config, or no target setting the field, is `undefined`.
  */
-export function targetDataset(dir: string, name?: string): string | undefined {
+function targetField(dir: string, field: "dataset" | "repo", name?: string): string | undefined {
   if (!readMalloyyoBlock(dir)) return undefined;
   const targets = readTargetMap(dir);
   if (name !== undefined) {
@@ -176,18 +176,28 @@ export function targetDataset(dir: string, name?: string): string | undefined {
       const available = Object.keys(targets).join(", ") || "(none defined)";
       throw new Error(`Unknown target "${name}". Available: ${available}`);
     }
-    return cfg.dataset || undefined;
+    return cfg[field] || undefined;
   }
-  const named = Object.entries(targets).filter(([, c]) => c.dataset);
-  const distinct = [...new Set(named.map(([, c]) => c.dataset))];
+  const set = Object.entries(targets).filter(([, c]) => c[field]);
+  const distinct = [...new Set(set.map(([, c]) => c[field]))];
   if (distinct.length > 1) {
     throw new Error(
-      `The targets in malloy-config.json name different datasets ` +
-        `(${named.map(([n, c]) => `${n}: ${c.dataset}`).join(", ")}), so this repo's dataset is ambiguous.\n` +
+      `The targets in malloy-config.json name different ${field === "repo" ? "repos" : "datasets"} ` +
+        `(${set.map(([n, c]) => `${n}: ${c[field]}`).join(", ")}), so this publish is ambiguous.\n` +
         `Name the target:  malloyyo publish <target>`,
     );
   }
   return distinct[0];
+}
+
+/** A single-dataset repo's dataset name. Unset, the server names it after the repo. */
+export function targetDataset(dir: string, name?: string): string | undefined {
+  return targetField(dir, "dataset", name);
+}
+
+/** The repo `publish` sends when `--repo` isn't given. */
+export function targetRepo(dir: string, name?: string): string | undefined {
+  return targetField(dir, "repo", name);
 }
 
 /** Site settings from the `malloyyo` block. Unlike target resolution this NEVER

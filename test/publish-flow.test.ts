@@ -1310,14 +1310,24 @@ test("publish has no --dataset: every dataset is published as part of a repo", a
   assert.match(`${c.stdout}${c.stderr}`, /--repo <owner\/name>/);
   assert.equal((await datasetRows(name)).length, 0, "nothing was created");
 
-  // With an `origin` remote, the repo is named by it: a bare publish works.
+  // The git remote is never used to name the repo — a fork's `origin` would
+  // otherwise publish over the upstream's repo of the same name.
   execFileSync("git", ["remote", "add", "origin", `https://github.com/t/origin_${RUN}.git`], {
     cwd: single,
     stdio: "ignore",
   });
   const o = await runCli(["publish", "test", single, "--create-datasets", "--token", token, "--dry-run"], single);
-  assert.equal(o.code, 0, `${o.stdout}\n${o.stderr}`);
-  assert.match(o.stdout, new RegExp(`repo t/origin_${RUN} \\(from git remote origin`));
+  assert.notEqual(o.code, 0, "an origin remote does not name the repo");
+  assert.match(`${o.stdout}${o.stderr}`, /"repo": "<owner\/name>"/);
+
+  // The target's "repo" does: a bare publish works once the config says it.
+  const cfgPath = join(single, "malloy-config.json");
+  const cfg = JSON.parse(readFileSync(cfgPath, "utf8"));
+  cfg.malloyyo.targets.test.repo = `t/configured_${RUN}`;
+  writeFileSync(cfgPath, JSON.stringify(cfg));
+  const c2 = await runCli(["publish", "test", single, "--create-datasets", "--token", token, "--dry-run"], single);
+  assert.equal(c2.code, 0, `${c2.stdout}\n${c2.stderr}`);
+  assert.match(c2.stdout, new RegExp(`repo=t/configured_${RUN}`));
 
   // A single-dataset repo is still a supported layout: it publishes with --repo.
   const d = await runCli(["publish", "test", single, ...repoArg(single), "--create-datasets", "--token", token], single);
@@ -1374,6 +1384,35 @@ test("a repo-less dataset holding a name blocks creating that name, and says how
   const ok = await runCli(["publish", "test", dir, ...repoArg(dir), "--token", token], dir);
   assert.equal(ok.code, 0, `${ok.stdout}\n${ok.stderr}`);
   assert.equal((await datasetRows(name))[0].id, old.id);
+});
+
+test("publishing the same commit after a move still refreshes the moved dataset", async () => {
+  // The repo already carries datasets/<b> (unclaimed), so the bytes after the
+  // move are identical to the live revision. `unchanged` must not skip `b`.
+  const a = `same_a_${RUN}`;
+  const b = `same_b_${RUN}`;
+  const slug = `t/same_bytes_${RUN}`;
+  const dir = makeRepo([a, b]);
+  // Publish `a` only: GitHub-style, where datasets/<b> is simply unclaimed.
+  const first = await runCli(["publish", "-i", serverUrl, "--repo", slug, "--create-datasets", "--token", token], dir);
+  assert.equal(first.code, 0, `${first.stdout}\n${first.stderr}`);
+  const [created] = await datasetRows(b);
+  // Turn `b` back into a pre-repo dataset with its own old model.
+  await db.update(datasets).set({ repoId: null, repoDir: "" }).where(eq(datasets.id, created.id));
+  await db.update(malloyModels).set({ active: false }).where(eq(malloyModels.datasetId, created.id));
+  const [old] = await db
+    .insert(malloyModels)
+    .values({ datasetId: created.id, version: 99, source: "source: stale is 1", generatedBy: "pre-repo", active: true })
+    .returning();
+
+  const moved = await attachDatasetToRepo({ dataset: b, repo: slug, dir: `datasets/${b}`, userId: admin.id });
+  assert.ok(moved.ok, moved.ok ? "" : moved.error);
+  const again = await runCli(["publish", "-i", serverUrl, "--repo", slug, "--token", token], dir);
+  assert.equal(again.code, 0, `${again.stdout}\n${again.stderr}`);
+  assert.doesNotMatch(again.stdout, /unchanged/);
+  const served = await latestModel(created.id);
+  assert.notEqual(served.id, old.id, "the moved dataset now serves the repo's model");
+  assert.ok(served.revisionId);
 });
 
 test("a directory that isn't a git checkout is refused, and says why", async () => {

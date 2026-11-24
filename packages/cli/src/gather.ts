@@ -166,43 +166,6 @@ export function gitInfo(dir: string): GitInfo {
 }
 
 /**
- * `owner/name` from the checkout's `origin` remote — what `publish` names the repo
- * when `--repo` isn't given. Separate from `gitInfo`, which gives up on a repo with
- * no commits yet; the remote is there from the first `git remote add`.
- */
-export function originRepo(dir: string): string | undefined {
-  let url: string;
-  try {
-    url = execFileSync("git", ["remote", "get-url", "origin"], {
-      cwd: dir,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-  } catch {
-    return undefined;
-  }
-  // git@host:owner/name.git | https://host/owner/name(.git)/ | ssh://git@host/owner/name
-  //
-  // A HOSTED remote only. A local path or file:// URL has no owner, and making
-  // one up from its parent directory (`/srv/git/models` → `git/models`) would
-  // print and publish under a name nobody chose — so there is no default and
-  // --repo is asked for.
-  const hosted = /^[a-z+]+:\/\/[^/]+\//i.test(url) && !/^file:/i.test(url);
-  const scp = /^[^@/]+@[^:/]+:/.test(url);
-  if (!hosted && !scp) return undefined;
-  const path = url
-    .replace(/\.git\/?$/, "")
-    .replace(/\/+$/, "")
-    .replace(/^[a-z+]+:\/\/[^/]*\//i, "")
-    .replace(/^[^@/]+@[^:/]+:/, "");
-  // Azure DevOps puts `_git` between the project and the repo.
-  const parts = path.split("/").filter((p) => p && p !== "_git");
-  if (parts.length < 2) return undefined;
-  const [owner, name] = parts.slice(-2);
-  return /^[\w.-]+$/.test(owner) && /^[\w.-]+$/.test(name) ? `${owner}/${name}` : undefined;
-}
-
-/**
  * Every file in the repo the server could need, repo-relative.
  *
  * `gatherDirectory` answers this for ONE dataset and returns only `.malloy`,

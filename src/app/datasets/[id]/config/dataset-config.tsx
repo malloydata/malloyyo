@@ -305,15 +305,22 @@ function MoveToRepo({ datasetId, datasetName }: { datasetId: string; datasetName
   async function move() {
     setBusy(true);
     setError(null);
-    const res = await fetch(`/api/datasets/${datasetId}/repo`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ repo, dir }),
-    });
-    const out = (await res.json().catch(() => ({}))) as { error?: string; repo?: string };
-    setBusy(false);
-    if (!res.ok || !out.repo) return setError(out.error ?? `failed (${res.status})`);
-    router.push(`/repos/${encodeURIComponent(out.repo)}`);
+    try {
+      const res = await fetch(`/api/datasets/${datasetId}/repo`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ repo, dir }),
+      });
+      const out = (await res.json().catch(() => ({}))) as { error?: string; repo?: string };
+      if (!res.ok || !out.repo) return setError(out.error ?? `failed (${res.status})`);
+      router.push(`/repos/${encodeURIComponent(out.repo)}`);
+    } catch (err) {
+      // The request never got an answer (offline, a server restart): say so,
+      // rather than leaving the button stuck on "moving…".
+      setError(`the move did not reach the server: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (

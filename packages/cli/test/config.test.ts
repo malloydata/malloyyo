@@ -16,6 +16,7 @@ import {
   resolveInstance,
   resolvePublishTarget,
   targetDataset,
+  targetRepo,
 } from "../src/config.js";
 
 function withConfig(malloyyo: unknown, fn: (dir: string) => void) {
@@ -284,4 +285,19 @@ test("targetDataset: one name across targets is the name; different names are re
   } finally {
     fs.rmSync(bare, { recursive: true, force: true });
   }
+});
+
+test("targetRepo: the repo publish sends, from the target — never guessed", () => {
+  withConfig(
+    { targets: { prod: { url: "https://a", dataset: "m", repo: "acme/models" }, stg: { url: "https://b", dataset: "m", repo: "acme/models" } } },
+    (dir) => assert.equal(targetRepo(dir), "acme/models"),
+  );
+  withConfig(
+    { targets: { prod: { url: "https://a", repo: "acme/models" }, stg: { url: "https://b", repo: "acme/models-dev" } } },
+    (dir) => {
+      assert.throws(() => targetRepo(dir), /name different repos/);
+      assert.equal(targetRepo(dir, "stg"), "acme/models-dev");
+    },
+  );
+  withConfig({ targets: { prod: { url: "https://a" } } }, (dir) => assert.equal(targetRepo(dir), undefined));
 });

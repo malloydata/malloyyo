@@ -21,15 +21,12 @@
 import { redirect } from "next/navigation";
 import { resolveDatasetRef } from "@/lib/repos";
 import { DatasetConfig } from "./dataset-config";
-import { turnAwayDashboardOnly } from "@/lib/explore-gate";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 export default async function Page({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  // The operator's view — model version, files, the repo. Not a dashboard.
-  await turnAwayDashboardOnly();
 
   // Resolved the same way every other surface resolves one — a uuid,
   // `repo:dataset`, an alias, or a bare name — so a link that worked before the

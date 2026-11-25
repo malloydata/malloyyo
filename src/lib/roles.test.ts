@@ -17,8 +17,7 @@ import {
   isEnvAdmin,
   roleNameError,
   rolesOf,
-  canExplore,
-  MALLOYYO_DASHBOARD_ONLY,
+  datasetAccessWhere,
 } from "./roles";
 
 // env.APP_ADMIN_EMAILS is a getter, so setting the variable around the run is
@@ -83,35 +82,6 @@ test("canAuthor: admins, and nobody else", () => {
   assert.ok(!canAuthor({ roles: ["finance"] }));
   assert.ok(!canAuthor({ roles: ["MALLOYYO_DEVELOPER"] }), "the removed role grants nothing");
   assert.ok(!canAuthor({}));
-});
-
-test("canExplore: everyone, unless they are dashboard-only — and an admin regardless", () => {
-  // The default is YES, and it has to be: people admitted through a hosted
-  // sign-in hold no built-in role at all, so a rule that required one would
-  // lock every one of them out of the query surfaces on deploy.
-  assert.ok(canExplore({}));
-  assert.ok(canExplore({ roles: [] }));
-  assert.ok(canExplore({ roles: ["finance"] }));
-  assert.ok(canExplore({ roles: [MALLOYYO_USER] }));
-
-  assert.ok(!canExplore({ roles: [MALLOYYO_DASHBOARD_ONLY] }));
-  // It restricts whatever else they hold; the other roles still say which
-  // datasets' dashboards they see.
-  assert.ok(!canExplore({ roles: [MALLOYYO_USER, "finance", MALLOYYO_DASHBOARD_ONLY] }));
-
-  // An instance must not be able to tick its way into an admin who cannot use
-  // it — by any of the ways there are of being an admin.
-  assert.ok(canExplore({ roles: [MALLOYYO_ADMIN, MALLOYYO_DASHBOARD_ONLY] }));
-  assert.ok(canExplore({ role: "owner", roles: [MALLOYYO_DASHBOARD_ONLY] }));
-  assert.ok(canExplore({ isAdmin: true, roles: [MALLOYYO_DASHBOARD_ONLY] }));
-});
-
-test("dashboard-only is built in, and is safe as an admission default", () => {
-  assert.ok(isBuiltinRole(MALLOYYO_DASHBOARD_ONLY));
-  assert.ok(roleNameError(MALLOYYO_DASHBOARD_ONLY), "it cannot be re-created by hand");
-  // The opposite of MALLOYYO_ADMIN: it narrows, so handing it to every arrival
-  // is how an instance of dashboard-only readers is set up.
-  assert.ok(!NEVER_A_DEFAULT.includes(MALLOYYO_DASHBOARD_ONLY));
 });
 
 test("the privileged built-ins are never an admission default", () => {
@@ -188,4 +158,40 @@ test("datasetRoleOverlap: a NULL roles column cannot match", () => {
     .where(datasetRoleOverlap("22222222-2222-2222-2222-222222222222"))
     .toSQL();
   assert.match(text, /coalesce\(\s*"users"\."roles",\s*'\{\}'::text\[\]\s*\)/i);
+});
+
+// ── View vs query ───────────────────────────────────────────────────────────
+//
+// A role is full or view-only, and someone's level on a dataset is the best any
+// of their roles gives them there. The behaviour is pinned against a real
+// database in test/dashboard-audience.test.ts; what is pinned here is the shape
+// of the two predicates, because the difference between them is one subquery
+// and replacing either with the other passes every test that does not look.
+
+test("datasetAccessWhere: query level drops the roles that are view-only", () => {
+  const id = "33333333-3333-3333-3333-333333333333";
+  const view = db.select().from(datasets).where(datasetAccessWhere(id, "view")).toSQL().sql;
+  const query = db.select().from(datasets).where(datasetAccessWhere(id, "query")).toSQL().sql;
+
+  // Viewing asks only whether a role overlaps; it never consults the catalog.
+  assert.ok(!/view_only/i.test(view));
+  assert.equal(view, db.select().from(datasets).where(datasetVisibleWhere(id)).toSQL().sql);
+
+  // Querying removes the view-only ones from what the person holds — and by
+  // exclusion, so a role with no catalog row still counts in full. Nothing
+  // changes for anyone until an admin marks a role view-only.
+  assert.match(query, /not exists \(select 1 from "roles" where[\s\S]*"view_only"\)/i);
+  assert.match(query, /unnest\(coalesce\(\s*"users"\."roles"/i);
+  // Owning a dataset, and the legacy public flag, are not roles: both stay full.
+  assert.match(query, /user_id[\s\S]*\sor\s[\s\S]*is_public[\s\S]*\sor\s[\s\S]*&&/i);
+  // Still a parameter, still nowhere in the text.
+  assert.ok(!query.includes("33333333"));
+});
+
+test("datasetAccessWhere: an admin passes at either level", () => {
+  for (const need of ["view", "query"] as const) {
+    const text = db.select().from(datasets).where(datasetAccessWhere("x", need, true)).toSQL().sql;
+    assert.ok(!/&&/.test(text), `${need}: no role clause for an admin`);
+    assert.match(text, /status/i, `${need}: still only READY datasets`);
+  }
 });

@@ -95,9 +95,10 @@ const REVIEWED_AFTER_REWRITE = [
   // default it never writes. A draft the live version saves during the deploy
   // takes that default (private), which is what the new version would give it.
   "0030_dashboard_audiences",
-  // One catalog row. The live version lists it as an ordinary role and gives it
-  // no meaning; nobody holds it until an admin on the new version grants it.
-  "0031_dashboard_only_role",
+  // One column with a default the live version never writes or reads. Every
+  // role stays full (the default) until an admin on the new version marks one
+  // view-only, so nobody's access changes when this lands.
+  "0031_role_view_only",
 ];
 
 /** What the journal should currently end with. */

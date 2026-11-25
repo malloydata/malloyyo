@@ -10,7 +10,7 @@ import type { SourceInfo } from "./malloy";
 // so modules that only READ the DB — notably loadSharedQuery, used by the
 // /ltool/[slug] page — don't drag DuckDB into their serverless bundle and 500
 // with "libduckdb.so: cannot open shared object file".
-import { datasetVisibleWhere, hasRole, MALLOYYO_ADMIN, rolesOf, type RoleBearing } from "./roles";
+import { datasetAccessWhere, hasRole, MALLOYYO_ADMIN, rolesOf, type DatasetAccess, type RoleBearing } from "./roles";
 import { env } from "./env";
 import { leaseScope } from "./tenancy";
 import { qualifiedName } from "./repo-names";
@@ -29,14 +29,32 @@ import {
 // src/lib/mcp-host.ts. What remains here is the DB/query plumbing that the host
 // (and the web UI) share: model resolution, file maps, recording, sharing.
 
-// The datasets a user may query: their own or public, and ready. One home for
-// the predicate — the host's findModelByRef and findBySource both build on it.
+// The datasets a user may OPEN — owned, public, or granted by any role — and
+// ready. Opening one is enough to see its dashboards; it is not enough to query
+// it (see `queryableDatasetWhere`). Kept as a re-export rather than inlined
+// because every read path in the app funnels through these two names, and one
+// predicate each is the only way that stays true.
 export function visibleDatasetWhere(userId: string, isAdmin = false) {
-  // Owner, public, granted by a role — or MALLOYYO_ADMIN, which opens every
-  // dataset. Kept as a re-export rather than inlined because every read path in
-  // the app funnels through this name, and one predicate is the only way that
-  // stays true.
-  return datasetVisibleWhere(userId, isAdmin);
+  return datasetAccessWhere(userId, "view", isAdmin);
+}
+
+// The datasets a user may QUERY: the ones above, minus those that only a
+// view-only role opens for them (src/lib/roles.ts, `DatasetAccess`). What every
+// query surface resolves through — the source catalogue, ltool, chat, the MCP
+// tools, saving a draft.
+export function queryableDatasetWhere(userId: string, isAdmin = false) {
+  return datasetAccessWhere(userId, "query", isAdmin);
+}
+
+/** Whether this person may query a dataset they can already open — for a page
+    deciding which ways into the data to offer beside a dashboard. */
+export async function canQueryDataset(userId: string, datasetId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ id: datasets.id })
+    .from(datasets)
+    .where(and(queryableDatasetWhere(userId), eq(datasets.id, datasetId)))
+    .limit(1);
+  return !!row;
 }
 
 // What a viewer may READ ABOUT a dataset: the questions asked of it, the Malloy
@@ -71,7 +89,8 @@ export async function findBySource(userId: string, sourceName: string) {
   const dsList = await db
     .select()
     .from(datasets)
-    .where(visibleDatasetWhere(userId))
+    // A source is addressed in order to query it.
+    .where(queryableDatasetWhere(userId))
     .orderBy(desc(datasets.createdAt));
 
   for (const ds of dsList) {
@@ -94,7 +113,8 @@ export async function findByDatasetId(userId: string, datasetId: string) {
   const [ds] = await db
     .select()
     .from(datasets)
-    .where(and(visibleDatasetWhere(userId), eq(datasets.id, datasetId)))
+    // Replaying a recorded query runs it.
+    .where(and(queryableDatasetWhere(userId), eq(datasets.id, datasetId)))
     .limit(1);
   if (!ds) return null;
   const model = await latestModel(ds.id);
@@ -111,8 +131,13 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * to give the same answer for everyone, or two people following the same share
  * link reach different datasets. So the ref is resolved first and the viewer's
  * visibility is applied to the answer.
+ *
+ * `need` is what the caller is about to do with it, and it has no default on
+ * purpose: `view` to show a dashboard, `query` to run anything the reader
+ * wrote. A caller that could leave it out would be a query surface quietly
+ * resolving at view level — so every one of them says.
  */
-export async function findByDatasetRef(userId: string, ref: string) {
+export async function findByDatasetRef(userId: string, ref: string, need: DatasetAccess) {
   // `repo@ref:dataset` — a fetched branch snapshot (repo-previews.ts). Admins
   // only; anyone else gets the same null as a dataset they can't see.
   const asPreview = parsePreviewRef(ref);
@@ -126,7 +151,7 @@ export async function findByDatasetRef(userId: string, ref: string) {
   const [visible] = await db
     .select()
     .from(datasets)
-    .where(and(visibleDatasetWhere(userId), eq(datasets.id, r.dataset.id)))
+    .where(and(datasetAccessWhere(userId, need), eq(datasets.id, r.dataset.id)))
     .limit(1);
   if (!visible) return null;
   const model = await latestModel(visible.id);
@@ -485,7 +510,7 @@ export async function runQueryForWeb(
   // read carries the dataset's NAME (`/ltool?dataset=babynames`), and
   // findByDatasetRef takes either. Resolving only by id made a named link fail
   // in the ugliest way available — Postgres refusing to cast the name to uuid.
-  const found = datasetId ? await findByDatasetRef(userId, datasetId) : await findBySource(userId, source);
+  const found = datasetId ? await findByDatasetRef(userId, datasetId, "query") : await findBySource(userId, source);
   if (!found) return { ok: false, error: `source '${source}' not found` };
   const { ds, model } = found;
   if (ds.status !== "ready") return { ok: false, error: `source '${source}' is not ready` };
@@ -555,7 +580,7 @@ export async function saveWebQuery(
 ): Promise<WebSaveResult> {
   const userId = user.id;
   // By ref, for the same reason as runQueryForWeb above.
-  const found = datasetId ? await findByDatasetRef(userId, datasetId) : await findBySource(userId, source);
+  const found = datasetId ? await findByDatasetRef(userId, datasetId, "query") : await findBySource(userId, source);
   if (!found) return { ok: false, error: `source '${source}' not found` };
   if ("preview" in found) {
     return { ok: false, error: "This is a branch preview, so its queries can't be saved. Save it on the published dataset once the branch is merged." };

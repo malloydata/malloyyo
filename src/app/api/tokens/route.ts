@@ -8,7 +8,6 @@
 
 import { NextResponse } from "next/server";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
-import { dashboardOnlyRefusal } from "@/lib/explore-gate";
 import {
   createApiToken,
   expiryFromDays,
@@ -45,11 +44,6 @@ export async function GET() {
 export async function POST(req: Request) {
   const who = await me();
   if (!who.ok) return who.res;
-  // Minting only. A dashboard-only account has nothing a token could reach, and
-  // every bearer path refuses it anyway (src/lib/bearer-auth.ts); listing and
-  // revoking stay open so a token from before the restriction can be removed.
-  const refusal = dashboardOnlyRefusal(who.user);
-  if (refusal) return refusal;
 
   const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
   if (!body) return NextResponse.json({ error: "invalid JSON body" }, { status: 400 });

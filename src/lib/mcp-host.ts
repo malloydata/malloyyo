@@ -52,7 +52,7 @@ import {
   loadSharedQuery,
   modelFileMap,
   recordHistory,
-  visibleDatasetWhere,
+  queryableDatasetWhere,
   type RecordHistoryFields,
 } from "./mcp-tools";
 import { env } from "./env";
@@ -154,7 +154,9 @@ type DatasetRow = {
   requiredGivens: string[];
 };
 
-// Datasets this user may query — via the shared visibility predicate.
+// Datasets this user may QUERY — the shared predicate, at query level. Every
+// tool here runs or describes something to be run, so a dataset someone can
+// only view (src/lib/roles.ts, `DatasetAccess`) is not in this surface at all.
 async function visibleDatasets(userId: string): Promise<DatasetRow[]> {
   const rows = await db
     // requiredGivens rides along: every lease needs it, and a second lookup per
@@ -168,7 +170,7 @@ async function visibleDatasets(userId: string): Promise<DatasetRow[]> {
     })
     .from(datasets)
     .leftJoin(repos, eq(datasets.repoId, repos.id))
-    .where(visibleDatasetWhere(userId))
+    .where(queryableDatasetWhere(userId))
     .orderBy(desc(datasets.createdAt));
   return rows.map((r) => ({ ...r, ref: qualifiedName(r.repoSlug, r.name) }));
 }
@@ -185,7 +187,7 @@ async function visibleDatasets(userId: string): Promise<DatasetRow[]> {
  * back first.
  */
 async function findModelByRef(userId: string, ref: string) {
-  const found = await findByDatasetRef(userId, ref);
+  const found = await findByDatasetRef(userId, ref, "query");
   return found
     ? { ds: found.ds, model: found.model, ref: found.ref, preview: "preview" in found ? found.preview : undefined }
     : null;

@@ -79,6 +79,26 @@ export async function POST(req: Request) {
       break;
     }
 
+    case "set-access": {
+      // What the role allows on the datasets it opens: query them (the default)
+      // or only open their dashboards. One flag on the role — see
+      // `DatasetAccess` in src/lib/roles.ts for how it combines across the
+      // roles one person holds.
+      if (typeof body?.viewOnly !== "boolean") return bad("viewOnly must be true or false");
+      // An admin publishes models and grants roles. A view-only admin role
+      // would be a contradiction the rest of the app then has to keep
+      // explaining, so it cannot be made.
+      if (name === MALLOYYO_ADMIN) return bad("MALLOYYO_ADMIN always allows everything");
+      const changed = await db
+        .update(roles)
+        .set({ viewOnly: body.viewOnly })
+        .where(eq(roles.name, name))
+        .returning({ name: roles.name });
+      if (changed.length === 0) return bad(`unknown role: ${name || "(none)"}`);
+      logger.info("role access set", { name, viewOnly: body.viewOnly, actorId: actor.id });
+      break;
+    }
+
     case "set-datasets": {
       // Which datasets this role opens, as a whole list — the UI sends the set
       // it wants, so a checkbox cleared in the browser is a dataset removed
@@ -223,7 +243,7 @@ export async function POST(req: Request) {
 
     default:
       return bad(
-        "expected action: create | delete | set-datasets | set-user-roles | set-dataset-givens | set-default",
+        "expected action: create | delete | set-access | set-datasets | set-user-roles | set-dataset-givens | set-default",
       );
   }
 

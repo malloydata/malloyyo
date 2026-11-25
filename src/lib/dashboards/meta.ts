@@ -124,7 +124,7 @@ export async function listDashboardsForModel(
 
 /** Dashboards on a single dataset's current (latest) model, if visible. */
 export async function listDashboards(userId: string, datasetId: string): Promise<DashboardSummary[]> {
-  const found = await findByDatasetRef(userId, datasetId);
+  const found = await findByDatasetRef(userId, datasetId, "view");
   if (!found) return [];
   // A preview is an admin's own fetch of a branch: nothing in it is hidden from them.
   if ("preview" in found) return previewDashboards(found.preview.entry, datasetId, found.ds.name);
@@ -150,7 +150,7 @@ function previewDashboards(entry: PreviewDataset, datasetId: string, datasetName
     stays the model's own: a draft is not a sibling of a published dashboard
     (the frame injects that list into a dashboard's own switcher). */
 export async function listDashboardsAndDrafts(userId: string, datasetRef: string): Promise<DashboardSummary[]> {
-  const found = await findByDatasetRef(userId, datasetRef);
+  const found = await findByDatasetRef(userId, datasetRef, "view");
   if (!found) return [];
   // A preview has no drafts: drafts belong to the published dataset.
   if ("preview" in found) return previewDashboards(found.preview.entry, datasetRef, found.ds.name);
@@ -180,7 +180,7 @@ function forwarded(draft: { promotedAs: string | null }, published: Set<string>)
 export async function draftForward(userId: string, datasetRef: string, name: string): Promise<string | null> {
   const slug = draftSlug(name);
   if (slug === null) return null;
-  const found = await findByDatasetRef(userId, datasetRef);
+  const found = await findByDatasetRef(userId, datasetRef, "view");
   if (!found || "preview" in found) return null;
   const [d] = await db
     .select({ promotedAs: draftDashboards.promotedAs })
@@ -371,7 +371,7 @@ function draftSummary(
 }
 
 export async function getDashboard(userId: string, datasetId: string, name: string): Promise<DashboardDetail | null> {
-  const found = await findByDatasetRef(userId, datasetId);
+  const found = await findByDatasetRef(userId, datasetId, "view");
   if (!found) return null;
   if ("preview" in found) {
     const a = (found.preview.entry.artifacts ?? []).find((x) => x.name === name);

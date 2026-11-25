@@ -98,6 +98,30 @@ export function DeleteRoleButton({ name, holders }: { name: string; holders: num
   );
 }
 
+/**
+ * What a role lets its holders do on the datasets it opens: query them, or only
+ * open their dashboards. Saved on change — it is one choice, and a Save button
+ * beside a two-way switch is a second click that can only be forgotten.
+ */
+export function RoleAccess({ name, viewOnly }: { name: string; viewOnly: boolean }) {
+  const { run, busy, error } = useAction();
+  return (
+    <span className="inline-flex flex-col gap-1">
+      <select
+        aria-label={`What ${name} allows`}
+        className={`${INPUT} text-xs`}
+        disabled={busy}
+        value={viewOnly ? "view" : "query"}
+        onChange={(e) => void run({ action: "set-access", name, viewOnly: e.target.value === "view" })}
+      >
+        <option value="query">Query and dashboards</option>
+        <option value="view">Dashboards only</option>
+      </select>
+      {error && <span className="text-xs text-red-600 dark:text-red-400">{error}</span>}
+    </span>
+  );
+}
+
 /** Which datasets a role opens. Saved as a whole set, so unchecking is a real
     edit rather than something you have to remember to apply separately. */
 export function RoleDatasets({

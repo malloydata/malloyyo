@@ -26,9 +26,8 @@ Everyone has a **list** of roles, not one.
 |---|---|
 | `MALLOYYO_USER` | sign in, query the datasets your roles allow, save and share queries, build draft dashboards |
 | `MALLOYYO_ADMIN` | everything above, plus create datasets, publish models, and manage people, roles and instance settings |
-| `MALLOYYO_DASHBOARD_ONLY` | *restricts*: open dashboards, and nothing else — see [Dashboard-only people](#dashboard-only-people) |
 
-Two that grant, not three. There was a `MALLOYYO_DEVELOPER` for someone who should ship
+Two, not three. There was a `MALLOYYO_DEVELOPER` for someone who should ship
 models without administering people, and it could not mean that: a dataset names
 a repo this server compiles, and a model can define `duckdb.sql(...)` sources and
 a `malloy-config.json` whose connection secrets resolve against the server's own
@@ -62,47 +61,59 @@ managed here, so that a group membership revoked upstream takes effect on the
 next sign-in. Name your roles to match what that system already calls them and
 the switch costs you nothing.
 
-## Dashboard-only people
+## A role is full or view-only
 
-Some people should read dashboards and never see a query box: a client's staff,
-an executive audience, a customer. Give them `MALLOYYO_DASHBOARD_ONLY`.
+Every role says one more thing besides which datasets it opens: what its
+holders may do there.
+
+| a role that is… | lets its holders… |
+|---|---|
+| **full** (the default) | query the datasets it opens — the query editor, chat, AI Q&A, the MCP connector, draft dashboards — and open their dashboards |
+| **view-only** | open the dashboards on the datasets it opens, and nothing else |
+
+Set it per role at **Admin → Roles**, in the *Allows* column. It belongs to the
+role, not to each dataset the role is listed on: a role names a group of
+people, and "these people read dashboards" is a fact about them.
 
 ```
-dana@client.com      MALLOYYO_DASHBOARD_ONLY, client_reports
+clients     view-only    opens: client_reports
+analysts    full         opens: client_reports, finance
 ```
 
-They sign in to a home page listing the dashboards they can open, and that is
-the whole product for them: no query editor, no chat, no AI Q&A, no MCP
-connector, no API tokens, no draft dashboards. The pages redirect home and the
-routes behind them refuse, including for a connector or token they set up
-before the role was given.
+**Someone's level on a dataset is the best any of their roles gives them
+there.** Hold `clients` and you read the dashboards on `client_reports`. Hold
+`analysts` too and you can query it. So the same person can query one dataset
+and only read dashboards on the next, and there is no such thing as a
+"dashboard-only user" to configure: someone is dashboard-only exactly when
+every role that reaches a dataset for them is view-only. Their home page is then
+the dashboards they can open, with no query editor, chat or connector offered,
+because for them there is nothing those could reach.
 
-It is the one built-in role that takes something away, which has two
-consequences worth knowing:
+Where view-only shows:
 
-- **It is safe as an admission default**, where `MALLOYYO_ADMIN` is not. An
-  instance whose arrivals should all be dashboard-only lists it in the default
-  set.
-- **An admin is never dashboard-only.** Holding both is the same as holding
-  `MALLOYYO_ADMIN`: someone who can publish models and grant roles is not kept
-  out of a query box, and an instance cannot tick its way into having an admin
-  who cannot use it.
+- The dataset's dashboards open as usual; the ways into its data that are not a
+  dashboard — AI Q&A, Query, Chat, config, *Explore in Claude* — are left off.
+- It is absent from `list_sources`, from the query editor's and chat's source
+  lists, and a query naming it is refused the same way an unknown dataset is.
+- A draft dashboard cannot be saved on it. A draft is built from queries its
+  author wrote.
 
-Which dashboards they see is decided exactly as it is for everyone else: by the
-datasets their other roles open, and then by [who sees a
-dashboard](#who-sees-a-dashboard). The usual shape is one role per audience —
-`client_reports` above — listed on a dataset curated for that audience.
+`MALLOYYO_ADMIN` cannot be made view-only. `MALLOYYO_USER` can: on an instance
+where it opens datasets for every member, that makes those datasets
+read-the-dashboards-only for everyone who has no fuller role on them.
 
 **This is a product tier, not a wall around data.** A dashboard runs queries
-against its dataset, so a dashboard-only person can still reach whatever the
-datasets they can open contain. What they must not see goes in a dataset they
-are not granted, or behind the model's own row scoping (below) — which applies
-to dashboards the same as to queries.
+against its dataset, so someone with view-only access can still reach whatever
+that dataset contains. What they must not see goes in a dataset they are not
+granted, or behind the model's own row scoping (below) — which applies to
+dashboards the same as to queries. The usual shape is a dataset curated for the
+audience, opened by a view-only role.
 
 ## Datasets name the roles that may open them
 
 A dataset lists the roles that grant access to it. Hold one of them and you can
-query its sources and open its dashboards; hold none and the dataset is not
+open its dashboards — and query its sources, unless every one you hold is
+view-only; hold none and the dataset is not
 there for you — it does not appear in `list_sources`, and a query naming it is
 refused the same way an unknown dataset is.
 
@@ -310,9 +321,9 @@ To everyone else it is not there: it is missing from every menu and from
 
 Sharing **never opens a dataset**. The person still needs a role that opens
 the dataset the dashboard is built on; share with someone who has none and the
-page says so, and the share takes effect once they are given one. So granting
-a dashboard-only person a dashboard is two steps: a role that opens the
-dataset, then — for the private ones — a share.
+page says so, and the share takes effect once they are given one. So showing
+someone a private dashboard is two steps: a role that opens the dataset
+(view-only is enough), then a share.
 
 **This narrows a menu; it is not a security boundary.** Anyone who can open one
 dashboard on a dataset can query all of that dataset through it. A private
@@ -322,7 +333,8 @@ repo](#organising-a-repo).
 
 ## What each person sees
 
-`list_sources` — and every dashboard list, and the home page — shows only the
-datasets your roles grant. A dataset you have no role for is not something you
+`list_sources` shows the datasets your roles let you query. Every dashboard
+list, and the home page, shows the ones your roles let you open — which is
+those, plus any a view-only role opens for you. A dataset you have no role for is not something you
 are told you cannot see; it simply is not in the answer. The same goes for a
 private dashboard nobody shared with you.

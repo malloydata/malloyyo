@@ -192,7 +192,10 @@ export async function saveDraftDashboard(
     if (bad) return { ok: false, error: bad };
   }
 
-  const found = await findByDatasetRef(userId, datasetRef);
+  // A draft is built out of queries its author wrote, so saving one takes the
+  // right to QUERY the dataset. Someone who can only view it gets the same
+  // answer as someone who cannot see it at all.
+  const found = await findByDatasetRef(userId, datasetRef, "query");
   if (!found) return { ok: false, error: `dataset '${datasetRef}' not found` };
   // A draft belongs to a published dataset and is listed to its readers; one
   // validated against an unpublished preview's model would land there anyway.
@@ -464,7 +467,7 @@ export interface DraftSummary {
 /** This user's drafts on a dataset, newest first — what `malloyyo draft list`
     shows so a promoter can pick one without hunting for a slug. */
 export async function listDrafts(userId: string, datasetRef: string): Promise<DraftSummary[]> {
-  const found = await findByDatasetRef(userId, datasetRef);
+  const found = await findByDatasetRef(userId, datasetRef, "view");
   if (!found) return [];
   const rows = await db
     .select()
@@ -496,7 +499,7 @@ export interface DraftFiles extends DraftSummary {
     already read its compiled bundle. A private draft answers null to everyone
     else, the same as a slug that does not exist. */
 export async function getDraftFiles(userId: string, datasetRef: string, slug: string): Promise<DraftFiles | null> {
-  const found = await findByDatasetRef(userId, datasetRef);
+  const found = await findByDatasetRef(userId, datasetRef, "view");
   if (!found) return null;
   const [r] = await db
     .select()
@@ -544,7 +547,7 @@ export async function recordPromotion(
       "promoted from this version" — which is what a divergence check compares. */
   promoted: { name: string; hash?: string },
 ): Promise<"recorded" | "not-found" | "not-yours"> {
-  const found = await findByDatasetRef(userId, datasetRef);
+  const found = await findByDatasetRef(userId, datasetRef, "view");
   if (!found) return "not-found";
   const [row] = await db
     .select()
@@ -586,7 +589,7 @@ export async function deleteDraft(
   datasetRef: string,
   slug: string,
 ): Promise<{ outcome: "deleted"; promotedAs: string | null } | { outcome: "not-found" | "not-yours" }> {
-  const found = await findByDatasetRef(user.id, datasetRef);
+  const found = await findByDatasetRef(user.id, datasetRef, "view");
   if (!found) return { outcome: "not-found" };
   const [row] = await db
     .select()

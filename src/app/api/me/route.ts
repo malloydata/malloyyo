@@ -5,7 +5,6 @@ import { NextResponse } from "next/server";
 import { db, users, oauthAccessTokens, oauthRefreshTokens } from "@/db";
 import { eq, and, isNull, gt } from "drizzle-orm";
 import { isAdmin } from "@/lib/admin";
-import { canExplore } from "@/lib/roles";
 import { getSettings } from "@/lib/settings";
 import { env } from "@/lib/env";
 import { configuredAuthProviders, partialAuthProviders } from "@/lib/auth-providers";
@@ -96,15 +95,6 @@ export async function GET() {
     askConfig: askEnabled() ? askConfig() : null,
     signInPath: signInPath("/"),
     signOutPath: signOutPath("/"),
-    user: {
-      id: u.id,
-      name: u.name,
-      email: u.email,
-      image: u.image,
-      isAdmin: isAdmin(u),
-      // Only when true. It tells the UI which ways into the data to leave out;
-      // the routes behind them refuse on their own (src/lib/explore-gate.ts).
-      ...(canExplore(u) ? {} : { dashboardOnly: true }),
-    },
+    user: { id: u.id, name: u.name, email: u.email, image: u.image, isAdmin: isAdmin(u) },
   });
 }

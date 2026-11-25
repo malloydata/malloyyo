@@ -83,8 +83,6 @@ type Me = {
   email: string | null;
   image: string | null;
   isAdmin: boolean;
-  /** Dashboards only: no sources, questions, tokens or Claude — see DashboardOnlyHome. */
-  dashboardOnly?: boolean;
 };
 
 type FavQuery = {
@@ -120,12 +118,11 @@ export default function HomePage() {
   const [sources, setSources] = useState<DatasetGroup[] | null>(null);
   const [favQueries, setFavQueries] = useState<FavQuery[]>([]);
   const [dashboards, setDashboards] = useState<
-    Array<DashboardChip & { dataset: string; qualified: string }>
+    Array<DashboardChip & { dataset: string; qualified: string; datasetTitle?: string }>
   >([]);
   // Claude connect-instructions modal — shown when clicking a source's Claude
   // button before the connector is linked. claudeTargetUrl is the explore chat
   // to continue to after setup.
-  const [dashboardTree, setDashboardTree] = useState<HomeDataset[] | null>(null);
   const [showClaudeSetup, setShowClaudeSetup] = useState(false);
   const [claudeTargetUrl, setClaudeTargetUrl] = useState<string | null>(null);
 
@@ -146,13 +143,7 @@ export default function HomePage() {
     setAccessState(meJson.accessState === "pending" || meJson.accessState === "disabled" ? meJson.accessState : null);
     if (typeof meJson.claudeConnected === "boolean") setClaudeConnected(meJson.claudeConnected);
     if (typeof meJson.askEnabled === "boolean") setChatEnabled(meJson.askEnabled);
-    if (meJson.user?.dashboardOnly) {
-      // Their home is the dashboards they can open, by dataset. The sources and
-      // questions the rest of this page is built from are query surfaces, and
-      // those routes refuse this account.
-      const treeRes = await fetch("/api/dashboards?tree=1");
-      if (treeRes.ok) setDashboardTree(await treeRes.json());
-    } else if (meJson.user) {
+    if (meJson.user) {
       const [srcRes, favRes, dashRes] = await Promise.all([
         fetch("/api/sources"),
         fetch("/api/favorited-queries"),
@@ -185,41 +176,23 @@ export default function HomePage() {
   isPrivate?: boolean;
 };
 
-type HomeDataset = { dataset: string; qualified: string; title?: string; description?: string; dashboards: DashboardChip[] };
+type HomeDataset = { qualified: string; title: string; dashboards: DashboardChip[] };
 
 /**
- * Home for a dashboard-only account: each dataset they can open, and the
- * dashboards on it they can see. A dataset with none is left out — for them it
- * holds nothing to open — and so an account granted nothing yet gets a
- * sentence saying so rather than a blank page.
+ * The datasets a reader can open but not query, each with the dashboards on it
+ * they can see. No source rows and no ways in beside the dashboards, because
+ * for this reader there are none.
  */
-function DashboardOnlyHome({ datasets }: { datasets: HomeDataset[] | null }) {
-  if (datasets === null) return <p className="text-gray-500 dark:text-gray-400 text-xs">loading…</p>;
-  const withDashboards = datasets.filter((ds) => ds.dashboards.length > 0);
-  if (withDashboards.length === 0) {
-    return (
-      <section className="border border-gray-200 dark:border-gray-800 rounded p-6 text-center">
-        <p className="text-gray-700 dark:text-gray-300">No dashboards have been shared with you yet.</p>
-        <p className="mt-2 text-gray-500 dark:text-gray-400 text-xs leading-relaxed">
-          Ask whoever runs this instance to give you access.
-        </p>
-      </section>
-    );
-  }
+function ViewOnlyDatasets({ datasets }: { datasets: HomeDataset[] }) {
   return (
     <section>
       <h2 className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-3">Dashboards</h2>
       <div className="space-y-4">
-        {withDashboards.map((ds) => (
+        {datasets.map((ds) => (
           <div key={ds.qualified} className="border border-gray-200 dark:border-gray-800 rounded p-4 space-y-2">
-            <div>
-              <h3 className="font-semibold">{ds.title ?? ds.dataset}</h3>
-              {ds.description && (
-                <p className="text-gray-500 dark:text-gray-400 text-xs leading-relaxed">{ds.description}</p>
-              )}
-            </div>
+            <h3 className="font-semibold">{ds.title}</h3>
             {/* The model's own, then the drafts people opened or shared — the
-                same two rows, in the same order, as everyone else's home. */}
+                same two rows, in the same order, as a dataset card above. */}
             {modelDashboards(ds.dashboards).length > 0 && (
               <DashboardRow label="dashboards" dataset={ds.qualified} items={modelDashboards(ds.dashboards)} />
             )}
@@ -332,6 +305,29 @@ function shortAuthor(author: string): string {
     arr.push({ name: d.name, title: d.title, description: d.description, isDraft: d.isDraft, author: d.author, mine: d.mine, isPrivate: d.isPrivate });
   }
 
+
+  // Datasets this reader can OPEN but not QUERY: their roles on them are
+  // view-only (src/lib/roles.ts, `DatasetAccess`). The source catalogue above
+  // lists only what they may query, so these are the datasets that have
+  // dashboards for them and no card of their own. Computed only once the
+  // catalogue has answered — before that, every dataset would look view-only.
+  const viewOnlyByQualified = new Map<string, HomeDataset>();
+  if (sources !== null) {
+    for (const d of dashboards) {
+      if (datasetByQualified.has(d.qualified)) continue;
+      let ds = viewOnlyByQualified.get(d.qualified);
+      if (!ds) {
+        ds = { qualified: d.qualified, title: d.datasetTitle ?? d.dataset, dashboards: [] };
+        viewOnlyByQualified.set(d.qualified, ds);
+      }
+      ds.dashboards.push(d);
+    }
+  }
+  const viewOnlyDatasets = [...viewOnlyByQualified.values()];
+  // Nothing to query anywhere, and something to look at: for this reader the
+  // instance IS its dashboards. An admin always has the rest (they publish).
+  const viewOnlyEverywhere =
+    !me?.isAdmin && sources !== null && datasetGroups.length === 0 && viewOnlyDatasets.length > 0;
 
   // Datasets to render: those with questions first (recency order), then the
   // rest. Ordered as objects rather than as names, because a name no longer
@@ -482,19 +478,21 @@ function shortAuthor(author: string): string {
             </p>
           )}
         </section>
-      ) : me.dashboardOnly ? (
-        <DashboardOnlyHome datasets={dashboardTree} />
       ) : (
         <>
-          {/* Tokens is everyone's — a member holds their own CLI credential; admin
-              is the instance. Both live in the same right-aligned row. */}
+          {/* Tokens is everyone's who has something to query — a member holds
+              their own CLI credential; admin is the instance. Both live in the
+              same right-aligned row. Someone whose every dataset is view-only
+              has nothing a token could reach, so the link is left out. */}
           <section className="flex gap-3">
-            <Link
-              href="/settings/tokens"
-              className="inline-block rounded border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 px-4 py-2 text-xs hover:bg-gray-50 dark:hover:bg-gray-900 ml-auto"
-            >
-              tokens
-            </Link>
+            {!viewOnlyEverywhere && (
+              <Link
+                href="/settings/tokens"
+                className="inline-block rounded border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 px-4 py-2 text-xs hover:bg-gray-50 dark:hover:bg-gray-900 ml-auto"
+              >
+                tokens
+              </Link>
+            )}
             {me.isAdmin && (
               <Link
                 href="/admin"
@@ -509,6 +507,11 @@ function shortAuthor(author: string): string {
               row with its ways in — [query][chat][claude] — and the questions
               asked of it beneath. Sources that have been asked about lead, in
               recency order; the rest follow with their descriptions. */}
+          {/* Datasets they can open but not query — dashboards, and nothing to
+              run. First when it is all they have; after the rest otherwise. */}
+          {viewOnlyEverywhere && <ViewOnlyDatasets datasets={viewOnlyDatasets} />}
+
+          {!viewOnlyEverywhere && (
           <section>
             <div className="flex items-baseline justify-between mb-3">
               <h2 className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Datasets</h2>
@@ -746,6 +749,9 @@ function shortAuthor(author: string): string {
               </div>
             )}
           </section>
+          )}
+
+          {!viewOnlyEverywhere && viewOnlyDatasets.length > 0 && <ViewOnlyDatasets datasets={viewOnlyDatasets} />}
         </>
       )}
 

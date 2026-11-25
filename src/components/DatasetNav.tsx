@@ -25,6 +25,7 @@ export function DatasetNav({
   activeDashboard,
   activeTitle,
   questionsActive = false,
+  canQuery = true,
 }: {
   datasetId: string;
   /** What to CALL the dataset, resolved by the page that renders this.
@@ -51,6 +52,12 @@ export function DatasetNav({
   activeTitle?: string;
   /** True on the AI Q&A page. */
   questionsActive?: boolean;
+  /** Whether this reader may QUERY the dataset, not just open its dashboards
+      (src/lib/roles.ts, `DatasetAccess`). False leaves the tree and nothing
+      else: no AI Q&A, Query, Chat, config or Claude. Decided by the server
+      page, so the right set is in the first paint. Defaults to true for the
+      pages that are themselves query surfaces. */
+  canQuery?: boolean;
 }) {
   // Seeded from the server's answer when there is one, so the first paint is
   // already correct and the fetch below only confirms it.
@@ -73,11 +80,6 @@ export function DatasetNav({
   const [claudeConnected, setClaudeConnected] = useState(false);
   // Chat needs an ANTHROPIC_API_KEY; without one the pill would go nowhere.
   const [chatEnabled, setChatEnabled] = useState(false);
-  // A dashboard-only reader gets the tree and nothing else: no ways into the
-  // data that aren't dashboards, no config, no Claude. Unknown (null) until
-  // /api/me answers, and those groups wait for the answer rather than flash up
-  // and vanish — their routes would refuse the click anyway.
-  const [dashboardOnly, setDashboardOnly] = useState<boolean | null>(null);
 
   // The dataset's address, decided once. `datasetId` is the raw route param,
   // which Next hands back percent-ENCODED, so it is decoded before anything
@@ -116,7 +118,6 @@ export function DatasetNav({
         if (d?.instanceName) setInstanceName(d.instanceName);
         if (typeof d?.claudeConnected === "boolean") setClaudeConnected(d.claudeConnected);
         if (typeof d?.askEnabled === "boolean") setChatEnabled(d.askEnabled);
-        setDashboardOnly(d?.user?.dashboardOnly === true);
       })
       .catch(() => {});
   }, []);
@@ -169,7 +170,7 @@ export function DatasetNav({
         activeLabel={questionsActive ? "AI Q&A" : activeTitle}
       />
 
-      {dashboardOnly === false && (
+      {canQuery && (
       <>
       <span className="mx-1 h-4 w-px bg-gray-300 dark:bg-gray-700" />
 

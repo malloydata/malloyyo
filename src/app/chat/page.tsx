@@ -2,14 +2,12 @@
 // SPDX-License-Identifier: MIT
 
 import { ChatApp } from "@/components/ChatApp";
-import { turnAwayDashboardOnly } from "@/lib/explore-gate";
 
 export default async function ChatPage({
   searchParams,
 }: {
   searchParams: Promise<{ id?: string; dataset?: string; source?: string }>;
 }) {
-  await turnAwayDashboardOnly();
   const sp = await searchParams;
   // `?dataset=&source=` starts a chat on that source and opens it — what the
   // Chat buttons elsewhere link to, so they land in a conversation rather than

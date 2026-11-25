@@ -222,8 +222,8 @@
     {
       "idx": 31,
       "version": "7",
-      "when": 1795632199819,
-      "tag": "0031_dashboard_only_role",
+      "when": 1795638935541,
+      "tag": "0031_role_view_only",
       "breakpoints": true
     }
   ]

@@ -8,9 +8,8 @@ import { DEVCONTAINER_PATH } from "@/lib/github-source-link";
 import { qualifiedName } from "@/lib/repos";
 import { datasetTitle } from "@malloyyo/mcp-engine";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
-import { dashboardOnlyRefusal } from "@/lib/explore-gate";
 import { isAdmin } from "@/lib/admin";
-import { datasetVisibleWhere } from "@/lib/roles";
+import { datasetAccessWhere } from "@/lib/roles";
 
 export const runtime = "nodejs";
 
@@ -20,10 +19,6 @@ export async function GET() {
     if (err instanceof UnauthorizedError) me = null;
     else throw err;
   }
-  // The source catalogue and the question list are the query surface's index;
-  // a dashboard-only account reaches its dashboards through /api/dashboards.
-  const refusal = me ? dashboardOnlyRefusal(me) : null;
-  if (refusal) return refusal;
 
   const admin = me ? isAdmin(me) : false;
 
@@ -35,7 +30,10 @@ export async function GET() {
   // answer and this needs no special case of its own. It used to have one, under
   // a comment saying the predicate had no admin branch — it does now.
   const where = me
-    ? datasetVisibleWhere(me.id, admin)
+    ? // At QUERY level: this is the catalogue of sources to run something
+      // against, and what ltool and chat offer. A dataset someone can only view
+      // reaches them through its dashboards (/api/dashboards), not through here.
+      datasetAccessWhere(me.id, "query", admin)
     : and(eq(datasets.isPublic, true), ne(datasets.status, "failed"));
 
   const dsList = await db

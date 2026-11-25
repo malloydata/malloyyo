@@ -20,11 +20,10 @@ import { and, eq, inArray, isNull, isNotNull, sql } from "drizzle-orm";
 import { db, history, savedQueries } from "@/db";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { decodeDatasetRef } from "@/lib/repos";
-import { findByDatasetRef, normalizeSources } from "@/lib/mcp-tools";
+import { canQueryDataset, findByDatasetRef, normalizeSources } from "@/lib/mcp-tools";
 import { listDashboards } from "@/lib/dashboards/meta";
 import { datasetLandingPath } from "@/lib/dataset-landing";
 import { signInPath } from "@/lib/auth-paths";
-import { canExplore } from "@/lib/roles";
 import { RUN_LABELS } from "@/lib/tool-names";
 
 export const runtime = "nodejs";
@@ -78,11 +77,8 @@ export default async function DatasetLandingPage({ params }: { params: Promise<{
   const ref = decodeDatasetRef(raw);
 
   let userId: string;
-  let dashboardOnly: boolean;
   try {
-    const user = await getSessionUser();
-    userId = user.id;
-    dashboardOnly = !canExplore(user);
+    userId = (await getSessionUser()).id;
   } catch (err) {
     // The middleware already redirects unauthenticated page navigations, so this
     // is the belt-and-braces path (a stale session racing the render).
@@ -90,23 +86,23 @@ export default async function DatasetLandingPage({ params }: { params: Promise<{
     throw err;
   }
 
-  const found = await findByDatasetRef(userId, ref);
+  const found = await findByDatasetRef(userId, ref, "view");
   // Not visible, or has no model yet: config is the only page that can say
   // something useful about a dataset in that state, so send them there rather
   // than to a dashboard list that would be empty for a reason we can't explain.
-  // (A dashboard-only reader has no config page to be sent to — home, then.)
-  if (!found) redirect(dashboardOnly ? "/" : `/datasets/${encodeURIComponent(ref)}/config`);
+  if (!found) redirect(`/datasets/${encodeURIComponent(ref)}/config`);
 
-  const [dashboards, questions] = await Promise.all([
+  const [dashboards, questions, canQuery] = await Promise.all([
     listDashboards(userId, ref),
     hasQuestions(found.ds.id),
+    canQueryDataset(userId, found.ds.id),
   ]);
 
   redirect(
     datasetLandingPath(ref, {
       dashboards,
       hasQuestions: questions,
-      dashboardOnly,
+      viewOnly: !canQuery,
       firstSource: normalizeSources(found.model.sources)[0]?.name ?? null,
     }),
   );

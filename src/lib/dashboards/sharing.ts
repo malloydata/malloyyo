@@ -55,7 +55,7 @@ const refuse = (status: 400 | 403 | 404, error: string) => ({ ok: false as const
  * manage it" asked, and that one is a 403: by then they are looking at it.
  */
 async function manageable(user: User, datasetRef: string, name: string) {
-  const found = await findByDatasetRef(user.id, datasetRef);
+  const found = await findByDatasetRef(user.id, datasetRef, "view");
   // A branch preview is one admin's own fetch; it has no audience to manage.
   if (!found || "preview" in found) return refuse(404, "dashboard not found");
   const dash = await getDashboard(user.id, datasetRef, name);

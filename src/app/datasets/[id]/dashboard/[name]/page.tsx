@@ -13,6 +13,7 @@
 import { redirect, notFound } from "next/navigation";
 import { DatasetNav } from "@/components/DatasetNav";
 import { resolveDatasetRef } from "@/lib/repos";
+import { canQueryDataset } from "@/lib/mcp-tools";
 import { qualifiedName } from "@/lib/repo-names";
 import { datasetTitle } from "@malloyyo/mcp-engine";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
@@ -68,6 +69,9 @@ export default async function DashboardViewPage({
   // links on the FIRST render. It used to show the raw route param until a
   // client fetch replaced it.
   const ref = await resolveDatasetRef(id);
+  // What to offer beside the dashboard. Someone whose roles on this dataset are
+  // view-only gets the dashboards and no ways into the data that aren't one.
+  const canQuery = ref.ok ? await canQueryDataset(user.id, ref.dataset.id) : false;
   const navLabel = ref.ok ? datasetTitle(ref.dataset.name, ref.dataset.title) : undefined;
   const navRef = ref.ok && ref.repo ? qualifiedName(ref.repo.slug, ref.dataset.name) : ref.ok ? ref.dataset.name : undefined;
 
@@ -79,6 +83,7 @@ export default async function DashboardViewPage({
         datasetRef={navRef}
         activeDashboard={name}
         activeTitle={dash.title}
+        canQuery={canQuery}
       />
       <PreviewBanner userId={user.id} datasetRef={id} dashboard={name} />
       {dash.draft ? (

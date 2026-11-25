@@ -1,12 +1,20 @@
 // Copyright (c) The Malloy Foundation
 // SPDX-License-Identifier: MIT
 //
-// Who sees which dashboard — the audience layer under dataset access
-// (src/lib/dashboards/audience.ts, sharing.ts), against a real Postgres.
+// Who sees which dashboard, and who may query behind it — against a real
+// Postgres. Two layers under dataset access:
 //
-// DB-only on purpose: every function under test reads rows and decides, so the
-// model here is never compiled and the artifacts are bare rows. What this pins:
+//   • the dashboard AUDIENCE (src/lib/dashboards/audience.ts, sharing.ts)
+//   • VIEW vs QUERY: a role is full or view-only, and someone's level on a
+//     dataset is the best any of their roles gives them (src/lib/roles.ts)
 //
+// Almost entirely DB-only: these functions read rows and decide, so the
+// artifacts are bare rows and the model is compiled once, by list_sources.
+// What this pins:
+//
+//   • someone with only a view-only role on a dataset opens its dashboards and
+//     is invisible to every query surface — the source resolver, the MCP tools,
+//     saving a draft — while one full role on it is enough to query
 //   • a draft is private until its author opens it; a modeled dashboard is
 //     private when its manifest says so (`# artifact { private }`)
 //   • private means admins + its author + the people it is shared with — in
@@ -21,13 +29,23 @@
 import test, { before } from "node:test";
 import assert from "node:assert/strict";
 import { and, eq } from "drizzle-orm";
-import { db, users, datasets, malloyModels, malloyArtifacts, draftDashboards, dashboardGrants, type User } from "@/db";
+import {
+  db,
+  users,
+  roles,
+  datasets,
+  malloyModels,
+  malloyArtifacts,
+  draftDashboards,
+  dashboardGrants,
+  type User,
+} from "@/db";
 import { allDashboardsByDataset, getDashboard, listDashboards, listDashboardsAndDrafts } from "@/lib/dashboards";
-import { deleteDraft, getDraftFiles } from "@/lib/dashboards/draft";
+import { deleteDraft, getDraftFiles, saveDraftDashboard } from "@/lib/dashboards/draft";
 import { getSharing, setDraftVisibility, shareDashboard, unshareDashboard } from "@/lib/dashboards/sharing";
-import { canExplore, MALLOYYO_ADMIN, MALLOYYO_DASHBOARD_ONLY, MALLOYYO_USER } from "@/lib/roles";
-import { createApiToken } from "@/lib/api-tokens";
-import { resolveBearer } from "@/lib/bearer-auth";
+import { MALLOYYO_ADMIN, MALLOYYO_USER } from "@/lib/roles";
+import { buildHostedExploreSurface } from "@/lib/mcp-host";
+import { canQueryDataset, findByDatasetRef, findBySource } from "@/lib/mcp-tools";
 
 const DS = "audience";
 let admin: User, author: User, member: User, viewer: User, outsider: User;
@@ -39,18 +57,23 @@ const person = async (email: string, roles: string[], extra: Partial<typeof user
 const names = (list: { name: string }[]) => list.map((d) => d.name).sort();
 
 before(async () => {
-  // `staff` opens the dataset. The admin holds it too: MALLOYYO_ADMIN does not
-  // open a dataset on these paths, and the point here is what an admin sees
-  // INSIDE a dataset they can open.
+  // Two roles open the dataset. `staff` is full — and deliberately has NO
+  // catalog row, because a role nobody has described must still let its holders
+  // query: that is what keeps every existing instance unchanged. `readers` is
+  // view-only.
+  await db.insert(roles).values({ name: "readers", description: "Dashboards only.", viewOnly: true });
+
+  // The admin holds `staff` too: MALLOYYO_ADMIN does not open a dataset on these
+  // paths, and the point here is what an admin sees INSIDE a dataset they can open.
   admin = await person("admin@aud.test", [MALLOYYO_USER, MALLOYYO_ADMIN, "staff"], { role: "admin", isAdmin: true });
   author = await person("author@aud.test", [MALLOYYO_USER, "staff"]);
   member = await person("member@aud.test", [MALLOYYO_USER, "staff"]);
-  viewer = await person("viewer@aud.test", [MALLOYYO_DASHBOARD_ONLY, "staff"]);
+  viewer = await person("viewer@aud.test", [MALLOYYO_USER, "readers"]);
   outsider = await person("outsider@aud.test", [MALLOYYO_USER]);
 
   const [ds] = await db
     .insert(datasets)
-    .values({ userId: admin.id, name: DS, status: "ready", isPublic: false, roles: ["staff"] })
+    .values({ userId: admin.id, name: DS, status: "ready", isPublic: false, roles: ["staff", "readers"] })
     .returning();
   datasetId = ds.id;
   const [model] = await db
@@ -168,29 +191,73 @@ test("an admin shares a private modeled dashboard with one person", async () => 
   assert.equal(await getDashboard(member.id, DS, "secret"), null);
 });
 
-test("a dashboard-only person is shown a dashboard the same way anyone is", async () => {
-  // The restriction is on what they may DO, not on which dashboards they see.
-  assert.equal(canExplore(viewer), false);
+test("a view-only role opens the dashboards, like any role", async () => {
+  // Viewing is not a lesser kind of seeing: the same listing, the same lookup,
+  // and a private dashboard is shared with them the same way.
   assert.deepEqual(names(await listDashboardsAndDrafts(viewer.id, DS)), ["draft-everyones", "open"]);
+  assert.ok(await getDashboard(viewer.id, DS, "open"));
   assert.ok((await shareDashboard(admin, DS, "secret", viewer.email!)).ok);
   assert.ok(await getDashboard(viewer.id, DS, "secret"));
   await unshareDashboard(admin, DS, "secret", viewer.id);
 });
 
-test("a dashboard-only account's token stops working, whatever scope it carries", async () => {
-  // Minted while they could still query; the restriction arrives later. Every
-  // bearer surface — MCP, the CLI, the drafts API — resolves through here.
-  const minted = await createApiToken({ userId: viewer.id, name: "from-before", scopes: ["mcp"], expiresAt: null });
-  assert.ok(minted.ok);
-  if (!minted.ok) return;
-  const refused = await resolveBearer(minted.raw, { scope: "mcp", recordUse: false });
-  assert.ok(!refused.ok && refused.status === 403);
-  assert.match(refused.ok ? "" : refused.error, /dashboard-only/);
+test("…and is invisible to every query surface", async () => {
+  // The dataset resolves for viewing and not for querying.
+  assert.ok(await findByDatasetRef(viewer.id, DS, "view"));
+  assert.equal(await findByDatasetRef(viewer.id, DS, "query"), null);
+  assert.equal(await canQueryDataset(viewer.id, datasetId), false);
+  // A bare source name — how ltool, /api/run and chat address a model.
+  assert.equal(await findBySource(viewer.id, "s"), null);
+  assert.ok(await findBySource(member.id, "s"));
 
-  // Read per request, so lifting the restriction takes effect on the next one.
-  await db.update(users).set({ roles: ["staff"] }).where(eq(users.id, viewer.id));
-  assert.ok((await resolveBearer(minted.raw, { scope: "mcp", recordUse: false })).ok);
-  await db.update(users).set({ roles: [MALLOYYO_DASHBOARD_ONLY, "staff"] }).where(eq(users.id, viewer.id));
+  // The MCP tools: not listed, and addressed directly it is the same "unknown,
+  // or not visible to you" a dataset they cannot open at all gives.
+  const asViewer = buildHostedExploreSurface(viewer, "http://localhost:3000");
+  const listed = JSON.parse((await asViewer.call("list_sources", {})).content[0]?.text ?? "{}") as {
+    models?: Record<string, unknown>;
+  };
+  assert.equal(listed.models?.[DS], undefined);
+  const described = await asViewer.call("describe_source", { source: "s", model_ref: DS });
+  assert.match(described.content[0]?.text ?? "", /model-not-found/);
+  assert.match(described.content[0]?.text ?? "", /unknown, or not visible to you/);
+
+  const asMember = buildHostedExploreSurface(member, "http://localhost:3000");
+  const theirs = JSON.parse((await asMember.call("list_sources", {})).content[0]?.text ?? "{}") as {
+    models?: Record<string, unknown>;
+  };
+  assert.ok(theirs.models?.[DS], "a full role lists it");
+
+  // A draft is made of queries its author wrote, so saving one takes query
+  // access — refused before anything is compiled, as a dataset that is not there.
+  const saved = await saveDraftDashboard(
+    viewer.id,
+    DS,
+    { name: "sneaky", source: "export default () => null" },
+    "http://localhost:3000",
+  );
+  assert.ok(!saved.ok);
+  assert.match(saved.ok ? "" : saved.error, /not found/);
+});
+
+test("someone's level on a dataset is the best any of their roles gives them", async () => {
+  // A second role that is full is enough…
+  await db.update(users).set({ roles: [MALLOYYO_USER, "readers", "staff"] }).where(eq(users.id, viewer.id));
+  assert.equal(await canQueryDataset(viewer.id, datasetId), true);
+  assert.ok(await findByDatasetRef(viewer.id, DS, "query"));
+  await db.update(users).set({ roles: [MALLOYYO_USER, "readers"] }).where(eq(users.id, viewer.id));
+  assert.equal(await canQueryDataset(viewer.id, datasetId), false);
+
+  // …and the level belongs to the ROLE: marking it full gives every holder
+  // query access on the next request, with nothing changed on the person.
+  await db.update(roles).set({ viewOnly: false }).where(eq(roles.name, "readers"));
+  assert.equal(await canQueryDataset(viewer.id, datasetId), true);
+  await db.update(roles).set({ viewOnly: true }).where(eq(roles.name, "readers"));
+  assert.equal(await canQueryDataset(viewer.id, datasetId), false);
+
+  // Owning a dataset is not a role, so it cannot be view-only.
+  assert.equal(await canQueryDataset(admin.id, datasetId), true);
+  // And no role at all is neither.
+  assert.equal(await findByDatasetRef(outsider.id, DS, "view"), null);
 });
 
 test("sharing never opens a dataset, and says so", async () => {

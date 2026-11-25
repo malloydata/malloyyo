@@ -289,18 +289,21 @@ publish rights. Full guide: `docs/api-tokens.md`.
    `dashboard_grants`, which are per person and keyed by dashboard NAME
    (`draft-<slug>` for a draft) so they survive a republish. Writes are
    `src/lib/dashboards/sharing.ts`, behind `/api/dashboards/:ds/:name/sharing`.
-3. **Dashboard-only accounts** — the `MALLOYYO_DASHBOARD_ONLY` role;
-   `canExplore()` in `src/lib/roles.ts`. The one built-in that RESTRICTS, and
-   deliberately so: hosted sign-in creates users holding no built-in role, so a
-   positive "may query" capability would have locked all of them out. Gated in
-   `bearer-auth.ts` (every bearer surface) and `src/lib/explore-gate.ts` (each
-   session route and page that is a query surface).
+3. **View vs query** — `DatasetAccess` in `src/lib/roles.ts`. A role is full
+   or view-only (`roles.view_only`, set at Admin → Roles); someone's level on a
+   dataset is the best any role that opens it gives them, and a held role with
+   no catalog row counts as full, so nothing changes until an admin marks one.
+   There is no "dashboard-only user" setting — that is just someone whose every
+   role is view-only. `visibleDatasetWhere` = may open (dashboards);
+   `queryableDatasetWhere` = may query. `findByDatasetRef(userId, ref, need)`
+   takes the level as a REQUIRED argument so no query surface can resolve at
+   view level by omission; `findBySource`, `findByDatasetId` and the MCP host
+   are always query-level.
 
 Layers 2 and 3 are **curation, not security** — a dashboard's run route takes
 restricted Malloy, so anyone who can open one dashboard can query its whole
-dataset. Don't write code (or docs) that treats a private dashboard or a
-dashboard-only account as protecting data; separate data means separate
-datasets.
+dataset. Don't write code (or docs) that treats a private dashboard or
+view-only access as protecting data; separate data means separate datasets.
 
 **Every dashboard read goes through `./meta`** (`getDashboard` and the list
 functions), which is where the audience is enforced. `listDashboardsForModel`

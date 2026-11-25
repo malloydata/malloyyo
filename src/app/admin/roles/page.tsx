@@ -19,6 +19,7 @@ import {
   NewRoleForm,
   RoleDatasets,
   UserRoles,
+  RoleAccess,
 } from "./role-controls";
 
 export const runtime = "nodejs";
@@ -76,8 +77,10 @@ export default async function AdminRolesPage() {
         <div>
           <h2 className="text-sm font-medium">Roles</h2>
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 max-w-2xl">
-            A role decides which datasets someone may open. It is all of a dataset or none of
-            it, so if two groups need different sources, make two datasets. The two{" "}
+            A role decides which datasets someone may open, and what they may do there:
+            query them, or only open their dashboards. Someone holding several roles gets the
+            most any of them allows on each dataset. It is all of a dataset or none of it, so
+            if two groups need different sources, make two datasets. The two{" "}
             <code className="text-[11px]">MALLOYYO_</code> roles are built in. The rest are
             yours, and usually name a group of people.
           </p>
@@ -90,6 +93,7 @@ export default async function AdminRolesPage() {
             <thead className={THEAD}>
               <tr>
                 <th className={TH}>Role</th>
+                <th className={TH}>Allows</th>
                 <th className={TH}>Opens</th>
                 <th className={TH}>Held by</th>
                 <th className={TH} />
@@ -104,6 +108,16 @@ export default async function AdminRolesPage() {
                       <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 max-w-sm">
                         {role.description}
                       </div>
+                    )}
+                  </td>
+                  <td className={TD}>
+                    {/* An admin publishes models and grants roles; "dashboards
+                        only" is not a thing that role can mean, so it is not
+                        offered and the route refuses it. */}
+                    {role.name === MALLOYYO_ADMIN ? (
+                      <span className="text-xs text-gray-500 dark:text-gray-400">everything</span>
+                    ) : (
+                      <RoleAccess key={String(role.viewOnly)} name={role.name} viewOnly={role.viewOnly} />
                     )}
                   </td>
                   <td className={TD}>

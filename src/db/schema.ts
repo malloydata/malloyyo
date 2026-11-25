@@ -167,6 +167,20 @@ export const roles = pgTable("roles", {
   /** Built-ins are seeded and undeletable; the UI hides their delete button and
       the route refuses anyway. */
   builtin: boolean("builtin").notNull().default(false),
+  /**
+   * What this role lets its holder do on the datasets it opens.
+   *
+   * false (every role, until an admin says otherwise): QUERY them — the query
+   * editor, chat, the MCP connector, draft dashboards — and open their
+   * dashboards. true: open their dashboards, and nothing else.
+   *
+   * A property of the ROLE, not of each dataset it is listed on: a role names a
+   * group of people, and "these people read dashboards" is a fact about them.
+   * Someone's level on one dataset is the best any of their roles gives them
+   * there, so a single full role on it is enough to query it. See
+   * `datasetAccessWhere` in src/lib/roles.ts.
+   */
+  viewOnly: boolean("view_only").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .default(sql`now()`),

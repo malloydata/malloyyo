@@ -23,33 +23,13 @@
  */
 
 import { and, eq, or, sql } from "drizzle-orm";
-import { datasets, db, instanceSettings, users } from "@/db";
+import { datasets, db, instanceSettings, roles, users } from "@/db";
 import { env } from "./env";
 
 export const MALLOYYO_USER = "MALLOYYO_USER";
 export const MALLOYYO_ADMIN = "MALLOYYO_ADMIN";
 
-/**
- * Dashboards only — the one built-in that takes something AWAY.
- *
- * Everything else here grants: hold a role, gain what it opens. This one
- * narrows what its holder may do to opening dashboards, and it is shaped that
- * way on purpose. The alternative — a positive "may query" capability, with
- * dashboard-only meaning its absence — cannot be deployed: people admitted
- * through a hosted sign-in hold no built-in role at all (src/lib/external-user.ts
- * writes none), so absence would have described every one of them at once.
- *
- * Being a restriction also makes it safe as an admission default, where
- * MALLOYYO_ADMIN is not: an instance whose arrivals should all be
- * dashboard-only just lists it there.
- *
- * It says nothing about WHICH dashboards. That is the datasets their other
- * roles open, minus the private dashboards nobody shared with them
- * (src/lib/dashboards/audience.ts).
- */
-export const MALLOYYO_DASHBOARD_ONLY = "MALLOYYO_DASHBOARD_ONLY";
-
-export const BUILTIN_ROLES = [MALLOYYO_USER, MALLOYYO_ADMIN, MALLOYYO_DASHBOARD_ONLY] as const;
+export const BUILTIN_ROLES = [MALLOYYO_USER, MALLOYYO_ADMIN] as const;
 
 /**
  * Built-ins that must never be handed out by a default.
@@ -154,49 +134,68 @@ export function canAuthor(user: RoleBearing): boolean {
 }
 
 /**
- * May use the surfaces that QUERY: the query editor, chat, the MCP connector,
- * the CLI and API tokens, saved questions, draft dashboards.
+ * What someone may do with a dataset they can open.
  *
- * Everyone, unless they hold MALLOYYO_DASHBOARD_ONLY — and an admin regardless,
- * because someone who can publish a model and grant roles is not meaningfully
- * kept out of a query box, and an instance must never be able to tick its way
- * into having an admin who cannot use it.
+ *   view   open its dashboards
+ *   query  also query it: the query editor, chat, the MCP connector, saved
+ *          questions, draft dashboards
  *
- * This is a product tier, not a wall around data. A dashboard runs restricted
- * Malloy against its dataset, so a dashboard-only person can still read
- * whatever the datasets they can open contain. What they see is governed where
- * it always was: by which datasets their roles open, and by the model's own
- * row scoping.
+ * Every dataset someone can open they can at least VIEW. Whether they can also
+ * QUERY it is decided by the roles that open it for them: a role is either
+ * full or view-only (`roles.view_only`), and one full role on the dataset is
+ * enough. So "dashboard-only" is not a kind of account — it is what someone is
+ * when every role that reaches a dataset for them is view-only, and the same
+ * person can query one dataset and only read dashboards on the next.
+ *
+ * A TIER, NOT A WALL. A dashboard runs restricted Malloy against its dataset,
+ * so someone with view access can still read what the dataset contains. What
+ * people must not see belongs in a dataset they are not granted, or behind the
+ * model's row scoping. See docs/roles-and-access.md.
  */
-export function canExplore(user: RoleBearing): boolean {
-  const held = rolesOf(user);
-  return held.includes(MALLOYYO_ADMIN) || !held.includes(MALLOYYO_DASHBOARD_ONLY);
-}
-
-/** What a refused surface says. One sentence, used by every gate, so the API,
-    the CLI and the MCP client all explain the same thing the same way. */
-export const DASHBOARD_ONLY_MESSAGE =
-  "this account is dashboard-only: it can open dashboards, and cannot use the query editor, chat, " +
-  "the MCP connector, the CLI or API tokens. Ask an admin of this instance if that is wrong.";
+export type DatasetAccess = "view" | "query";
 
 /**
- * The SQL predicate for "datasets this person may open".
+ * The roles this person holds, as a SQL array — all of them for `view`, minus
+ * the view-only ones for `query`.
  *
- * Owner, or public, or one of their roles is listed on the dataset. The roles
- * come from a subquery on the user row rather than from an argument, so every
- * caller of `visibleDatasetWhere` gets role filtering without threading a list
- * through — and so a stale list can never be the thing that grants access.
+ * Read from the user row in a subquery rather than passed in, so every caller
+ * gets role filtering without threading a list through, and a stale list can
+ * never be the thing that grants access.
+ *
+ * A held role with no catalog row counts as FULL. That is the only reading
+ * under which nothing changes for anyone until an admin marks a role
+ * view-only: a role name carried on a user row from before the catalog, or by
+ * an integration, must not lose its holder the ability to query.
+ */
+function heldRoles(userId: string, need: DatasetAccess) {
+  if (need === "view") {
+    return sql`(select coalesce(${users.roles}, '{}'::text[]) from ${users} where ${users.id} = ${userId}::uuid)`;
+  }
+  return sql`(
+    select coalesce(array_agg(held.name), '{}'::text[])
+      from ${users}, unnest(coalesce(${users.roles}, '{}'::text[])) as held(name)
+     where ${users.id} = ${userId}::uuid
+       and not exists (select 1 from ${roles} where ${roles.name} = held.name and ${roles.viewOnly})
+  )`;
+}
+
+/**
+ * The SQL predicate for "one of this person's roles is listed on the dataset"
+ * — any role for `view`, a full one for `query`.
  *
  * Note what is NOT here: being an admin. Running a query returns ROWS, and
  * administering an instance has never been a reason to read its data. An admin
  * who needs a dataset is granted a role on it like anyone else.
  */
-export function datasetRoleOverlap(userId: string) {
-  return sql`${datasets.roles} && (select coalesce(${users.roles}, '{}'::text[]) from ${users} where ${users.id} = ${userId}::uuid)`;
+export function datasetRoleOverlap(userId: string, need: DatasetAccess = "view") {
+  return sql`${datasets.roles} && ${heldRoles(userId, need)}`;
 }
 
 /**
- * Which datasets this person may read.
+ * Which datasets this person may open (`view`) or query (`query`).
+ *
+ * Owning a dataset, and the legacy public flag, both give full access: neither
+ * comes from a role, so neither can be view-only.
  *
  * `isAdmin` is passed rather than derived in SQL, and that is deliberate: the
  * canonical answer folds in the legacy `role`/`is_admin` columns and
@@ -210,11 +209,16 @@ export function datasetRoleOverlap(userId: string) {
  * person who publishes a repo see what they just published, and nobody could
  * grant the first role on a dataset nobody can see.
  */
-export function datasetVisibleWhere(userId: string, isAdmin = false) {
+export function datasetAccessWhere(userId: string, need: DatasetAccess, isAdmin = false) {
   const reach = isAdmin
     ? sql`true`
-    : or(eq(datasets.userId, userId), eq(datasets.isPublic, true), datasetRoleOverlap(userId));
+    : or(eq(datasets.userId, userId), eq(datasets.isPublic, true), datasetRoleOverlap(userId, need));
   return and(reach, eq(datasets.status, "ready"));
+}
+
+/** Datasets this person may OPEN. The name every read path already uses. */
+export function datasetVisibleWhere(userId: string, isAdmin = false) {
+  return datasetAccessWhere(userId, "view", isAdmin);
 }
 
 /**

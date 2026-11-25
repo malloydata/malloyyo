@@ -122,7 +122,7 @@ export async function runDashboard(
   maxRows = 5000,
 ): Promise<DashboardRunResult> {
   const userId = user.id;
-  const found = await findByDatasetRef(userId, datasetId);
+  const found = await findByDatasetRef(userId, datasetId, "view");
   if (!found) return { ok: false, error: "dataset not found" };
   if (found.ds.status !== "ready") return { ok: false, error: "dataset not ready" };
   // What this dataset is scoped by: the values go on the runtime (where a

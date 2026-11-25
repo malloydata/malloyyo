@@ -3,7 +3,6 @@
 
 import { NextResponse } from "next/server";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
-import { dashboardOnlyRefusal } from "@/lib/explore-gate";
 import { findBySource, modelFileMap } from "@/lib/mcp-tools";
 import { describeSourceFields } from "@/lib/malloy";
 
@@ -19,8 +18,6 @@ export async function GET(req: Request) {
     if (err instanceof UnauthorizedError) return NextResponse.json({ error: "sign in required" }, { status: 401 });
     throw err;
   }
-  const refusal = dashboardOnlyRefusal(user);
-  if (refusal) return refusal;
 
   const source = new URL(req.url).searchParams.get("source");
   if (!source) return NextResponse.json({ error: "source is required" }, { status: 400 });

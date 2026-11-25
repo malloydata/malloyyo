@@ -954,7 +954,7 @@ test("a client is told the QUALIFIED name, so two same-named datasets stay addre
 
   // And the ref it was given resolves back to the right dataset.
   for (const slug of ["north", "south"]) {
-    const found = await findByDatasetRef(owner.id, `${slug}:ledger`);
+    const found = await findByDatasetRef(owner.id, `${slug}:ledger`, "view");
     assert.ok(found, `${slug}:ledger resolves`);
     const [repo] = await db.select().from(repos).where(eq(repos.slug, slug));
     assert.equal(found.ds.repoId, repo.id);
@@ -964,7 +964,7 @@ test("a client is told the QUALIFIED name, so two same-named datasets stay addre
   // written in this file's earlier test is what keeps it working — and keeps it
   // pointing at the dataset it always meant, not at whichever repo answers
   // first.
-  const old = await findByDatasetRef(owner.id, "ledger");
+  const old = await findByDatasetRef(owner.id, "ledger", "view");
   assert.ok(old, "the old bare name still resolves");
   const [north] = await db.select().from(repos).where(eq(repos.slug, "north"));
   assert.equal(old.ds.repoId, north.id);

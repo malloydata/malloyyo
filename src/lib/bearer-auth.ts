@@ -31,7 +31,6 @@ import {
 } from "@/lib/api-tokens";
 import { recordAccessTokenUse, validateAccessToken } from "@/lib/oauth/tokens";
 import { grantedScopes } from "@/lib/api-token-scopes";
-import { canExplore, DASHBOARD_ONLY_MESSAGE } from "@/lib/roles";
 
 export type Credential =
   | { kind: "oauth"; clientId: string; scopes: ApiTokenScope[] }
@@ -99,15 +98,6 @@ export async function resolveBearer(raw: string, opts: BearerOptions): Promise<B
   // disabled user's token stops working now, not at expiry.
   if (!authorize(user).allowed) {
     return { ok: false, status: 403, error: "access revoked for this account" };
-  }
-
-  // Every surface a bearer credential reaches is one a dashboard-only account
-  // does not have: MCP, the CLI, draft dashboards, publishing. Refused here, in
-  // the one place both token kinds resolve, so a token minted or a connector
-  // linked BEFORE someone was made dashboard-only stops working on the next
-  // request rather than at expiry — the same property revocation has.
-  if (!canExplore(user)) {
-    return { ok: false, status: 403, error: DASHBOARD_ONLY_MESSAGE };
   }
 
   if (!scopeSatisfied(cred.scopes, opts.scope)) {

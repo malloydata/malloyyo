@@ -3,7 +3,6 @@
 
 import { NextResponse } from "next/server";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
-import { dashboardOnlyRefusal } from "@/lib/explore-gate";
 import { runQueryForWeb, saveWebQuery, resolveLtoolAuthor } from "@/lib/mcp-tools";
 
 export const runtime = "nodejs";
@@ -14,8 +13,6 @@ export async function POST(req: Request) {
     if (err instanceof UnauthorizedError) return NextResponse.json({ error: "sign in required" }, { status: 401 });
     throw err;
   }
-  const refusal = dashboardOnlyRefusal(user);
-  if (refusal) return refusal;
 
   let body: { source: string; malloy: string; maxRows?: number; save?: boolean; title?: string; dataset?: string | null; baseSlug?: string | null; question?: string | null };
   try { body = await req.json(); } catch {

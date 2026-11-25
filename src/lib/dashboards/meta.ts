@@ -135,6 +135,45 @@ export async function listDashboardsForModel(
   return rows.map((a) => summary(datasetId, datasetName, a, stored));
 }
 
+/**
+ * `listDashboardsForModel` for many models in ONE query, keyed by model id —
+ * for list_sources, which lists every visible dataset and must cost the same
+ * with three of them or three thousand. Models with no dashboards are absent.
+ *
+ * Unfiltered, like the one-model form: PRIVATE dashboards are included and
+ * marked. A caller showing the result to someone filters it with
+ * `audienceFilter` (./audience), once for the whole batch.
+ */
+export async function listDashboardsForModels(
+  /** `stored` is each dataset's `dashboardAudience`, which decides which of its
+      dashboards are private — required, as for the one-model form above. */
+  models: Array<{ modelId: string; datasetId: string; datasetName: string; stored: AudienceMap }>,
+): Promise<Map<string, DashboardSummary[]>> {
+  const out = new Map<string, DashboardSummary[]>();
+  if (models.length === 0) return out;
+  const byModel = new Map(models.map((m) => [m.modelId, m]));
+  const rows = await db
+    .select({
+      modelId: malloyArtifacts.modelId,
+      name: malloyArtifacts.name,
+      title: malloyArtifacts.title,
+      manifest: malloyArtifacts.manifest,
+    })
+    .from(malloyArtifacts)
+    .where(inArray(malloyArtifacts.modelId, [...byModel.keys()]))
+    .orderBy(asc(malloyArtifacts.modelId), asc(malloyArtifacts.name));
+  const grouped = new Map<string, typeof rows>();
+  for (const r of rows) grouped.set(r.modelId, [...(grouped.get(r.modelId) ?? []), r]);
+  for (const [modelId, list] of grouped) {
+    const m = byModel.get(modelId)!;
+    out.set(
+      modelId,
+      aboutFirst(list).map((a) => summary(m.datasetId, m.datasetName, a, m.stored)),
+    );
+  }
+  return out;
+}
+
 /** Dashboards on a single dataset's current (latest) model, if visible. */
 export async function listDashboards(userId: string, datasetId: string): Promise<DashboardSummary[]> {
   const found = await findByDatasetRef(userId, datasetId, "view");

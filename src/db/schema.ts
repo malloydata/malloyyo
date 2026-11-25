@@ -645,6 +645,15 @@ export const datasetAliases = pgTable(
   (t) => [index("dataset_aliases_dataset_idx").on(t.datasetId)],
 );
 
+/** A model version's stored catalog entry: the engine's ModelEntry without
+    `model_ref` (or `dashboards`, which are listed from malloy_artifacts). */
+export type StoredCatalog = {
+  /** The projection it was made with (CATALOG_VERSION in src/lib/catalog.ts). */
+  v?: number;
+  description?: string;
+  sources?: Array<{ source_ref: string; description?: string; must_quote?: boolean }>;
+};
+
 export const malloyModels = pgTable(
   "malloy_models",
   {
@@ -696,6 +705,16 @@ export const malloyModels = pgTable(
     // Keyed implicitly by the immutable model.id (a repo edit is a new row), so it
     // never needs invalidation. Read lazily (only on a cold-instance miss).
     compiledModelDef: bytea("compiled_model_def"),
+    /**
+     * This version's `list_sources` entry, minus its `model_ref` (the dataset's
+     * ref, filled in when listed, so a rename never rewrites a stored row): the
+     * engine's `modelCatalogEntry` over an `exportedOnly` compile. Written at
+     * publish, so listing never compiles a model or opens a connection. Null
+     * for a version published before this column existed, or whose catalog
+     * compile failed; the first list computes it once and writes it back
+     * (src/lib/catalog.ts).
+     */
+    catalog: jsonb("catalog").$type<StoredCatalog>(),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .default(sql`now()`),

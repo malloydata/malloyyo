@@ -83,6 +83,9 @@ const PRE_REWRITE_LAST = MIGRATION;
  *    DEFAULT false) and `preview_datasets` (nullable), plus a partial index.
  *    The live version inserts revisions without naming either, and gets a
  *    published (`preview = false`) row exactly as before.
+ *  - 0030_malloy_models_catalog — additive: `malloy_models.catalog` (jsonb,
+ *    nullable). The live version neither reads nor writes it; new code treats
+ *    null as "compute on first list", so rows the old code writes are fine.
  *
  * None drops a column, which is the thing that cannot ride along in a
  * build-time migration.
@@ -91,15 +94,14 @@ const REVIEWED_AFTER_REWRITE = [
   "0027_public_to_user_role",
   "0028_drop_failed_datasets",
   "0029_repo_revision_previews",
-  // Additive: a new table the live version never reads, and a column with a
-  // default it never writes. A draft the live version saves during the deploy
-  // takes that default (private), which is what the new version would give it.
-  "0030_dashboard_audiences",
-  // Two columns with defaults the live version never writes or reads. Every
-  // existing grant stays full (nothing is view-only by default) and every
+  "0030_malloy_models_catalog",
+  // Additive throughout: a new table the live version never reads, and three
+  // columns with defaults it never writes. A draft the live version saves
+  // during the deploy takes the default (private), which is what the new
+  // version would give it. Every existing grant stays full, and every
   // published dashboard keeps the audience its model gives it, so nobody's
   // access changes when this lands.
-  "0031_dataset_access_levels",
+  "0031_dashboard_permissions",
 ];
 
 /** What the journal should currently end with. */

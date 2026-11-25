@@ -1,7 +1,7 @@
 // Copyright (c) The Malloy Foundation
 // SPDX-License-Identifier: MIT
 
-import { eq, and, desc, count } from "drizzle-orm";
+import { eq, and, desc, count, getTableColumns } from "drizzle-orm";
 import { db, datasets, malloyModels, repos, savedQueries, history, favorites, users } from "@/db";
 import type { SourceInfo } from "./malloy";
 // NOTE: `runRestrictedMalloyFiles` (and everything under ./malloy) pulls in
@@ -208,15 +208,23 @@ export async function resolveDatasetByRef(ref: string) {
 }
 
 
+/**
+ * A model row without `compiled_model_def`: a gzipped compiled model, several
+ * MB, that only src/lib/model-cache.ts reads (by id, on its own). Callers here
+ * want the identity, files and metadata, and `list_sources` calls this once per
+ * visible dataset, so pulling the blob along cost N blobs over the wire per call.
+ */
+const { compiledModelDef: _blob, ...MODEL_COLUMNS } = getTableColumns(malloyModels);
+
 export async function latestModel(datasetId: string) {
   const [active] = await db
-    .select()
+    .select(MODEL_COLUMNS)
     .from(malloyModels)
     .where(and(eq(malloyModels.datasetId, datasetId), eq(malloyModels.active, true)))
     .limit(1);
   if (active) return active;
   const [row] = await db
-    .select()
+    .select(MODEL_COLUMNS)
     .from(malloyModels)
     .where(eq(malloyModels.datasetId, datasetId))
     .orderBy(desc(malloyModels.version), desc(malloyModels.createdAt))
@@ -525,7 +533,7 @@ export async function runQueryForWeb(
       cacheKey: model.id,
       // Identity on the runtime, and the names this query must reference.
       // Both from the dataset (src/lib/tenancy.ts) — never from the request.
-      scope: leaseScope(ds.requiredGivens, { email: user.email, roles: rolesOf(user) }),
+      scope: { ...leaseScope(ds.requiredGivens, { email: user.email, roles: rolesOf(user) }), dataset: ds.name },
       requireGivens: ds.requiredGivens,
     });
     const durationMs = Date.now() - t0;
@@ -599,7 +607,7 @@ export async function saveWebQuery(
       cacheKey: model.id,
       // Identity on the runtime, and the names this query must reference.
       // Both from the dataset (src/lib/tenancy.ts) — never from the request.
-      scope: leaseScope(ds.requiredGivens, { email: user.email, roles: rolesOf(user) }),
+      scope: { ...leaseScope(ds.requiredGivens, { email: user.email, roles: rolesOf(user) }), dataset: ds.name },
       requireGivens: ds.requiredGivens,
     });
     const durationMs = Date.now() - t0;

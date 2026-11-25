@@ -1,6 +1,6 @@
 {
-  "id": "9b560554-0a22-4031-8bde-7ade3ca961e6",
-  "prevId": "e13101ad-b09e-4ad4-8247-ac6e2124a3f2",
+  "id": "008e0aa8-7887-4ccf-b499-66a0e5091be8",
+  "prevId": "1446fb14-2b13-4c4c-9eb4-fdeca3065c15",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -2029,6 +2029,12 @@
         "compiled_model_def": {
           "name": "compiled_model_def",
           "type": "bytea",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "catalog": {
+          "name": "catalog",
+          "type": "jsonb",
           "primaryKey": false,
           "notNull": false
         },

@@ -129,7 +129,7 @@ export async function runDashboard(
   // caller cannot reach them) and the names gate what a query must reference.
   // Both branches below take both; neither reads them from `givens`.
   const required = found.ds.requiredGivens ?? [];
-  const scope = leaseScope(required, { email: user.email, roles: rolesOf(user) });
+  const scope = { ...leaseScope(required, { email: user.email, roles: rolesOf(user) }), dataset: found.ref ?? datasetId };
   const a = await getDashboard(userId, datasetId, name);
   if (!a) return { ok: false, error: `dashboard '${name}' not found` };
   const { files, cacheKey } = await dashboardFiles(a);

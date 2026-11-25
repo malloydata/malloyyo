@@ -1,5 +1,5 @@
 {
-  "id": "e13101ad-b09e-4ad4-8247-ac6e2124a3f2",
+  "id": "1446fb14-2b13-4c4c-9eb4-fdeca3065c15",
   "prevId": "8c8f58b5-7acf-41b3-b172-3e507a31525a",
   "version": "7",
   "dialect": "postgresql",
@@ -617,115 +617,6 @@
       "checkConstraints": {},
       "isRLSEnabled": false
     },
-    "public.dashboard_grants": {
-      "name": "dashboard_grants",
-      "schema": "",
-      "columns": {
-        "dataset_id": {
-          "name": "dataset_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "dashboard": {
-          "name": "dashboard",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "user_id": {
-          "name": "user_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "granted_by_id": {
-          "name": "granted_by_id",
-          "type": "uuid",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "created_at": {
-          "name": "created_at",
-          "type": "timestamp with time zone",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "dashboard_grants_user_idx": {
-          "name": "dashboard_grants_user_idx",
-          "columns": [
-            {
-              "expression": "user_id",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "dashboard_grants_dataset_id_datasets_id_fk": {
-          "name": "dashboard_grants_dataset_id_datasets_id_fk",
-          "tableFrom": "dashboard_grants",
-          "tableTo": "datasets",
-          "columnsFrom": [
-            "dataset_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "dashboard_grants_user_id_users_id_fk": {
-          "name": "dashboard_grants_user_id_users_id_fk",
-          "tableFrom": "dashboard_grants",
-          "tableTo": "users",
-          "columnsFrom": [
-            "user_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        },
-        "dashboard_grants_granted_by_id_users_id_fk": {
-          "name": "dashboard_grants_granted_by_id_users_id_fk",
-          "tableFrom": "dashboard_grants",
-          "tableTo": "users",
-          "columnsFrom": [
-            "granted_by_id"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "set null",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {
-        "dashboard_grants_dataset_id_dashboard_user_id_pk": {
-          "name": "dashboard_grants_dataset_id_dashboard_user_id_pk",
-          "columns": [
-            "dataset_id",
-            "dashboard",
-            "user_id"
-          ]
-        }
-      },
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
-      "isRLSEnabled": false
-    },
     "public.dataset_aliases": {
       "name": "dataset_aliases",
       "schema": "",
@@ -1136,13 +1027,6 @@
           "type": "timestamp with time zone",
           "primaryKey": false,
           "notNull": false
-        },
-        "visibility": {
-          "name": "visibility",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "'private'"
         },
         "created_at": {
           "name": "created_at",
@@ -2015,6 +1899,12 @@
         "compiled_model_def": {
           "name": "compiled_model_def",
           "type": "bytea",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "catalog": {
+          "name": "catalog",
+          "type": "jsonb",
           "primaryKey": false,
           "notNull": false
         },

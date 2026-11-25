@@ -47,12 +47,14 @@ import {
   type Dataset,
   type Repo,
   type RepoRevisionSource,
+  type StoredCatalog,
 } from "@/db";
 import { ABOUT_NAME, ABOUT_TITLE } from "@/lib/dashboards/about";
+import { computeCatalog } from "@/lib/catalog";
 import { artifactManifest } from "@/lib/dashboards/manifest";
 import { DEVCONTAINER_PATH } from "./github-source-link";
 import { logger, serializeErr } from "./logger";
-import { fileUrl, introspectModelWithReader, withReaderRuntime, type SourceInfo } from "./malloy";
+import { fileUrl, introspectModelWithReader, newCompileCache, withReaderRuntime, type SourceInfo } from "./malloy";
 import {
   ArchiveError,
   discardWorkspace,
@@ -101,6 +103,8 @@ export type CompiledDir = {
   description: string | null;
   indexContent: string;
   artifacts: Array<Omit<typeof malloyArtifacts.$inferInsert, "modelId">>;
+  /** The version's list_sources entry; null when its catalog compile failed. */
+  catalog: StoredCatalog | null;
   configFrom?: string;
 };
 
@@ -262,7 +266,11 @@ export async function compileDir(
   const ws = writeDatasetWorkspace(repoRoot, view, config);
   try {
     const reader = new WorkspaceURLReader(ws);
-    const result = await introspectModelWithReader(reader, "index.malloy", config.text);
+    // One compile cache for every runtime below: the catalog and the dashboards
+    // reuse the model introspection compiled, instead of each translating
+    // index.malloy and fetching its tables' schemas again.
+    const compileCache = newCompileCache();
+    const result = await introspectModelWithReader(reader, "index.malloy", config.text, compileCache);
     if (!result.ok) return { ok: false, error: result.error };
 
     // Structure v2: each `dashboards/<name>.malloy` compiles as its OWN entry.
@@ -270,6 +278,11 @@ export async function compileDir(
     // because a dashboard is a view of the data and the data is the point.
     const artifacts: CompiledDir["artifacts"] = [];
     let bases: string[] = [];
+    // The catalog list_sources shows for this version (src/lib/catalog.ts),
+    // read from the model introspection already compiled (compileCache), so it
+    // costs no second compile. Non-fatal like the dashboards: null is computed
+    // again on first list.
+    let catalog: StoredCatalog | null = null;
     try {
       const dashDir = path.join(ws, "dashboards");
       bases = fs.existsSync(dashDir)
@@ -279,28 +292,31 @@ export async function compileDir(
             .map((n) => n.slice(0, -".malloy".length))
             .sort()
         : [];
-      if (bases.length > 0) {
-        type EngineRuntime = Parameters<typeof modelArtifact>[0];
-        const found = await withReaderRuntime(reader, config.text, async (runtime) => {
-          const out: Array<{ base: string; artifact: ArtifactInfo }> = [];
-          for (const base of bases) {
-            const r = await modelArtifact(
-              runtime as unknown as EngineRuntime,
-              fileUrl(`dashboards/${base}.malloy`),
-              base,
-            );
-            if (r.ok && r.artifact) out.push({ base, artifact: r.artifact });
-          }
-          return out;
-        });
-        for (const { base, artifact } of found) {
-          artifacts.push({
-            name: artifact.name || base,
-            title: artifact.title,
-            manifest: artifactManifest(base, artifact),
-            source: componentSource(ws, base),
-          });
+      type EngineRuntime = Parameters<typeof modelArtifact>[0];
+      const found = await withReaderRuntime(reader, config.text, async (runtime) => {
+        try {
+          catalog = await computeCatalog(runtime, fileUrl("index.malloy"));
+        } catch (err) {
+          logger.warn("catalog compile failed (non-fatal)", { dir, ...serializeErr(err) });
         }
+        const out: Array<{ base: string; artifact: ArtifactInfo }> = [];
+        for (const base of bases) {
+          const r = await modelArtifact(
+            runtime as unknown as EngineRuntime,
+            fileUrl(`dashboards/${base}.malloy`),
+            base,
+          );
+          if (r.ok && r.artifact) out.push({ base, artifact: r.artifact });
+        }
+        return out;
+      }, compileCache);
+      for (const { base, artifact } of found) {
+        artifacts.push({
+          name: artifact.name || base,
+          title: artifact.title,
+          manifest: artifactManifest(base, artifact),
+          source: componentSource(ws, base),
+        });
       }
       // The written front door: `dashboards/index.jsx|tsx` with no
       // `index.malloy`. It runs no query so the loop above never sees it, but it
@@ -330,6 +346,7 @@ export async function compileDir(
         description: result.meta.description ?? null,
         indexContent: fs.readFileSync(path.join(ws, "index.malloy"), "utf8"),
         artifacts,
+        catalog,
         configFrom: config.from,
       },
     };
@@ -861,6 +878,7 @@ async function activate(
                 : `cli:${input.repo.slug}`,
             compiledAt: now,
             sources: plan.compiled.sources,
+            catalog: plan.compiled.catalog,
             // Denormalized from the revision on purpose: it is immutable
             // per-model provenance written in this transaction, not mutable
             // repo-level config resolved by row order, which is the thing the

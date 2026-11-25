@@ -7,6 +7,8 @@ CREATE TABLE "dashboard_grants" (
 	CONSTRAINT "dashboard_grants_dataset_id_dashboard_user_id_pk" PRIMARY KEY("dataset_id","dashboard","user_id")
 );
 --> statement-breakpoint
+ALTER TABLE "datasets" ADD COLUMN "view_only_roles" text[] DEFAULT '{}'::text[] NOT NULL;--> statement-breakpoint
+ALTER TABLE "datasets" ADD COLUMN "dashboard_audience" jsonb DEFAULT '{}'::jsonb NOT NULL;--> statement-breakpoint
 ALTER TABLE "draft_dashboards" ADD COLUMN "visibility" text DEFAULT 'private' NOT NULL;--> statement-breakpoint
 -- Every draft that exists today was listed to everyone who could open its
 -- dataset, and people hold links to them. The column default is for drafts

@@ -83,6 +83,9 @@ const PRE_REWRITE_LAST = MIGRATION;
  *    DEFAULT false) and `preview_datasets` (nullable), plus a partial index.
  *    The live version inserts revisions without naming either, and gets a
  *    published (`preview = false`) row exactly as before.
+ *  - 0030_malloy_models_catalog — additive: `malloy_models.catalog` (jsonb,
+ *    nullable). The live version neither reads nor writes it; new code treats
+ *    null as "compute on first list", so rows the old code writes are fine.
  *
  * None drops a column, which is the thing that cannot ride along in a
  * build-time migration.
@@ -91,6 +94,7 @@ const REVIEWED_AFTER_REWRITE = [
   "0027_public_to_user_role",
   "0028_drop_failed_datasets",
   "0029_repo_revision_previews",
+  "0030_malloy_models_catalog",
 ];
 
 /** What the journal should currently end with. */

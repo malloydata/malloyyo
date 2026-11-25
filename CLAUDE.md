@@ -58,6 +58,7 @@ say what each deployment got.
 ```bash
 bash scripts/preflight.sh   # everything offline-verifiable (what CI runs)
 npm run test:hosted         # the DB-backed integration tests
+npm run load-test           # list_sources/query cost vs dataset count, and a concurrent burst
 npm test -w packages/cli    # CLI unit tests (pretest builds the bundle)
 node scripts/audit-gate.mjs # CI's dependency gate (needs the registry)
 ```
@@ -67,6 +68,14 @@ an advisory whose fix is already inside package.json's ranges. Advisories
 that need a major bump or have no fix are printed, not failed, so the gate
 is never red over something nobody can act on. `preflight.yml` runs it
 before the preflight script.
+
+`load-test` (`scripts/load-test.ts`, via `hosted-test.sh --run`) seeds
+`LOAD_DATASETS` (100) datasets into the same kind of throwaway Postgres and
+calls the hosted explore surface in process: list_sources, describe_source and
+query latency, then a burst of `LOAD_CONCURRENCY` (100) dashboard-shaped
+queries. A call unsettled after `LOAD_DEADLINE_S` (180) counts as hung and
+exits 2. Run it before and after anything that touches pooling or the catalog
+(`docs/model-cache-and-pooling.md`).
 
 `test:hosted` (`scripts/hosted-test.sh`) runs `test/hosted-explore.test.ts` (the
 hosted explore surface) and `test/publish-flow.test.ts` (the CLI publish flow:

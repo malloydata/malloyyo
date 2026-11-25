@@ -430,6 +430,23 @@ alongside stage 1, so its release is not on the critical path.
 | 4. Restart-proof model cache | Malloy release → `/malloy-update` → memory + Postgres `ModelCache` via Malloy's API, single-flight, publish warm; retire `MODEL_DEF_CACHE` and the internal APIs | a restart or deploy doesn't recompile every model | restart → 0 schema fetches; 32 concurrent cold → 1 compile; cross-version isolation | medium, gated on Malloy |
 | 5. Clean up | byte-bounded repo and bundle caches; drop `compiled_model_def` one release later; theory of operation into `docs/` | memory stays bounded on long-running servers | LRU-by-bytes units; migrate tests | small |
 
+**Status (2026-11-25):** stages 0, 1 and 2 are built. `npm run load-test`,
+100 datasets on in-process DuckDB, one node:
+
+| Call | Before (main, `eaf91ff`) | After stages 1–2 |
+|---|---|---|
+| `list_sources`, first call | 54.6 s | 16.7 s (computes and stores 100 catalogs, once) |
+| `list_sources`, repeated (p50) | 53.7 s | 9 ms |
+| `describe_source`, bare source (p50) | 53.8 s | 20 ms |
+| `query` with `model_ref` (p50) | 53.7 s | 29 ms |
+| burst of 100 concurrent queries (p50 / wall) | 79.3 s / 82.7 s | 5.4 s / 5.4 s |
+| hung calls | 0 | 0 |
+
+The "before" burst did not hang because nothing evicted a saturated pool in
+this run; the three hang paths are reproduced deterministically in
+`src/lib/runtime-pool.test.ts` instead. A remote warehouse makes every "before"
+number worse: each compile there also waits on schema fetches.
+
 **The load test** runs ~100 datasets across ~5 repos, one node. It measures
 `list_sources` and `query` p50/p99, and 100 concurrent `query` calls shaped like
 dashboards (bursts of 20–30 from one request, single queries from others). Pass

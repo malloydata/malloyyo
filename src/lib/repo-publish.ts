@@ -54,7 +54,7 @@ import { computeCatalog } from "@/lib/catalog";
 import { artifactManifest } from "@/lib/dashboards/manifest";
 import { DEVCONTAINER_PATH } from "./github-source-link";
 import { logger, serializeErr } from "./logger";
-import { fileUrl, introspectModelWithReader, withReaderRuntime, type SourceInfo } from "./malloy";
+import { fileUrl, introspectModelWithReader, newCompileCache, withReaderRuntime, type SourceInfo } from "./malloy";
 import {
   ArchiveError,
   discardWorkspace,
@@ -266,7 +266,11 @@ export async function compileDir(
   const ws = writeDatasetWorkspace(repoRoot, view, config);
   try {
     const reader = new WorkspaceURLReader(ws);
-    const result = await introspectModelWithReader(reader, "index.malloy", config.text);
+    // One compile cache for every runtime below: the catalog and the dashboards
+    // reuse the model introspection compiled, instead of each translating
+    // index.malloy and fetching its tables' schemas again.
+    const compileCache = newCompileCache();
+    const result = await introspectModelWithReader(reader, "index.malloy", config.text, compileCache);
     if (!result.ok) return { ok: false, error: result.error };
 
     // Structure v2: each `dashboards/<name>.malloy` compiles as its OWN entry.
@@ -275,9 +279,9 @@ export async function compileDir(
     const artifacts: CompiledDir["artifacts"] = [];
     let bases: string[] = [];
     // The catalog list_sources shows for this version (src/lib/catalog.ts),
-    // compiled in the same runtime as the dashboards so their shared tables'
-    // schemas are fetched once. Non-fatal like them: null is computed again on
-    // first list.
+    // read from the model introspection already compiled (compileCache), so it
+    // costs no second compile. Non-fatal like the dashboards: null is computed
+    // again on first list.
     let catalog: StoredCatalog | null = null;
     try {
       const dashDir = path.join(ws, "dashboards");
@@ -305,7 +309,7 @@ export async function compileDir(
           if (r.ok && r.artifact) out.push({ base, artifact: r.artifact });
         }
         return out;
-      });
+      }, compileCache);
       for (const { base, artifact } of found) {
         artifacts.push({
           name: artifact.name || base,

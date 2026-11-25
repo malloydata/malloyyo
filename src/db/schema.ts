@@ -614,6 +614,8 @@ export const datasetAliases = pgTable(
 /** A model version's stored catalog entry: the engine's ModelEntry without
     `model_ref` (or `dashboards`, which are listed from malloy_artifacts). */
 export type StoredCatalog = {
+  /** The projection it was made with (CATALOG_VERSION in src/lib/catalog.ts). */
+  v?: number;
   description?: string;
   sources?: Array<{ source_ref: string; description?: string; must_quote?: boolean }>;
 };

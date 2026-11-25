@@ -28,6 +28,7 @@ import {
   history,
   type User,
 } from "@/db";
+import { CATALOG_VERSION } from "@/lib/catalog";
 import { buildHostedExploreSurface } from "@/lib/mcp-host";
 import { allDashboardsByDataset, getDashboard, listAllDashboards, listDashboardsAndDrafts } from "@/lib/dashboards";
 import { loadSharedQuery, runQueryForWeb } from "@/lib/mcp-tools";
@@ -157,13 +158,43 @@ test("list_sources stores the catalog of a version that had none, once", async (
   await host().call("list_sources", {});
   const [petshop] = await db.select().from(datasets).where(eq(datasets.name, "petshop"));
   const [m] = await db.select().from(malloyModels).where(eq(malloyModels.datasetId, petshop.id));
-  assert.deepEqual(m.catalog, { sources: [{ source_ref: "sales", description: "Pet shop sales." }] });
+  assert.deepEqual(m.catalog, { v: CATALOG_VERSION, sources: [{ source_ref: "sales", description: "Pet shop sales." }] });
 
   // A version that does not compile stays uncatalogued — listed as a bare ref
   // and tried again next time, so a passing warehouse error can't freeze it.
   const [dashmod] = await db.select().from(datasets).where(eq(datasets.name, "dashmod"));
   const [broken] = await db.select().from(malloyModels).where(eq(malloyModels.datasetId, dashmod.id));
   assert.equal(broken.catalog, null);
+});
+
+test("a catalog from an older projection is recomputed and replaced", async () => {
+  // Stored before CATALOG_VERSION existed (no `v`), and wrong: the listing must
+  // not trust it, and must overwrite it with what this server's engine says.
+  const [ds] = await db
+    .insert(datasets)
+    .values({ userId: user.id, name: "oldproj", status: "ready", isPublic: false })
+    .returning();
+  const SRC = `source: fresh is duckdb.sql("select 1 as one") extend { measure: n is count() }\n`;
+  const [m] = await db
+    .insert(malloyModels)
+    .values({
+      datasetId: ds.id,
+      version: 1,
+      active: true,
+      source: SRC,
+      generatedBy: "test",
+      compiledAt: new Date(),
+      sources: [],
+      catalog: { sources: [{ source_ref: "stale_name" }] },
+    })
+    .returning();
+  await db.insert(malloyModelFiles).values({ modelId: m.id, path: "index.malloy", content: SRC });
+
+  const r = await host().call("list_sources", {});
+  const data = JSON.parse(blockText(r, 0)) as { models: Record<string, { sources?: Record<string, unknown> }> };
+  assert.deepEqual(Object.keys(data.models["oldproj"]?.sources ?? {}), ["fresh"]);
+  const [after] = await db.select().from(malloyModels).where(eq(malloyModels.id, m.id));
+  assert.deepEqual(after.catalog, { v: CATALOG_VERSION, sources: [{ source_ref: "fresh" }] });
 });
 
 test("list_sources reads a stored catalog and never compiles the model", async () => {
@@ -186,6 +217,7 @@ test("list_sources reads a stored catalog and never compiles the model", async (
       compiledAt: new Date(),
       sources: [],
       catalog: {
+        v: CATALOG_VERSION,
         description: "Stored at publish.",
         sources: [{ source_ref: "ghost", description: "Read from the column." }],
       },

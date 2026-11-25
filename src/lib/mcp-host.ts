@@ -16,7 +16,7 @@
 // dataset is 1:1 with a model_ref (the dataset name), so once the engine reports
 // the model_ref a query resolved to, recording is a direct dataset lookup.
 
-import { and, desc, eq, inArray, isNull } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
 import { db, datasets, malloyModels, repos, type StoredCatalog, type User } from "@/db";
 import {
   exploreSurface,
@@ -34,7 +34,7 @@ import {
     the model it resolved to, and the host-only SQL channel. */
 type QueryRunResult = WithHostOnly<RunResult & { model_ref?: string }>;
 import { listDashboardsForModels } from "./dashboards";
-import { catalogEntry, computeCatalog } from "./catalog";
+import { CATALOG_VERSION, CatalogBackfill, catalogEntry, computeCatalog, isStale } from "./catalog";
 import { withModelRuntime } from "./malloy";
 import { leaseScope } from "./tenancy";
 import { parsePreviewRef } from "./repo-previews";
@@ -240,50 +240,75 @@ async function servingModels(datasetIds: string[]): Promise<Map<string, ServedMo
   return new Map(rows.map((r) => [r.datasetId, r]));
 }
 
-/** How many uncatalogued versions compile at once during a backfill. */
+/** How many stale catalogs compile at once during a listing. */
 const BACKFILL_CONCURRENCY = 4;
 
 /**
- * Compile and store the catalog of each version that has none: one published
- * before the column existed, or whose publish-time catalog compile failed.
- * Fills `model.catalog` in place. A version that still does not compile stays
- * null — listed as a bare ref, and tried again next time, so a transient
- * warehouse error never freezes a bare entry.
+ * Shared across requests: one compile per version at a time, and a version that
+ * fails waits this long before it is tried again (src/lib/catalog.ts).
+ */
+const catalogBackfill = new CatalogBackfill({ retryMs: 5 * 60_000 });
+
+/**
+ * Compute and store the catalog of each version whose stored one is stale (null:
+ * published before the column existed, or its publish-time compile failed; or
+ * made by an older projection). Fills `model.catalog` in place on success. A
+ * version that fails keeps whatever it had (null lists as a bare ref, an old
+ * projection lists as it was) and is skipped until its retry is due, so a broken
+ * model costs one compile per retry window rather than one per call.
  */
 async function backfillCatalogs(rows: Array<{ ds: DatasetRow; model: ServedModel }>): Promise<void> {
-  if (rows.length === 0) return;
+  const due = rows.filter((r) => catalogBackfill.due(r.model.id));
+  if (due.length === 0) return;
   const sources = new Map(
     (
       await db
         .select({ id: malloyModels.id, source: malloyModels.source })
         .from(malloyModels)
-        .where(inArray(malloyModels.id, rows.map((r) => r.model.id)))
+        .where(inArray(malloyModels.id, due.map((r) => r.model.id)))
     ).map((r) => [r.id, r.source]),
   );
   let next = 0;
   const worker = async () => {
-    while (next < rows.length) {
-      const { ds, model } = rows[next++];
-      try {
-        const catalog = await leaseDataset(
-          { id: model.id, datasetId: model.datasetId, revisionId: model.revisionId, source: sources.get(model.id) ?? "" },
-          (m) => computeCatalog(m.runtime, m.entry),
-          undefined,
-          ds.ref,
-        );
-        if (!catalog) continue;
-        model.catalog = catalog;
-        await db
-          .update(malloyModels)
-          .set({ catalog })
-          .where(and(eq(malloyModels.id, model.id), isNull(malloyModels.catalog)));
-        logger.info("catalog backfilled", { modelId: model.id, dataset: ds.ref });
-      } catch (err) {
-        logger.warn("catalog backfill failed", { modelId: model.id, dataset: ds.ref, err: serializeErr(err) });
-      }
+    while (next < due.length) {
+      const { ds, model } = due[next++];
+      const catalog = await catalogBackfill.run(model.id, async () => {
+        try {
+          const computed = await leaseDataset(
+            { id: model.id, datasetId: model.datasetId, revisionId: model.revisionId, source: sources.get(model.id) ?? "" },
+            (m) => computeCatalog(m.runtime, m.entry),
+            undefined,
+            ds.ref,
+          );
+          if (!computed) {
+            logger.info("catalog backfill: model does not compile", { modelId: model.id, dataset: ds.ref });
+            return null;
+          }
+          // Only over a row still stale for this projection: a newer server
+          // that already wrote a newer one keeps it.
+          await db
+            .update(malloyModels)
+            .set({ catalog: computed })
+            .where(
+              and(
+                eq(malloyModels.id, model.id),
+                or(
+                  isNull(malloyModels.catalog),
+                  sql`coalesce((${malloyModels.catalog}->>'v')::int, 0) < ${CATALOG_VERSION}`,
+                ),
+              ),
+            );
+          logger.info("catalog backfilled", { modelId: model.id, dataset: ds.ref });
+          return computed;
+        } catch (err) {
+          logger.warn("catalog backfill failed", { modelId: model.id, dataset: ds.ref, err: serializeErr(err) });
+          return null;
+        }
+      });
+      if (catalog) model.catalog = catalog;
     }
   };
-  await Promise.all(Array.from({ length: Math.min(BACKFILL_CONCURRENCY, rows.length) }, worker));
+  await Promise.all(Array.from({ length: Math.min(BACKFILL_CONCURRENCY, due.length) }, worker));
 }
 
 // The engine's ExploreHost: withModel resolves + leases a pooled Runtime; list
@@ -315,8 +340,10 @@ function makeExploreHost(user: User, baseUrl: string): ExploreHost {
     // list_sources, and the catalog resolveModel and the query guard read:
     // stored catalog entries (src/lib/catalog.ts), so the cost is three
     // queries whatever the number of datasets: no compile, no connection.
-    // A version published before the catalog column existed is compiled once
-    // here and written back.
+    // A version whose stored catalog is stale (published before the column
+    // existed, failed at publish, or an older projection) is compiled here and
+    // written back: once, shared by concurrent listings, and not again for a
+    // while if it fails (backfillCatalogs).
     list: async () => {
       const visible = await visibleDatasets(userId);
       const served = await servingModels(visible.map((d) => d.id));
@@ -324,7 +351,7 @@ function makeExploreHost(user: User, baseUrl: string): ExploreHost {
         const model = served.get(ds.id);
         return model ? [{ ds, model }] : [];
       });
-      await backfillCatalogs(rows.filter((r) => r.model.catalog === null));
+      await backfillCatalogs(rows.filter((r) => isStale(r.model.catalog)));
 
       // A dashboard is part of what a model offers, so it belongs in the same
       // listing as the sources — an agent should not need a second tool, or

@@ -31,6 +31,7 @@ import {
   type Repo,
   type User,
 } from "@/db";
+import { CATALOG_VERSION } from "@/lib/catalog";
 import { buildHostedExploreSurface } from "@/lib/mcp-host";
 import { findByDatasetRef, modelFileMap } from "@/lib/mcp-tools";
 import { publishRevision } from "@/lib/repo-publish";
@@ -186,7 +187,7 @@ test("a verified revision goes live, and the datasets it creates commit with the
     // imported lib source is not exported, so it is not listed.
     assert.deepEqual(
       model.catalog,
-      { sources: [{ source_ref: "sales", description: "Pet shop sales." }] },
+      { v: CATALOG_VERSION, sources: [{ source_ref: "sales", description: "Pet shop sales." }] },
       "…and its catalog entry, computed at publish",
     );
   }

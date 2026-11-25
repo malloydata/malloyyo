@@ -107,17 +107,19 @@ user and call, so `list()` should never compile.
 - **Write** it at publish in `src/lib/repo-publish.ts`, next to `sources`. If
   the publish workspace compile ever diverges from the served shape, compute it
   through the serving path instead.
-- **Read**: `list()` becomes two queries regardless of N. First, visible
-  datasets joined to their active model's `id, catalog` (no blobs, no
-  `source`). Second, all dashboards for those model ids with
-  `WHERE model_id = ANY(...)`.
-- **Backfill**: a version with `catalog IS NULL` is computed once through the
-  normal lease path (which also warms the model cache), then written with
-  `UPDATE … WHERE catalog IS NULL`. Concurrent computes are harmless; the write
-  is idempotent.
-- **Failure**: a model that won't compile lists as a bare `{ model_ref }`, as
-  today, and is not written back, so a transient warehouse error doesn't freeze
-  a bare entry.
+- **Read**: `list()` is three queries regardless of N: the visible datasets;
+  the model each serves (one `DISTINCT ON`, active then newest, as
+  `latestModel`), with its `id, catalog` and no blobs or `source`; and every
+  dashboard for those model ids at once (`WHERE model_id = ANY(...)`).
+- **Backfill**: a version whose stored catalog is stale (null, or made by an
+  older projection: each entry carries `v`, `CATALOG_VERSION` in
+  `src/lib/catalog.ts`, bumped whenever `modelCatalogEntry` changes) is
+  compiled during the listing and written back. One compile per version at a
+  time, shared by concurrent listings.
+- **Failure**: a version that does not compile keeps what it had (null lists
+  as a bare `{ model_ref }`, an old projection lists as it was) and is not
+  tried again for five minutes, so a broken model or an unreachable warehouse
+  costs one compile per window rather than one per call.
 - `resolveModel` and the query guard keep calling `list()`; it is cheap now.
   The host may memoize it for one request.
 
@@ -446,6 +448,11 @@ The "before" burst did not hang because nothing evicted a saturated pool in
 this run; the three hang paths are reproduced deterministically in
 `src/lib/runtime-pool.test.ts` instead. A remote warehouse makes every "before"
 number worse: each compile there also waits on schema fetches.
+
+Until stage 3's connection budget lands, open connections are bounded by
+`MALLOYYO_MAX_POOLS` (default 64) pools of up to `poolSize` connections each.
+A busy pool is never evicted; past the cap, a query for another dataset waits,
+under the same 120 s deadline, for a pool to go idle.
 
 **The load test** runs ~100 datasets across ~5 repos, one node. It measures
 `list_sources` and `query` p50/p99, and 100 concurrent `query` calls shaped like

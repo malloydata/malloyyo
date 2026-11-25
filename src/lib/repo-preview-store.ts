@@ -69,11 +69,16 @@ export async function fetchBranchPreview(repo: Repo, branch: string, userId: str
  */
 export async function previewChanges(
   repo: Repo,
-  req: { label: string; base: string; files: Record<string, string>; deleted: string[] },
+  req: { label: string; base: string | null; files: Record<string, string>; deleted: string[] },
   userId: string,
 ): Promise<PreviewSummary | Fail> {
-  const base = await baseArchive(repo, req.base.trim());
+  // No base: the files ARE the repo. What guided setup does before the
+  // instance can read a new (private) repo from GitHub — everything is sent.
+  const base = req.base?.trim() ? await baseArchive(repo, req.base.trim()) : ({ ok: true, zip: null, sha: null } as const);
   if (!base.ok) return base;
+  if (!base.zip && Object.keys(req.files).length === 0) {
+    return { ok: false, error: "with no base, send every file of the repo (there is nothing to lay them over)." };
+  }
   let zip: Buffer;
   try {
     zip = overlayArchive(base.zip, { files: req.files, deleted: req.deleted });

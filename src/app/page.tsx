@@ -442,7 +442,11 @@ function shortAuthor(author: string): string {
             {sources === null ? (
               <p className="text-gray-500 dark:text-gray-400 text-xs">loading…</p>
             ) : orderedDatasetNames.length === 0 ? (
-              <p className="text-gray-500 dark:text-gray-400 text-xs">No sources yet.</p>
+              me.isAdmin ? (
+                <SetupWithClaude instanceName={instanceName} />
+              ) : (
+                <p className="text-gray-500 dark:text-gray-400 text-xs">No sources yet.</p>
+              )
             ) : (
               <div className="space-y-6">
                 {repoSections.map((section) => {
@@ -937,6 +941,78 @@ function Copyable({ value, multiline }: { value: string; multiline?: boolean }) 
         {copied ? "copied" : "copy"}
       </button>
     </div>
+  );
+}
+
+/**
+ * An admin's first look at an empty instance: set it up by talking to Claude
+ * (yo_help "setup/start"), which needs the connector, a private GitHub repo for
+ * the model, and a Claude Code session on it. The Setup page is the manual way
+ * through the same steps.
+ */
+function SetupWithClaude({ instanceName }: { instanceName: string }) {
+  const [origin, setOrigin] = useState("");
+  const [authoring, setAuthoring] = useState<boolean | null>(null);
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => { setOrigin(window.location.origin); }, []);
+  useEffect(() => {
+    fetch("/api/admin/setup")
+      .then((r) => r.json())
+      .then((d: { status?: { authoring?: boolean } }) => setAuthoring(d.status?.authoring ?? null))
+      .catch(() => setAuthoring(null));
+  }, []);
+  const mcpUrl = `${origin}/mcp`;
+  const prompt = encodeURIComponent(`Set up ${instanceName} — follow yo_help("setup/start")`);
+  const step = "space-y-1";
+  const muted = "text-gray-600 dark:text-gray-400";
+  return (
+    <section className="border border-gray-200 dark:border-gray-800 rounded p-4 space-y-4 text-xs">
+      <div className="space-y-1">
+        <h2 className="text-sm font-semibold">Set up {instanceName} with Claude</h2>
+        <p className={muted}>
+          No datasets yet. Claude can walk you through it: connect your database, interview you about what you
+          want to know, build a first model and dashboards, and publish them from a private GitHub repo.
+        </p>
+      </div>
+      {authoring === false ? (
+        <p className="text-amber-700 dark:text-amber-300">
+          Claude&apos;s authoring tools are off on this instance.{" "}
+          <Link className="underline" href="/admin/setup?step=authoring">Turn them on</Link> first.
+        </p>
+      ) : null}
+      <ol className="list-decimal list-inside space-y-3">
+        <li className={step}>
+          <strong>Add this server to Claude.</strong>{" "}
+          <span className={muted}>
+            claude.ai → Settings → Connectors → Add custom connector. Name it <strong>{instanceName}</strong>, URL:
+          </span>
+          <Copyable value={mcpUrl} />
+        </li>
+        <li className={step}>
+          <strong>Create a private GitHub repo for the model</strong>{" "}
+          <span className={muted}>(you can move it to another owner later).</span>{" "}
+          <a className="underline" target="_blank" rel="noreferrer" href="https://github.com/new?name=malloy-models&visibility=private">
+            Create it
+          </a>{" "}
+          <span className={muted}>and tick &ldquo;Add a README file&rdquo;.</span>
+        </li>
+        <li className={step}>
+          <strong>Start Claude Code on it</strong>{" "}
+          <span className={muted}>and Claude takes it from there.</span>{" "}
+          <a className="underline" target="_blank" rel="noreferrer" href={`https://claude.ai/code?prompt=${prompt}`}>
+            Open Claude Code
+          </a>
+          <span className={muted}>
+            , pick the repo you just made, and make sure the {instanceName} connector is on. Or type{" "}
+            <code>/setup</code> there.
+          </span>
+        </li>
+      </ol>
+      <p className={muted}>
+        Prefer a chat? Ask Claude on claude.ai to &ldquo;set up {instanceName}&rdquo;, and it will send you the
+        links. Or do it by hand on the <Link className="underline" href="/admin/setup">Setup page</Link>.
+      </p>
+    </section>
   );
 }
 

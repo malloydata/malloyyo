@@ -507,7 +507,8 @@ export const OVERLAY_LIMITS = { files: 200, bytes: 512 * 1024 };
  * than none.
  */
 export function overlayArchive(
-  baseZip: Buffer,
+  /** Null: start from nothing — a new repo whose files the server can't read yet. */
+  baseZip: Buffer | null,
   changes: { files: Record<string, string>; deleted: string[] },
 ): Buffer {
   const written = Object.keys(changes.files);
@@ -529,7 +530,7 @@ export function overlayArchive(
   const both = changes.deleted.filter((p) => p in changes.files);
   if (both.length > 0) throw new ArchiveError(`both written and deleted: ${both.join(", ")}`);
 
-  const members = readZip(baseZip);
+  const members = baseZip ? readZip(baseZip) : new Map<string, Uint8Array>();
   const missing = changes.deleted.filter((p) => !members.has(p));
   if (missing.length > 0) {
     throw new ArchiveError(`deleted, but not in the base commit: ${missing.slice(0, 5).join(", ")}`);

@@ -16,12 +16,10 @@
 // dataset is 1:1 with a model_ref (the dataset name), so once the engine reports
 // the model_ref a query resolved to, recording is a direct dataset lookup.
 
-import { desc, eq } from "drizzle-orm";
-import { db, datasets, repos, type User } from "@/db";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
+import { db, datasets, malloyModels, repos, type StoredCatalog, type User } from "@/db";
 import {
-  compile,
   exploreSurface,
-  modelCatalogEntry,
   renderInstructions,
   toContent,
   HOST_ONLY,
@@ -35,7 +33,8 @@ import {
 /** What the explore `query` tool returns on an executed run: the run result,
     the model it resolved to, and the host-only SQL channel. */
 type QueryRunResult = WithHostOnly<RunResult & { model_ref?: string }>;
-import { listDashboardsForModel } from "./dashboards";
+import { listDashboardsForModels } from "./dashboards";
+import { catalogEntry, computeCatalog } from "./catalog";
 import { withModelRuntime } from "./malloy";
 import { leaseScope } from "./tenancy";
 import { parsePreviewRef } from "./repo-previews";
@@ -47,7 +46,6 @@ import {
   canReadDataset,
   findByDatasetRef,
   findPreview,
-  latestModel,
   loadSharedQuery,
   modelFileMap,
   recordHistory,
@@ -215,9 +213,83 @@ async function leaseDataset<T>(
   );
 }
 
+type ServedModel = { id: string; datasetId: string; revisionId: string | null; catalog: StoredCatalog | null };
+
+/**
+ * The model each dataset serves, for many datasets in one query: the active
+ * version, else the newest — latestModel's rule (src/lib/mcp-tools.ts) as one
+ * DISTINCT ON. Only what listing needs; never the source text or blobs.
+ */
+async function servingModels(datasetIds: string[]): Promise<Map<string, ServedModel>> {
+  if (datasetIds.length === 0) return new Map();
+  const rows = await db
+    .selectDistinctOn([malloyModels.datasetId], {
+      id: malloyModels.id,
+      datasetId: malloyModels.datasetId,
+      revisionId: malloyModels.revisionId,
+      catalog: malloyModels.catalog,
+    })
+    .from(malloyModels)
+    .where(inArray(malloyModels.datasetId, datasetIds))
+    .orderBy(
+      malloyModels.datasetId,
+      desc(malloyModels.active),
+      desc(malloyModels.version),
+      desc(malloyModels.createdAt),
+    );
+  return new Map(rows.map((r) => [r.datasetId, r]));
+}
+
+/** How many uncatalogued versions compile at once during a backfill. */
+const BACKFILL_CONCURRENCY = 4;
+
+/**
+ * Compile and store the catalog of each version that has none: one published
+ * before the column existed, or whose publish-time catalog compile failed.
+ * Fills `model.catalog` in place. A version that still does not compile stays
+ * null — listed as a bare ref, and tried again next time, so a transient
+ * warehouse error never freezes a bare entry.
+ */
+async function backfillCatalogs(rows: Array<{ ds: DatasetRow; model: ServedModel }>): Promise<void> {
+  if (rows.length === 0) return;
+  const sources = new Map(
+    (
+      await db
+        .select({ id: malloyModels.id, source: malloyModels.source })
+        .from(malloyModels)
+        .where(inArray(malloyModels.id, rows.map((r) => r.model.id)))
+    ).map((r) => [r.id, r.source]),
+  );
+  let next = 0;
+  const worker = async () => {
+    while (next < rows.length) {
+      const { ds, model } = rows[next++];
+      try {
+        const catalog = await leaseDataset(
+          { id: model.id, datasetId: model.datasetId, revisionId: model.revisionId, source: sources.get(model.id) ?? "" },
+          (m) => computeCatalog(m.runtime, m.entry),
+          undefined,
+          ds.ref,
+        );
+        if (!catalog) continue;
+        model.catalog = catalog;
+        await db
+          .update(malloyModels)
+          .set({ catalog })
+          .where(and(eq(malloyModels.id, model.id), isNull(malloyModels.catalog)));
+        logger.info("catalog backfilled", { modelId: model.id, dataset: ds.ref });
+      } catch (err) {
+        logger.warn("catalog backfill failed", { modelId: model.id, dataset: ds.ref, err: serializeErr(err) });
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(BACKFILL_CONCURRENCY, rows.length) }, worker));
+}
+
 // The engine's ExploreHost: withModel resolves + leases a pooled Runtime; list
-// compiles each visible model and renders it through the engine's ONE catalog
-// projection (modelCatalogEntry) — no per-host copy of the listing shape.
+// reads each visible version's stored catalog, which the engine's ONE catalog
+// projection (modelCatalogEntry) produced at publish — no per-host copy of the
+// listing shape (src/lib/catalog.ts).
 function makeExploreHost(user: User, baseUrl: string): ExploreHost {
   const userId = user.id;
   return {
@@ -240,59 +312,54 @@ function makeExploreHost(user: User, baseUrl: string): ExploreHost {
         found.ref,
       );
     },
+    // list_sources, and the catalog resolveModel and the query guard read:
+    // stored catalog entries (src/lib/catalog.ts), so the cost is three
+    // queries whatever the number of datasets: no compile, no connection.
+    // A version published before the catalog column existed is compiled once
+    // here and written back.
     list: async () => {
-      const entries: ModelEntry[] = [];
-      for (const ds of await visibleDatasets(userId)) {
-        const model = await latestModel(ds.id);
-        if (!model) continue;
-        let entry: ModelEntry;
-        try {
-          entry = await leaseDataset(model, async (m) => {
-            const compiled = await compile(m.runtime, m.entry, { exportedOnly: true });
-            return compiled.ok && compiled.model
-              ? modelCatalogEntry(ds.ref, compiled.model)
-              : { model_ref: ds.ref };
-          });
-        } catch {
-          entry = { model_ref: ds.ref }; // a model that won't compile lists as a bare ref
-        }
-        // A dashboard is part of what a model offers, so it belongs in the same
-        // listing as the sources — an agent should not need a second tool, or
-        // prior knowledge that one exists, to find out a dataset has views
-        // built for it.
-        //
-        // Read from the artifact table, NOT from the compile above: a dashboard
-        // is listed whether or not the model currently compiles, and listing
-        // must not depend on holding a runtime lease.
-        //
-        // Addressed by MODEL ID, not back through the dataset: `visibleDatasets`
-        // has already settled visibility and `latestModel` has already picked
-        // the version, so re-resolving both would cost two extra queries per
-        // dataset and could pick up a newer model than the one just compiled.
-        //
-        // GUARDED, because dashboards are advisory and the sources are what
-        // this tool is for: an artifact-table failure degrades to "no
-        // dashboards" rather than taking the whole catalog down with it.
-        try {
-          const dashboards = (await listDashboardsForModel(model.id, ds.id, ds.name)).map((d) => ({
+      const visible = await visibleDatasets(userId);
+      const served = await servingModels(visible.map((d) => d.id));
+      const rows = visible.flatMap((ds) => {
+        const model = served.get(ds.id);
+        return model ? [{ ds, model }] : [];
+      });
+      await backfillCatalogs(rows.filter((r) => r.model.catalog === null));
+
+      // A dashboard is part of what a model offers, so it belongs in the same
+      // listing as the sources — an agent should not need a second tool, or
+      // prior knowledge that one exists, to find out a dataset has views built
+      // for it. Read from the artifact table, so a dataset lists its dashboards
+      // whether or not its model compiles; addressed by the model id chosen
+      // above, so the dashboards and the sources describe the same version.
+      //
+      // GUARDED, because dashboards are advisory and the sources are what this
+      // tool is for: an artifact-table failure degrades to "no dashboards"
+      // rather than taking the whole catalog down with it.
+      let dashboards: Awaited<ReturnType<typeof listDashboardsForModels>> = new Map();
+      try {
+        dashboards = await listDashboardsForModels(
+          rows.map((r) => ({ modelId: r.model.id, datasetId: r.ds.id, datasetName: r.ds.name })),
+        );
+      } catch (err) {
+        logger.warn("list_sources: dashboards unavailable", { err: serializeErr(err) });
+      }
+
+      const entries: ModelEntry[] = rows.map(({ ds, model }) => {
+        const entry = catalogEntry(ds.ref, model.catalog);
+        const own = dashboards.get(model.id) ?? [];
+        if (own.length) {
+          entry.dashboards = own.map((d) => ({
             name: d.name,
             title: d.title,
             description: d.description,
-            // `ds.ref`, like the three catalog refs above it. The bare name
-            // was the one spot this conversion missed, so two repos each
-            // publishing `orders` advertised correct model_refs and then
-            // IDENTICAL dashboard URLs.
+            // `ds.ref`, like the catalog refs: two repos each publishing
+            // `orders` must not advertise identical dashboard URLs.
             url: dashboardUrl(baseUrl, ds.ref, d.name),
           }));
-          if (dashboards.length) entry.dashboards = dashboards;
-        } catch (err) {
-          logger.warn("list_sources: dashboards unavailable", {
-            datasetId: ds.id,
-            err: serializeErr(err),
-          });
         }
-        entries.push(entry);
-      }
+        return entry;
+      });
       return { entries };
     },
   };

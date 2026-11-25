@@ -1,0 +1,1 @@
+ALTER TABLE "malloy_models" ADD COLUMN "catalog" jsonb;

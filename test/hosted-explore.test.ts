@@ -148,8 +148,58 @@ test("list_sources surfaces each model's sources with their annotations", async 
   assert.ok(entry, "petshop is listed");
   const sales = entry!.sources?.["sales"];
   assert.ok(sales, "its `sales` source is listed");
-  // Description comes from the model's #" annotation (compiled fresh), not the DB.
+  // Description comes from the model's #" annotation: this version predates
+  // the catalog column, so the first list compiled it (and stored the result).
   assert.equal(sales!.description, "Pet shop sales.");
+});
+
+test("list_sources stores the catalog of a version that had none, once", async () => {
+  await host().call("list_sources", {});
+  const [petshop] = await db.select().from(datasets).where(eq(datasets.name, "petshop"));
+  const [m] = await db.select().from(malloyModels).where(eq(malloyModels.datasetId, petshop.id));
+  assert.deepEqual(m.catalog, { sources: [{ source_ref: "sales", description: "Pet shop sales." }] });
+
+  // A version that does not compile stays uncatalogued — listed as a bare ref
+  // and tried again next time, so a passing warehouse error can't freeze it.
+  const [dashmod] = await db.select().from(datasets).where(eq(datasets.name, "dashmod"));
+  const [broken] = await db.select().from(malloyModels).where(eq(malloyModels.datasetId, dashmod.id));
+  assert.equal(broken.catalog, null);
+});
+
+test("list_sources reads a stored catalog and never compiles the model", async () => {
+  // A model that cannot compile, with a stored catalog: if listing compiled it,
+  // the entry would come back bare. The stored entry coming back proves it read
+  // the column.
+  const [ds] = await db
+    .insert(datasets)
+    .values({ userId: user.id, name: "storedcat", status: "ready", isPublic: false })
+    .returning();
+  const UNPARSEABLE = "this is not malloy\n";
+  const [m] = await db
+    .insert(malloyModels)
+    .values({
+      datasetId: ds.id,
+      version: 1,
+      active: true,
+      source: UNPARSEABLE,
+      generatedBy: "test",
+      compiledAt: new Date(),
+      sources: [],
+      catalog: {
+        description: "Stored at publish.",
+        sources: [{ source_ref: "ghost", description: "Read from the column." }],
+      },
+    })
+    .returning();
+  await db.insert(malloyModelFiles).values({ modelId: m.id, path: "index.malloy", content: UNPARSEABLE });
+
+  const r = await host().call("list_sources", {});
+  const data = JSON.parse(blockText(r, 0)) as {
+    models: Record<string, { description?: string; sources?: Record<string, { description?: string }> }>;
+  };
+  const entry = data.models["storedcat"];
+  assert.equal(entry?.description, "Stored at publish.");
+  assert.equal(entry?.sources?.["ghost"]?.description, "Read from the column.");
 });
 
 test("list_sources reports a model's dashboards — even when the model won't compile", async () => {

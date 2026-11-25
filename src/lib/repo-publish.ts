@@ -47,8 +47,10 @@ import {
   type Dataset,
   type Repo,
   type RepoRevisionSource,
+  type StoredCatalog,
 } from "@/db";
 import { ABOUT_NAME, ABOUT_TITLE } from "@/lib/dashboards/about";
+import { computeCatalog } from "@/lib/catalog";
 import { artifactManifest } from "@/lib/dashboards/manifest";
 import { DEVCONTAINER_PATH } from "./github-source-link";
 import { logger, serializeErr } from "./logger";
@@ -101,6 +103,8 @@ export type CompiledDir = {
   description: string | null;
   indexContent: string;
   artifacts: Array<Omit<typeof malloyArtifacts.$inferInsert, "modelId">>;
+  /** The version's list_sources entry; null when its catalog compile failed. */
+  catalog: StoredCatalog | null;
   configFrom?: string;
 };
 
@@ -270,6 +274,11 @@ export async function compileDir(
     // because a dashboard is a view of the data and the data is the point.
     const artifacts: CompiledDir["artifacts"] = [];
     let bases: string[] = [];
+    // The catalog list_sources shows for this version (src/lib/catalog.ts),
+    // compiled in the same runtime as the dashboards so their shared tables'
+    // schemas are fetched once. Non-fatal like them: null is computed again on
+    // first list.
+    let catalog: StoredCatalog | null = null;
     try {
       const dashDir = path.join(ws, "dashboards");
       bases = fs.existsSync(dashDir)
@@ -279,28 +288,31 @@ export async function compileDir(
             .map((n) => n.slice(0, -".malloy".length))
             .sort()
         : [];
-      if (bases.length > 0) {
-        type EngineRuntime = Parameters<typeof modelArtifact>[0];
-        const found = await withReaderRuntime(reader, config.text, async (runtime) => {
-          const out: Array<{ base: string; artifact: ArtifactInfo }> = [];
-          for (const base of bases) {
-            const r = await modelArtifact(
-              runtime as unknown as EngineRuntime,
-              fileUrl(`dashboards/${base}.malloy`),
-              base,
-            );
-            if (r.ok && r.artifact) out.push({ base, artifact: r.artifact });
-          }
-          return out;
-        });
-        for (const { base, artifact } of found) {
-          artifacts.push({
-            name: artifact.name || base,
-            title: artifact.title,
-            manifest: artifactManifest(base, artifact),
-            source: componentSource(ws, base),
-          });
+      type EngineRuntime = Parameters<typeof modelArtifact>[0];
+      const found = await withReaderRuntime(reader, config.text, async (runtime) => {
+        try {
+          catalog = await computeCatalog(runtime, fileUrl("index.malloy"));
+        } catch (err) {
+          logger.warn("catalog compile failed (non-fatal)", { dir, ...serializeErr(err) });
         }
+        const out: Array<{ base: string; artifact: ArtifactInfo }> = [];
+        for (const base of bases) {
+          const r = await modelArtifact(
+            runtime as unknown as EngineRuntime,
+            fileUrl(`dashboards/${base}.malloy`),
+            base,
+          );
+          if (r.ok && r.artifact) out.push({ base, artifact: r.artifact });
+        }
+        return out;
+      });
+      for (const { base, artifact } of found) {
+        artifacts.push({
+          name: artifact.name || base,
+          title: artifact.title,
+          manifest: artifactManifest(base, artifact),
+          source: componentSource(ws, base),
+        });
       }
       // The written front door: `dashboards/index.jsx|tsx` with no
       // `index.malloy`. It runs no query so the loop above never sees it, but it
@@ -330,6 +342,7 @@ export async function compileDir(
         description: result.meta.description ?? null,
         indexContent: fs.readFileSync(path.join(ws, "index.malloy"), "utf8"),
         artifacts,
+        catalog,
         configFrom: config.from,
       },
     };
@@ -861,6 +874,7 @@ async function activate(
                 : `cli:${input.repo.slug}`,
             compiledAt: now,
             sources: plan.compiled.sources,
+            catalog: plan.compiled.catalog,
             // Denormalized from the revision on purpose: it is immutable
             // per-model provenance written in this transaction, not mutable
             // repo-level config resolved by row order, which is the thing the

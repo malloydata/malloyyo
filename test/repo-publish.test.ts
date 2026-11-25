@@ -182,6 +182,13 @@ test("a verified revision goes live, and the datasets it creates commit with the
       .from(malloyModelFiles)
       .where(eq(malloyModelFiles.modelId, model.id));
     assert.equal(fileRows.length, 0, "…and no file rows");
+    // list_sources reads this and never compiles (src/lib/catalog.ts). The
+    // imported lib source is not exported, so it is not listed.
+    assert.deepEqual(
+      model.catalog,
+      { sources: [{ source_ref: "sales", description: "Pet shop sales." }] },
+      "…and its catalog entry, computed at publish",
+    );
   }
 });
 

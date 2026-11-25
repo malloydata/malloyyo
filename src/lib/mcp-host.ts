@@ -204,7 +204,8 @@ async function leaseDataset<T>(
   // The identity rides on the RUNTIME (core locks it there), and the names the
   // query must reference ride on the BoundModel. Both come from the dataset,
   // never from the request. See src/lib/tenancy.ts.
-  const scope = scoped ? leaseScope(scoped.required, scoped.user) : undefined;
+  // `dataset` only names the dataset in a wait-timeout error (src/lib/runtime-pool.ts).
+  const scope = { ...(scoped ? leaseScope(scoped.required, scoped.user) : {}), dataset: ref ?? model.datasetId };
   return withModelRuntime(
     files,
     model.id,

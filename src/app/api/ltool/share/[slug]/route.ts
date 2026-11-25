@@ -3,6 +3,7 @@
 
 import { NextResponse } from "next/server";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
+import { dashboardOnlyRefusal } from "@/lib/explore-gate";
 import { isAdmin } from "@/lib/admin";
 import { canReadDataset, datasetNameById, loadSharedQuery, sharedQueryListContext } from "@/lib/mcp-tools";
 import { db, datasets } from "@/db";
@@ -38,6 +39,8 @@ export async function GET(
     if (err instanceof UnauthorizedError) return NextResponse.json({ error: "sign in required" }, { status: 401 });
     throw err;
   }
+  const refusal = dashboardOnlyRefusal(user);
+  if (refusal) return refusal;
 
   const { slug } = await ctx.params;
   const res = await loadSharedQuery(slug);

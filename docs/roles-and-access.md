@@ -26,8 +26,9 @@ Everyone has a **list** of roles, not one.
 |---|---|
 | `MALLOYYO_USER` | sign in, query the datasets your roles allow, save and share queries, build draft dashboards |
 | `MALLOYYO_ADMIN` | everything above, plus create datasets, publish models, and manage people, roles and instance settings |
+| `MALLOYYO_DASHBOARD_ONLY` | *restricts*: open dashboards, and nothing else — see [Dashboard-only people](#dashboard-only-people) |
 
-Two, not three. There was a `MALLOYYO_DEVELOPER` for someone who should ship
+Two that grant, not three. There was a `MALLOYYO_DEVELOPER` for someone who should ship
 models without administering people, and it could not mean that: a dataset names
 a repo this server compiles, and a model can define `duckdb.sql(...)` sources and
 a `malloy-config.json` whose connection secrets resolve against the server's own
@@ -60,6 +61,43 @@ Roles may eventually be read from your identity provider instead of being
 managed here, so that a group membership revoked upstream takes effect on the
 next sign-in. Name your roles to match what that system already calls them and
 the switch costs you nothing.
+
+## Dashboard-only people
+
+Some people should read dashboards and never see a query box: a client's staff,
+an executive audience, a customer. Give them `MALLOYYO_DASHBOARD_ONLY`.
+
+```
+dana@client.com      MALLOYYO_DASHBOARD_ONLY, client_reports
+```
+
+They sign in to a home page listing the dashboards they can open, and that is
+the whole product for them: no query editor, no chat, no AI Q&A, no MCP
+connector, no API tokens, no draft dashboards. The pages redirect home and the
+routes behind them refuse, including for a connector or token they set up
+before the role was given.
+
+It is the one built-in role that takes something away, which has two
+consequences worth knowing:
+
+- **It is safe as an admission default**, where `MALLOYYO_ADMIN` is not. An
+  instance whose arrivals should all be dashboard-only lists it in the default
+  set.
+- **An admin is never dashboard-only.** Holding both is the same as holding
+  `MALLOYYO_ADMIN`: someone who can publish models and grant roles is not kept
+  out of a query box, and an instance cannot tick its way into having an admin
+  who cannot use it.
+
+Which dashboards they see is decided exactly as it is for everyone else: by the
+datasets their other roles open, and then by [who sees a
+dashboard](#who-sees-a-dashboard). The usual shape is one role per audience —
+`client_reports` above — listed on a dataset curated for that audience.
+
+**This is a product tier, not a wall around data.** A dashboard runs queries
+against its dataset, so a dashboard-only person can still reach whatever the
+datasets they can open contain. What they must not see goes in a dataset they
+are not granted, or behind the model's own row scoping (below) — which applies
+to dashboards the same as to queries.
 
 ## Datasets name the roles that may open them
 
@@ -237,8 +275,54 @@ nobody ever sees both. Where people genuinely need both, give the variants
 different names — `orders` and `orders_with_support` — so the choice is made on
 meaning rather than on which dataset it came from.
 
+## Who sees a dashboard
+
+Being able to open a dataset shows you its dashboards — except the ones that
+are **private**. There are two ways a dashboard is private, and one rule for
+who sees it then.
+
+**A modeled dashboard is public unless its tag says otherwise:**
+
+```malloy
+# artifact { title="Board numbers" private }
+query: board_numbers is orders -> { … }
+```
+
+It is still published with the model; it is just not listed to everyone on the
+dataset. An admin opens it and adds people by email, in the bar across the top
+of its page. Whether it is private is the model's to say — there is no toggle
+on the instance, so the next publish cannot silently undo one.
+
+**A draft is private until its author says otherwise.** New drafts are seen
+only by their author and admins. On the draft's page its author (or an admin)
+either opens it to everyone who can open the dataset, or keeps it private and
+adds people by email. (Drafts that existed before this was introduced were
+listed to everyone, and still are.)
+
+**A private dashboard is seen by:**
+
+- admins,
+- its author, if it is a draft,
+- the people it has been shared with.
+
+To everyone else it is not there: it is missing from every menu and from
+`list_sources`, and its URL answers "not found".
+
+Sharing **never opens a dataset**. The person still needs a role that opens
+the dataset the dashboard is built on; share with someone who has none and the
+page says so, and the share takes effect once they are given one. So granting
+a dashboard-only person a dashboard is two steps: a role that opens the
+dataset, then — for the private ones — a share.
+
+**This narrows a menu; it is not a security boundary.** Anyone who can open one
+dashboard on a dataset can query all of that dataset through it. A private
+dashboard hides a view, not the rows behind it. If two audiences must not see
+each other's data, that is two datasets — see [Organising a
+repo](#organising-a-repo).
+
 ## What each person sees
 
 `list_sources` — and every dashboard list, and the home page — shows only the
 datasets your roles grant. A dataset you have no role for is not something you
-are told you cannot see; it simply is not in the answer.
+are told you cannot see; it simply is not in the answer. The same goes for a
+private dashboard nobody shared with you.

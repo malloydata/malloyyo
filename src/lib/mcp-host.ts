@@ -36,6 +36,7 @@ import {
     the model it resolved to, and the host-only SQL channel. */
 type QueryRunResult = WithHostOnly<RunResult & { model_ref?: string }>;
 import { listDashboardsForModel } from "./dashboards";
+import { visibleDashboards } from "./dashboards/audience";
 import { withModelRuntime } from "./malloy";
 import { leaseScope } from "./tenancy";
 import { parsePreviewRef } from "./repo-previews";
@@ -273,7 +274,15 @@ function makeExploreHost(user: User, baseUrl: string): ExploreHost {
         // this tool is for: an artifact-table failure degrades to "no
         // dashboards" rather than taking the whole catalog down with it.
         try {
-          const dashboards = (await listDashboardsForModel(model.id, ds.id, ds.name)).map((d) => ({
+          // Minus the private ones this person was not given: the catalog is
+          // a listing like any other, and it would otherwise advertise a URL
+          // that answers "not found".
+          const listed = await visibleDashboards(
+            userId,
+            ds.id,
+            await listDashboardsForModel(model.id, ds.id, ds.name),
+          );
+          const dashboards = listed.map((d) => ({
             name: d.name,
             title: d.title,
             description: d.description,

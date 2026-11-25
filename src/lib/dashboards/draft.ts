@@ -24,7 +24,7 @@
 import { createHash } from "node:crypto";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { modelArtifact, validateRestricted, type Problem } from "@malloyyo/mcp-engine";
-import { db, draftDashboards } from "@/db";
+import { dashboardGrants, db, draftDashboards, DRAFT_VISIBILITIES, type DraftVisibility } from "@/db";
 import { hasRole, MALLOYYO_ADMIN, type RoleBearing } from "@/lib/roles";
 import { findByDatasetRef, modelFileMap } from "@/lib/mcp-tools";
 import { fileUrl, runNamedMalloyFiles, withModelRuntime } from "@/lib/malloy";
@@ -32,6 +32,7 @@ import { newDatasetSlug } from "@/lib/slug";
 import { bundleDashboard } from "./bundle";
 import { declaredRuns, explainProblems } from "./engine";
 import { artifactManifest } from "./manifest";
+import { mayOpenDashboard } from "./audience";
 import { DRAFT_PREFIX } from "./meta";
 import { applyDraftEdits, draftBody, draftFile, type DraftEdit } from "./draft-text";
 
@@ -62,6 +63,14 @@ export interface DraftInput {
       edits applied to the stored draft. Each `find` must occur exactly once in
       its file (`source` by default, or `malloy`). */
   edits?: DraftEdit[];
+  /** Who else may open it: `private` (its author, admins, and the people it is
+      shared with) or `dataset` (everyone who can open the dataset). A new draft
+      is private; an update that leaves this out keeps what the draft has. */
+  visibility?: DraftVisibility;
+}
+
+export function isDraftVisibility(v: unknown): v is DraftVisibility {
+  return (DRAFT_VISIBILITIES as readonly unknown[]).includes(v);
 }
 
 export interface DraftTileReport {
@@ -82,6 +91,8 @@ export type DraftSaveResult =
       dataset: string;
       title: string;
       url: string;
+      /** Who else can open that URL — see DraftInput.visibility. */
+      visibility: DraftVisibility;
       tiles: DraftTileReport[];
       component: { ok: boolean; error?: string; line?: number };
     }
@@ -167,6 +178,9 @@ export async function saveDraftDashboard(
   }
   if (editing && (hasText(input.source) || hasText(input.malloy))) {
     return { ok: false, error: "send edits or whole files, not both" };
+  }
+  if (input.visibility !== undefined && !isDraftVisibility(input.visibility)) {
+    return { ok: false, error: `visibility must be one of: ${DRAFT_VISIBILITIES.join(", ")}` };
   }
 
   // Whole files are checked here, before any database work; edited ones once
@@ -338,6 +352,9 @@ export async function saveDraftDashboard(
     manifest,
     malloy,
     source,
+    // Only when asked. Left out, an update keeps the draft's audience and a new
+    // row takes the column default, which is private.
+    ...(input.visibility ? { visibility: input.visibility } : {}),
     updatedAt: new Date(),
   };
   // Edits were applied to the draft read above, and the checks since then take
@@ -425,6 +442,7 @@ export async function saveDraftDashboard(
     // name sent `save_draft_dashboard(dataset: "globex:orders")` a link to
     // acme's dataset.
     url: `${origin.replace(/\/$/, "")}/datasets/${encodeURIComponent(qualified)}/dashboard/${dashboard}`,
+    visibility: row.visibility,
     tiles,
     component,
   };
@@ -474,8 +492,9 @@ export interface DraftFiles extends DraftSummary {
   inline: string[];
 }
 
-/** One draft's files. Readable by anyone who can see the dataset: they can
-    already open the dashboard and read its compiled bundle. */
+/** One draft's files. Readable by anyone who can OPEN the draft: they can
+    already read its compiled bundle. A private draft answers null to everyone
+    else, the same as a slug that does not exist. */
 export async function getDraftFiles(userId: string, datasetRef: string, slug: string): Promise<DraftFiles | null> {
   const found = await findByDatasetRef(userId, datasetRef);
   if (!found) return null;
@@ -485,6 +504,8 @@ export async function getDraftFiles(userId: string, datasetRef: string, slug: st
     .where(and(eq(draftDashboards.slug, slug), eq(draftDashboards.datasetId, found.ds.id)))
     .limit(1);
   if (!r) return null;
+  const audience = { name: `${DRAFT_PREFIX}${r.slug}`, isPrivate: r.visibility === "private", authorId: r.userId };
+  if (!(await mayOpenDashboard(userId, found.ds.id, audience))) return null;
   return {
     slug: r.slug,
     dashboard: `${DRAFT_PREFIX}${r.slug}`,
@@ -551,9 +572,9 @@ function draftHash(row: { malloy: string; source: string }): string {
 }
 
 /**
- * Delete a draft. Its author may, and so may an admin — a draft is listed to
- * everyone who can see the dataset, so a stale one is everyone's clutter and
- * someone has to be able to clear it.
+ * Delete a draft. Its author may, and so may an admin — a draft opened to the
+ * dataset is everyone's clutter once it is stale, and someone has to be able
+ * to clear it.
  *
  * A real delete: the row goes, and its URL 404s. A promoted draft whose
  * dashboard is published doesn't need deleting — listings already leave it
@@ -574,6 +595,15 @@ export async function deleteDraft(
     .limit(1);
   if (!row) return { outcome: "not-found" };
   if (row.userId !== user.id && !hasRole(user, MALLOYYO_ADMIN)) return { outcome: "not-yours" };
-  await db.delete(draftDashboards).where(eq(draftDashboards.id, row.id));
+  // Its shares go with it. They are keyed by name, not by this row, so nothing
+  // cascades — and a slug is never reused, so they would only ever be litter.
+  await db.transaction(async (tx) => {
+    await tx
+      .delete(dashboardGrants)
+      .where(
+        and(eq(dashboardGrants.datasetId, row.datasetId), eq(dashboardGrants.dashboard, `${DRAFT_PREFIX}${row.slug}`)),
+      );
+    await tx.delete(draftDashboards).where(eq(draftDashboards.id, row.id));
+  });
   return { outcome: "deleted", promotedAs: row.promotedAs };
 }

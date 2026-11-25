@@ -42,6 +42,23 @@ returns it — not from what you sent: a dashboard file that uses givens is
 stored with an `##! experimental.givens` line added at the top. Edits keep
 the draft's name, so `name` can be left out.
 
+## Who can open it
+
+**A new draft is private.** Its author and admins can open the `url`; to anyone
+else it does not exist. So before telling someone to send that link to a
+colleague, open it up:
+
+- `save_draft_dashboard({ …, slug, visibility: "dataset" })` — everyone who can
+  see the dataset can open it, and it appears in their dashboard menu.
+  `visibility: "private"` closes it again. Leave `visibility` out when
+  iterating and the draft keeps what it has.
+- To share with particular people instead, the author adds them by email on
+  the draft's own page (the bar across the top). There is no tool for that.
+
+Either way the reader must already be able to see the dataset. Sharing a
+dashboard never gives anyone access to data; it only decides who is shown this
+view of data they could already query.
+
 ## The queries
 
 Inline Malloy runs against what the model PUBLISHES — the same rules as the

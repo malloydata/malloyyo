@@ -32,6 +32,9 @@ export interface DatasetLandingInput {
   hasQuestions: boolean;
   /** The model's first source, for ltool's initial selection. */
   firstSource?: string | null;
+  /** The reader is dashboard-only (`canExplore` is false): steps 2 and 3 are
+      query surfaces they do not have, so with no dashboard they go home. */
+  dashboardOnly?: boolean;
 }
 
 /**
@@ -46,6 +49,11 @@ export function datasetLandingPath(ref: string, input: DatasetLandingInput): str
 
   const first = input.dashboards[0];
   if (first) return `${base}/dashboard/${encodeURIComponent(first.name)}`;
+
+  // Nothing on this dataset is theirs to open — which also covers a dataset
+  // whose only dashboards are private ones nobody shared with them. Home lists
+  // what they can open.
+  if (input.dashboardOnly) return "/";
 
   if (input.hasQuestions) return `${base}/questions`;
 

@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import { eq, and, ne, or, inArray, sql, desc } from "drizzle-orm";
 import { db, datasets, savedQueries, favorites, users } from "@/db";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
+import { dashboardOnlyRefusal } from "@/lib/explore-gate";
 import { isAdmin } from "@/lib/admin";
 import { env } from "@/lib/env";
 
@@ -21,6 +22,10 @@ export async function GET() {
     if (err instanceof UnauthorizedError) me = null;
     else throw err;
   }
+  // The source catalogue and the question list are the query surface's index;
+  // a dashboard-only account reaches its dashboards through /api/dashboards.
+  const refusal = me ? dashboardOnlyRefusal(me) : null;
+  if (refusal) return refusal;
 
   const admin = me ? isAdmin(me) : false;
   const visible = admin

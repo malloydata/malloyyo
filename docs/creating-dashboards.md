@@ -93,6 +93,7 @@ from …` brings the filter but *not* the control.)
 | `title="…"` | Dashboard title. Falls back to the `#"` doc comment. |
 | `givens { X=f'…' }` | Per-dashboard starting values for the controls ([§3](#per-dashboard-starting-values)). |
 | `autorun=false` | Batch filter changes behind an **Apply** button instead of re-running live. |
+| `private` | Don't list this dashboard to everyone who can open the dataset: admins see it, and share it with people one at a time from its page. See [Roles and access](roles-and-access.md#who-sees-a-dashboard). |
 
 The dashboard's **name is the filename** — don't set a `name=`; keeping filename
 = name means one source of truth (the URL, the `# drill { to=… }`, and the

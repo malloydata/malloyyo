@@ -86,6 +86,9 @@ export default function QuestionsPage({ params }: { params: Promise<{ id: string
       .then((d) => {
         if (d?.instanceName) setInstanceName(d.instanceName);
         if (typeof d?.claudeConnected === "boolean") setClaudeConnected(d.claudeConnected);
+        // Questions and their Malloy are the query surface; /api/history has
+        // already refused, so this is only where to go instead of an empty page.
+        if (d?.user?.dashboardOnly) window.location.replace("/");
       })
       .catch(() => {});
   }, [id]);

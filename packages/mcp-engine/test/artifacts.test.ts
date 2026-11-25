@@ -138,3 +138,17 @@ test('modelArtifact: a single-tile `## artifact { tiles=[X] }` is a single-query
     'warns that dashboard_columns is ignored on a single-tile artifact',
   );
 });
+
+test('artifactQueries: `private` on the tag is carried, in either tag form, and only when set', async () => {
+  const res = await withFixtureRuntime((rt) => artifactQueries(rt, fixtureUrl('artifacts_private.malloy')));
+  assert.equal(res.ok, true);
+  if (!res.ok) return;
+  const priv = Object.fromEntries(res.artifacts.map((a) => [a.name, a.private]));
+  assert.deepEqual(priv, {
+    braced: true, // `# artifact { … private }`
+    flat: true, // `# artifact name="…" private`
+    explicit: true, // `private=true`
+    opened: undefined, // `private=false` says so out loud and carries nothing
+    plain: undefined, // open to the dataset is the default — no flag
+  });
+});

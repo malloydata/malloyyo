@@ -13,6 +13,7 @@
 // conversation anyone can replay to the model.
 
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
+import { dashboardOnlyRefusal } from "@/lib/explore-gate";
 import { isAdmin } from "@/lib/admin";
 import { askEnabled } from "@/lib/ask";
 import { runChatTurn, type ChatEvent } from "@/lib/chat/loop";
@@ -45,6 +46,8 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     }
     throw err;
   }
+  const refusal = dashboardOnlyRefusal(user);
+  if (refusal) return refusal;
 
   const { id } = await ctx.params;
   // ownedChat, not readableChat — deliberately. A published chat is readable by

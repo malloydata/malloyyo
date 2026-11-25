@@ -117,6 +117,21 @@ Per-dashboard starting values go in the tag:
 # artifact { title="Ford recalls" givens { MANUFACTURER=f'Ford Motor Company' } }
 ```
 
+## Private dashboards
+
+A published dashboard is listed to everyone who can see its dataset. To keep one
+to a chosen few, say so in the tag:
+
+```malloy
+# artifact { title="Board numbers" private }
+```
+
+It publishes as usual, but on the instance only admins see it, and an admin
+shares it with people one at a time from the dashboard's own page. It decides
+who is shown the dashboard, not who can read the data: the dataset is still the
+unit of access, so data that must stay apart belongs in a separate dataset.
+`dashboard dev` and static bundles have no audience and ignore it.
+
 ## Drill from a dimension
 
 `# drill` on a source `dimension:` (in the model) makes its cells clickable —

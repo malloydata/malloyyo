@@ -29,7 +29,27 @@ import { env } from "./env";
 export const MALLOYYO_USER = "MALLOYYO_USER";
 export const MALLOYYO_ADMIN = "MALLOYYO_ADMIN";
 
-export const BUILTIN_ROLES = [MALLOYYO_USER, MALLOYYO_ADMIN] as const;
+/**
+ * Dashboards only — the one built-in that takes something AWAY.
+ *
+ * Everything else here grants: hold a role, gain what it opens. This one
+ * narrows what its holder may do to opening dashboards, and it is shaped that
+ * way on purpose. The alternative — a positive "may query" capability, with
+ * dashboard-only meaning its absence — cannot be deployed: people admitted
+ * through a hosted sign-in hold no built-in role at all (src/lib/external-user.ts
+ * writes none), so absence would have described every one of them at once.
+ *
+ * Being a restriction also makes it safe as an admission default, where
+ * MALLOYYO_ADMIN is not: an instance whose arrivals should all be
+ * dashboard-only just lists it there.
+ *
+ * It says nothing about WHICH dashboards. That is the datasets their other
+ * roles open, minus the private dashboards nobody shared with them
+ * (src/lib/dashboards/audience.ts).
+ */
+export const MALLOYYO_DASHBOARD_ONLY = "MALLOYYO_DASHBOARD_ONLY";
+
+export const BUILTIN_ROLES = [MALLOYYO_USER, MALLOYYO_ADMIN, MALLOYYO_DASHBOARD_ONLY] as const;
 
 /**
  * Built-ins that must never be handed out by a default.
@@ -132,6 +152,32 @@ export function hasRole(user: RoleBearing, role: string): boolean {
 export function canAuthor(user: RoleBearing): boolean {
   return rolesOf(user).includes(MALLOYYO_ADMIN);
 }
+
+/**
+ * May use the surfaces that QUERY: the query editor, chat, the MCP connector,
+ * the CLI and API tokens, saved questions, draft dashboards.
+ *
+ * Everyone, unless they hold MALLOYYO_DASHBOARD_ONLY — and an admin regardless,
+ * because someone who can publish a model and grant roles is not meaningfully
+ * kept out of a query box, and an instance must never be able to tick its way
+ * into having an admin who cannot use it.
+ *
+ * This is a product tier, not a wall around data. A dashboard runs restricted
+ * Malloy against its dataset, so a dashboard-only person can still read
+ * whatever the datasets they can open contain. What they see is governed where
+ * it always was: by which datasets their roles open, and by the model's own
+ * row scoping.
+ */
+export function canExplore(user: RoleBearing): boolean {
+  const held = rolesOf(user);
+  return held.includes(MALLOYYO_ADMIN) || !held.includes(MALLOYYO_DASHBOARD_ONLY);
+}
+
+/** What a refused surface says. One sentence, used by every gate, so the API,
+    the CLI and the MCP client all explain the same thing the same way. */
+export const DASHBOARD_ONLY_MESSAGE =
+  "this account is dashboard-only: it can open dashboards, and cannot use the query editor, chat, " +
+  "the MCP connector, the CLI or API tokens. Ask an admin of this instance if that is wrong.";
 
 /**
  * The SQL predicate for "datasets this person may open".

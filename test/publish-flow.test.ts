@@ -1130,8 +1130,19 @@ test("a draft is recorded by its own author; a colleague gets the files and a no
   await db.update(datasets).set({ isPublic: true }).where(eq(datasets.name, DS_DRAFT));
   const colleague = await seedMember(`promoter-${RUN}@test.local`);
   const theirToken = await mintFor(colleague.id, ["mcp"]);
+  const promote = () => runCli(["draft", "promote", slug, ".", "--name", "theirs", "--token", theirToken], dir, env);
 
-  const r = await runCli(["draft", "promote", slug, ".", "--name", "theirs", "--token", theirToken], dir, env);
+  // A new draft is private, and a private draft's files are as private as the
+  // draft: to a colleague it is a slug that does not exist.
+  const refused = await promote();
+  assert.notEqual(refused.code, 0, "a private draft is not a colleague's to promote");
+  assert.match(refused.stderr + refused.stdout, /no draft/);
+  assert.ok(!existsSync(join(dir, "dashboards", "theirs.jsx")), "nothing was written");
+
+  // Once its author opens it to the dataset, anyone who can open it may take
+  // the files — but only the author's promotion is recorded on the draft.
+  await db.update(draftDashboards).set({ visibility: "dataset" }).where(eq(draftDashboards.slug, slug));
+  const r = await promote();
   assert.equal(r.code, 0, r.stderr + r.stdout);
   assert.ok(existsSync(join(dir, "dashboards", "theirs.jsx")), "the files are still written");
   assert.match(r.stdout, /not recorded on the draft/);

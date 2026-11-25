@@ -22,7 +22,8 @@ import { signInPath } from "@/lib/auth-paths";
 // Malloy) are fetched by TagOnlyDashboard from the /view API route. See
 // reference_ssr_page_duckdb_500.
 import { draftForward, draftSlug, getDashboard, isCustomDashboard } from "@/lib/dashboards";
-import { DraftBar } from "@/components/DraftBar";
+import { DraftBar, PrivateDashboardBar } from "@/components/DraftBar";
+import { isAdmin } from "@/lib/admin";
 import { CustomDashboardFrame } from "./CustomDashboardFrame";
 import { PreviewBanner } from "@/components/PreviewBanner";
 import { TagOnlyDashboard } from "./TagOnlyDashboard";
@@ -85,9 +86,13 @@ export default async function DashboardViewPage({
           user={user}
           datasetRef={id}
           slug={draftSlug(name) ?? name}
+          dashboard={name}
           authorId={dash.draft.authorId}
           promotedAs={dash.draft.promotedAs}
+          visibility={dash.draft.visibility}
         />
+      ) : dash.isPrivate && isAdmin(user) ? (
+        <PrivateDashboardBar datasetRef={id} dashboard={name} />
       ) : null}
       {isCustomDashboard(dash) ? (
         <CustomDashboardFrame key={`${id}/${name}`} id={id} name={name} />

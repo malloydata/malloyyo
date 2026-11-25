@@ -4,13 +4,13 @@
 import { NextResponse } from "next/server";
 import { requireBearer } from "@/lib/bearer-auth";
 import { originFromRequest } from "@/lib/oauth/base-url";
-import { listDrafts, saveDraftDashboard } from "@/lib/dashboards/draft";
+import { isDraftVisibility, listDrafts, saveDraftDashboard } from "@/lib/dashboards/draft";
 
 export const runtime = "nodejs";
 
 /**
  * POST /api/datasets/:ref/drafts — save a draft dashboard.
- * Body: { name, malloy?, source?, title?, description?, slug?, edits? }.
+ * Body: { name, malloy?, source?, title?, description?, slug?, edits?, visibility? }.
  *
  * The `mcp` scope, not `publish`: a draft dashboard is a query-level act —
  * any member who can query the dataset may make one, and its .malloy passes
@@ -29,6 +29,7 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
     description?: unknown;
     slug?: unknown;
     edits?: unknown;
+    visibility?: unknown;
   };
   try {
     body = await req.json();
@@ -47,6 +48,9 @@ export async function POST(req: Request, ctx: { params: Promise<{ id: string }> 
       description: typeof body.description === "string" ? body.description : undefined,
       slug: typeof body.slug === "string" && body.slug ? body.slug : undefined,
       edits: Array.isArray(body.edits) ? body.edits : undefined,
+      // An unrecognized value is dropped rather than refused: this route is
+      // also what older CLIs post to, and "keep what it has" is the safe read.
+      visibility: isDraftVisibility(body.visibility) ? body.visibility : undefined,
     },
     originFromRequest(req),
   );

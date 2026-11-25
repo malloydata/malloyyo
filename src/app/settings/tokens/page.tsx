@@ -9,6 +9,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
+import { canExplore } from "@/lib/roles";
 import { isAdmin } from "@/lib/admin";
 import { listApiTokens, toView } from "@/lib/api-tokens";
 import { env } from "@/lib/env";
@@ -33,6 +34,8 @@ export default async function TokensPage() {
     if (err instanceof UnauthorizedError) redirect("/");
     throw err;
   }
+  // Nothing a token reaches is open to a dashboard-only account.
+  if (!canExplore(me)) redirect("/");
 
   const tokens = (await listApiTokens(me.id)).map((t) => toView(t));
 

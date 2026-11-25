@@ -73,6 +73,11 @@ export function DatasetNav({
   const [claudeConnected, setClaudeConnected] = useState(false);
   // Chat needs an ANTHROPIC_API_KEY; without one the pill would go nowhere.
   const [chatEnabled, setChatEnabled] = useState(false);
+  // A dashboard-only reader gets the tree and nothing else: no ways into the
+  // data that aren't dashboards, no config, no Claude. Unknown (null) until
+  // /api/me answers, and those groups wait for the answer rather than flash up
+  // and vanish — their routes would refuse the click anyway.
+  const [dashboardOnly, setDashboardOnly] = useState<boolean | null>(null);
 
   // The dataset's address, decided once. `datasetId` is the raw route param,
   // which Next hands back percent-ENCODED, so it is decoded before anything
@@ -111,6 +116,7 @@ export function DatasetNav({
         if (d?.instanceName) setInstanceName(d.instanceName);
         if (typeof d?.claudeConnected === "boolean") setClaudeConnected(d.claudeConnected);
         if (typeof d?.askEnabled === "boolean") setChatEnabled(d.askEnabled);
+        setDashboardOnly(d?.user?.dashboardOnly === true);
       })
       .catch(() => {});
   }, []);
@@ -163,6 +169,8 @@ export function DatasetNav({
         activeLabel={questionsActive ? "AI Q&A" : activeTitle}
       />
 
+      {dashboardOnly === false && (
+      <>
       <span className="mx-1 h-4 w-px bg-gray-300 dark:bg-gray-700" />
 
       {/* What ISN'T a dashboard: the ways into the data nobody built in
@@ -254,6 +262,8 @@ export function DatasetNav({
           </svg>
         </button>
       </div>
+      </>
+      )}
     </nav>
   );
 }

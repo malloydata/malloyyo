@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import { and, eq } from "drizzle-orm";
 import { db, savedQueries, history } from "@/db";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
+import { dashboardOnlyRefusal } from "@/lib/explore-gate";
 import { isAdmin } from "@/lib/admin";
 
 export const runtime = "nodejs";
@@ -19,6 +20,8 @@ export async function POST(req: Request) {
     if (err instanceof UnauthorizedError) return NextResponse.json({ error: "sign in required" }, { status: 401 });
     throw err;
   }
+  const refusal = dashboardOnlyRefusal(user);
+  if (refusal) return refusal;
 
   const body = await req.json() as { slug?: string; title?: string };
   const slug = body.slug;

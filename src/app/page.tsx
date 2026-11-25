@@ -5,6 +5,7 @@
 import { useEffect, useState } from "react";
 import { signIn } from "next-auth/react";
 import Link from "next/link";
+import { LockIcon } from "lucide-react";
 import { QueryIcon } from "@/components/QueryIcon";
 import { repoUrl, codespaceUrl } from "@/lib/github-source-link";
 import {
@@ -82,6 +83,8 @@ type Me = {
   email: string | null;
   image: string | null;
   isAdmin: boolean;
+  /** Dashboards only: no sources, questions, tokens or Claude — see DashboardOnlyHome. */
+  dashboardOnly?: boolean;
 };
 
 type FavQuery = {
@@ -122,6 +125,7 @@ export default function HomePage() {
   // Claude connect-instructions modal — shown when clicking a source's Claude
   // button before the connector is linked. claudeTargetUrl is the explore chat
   // to continue to after setup.
+  const [dashboardTree, setDashboardTree] = useState<HomeDataset[] | null>(null);
   const [showClaudeSetup, setShowClaudeSetup] = useState(false);
   const [claudeTargetUrl, setClaudeTargetUrl] = useState<string | null>(null);
 
@@ -142,7 +146,13 @@ export default function HomePage() {
     setAccessState(meJson.accessState === "pending" || meJson.accessState === "disabled" ? meJson.accessState : null);
     if (typeof meJson.claudeConnected === "boolean") setClaudeConnected(meJson.claudeConnected);
     if (typeof meJson.askEnabled === "boolean") setChatEnabled(meJson.askEnabled);
-    if (meJson.user) {
+    if (meJson.user?.dashboardOnly) {
+      // Their home is the dashboards they can open, by dataset. The sources and
+      // questions the rest of this page is built from are query surfaces, and
+      // those routes refuse this account.
+      const treeRes = await fetch("/api/dashboards?tree=1");
+      if (treeRes.ok) setDashboardTree(await treeRes.json());
+    } else if (meJson.user) {
       const [srcRes, favRes, dashRes] = await Promise.all([
         fetch("/api/sources"),
         fetch("/api/favorited-queries"),
@@ -172,7 +182,61 @@ export default function HomePage() {
   isDraft?: boolean;
   author?: string;
   mine?: boolean;
+  isPrivate?: boolean;
 };
+
+type HomeDataset = { dataset: string; qualified: string; title?: string; description?: string; dashboards: DashboardChip[] };
+
+/**
+ * Home for a dashboard-only account: each dataset they can open, and the
+ * dashboards on it they can see. A dataset with none is left out — for them it
+ * holds nothing to open — and so an account granted nothing yet gets a
+ * sentence saying so rather than a blank page.
+ */
+function DashboardOnlyHome({ datasets }: { datasets: HomeDataset[] | null }) {
+  if (datasets === null) return <p className="text-gray-500 dark:text-gray-400 text-xs">loading…</p>;
+  const withDashboards = datasets.filter((ds) => ds.dashboards.length > 0);
+  if (withDashboards.length === 0) {
+    return (
+      <section className="border border-gray-200 dark:border-gray-800 rounded p-6 text-center">
+        <p className="text-gray-700 dark:text-gray-300">No dashboards have been shared with you yet.</p>
+        <p className="mt-2 text-gray-500 dark:text-gray-400 text-xs leading-relaxed">
+          Ask whoever runs this instance to give you access.
+        </p>
+      </section>
+    );
+  }
+  return (
+    <section>
+      <h2 className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-3">Dashboards</h2>
+      <div className="space-y-4">
+        {withDashboards.map((ds) => (
+          <div key={ds.qualified} className="border border-gray-200 dark:border-gray-800 rounded p-4 space-y-2">
+            <div>
+              <h3 className="font-semibold">{ds.title ?? ds.dataset}</h3>
+              {ds.description && (
+                <p className="text-gray-500 dark:text-gray-400 text-xs leading-relaxed">{ds.description}</p>
+              )}
+            </div>
+            {/* The model's own, then the drafts people opened or shared — the
+                same two rows, in the same order, as everyone else's home. */}
+            {modelDashboards(ds.dashboards).length > 0 && (
+              <DashboardRow label="dashboards" dataset={ds.qualified} items={modelDashboards(ds.dashboards)} />
+            )}
+            {userDashboards(ds.dashboards).length > 0 && (
+              <DashboardRow
+                label="user dashboards"
+                dataset={ds.qualified}
+                items={userDashboards(ds.dashboards)}
+                collapseAfter={6}
+              />
+            )}
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
 
 const modelDashboards = (all: DashboardChip[]): DashboardChip[] => all.filter((d) => !d.isDraft);
 // Yours first: on a dataset other people also build on, your own are what you
@@ -204,7 +268,15 @@ function DashboardRow({
         <Link
           key={d.name}
           href={`/datasets/${encodeURIComponent(dataset)}/dashboard/${encodeURIComponent(d.name)}`}
-          title={[d.description, d.isDraft && d.author ? `by ${d.author}` : null].filter(Boolean).join(" — ") || undefined}
+          title={
+            [
+              d.description,
+              d.isDraft && d.author ? `by ${d.author}` : null,
+              d.isPrivate ? "private — not listed to everyone on this dataset" : null,
+            ]
+              .filter(Boolean)
+              .join(" — ") || undefined
+          }
           className={
             "text-xs px-2 py-0.5 rounded border hover:bg-gray-50 dark:hover:bg-gray-900 " +
             (d.isDraft
@@ -213,6 +285,7 @@ function DashboardRow({
           }
         >
           {d.title}
+          {d.isPrivate && <LockIcon size={9} aria-label="Private" className="ml-1 inline opacity-60" />}
           {d.isDraft && d.author && !d.mine && (
             <span className="ml-1 text-[9px] text-gray-400 dark:text-gray-500">{shortAuthor(d.author)}</span>
           )}
@@ -256,7 +329,7 @@ function shortAuthor(author: string): string {
     // every dashboard rendered twice under each.
     let arr = dashByDataset.get(d.qualified);
     if (!arr) { arr = []; dashByDataset.set(d.qualified, arr); }
-    arr.push({ name: d.name, title: d.title, description: d.description, isDraft: d.isDraft, author: d.author, mine: d.mine });
+    arr.push({ name: d.name, title: d.title, description: d.description, isDraft: d.isDraft, author: d.author, mine: d.mine, isPrivate: d.isPrivate });
   }
 
 
@@ -409,6 +482,8 @@ function shortAuthor(author: string): string {
             </p>
           )}
         </section>
+      ) : me.dashboardOnly ? (
+        <DashboardOnlyHome datasets={dashboardTree} />
       ) : (
         <>
           {/* Tokens is everyone's — a member holds their own CLI credential; admin

@@ -245,6 +245,10 @@ echo "→ running hosted-explore test"
 reset_schema
 npx tsx --test test/hosted-explore.test.ts
 
+echo "→ running dashboard-audience test (private dashboards, sharing, dashboard-only)"
+reset_schema
+npx tsx --test test/dashboard-audience.test.ts
+
 echo "→ running mcp-route test (official MCP client → /mcp, both protocol eras)"
 reset_schema
 npx tsx --test test/mcp-route.test.ts

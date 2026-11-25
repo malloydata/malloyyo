@@ -18,6 +18,7 @@
 
 import { NextResponse } from "next/server";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
+import { dashboardOnlyRefusal } from "@/lib/explore-gate";
 import { isAdmin } from "@/lib/admin";
 import { askEnabled, askForMalloy } from "@/lib/ask";
 import { runQueryForWeb } from "@/lib/mcp-tools";
@@ -47,6 +48,8 @@ export async function POST(req: Request) {
     }
     throw err;
   }
+  const refusal = dashboardOnlyRefusal(user);
+  if (refusal) return refusal;
 
   let body: {
     source?: string;

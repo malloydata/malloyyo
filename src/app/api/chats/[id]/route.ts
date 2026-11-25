@@ -11,6 +11,7 @@
 
 import { NextResponse } from "next/server";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
+import { dashboardOnlyRefusal } from "@/lib/explore-gate";
 import {
   chatIsPublishable,
   deleteChat,
@@ -45,7 +46,9 @@ type Ctx = { params: Promise<{ id: string }> };
 
 async function requireUser() {
   try {
-    return { user: await getSessionUser() };
+    const user = await getSessionUser();
+    const refusal = dashboardOnlyRefusal(user);
+    return refusal ? { error: refusal } : { user };
   } catch (err) {
     if (err instanceof UnauthorizedError) {
       return { error: NextResponse.json({ error: "sign in required" }, { status: 401 }) };

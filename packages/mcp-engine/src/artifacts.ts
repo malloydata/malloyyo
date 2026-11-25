@@ -57,6 +57,12 @@ export interface ArtifactInfo {
       dashboard into the staged/Apply model; omitted or `autorun=true` = live.
       Only carried when explicitly `false` (the runtime treats absent as live). */
   autorun?: boolean;
+  /** `# artifact { private }`: where the dashboard is hosted, it is not listed
+      to everyone who can open the dataset — admins see it, and share it with
+      people one at a time. Only carried when set. Curation, not access control:
+      the dataset still decides who can read the data. Local tooling
+      (`dashboard dev`, a static bundle) has no audience and ignores it. */
+  private?: boolean;
   /** Non-fatal authoring issues surfaced by `lint` (e.g. `dashboard_columns` on a
       single-tile artifact, which is ignored). Never blocks; absent when clean. */
   warnings?: string[];
@@ -146,6 +152,12 @@ export function readArtifactTag(ident: ArtifactIdent, q: Tagged): ArtifactInfo |
   const name = nested?.text('name') ?? tag.text('name') ?? ident.defaultName;
   const title =
     nested?.text('title') ?? tag.text('title') ?? description?.split('\n')[0] ?? ident.defaultName;
+  // A bare `private` or `private=true`; `private=false` says the opposite out
+  // loud, which is worth allowing so a tag can be flipped without deleting it.
+  // Read at both sites, like every other property here: the braced form nests
+  // it under `artifact`, the flat form (`# artifact name="x" private`) does not.
+  const privateAt = nested?.has('private') ? nested : tag.has('private') ? tag : undefined;
+  const isPrivate = privateAt !== undefined && privateAt.text('private') !== 'false';
 
   // Composite: `tiles=[…]`. Each tile resolves to a run-expression (bare views
   // scoped to the declaring source).
@@ -165,6 +177,7 @@ export function readArtifactTag(ident: ArtifactIdent, q: Tagged): ArtifactInfo |
       if (description) info.description = description;
       if (autorunText === 'false') info.autorun = false;
       if (givens) info.givens = givens;
+      if (isPrivate) info.private = true;
       if (typeof cols === 'number')
         info.warnings = [
           'dashboard_columns is ignored on a single-tile artifact (one tile renders like a single-query `# artifact`, laid out by the tile query’s own `# dashboard` tag)',
@@ -178,6 +191,7 @@ export function readArtifactTag(ident: ArtifactIdent, q: Tagged): ArtifactInfo |
     if (typeof cols === 'number') info.dashboard_columns = cols;
     if (autorunText === 'false') info.autorun = false;
     if (givens) info.givens = givens;
+    if (isPrivate) info.private = true;
     return info;
   }
 
@@ -191,6 +205,7 @@ export function readArtifactTag(ident: ArtifactIdent, q: Tagged): ArtifactInfo |
   if (autorunText === 'false') info.autorun = false;
   const givens = readGivens(tag);
   if (givens) info.givens = givens;
+  if (isPrivate) info.private = true;
   return info;
 }
 

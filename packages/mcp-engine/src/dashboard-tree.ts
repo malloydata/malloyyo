@@ -16,6 +16,9 @@ export interface TreeDashboard {
   isDraft?: boolean;
   author?: string;
   mine?: boolean;
+  /** Not listed to everyone on the dataset — the reader is one of the few who
+      can see it. Hosted only; a local tree has no audience. */
+  isPrivate?: boolean;
 }
 export interface TreeDataset {
   /** The dataset's NAME — its identity, and what links are built from. */

@@ -78,7 +78,7 @@ export async function GET(req: Request) {
 /** A summary as the browser sees it. `mine` rather than the author id: a
     listing sorts a reader's own first, and no client needs other people's ids. */
 function wire(
-  { name, title, description, isDraft, author, authorId }: DashboardSummary,
+  { name, title, description, isDraft, author, authorId, isPrivate }: DashboardSummary,
   userId: string,
 ) {
   return {
@@ -86,5 +86,9 @@ function wire(
     title,
     ...(description ? { description } : {}),
     ...(isDraft ? { isDraft: true, author, mine: authorId === userId } : {}),
+    // So a menu can mark what is not listed to everyone — the person reading
+    // it is one of the few who can see it, and should know that before
+    // forwarding the link.
+    ...(isPrivate ? { isPrivate: true } : {}),
   };
 }

@@ -1107,11 +1107,12 @@ export const chatResults = pgTable(
 // addressed as the dashboard name `draft-<slug>` so every dashboard route
 // (page, frame, bundle, run, the MCP panel) serves it unchanged.
 //
-// Unlisted, not private: anyone who can read the dataset and has the slug can
-// view it; only its creator can overwrite it. The .malloy text has passed the
-// restricted gate (no raw SQL / connections / imports) before it is stored —
-// see src/lib/dashboards/draft.ts — which is what makes it safe to compile
-// as a model file.
+// Private until its author says otherwise: `visibility` decides who else on
+// the dataset may open it (see src/lib/dashboards/audience.ts); only its
+// creator can overwrite it. The .malloy text has passed the restricted gate
+// (no raw SQL / connections / imports) before it is stored — see
+// src/lib/dashboards/draft.ts — which is what makes it safe to compile as a
+// model file.
 export const draftDashboards = pgTable(
   "draft_dashboards",
   {
@@ -1146,10 +1147,54 @@ export const draftDashboards = pgTable(
     promotedAs: text("promoted_as"),
     promotedHash: text("promoted_hash"),
     promotedAt: timestamp("promoted_at", { withTimezone: true }),
+    // Who, beyond its author and the admins, may open it.
+    //   private — nobody, except people it is shared with (dashboard_grants)
+    //   dataset — everyone who can open the dataset
+    // New drafts are private: a draft is work in progress, and listing it to
+    // the whole dataset is its author's call. Rows that predate the column were
+    // listed to everyone and stay `dataset` (the migration says so), so no link
+    // anyone already holds stops working.
+    visibility: text("visibility").$type<DraftVisibility>().notNull().default("private"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`now()`),
   },
   (t) => [index("draft_dashboards_user_idx").on(t.userId, t.updatedAt)],
+);
+
+export const DRAFT_VISIBILITIES = ["private", "dataset"] as const;
+export type DraftVisibility = (typeof DRAFT_VISIBILITIES)[number];
+
+// A PRIVATE dashboard shared with one person.
+//
+// Private means a draft whose author has not opened it to the dataset, or a
+// modeled dashboard tagged `# artifact { private }`. Admins and (for a draft)
+// its author see it regardless; a row here adds one more person.
+//
+// This NARROWS what a dataset shows and never widens it: the grantee still has
+// to be able to open the dataset, which stays the unit of access. It is
+// curation, not a security boundary — anyone who can open one dashboard on a
+// dataset can query the whole dataset through it.
+//
+// Keyed by the dashboard's NAME as every route addresses it (`draft-<slug>` for
+// a draft) rather than by an artifact row id: a modeled dashboard is a new
+// artifact row on every publish, and a grant has to survive that.
+export const dashboardGrants = pgTable(
+  "dashboard_grants",
+  {
+    datasetId: uuid("dataset_id")
+      .notNull()
+      .references(() => datasets.id, { onDelete: "cascade" }),
+    dashboard: text("dashboard").notNull(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    grantedById: uuid("granted_by_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
+  },
+  (t) => [
+    primaryKey({ columns: [t.datasetId, t.dashboard, t.userId] }),
+    index("dashboard_grants_user_idx").on(t.userId),
+  ],
 );
 
 export type Repo = typeof repos.$inferSelect;
@@ -1178,3 +1223,4 @@ export type Chat = typeof chats.$inferSelect;
 export type ChatMessage = typeof chatMessages.$inferSelect;
 export type ChatResult = typeof chatResults.$inferSelect;
 export type DraftDashboard = typeof draftDashboards.$inferSelect;
+export type DashboardGrant = typeof dashboardGrants.$inferSelect;

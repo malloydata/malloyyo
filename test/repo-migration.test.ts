@@ -91,6 +91,13 @@ const REVIEWED_AFTER_REWRITE = [
   "0027_public_to_user_role",
   "0028_drop_failed_datasets",
   "0029_repo_revision_previews",
+  // Additive: a new table the live version never reads, and a column with a
+  // default it never writes. A draft the live version saves during the deploy
+  // takes that default (private), which is what the new version would give it.
+  "0030_dashboard_audiences",
+  // One catalog row. The live version lists it as an ordinary role and gives it
+  // no meaning; nobody holds it until an admin on the new version grants it.
+  "0031_dashboard_only_role",
 ];
 
 /** What the journal should currently end with. */

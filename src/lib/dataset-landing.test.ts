@@ -58,6 +58,14 @@ test("ltool still works when the model declares no sources", () => {
   assert.doesNotMatch(path, /undefined|null/);
 });
 
+test("a dashboard-only reader lands on a dashboard, or goes home", () => {
+  // Questions and ltool are query surfaces they do not have, so those steps of
+  // the chain are not theirs to fall through to.
+  const theirs = { hasQuestions: true, firstSource: "s", dashboardOnly: true };
+  assert.match(datasetLandingPath("d", { ...theirs, dashboards: [{ name: "a" }] }), /\/dashboard\/a$/);
+  assert.equal(datasetLandingPath("d", { ...theirs, dashboards: [] }), "/");
+});
+
 test("a dashboard beats questions, and questions beat ltool", () => {
   const all = { hasQuestions: true, firstSource: "s" };
   assert.match(datasetLandingPath("d", { ...all, dashboards: [{ name: "a" }] }), /\/dashboard\/a$/);

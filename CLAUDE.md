@@ -275,6 +275,38 @@ dataset push (`/api/datasets/:id/model/push`) is retired — it answers 410. The
 ownership exceptions — dataset ownership is only half-built, so it grants no
 publish rights. Full guide: `docs/api-tokens.md`.
 
+## Who sees what: three layers, and only the first is a boundary
+
+1. **Dataset access** — `datasets.roles` against `users.roles`
+   (`visibleDatasetWhere`). The unit of access, and the only security boundary
+   here. Row scoping inside a dataset is the model's (`$MALLOYYO_EMAIL`,
+   `$MALLOYYO_ROLES`). `docs/roles-and-access.md`.
+2. **Dashboard audience** — `src/lib/dashboards/audience.ts`. A dashboard is
+   open to everyone on its dataset, or PRIVATE: a modeled one tagged
+   `# artifact { private }` (carried as `manifest.private`), or a draft whose
+   `draft_dashboards.visibility` is `private` (the default for new drafts; rows
+   from before the column are `dataset`). Private = admins + a draft's author +
+   `dashboard_grants`, which are per person and keyed by dashboard NAME
+   (`draft-<slug>` for a draft) so they survive a republish. Writes are
+   `src/lib/dashboards/sharing.ts`, behind `/api/dashboards/:ds/:name/sharing`.
+3. **Dashboard-only accounts** — the `MALLOYYO_DASHBOARD_ONLY` role;
+   `canExplore()` in `src/lib/roles.ts`. The one built-in that RESTRICTS, and
+   deliberately so: hosted sign-in creates users holding no built-in role, so a
+   positive "may query" capability would have locked all of them out. Gated in
+   `bearer-auth.ts` (every bearer surface) and `src/lib/explore-gate.ts` (each
+   session route and page that is a query surface).
+
+Layers 2 and 3 are **curation, not security** — a dashboard's run route takes
+restricted Malloy, so anyone who can open one dashboard can query its whole
+dataset. Don't write code (or docs) that treats a private dashboard or a
+dashboard-only account as protecting data; separate data means separate
+datasets.
+
+**Every dashboard read goes through `./meta`** (`getDashboard` and the list
+functions), which is where the audience is enforced. `listDashboardsForModel`
+and `listDraftsOnDataset` are the raw, unfiltered ones — pass their result
+through `visibleDashboards` before showing it to anyone.
+
 ## Vercel deployment notes
 
 - `outputFileTracingIncludes` keys must NOT have `/route` suffix

@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import { eq, desc, and, isNull, isNotNull, inArray, or, sql } from "drizzle-orm";
 import { db, datasets, history, savedQueries, users } from "@/db";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
+import { dashboardOnlyRefusal } from "@/lib/explore-gate";
 import { isAdmin } from "@/lib/admin";
 import { resolveDatasetRef } from "@/lib/repos";
 import { canReadDataset } from "@/lib/mcp-tools";
@@ -50,6 +51,8 @@ export async function GET(req: Request) {
     if (err instanceof UnauthorizedError) return NextResponse.json({ error: "sign in required" }, { status: 401 });
     throw err;
   }
+  const refusal = dashboardOnlyRefusal(user);
+  if (refusal) return refusal;
 
   const url = new URL(req.url);
   const scope = url.searchParams.get("scope") ?? "me";     // "me" | "all"

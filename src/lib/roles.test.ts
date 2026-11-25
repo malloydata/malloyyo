@@ -17,6 +17,8 @@ import {
   isEnvAdmin,
   roleNameError,
   rolesOf,
+  canExplore,
+  MALLOYYO_DASHBOARD_ONLY,
 } from "./roles";
 
 // env.APP_ADMIN_EMAILS is a getter, so setting the variable around the run is
@@ -81,6 +83,35 @@ test("canAuthor: admins, and nobody else", () => {
   assert.ok(!canAuthor({ roles: ["finance"] }));
   assert.ok(!canAuthor({ roles: ["MALLOYYO_DEVELOPER"] }), "the removed role grants nothing");
   assert.ok(!canAuthor({}));
+});
+
+test("canExplore: everyone, unless they are dashboard-only — and an admin regardless", () => {
+  // The default is YES, and it has to be: people admitted through a hosted
+  // sign-in hold no built-in role at all, so a rule that required one would
+  // lock every one of them out of the query surfaces on deploy.
+  assert.ok(canExplore({}));
+  assert.ok(canExplore({ roles: [] }));
+  assert.ok(canExplore({ roles: ["finance"] }));
+  assert.ok(canExplore({ roles: [MALLOYYO_USER] }));
+
+  assert.ok(!canExplore({ roles: [MALLOYYO_DASHBOARD_ONLY] }));
+  // It restricts whatever else they hold; the other roles still say which
+  // datasets' dashboards they see.
+  assert.ok(!canExplore({ roles: [MALLOYYO_USER, "finance", MALLOYYO_DASHBOARD_ONLY] }));
+
+  // An instance must not be able to tick its way into an admin who cannot use
+  // it — by any of the ways there are of being an admin.
+  assert.ok(canExplore({ roles: [MALLOYYO_ADMIN, MALLOYYO_DASHBOARD_ONLY] }));
+  assert.ok(canExplore({ role: "owner", roles: [MALLOYYO_DASHBOARD_ONLY] }));
+  assert.ok(canExplore({ isAdmin: true, roles: [MALLOYYO_DASHBOARD_ONLY] }));
+});
+
+test("dashboard-only is built in, and is safe as an admission default", () => {
+  assert.ok(isBuiltinRole(MALLOYYO_DASHBOARD_ONLY));
+  assert.ok(roleNameError(MALLOYYO_DASHBOARD_ONLY), "it cannot be re-created by hand");
+  // The opposite of MALLOYYO_ADMIN: it narrows, so handing it to every arrival
+  // is how an instance of dashboard-only readers is set up.
+  assert.ok(!NEVER_A_DEFAULT.includes(MALLOYYO_DASHBOARD_ONLY));
 });
 
 test("the privileged built-ins are never an admission default", () => {

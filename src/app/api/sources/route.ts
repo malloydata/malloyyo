@@ -33,7 +33,7 @@ export async function GET() {
     ? // At QUERY level: this is the catalogue of sources to run something
       // against, and what ltool and chat offer. A dataset someone can only view
       // reaches them through its dashboards (/api/dashboards), not through here.
-      datasetAccessWhere(me.id, "query", admin)
+      datasetAccessWhere(me.id, "query")
     : and(eq(datasets.isPublic, true), ne(datasets.status, "failed"));
 
   const dsList = await db

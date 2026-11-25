@@ -8,19 +8,12 @@
 // set once and then forgotten.
 
 import { asc, desc, eq } from "drizzle-orm";
-import { db, datasets, givens as givensTable, roles as rolesTable, users } from "@/db";
+import { dashboardGrants, db, datasets, givens as givensTable, roles as rolesTable, users } from "@/db";
 import { requireAdminPage } from "@/lib/admin";
-import { defaultRoles, isBuiltinRole, MALLOYYO_ADMIN, NEVER_A_DEFAULT, rolesOf } from "@/lib/roles";
+import { defaultRoles, MALLOYYO_ADMIN, NEVER_A_DEFAULT, rolesOf } from "@/lib/roles";
 import { datasetTitle } from "@malloyyo/mcp-engine";
-import {
-  DatasetGivens,
-  DefaultRoles,
-  DeleteRoleButton,
-  NewRoleForm,
-  RoleDatasets,
-  UserRoles,
-  RoleAccess,
-} from "./role-controls";
+import { DatasetGivens, DefaultRoles } from "./role-controls";
+import { PeoplePanel, RolesPanel, type SharedDashboard } from "./roles-workspace";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -32,13 +25,13 @@ const THEAD =
   "bg-gray-50 dark:bg-gray-900 text-left text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-gray-800";
 
 export default async function AdminRolesPage() {
-  await requireAdminPage();
+  const me = await requireAdminPage();
 
-  const [catalog, dsRows, people, fallback, givenCatalog] = await Promise.all([
+  const [catalog, dsRows, people, fallback, givenCatalog, grants] = await Promise.all([
     db.select().from(rolesTable).orderBy(asc(rolesTable.builtin), asc(rolesTable.name)),
     // Ready datasets only. A failed or half-built row cannot be opened by
-    // anyone, and listing it here means two checkboxes with the same label and
-    // no way to tell which is which.
+    // anyone, and listing it here means two rows with the same label and no
+    // way to tell which is which.
     db
       .select({
         id: datasets.id,
@@ -46,6 +39,9 @@ export default async function AdminRolesPage() {
         title: datasets.title,
         description: datasets.description,
         roles: datasets.roles,
+        viewOnlyRoles: datasets.viewOnlyRoles,
+        isPublic: datasets.isPublic,
+        ownerId: datasets.userId,
         requiredGivens: datasets.requiredGivens,
       })
       .from(datasets)
@@ -54,147 +50,55 @@ export default async function AdminRolesPage() {
     db.select().from(users).orderBy(desc(users.createdAt)),
     defaultRoles(),
     db.select().from(givensTable).orderBy(asc(givensTable.name)),
+    // Private dashboards shared with people by email — shown beside each
+    // person, because a role change can strand one.
+    db
+      .select({
+        userId: dashboardGrants.userId,
+        datasetId: dashboardGrants.datasetId,
+        dashboard: dashboardGrants.dashboard,
+      })
+      .from(dashboardGrants),
   ]);
 
   const allRoleNames = catalog.map((r) => r.name);
   // Title for reading, NAME underneath. This page is where access is decided,
   // and titles are not unique — two datasets may both be called "Sales", and a
-  // row you cannot tell apart is a role granted to the wrong one.
+  // row you cannot tell apart is a level set on the wrong one.
   const allDatasets = dsRows.map((d) => ({
     id: d.id,
     name: d.name,
     title: datasetTitle(d.name, d.title),
-    description: d.description ?? undefined,
+    roles: d.roles ?? [],
+    viewOnlyRoles: d.viewOnlyRoles ?? [],
+    isPublic: d.isPublic,
+    ownerId: d.ownerId,
   }));
-  const members = people.filter((u) => u.status !== "pending");
-  const holders = (role: string) => members.filter((u) => rolesOf(u).includes(role)).length;
-  const grantedFor = (role: string) =>
-    dsRows.filter((d) => (d.roles ?? []).includes(role)).map((d) => d.id);
+  const members = people
+    .filter((u) => u.status !== "pending")
+    .map((u) => {
+      // `rolesOf`, not the bare column: it folds in the older ways of being an
+      // admin, so this page and every access check name the same people.
+      const held = rolesOf(u);
+      return {
+        id: u.id,
+        name: u.name,
+        email: u.email,
+        roles: held,
+        isAdmin: held.includes(MALLOYYO_ADMIN),
+        isOwner: u.role === "owner",
+        isSelf: u.id === me.id,
+      };
+    });
+  const shared: Record<string, SharedDashboard[]> = {};
+  for (const g of grants) (shared[g.userId] ??= []).push({ datasetId: g.datasetId, dashboard: g.dashboard });
+  const roleRows = catalog.map((r) => ({ name: r.name, description: r.description, builtin: r.builtin }));
 
   return (
-    <div className="flex flex-col gap-8">
-      <section className="flex flex-col gap-3">
-        <div>
-          <h2 className="text-sm font-medium">Roles</h2>
-          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 max-w-2xl">
-            A role decides which datasets someone may open, and what they may do there:
-            query them, or only open their dashboards. Someone holding several roles gets the
-            most any of them allows on each dataset. It is all of a dataset or none of it, so
-            if two groups need different sources, make two datasets. The two{" "}
-            <code className="text-[11px]">MALLOYYO_</code> roles are built in. The rest are
-            yours, and usually name a group of people.
-          </p>
-        </div>
+    <div className="flex flex-col gap-10">
+      <RolesPanel roles={roleRows} datasets={allDatasets} people={members} canViewAs />
 
-        <NewRoleForm />
-
-        <div className={TABLE_WRAP}>
-          <table className="w-full text-sm">
-            <thead className={THEAD}>
-              <tr>
-                <th className={TH}>Role</th>
-                <th className={TH}>Allows</th>
-                <th className={TH}>Opens</th>
-                <th className={TH}>Held by</th>
-                <th className={TH} />
-              </tr>
-            </thead>
-            <tbody>
-              {catalog.map((role) => (
-                <tr key={role.name} className="border-b border-gray-100 dark:border-gray-800 last:border-0">
-                  <td className={TD}>
-                    <div className="font-mono text-xs">{role.name}</div>
-                    {role.description && (
-                      <div className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 max-w-sm">
-                        {role.description}
-                      </div>
-                    )}
-                  </td>
-                  <td className={TD}>
-                    {/* An admin publishes models and grants roles; "dashboards
-                        only" is not a thing that role can mean, so it is not
-                        offered and the route refuses it. */}
-                    {role.name === MALLOYYO_ADMIN ? (
-                      <span className="text-xs text-gray-500 dark:text-gray-400">everything</span>
-                    ) : (
-                      <RoleAccess key={String(role.viewOnly)} name={role.name} viewOnly={role.viewOnly} />
-                    )}
-                  </td>
-                  <td className={TD}>
-                    {/* MALLOYYO_ADMIN opens every dataset by itself
-                        (datasetVisibleWhere), so a row of checkboxes here was
-                        not a grant — ticking one changed nothing and leaving it
-                        unticked withheld nothing. Saying so is the honest
-                        control; offering a choice that does not exist is not. */}
-                    {role.name === MALLOYYO_ADMIN ? (
-                      <span className="text-xs text-gray-500 dark:text-gray-400">
-                        every dataset, including ones added later
-                      </span>
-                    ) : (
-                      <RoleDatasets
-                        key={grantedFor(role.name).join(",")}
-                        name={role.name}
-                        all={allDatasets}
-                        granted={grantedFor(role.name)}
-                      />
-                    )}
-                  </td>
-                  <td className={`${TD} text-xs text-gray-500 dark:text-gray-400 whitespace-nowrap`}>
-                    {holders(role.name)}
-                  </td>
-                  <td className={`${TD} text-right`}>
-                    {isBuiltinRole(role.name) ? (
-                      <span className="text-xs text-gray-400">built in</span>
-                    ) : (
-                      <DeleteRoleButton name={role.name} holders={holders(role.name)} />
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
-
-      <section className="flex flex-col gap-3">
-        <div>
-          <h2 className="text-sm font-medium">Who holds what</h2>
-          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 max-w-2xl">
-            Changes take effect on their next request. Take away the last role that opens a
-            dataset and it disappears from their view: not listed, not just refused.
-          </p>
-        </div>
-        <div className={TABLE_WRAP}>
-          <table className="w-full text-sm">
-            <thead className={THEAD}>
-              <tr>
-                <th className={TH}>Person</th>
-                <th className={TH}>Roles</th>
-              </tr>
-            </thead>
-            <tbody>
-              {members.map((u) => (
-                <tr key={u.id} className="border-b border-gray-100 dark:border-gray-800 last:border-0">
-                  <td className={TD}>
-                    <div>{u.name ?? u.email ?? u.id.slice(0, 8)}</div>
-                    {u.name && u.email && (
-                      <div className="text-xs text-gray-500 dark:text-gray-400">{u.email}</div>
-                    )}
-                  </td>
-                  <td className={TD}>
-                    <UserRoles
-                      key={rolesOf(u).join(",")}
-                      userId={u.id}
-                      all={allRoleNames}
-                      held={rolesOf(u)}
-                    />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </section>
+      <PeoplePanel people={members} roles={roleRows} datasets={allDatasets} shared={shared} canViewAs />
 
       <section className="flex flex-col gap-3">
         <div>
@@ -244,10 +148,10 @@ export default async function AdminRolesPage() {
 
       <section className="flex flex-col gap-2">
         <div>
-          <h2 className="text-sm font-medium">New arrivals get</h2>
+          <h2 className="text-sm font-medium">New users get</h2>
           <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 max-w-2xl">
-            Roles everyone gets on their first sign-in. If none of them opens a dataset, new
-            people see an empty instance until someone grants them access.
+            The roles someone holds the first time they sign in. If none of them opens a
+            dataset, a new person signs in to an empty page until you give them a role.
           </p>
         </div>
         <DefaultRoles

@@ -140,8 +140,8 @@ You'll rarely need these from Claude Code, but they exist:
 A dashboard made in chat with `save_draft_dashboard` is a **draft**. It lives on
 the instance and starts out **private**: its author and admins can open it, and
 nobody else. Its author opens it to everyone who can see the dataset — or shares
-it with individual people — from the bar across its page, or by saving it with
-`visibility: "dataset"`. To make it part of the model, Claude writes it into the repo as
+it with individual people — from the **Share** button on its page, or by saving
+it with `visibility: "dataset"`. Promoting it keeps whichever it has. To make it part of the model, Claude writes it into the repo as
 `dashboards/<name>.malloy` plus its component (`get_draft_dashboard` hands it
 the files), previews it, commits, and records the promotion.
 

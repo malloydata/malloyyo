@@ -6,8 +6,8 @@
 // see what).
 //
 //   GET     the current audience
-//   PATCH   { visibility }  open a DRAFT to its dataset, or close it
-//   POST    { email }       share a private dashboard with one person
+//   PATCH   { visibility }  general access: private, or open to the dataset
+//   POST    { email }       share it with one person
 //   DELETE  { userId }      stop sharing it with them
 //
 // A browser session only. This is something a person does on a dashboard's
@@ -18,7 +18,7 @@ import { DRAFT_VISIBILITIES, type DraftVisibility, type User } from "@/db";
 import { getSessionUserOrNull } from "@/lib/user";
 import {
   getSharing,
-  setDraftVisibility,
+  setDashboardVisibility,
   shareDashboard,
   unshareDashboard,
   type SharingResult,
@@ -64,7 +64,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
     );
   }
   return withUser(ctx, async (user, datasetId, name) =>
-    answer(await setDraftVisibility(user, datasetId, name, visibility as DraftVisibility)),
+    answer(await setDashboardVisibility(user, datasetId, name, visibility as DraftVisibility)),
   );
 }
 

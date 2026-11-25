@@ -135,6 +135,8 @@ export function dashboardUrl(baseUrl: string, modelRef: string, name: string): s
 type DatasetRow = {
   id: string;
   name: string;
+  /** Which of its published dashboards are private — see dashboards/audience. */
+  dashboardAudience: Record<string, "private" | "dataset"> | null;
   /** The repo that publishes it, or null for one no repo does. */
   repoSlug: string | null;
   /**
@@ -167,6 +169,7 @@ async function visibleDatasets(userId: string): Promise<DatasetRow[]> {
       name: datasets.name,
       repoSlug: repos.slug,
       requiredGivens: datasets.requiredGivens,
+      dashboardAudience: datasets.dashboardAudience,
     })
     .from(datasets)
     .leftJoin(repos, eq(datasets.repoId, repos.id))
@@ -282,7 +285,7 @@ function makeExploreHost(user: User, baseUrl: string): ExploreHost {
           const listed = await visibleDashboards(
             userId,
             ds.id,
-            await listDashboardsForModel(model.id, ds.id, ds.name),
+            await listDashboardsForModel(model.id, ds.id, ds.name, ds.dashboardAudience),
           );
           const dashboards = listed.map((d) => ({
             name: d.name,

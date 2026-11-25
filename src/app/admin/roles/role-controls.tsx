@@ -5,7 +5,9 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
-function useAction() {
+/** One POST to /api/admin/roles, then a refresh so the page shows what is
+    stored. Shared with ./roles-workspace. */
+export function useAction() {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -32,9 +34,9 @@ function useAction() {
   return { run, busy, error };
 }
 
-const BTN =
+export const BTN =
   "px-2 py-1 rounded border border-gray-300 dark:border-gray-700 text-xs hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-50";
-const INPUT =
+export const INPUT =
   "px-2 py-1 rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950 text-sm";
 
 export function NewRoleForm() {
@@ -95,133 +97,6 @@ export function DeleteRoleButton({ name, holders }: { name: string; holders: num
       </button>
       {error && <span className="text-xs text-red-600 dark:text-red-400">{error}</span>}
     </span>
-  );
-}
-
-/**
- * What a role lets its holders do on the datasets it opens: query them, or only
- * open their dashboards. Saved on change — it is one choice, and a Save button
- * beside a two-way switch is a second click that can only be forgotten.
- */
-export function RoleAccess({ name, viewOnly }: { name: string; viewOnly: boolean }) {
-  const { run, busy, error } = useAction();
-  return (
-    <span className="inline-flex flex-col gap-1">
-      <select
-        aria-label={`What ${name} allows`}
-        className={`${INPUT} text-xs`}
-        disabled={busy}
-        value={viewOnly ? "view" : "query"}
-        onChange={(e) => void run({ action: "set-access", name, viewOnly: e.target.value === "view" })}
-      >
-        <option value="query">Query and dashboards</option>
-        <option value="view">Dashboards only</option>
-      </select>
-      {error && <span className="text-xs text-red-600 dark:text-red-400">{error}</span>}
-    </span>
-  );
-}
-
-/** Which datasets a role opens. Saved as a whole set, so unchecking is a real
-    edit rather than something you have to remember to apply separately. */
-export function RoleDatasets({
-  name,
-  all,
-  granted,
-}: {
-  name: string;
-  all: { id: string; name: string; title: string; description?: string }[];
-  granted: string[];
-}) {
-  const { run, busy, error } = useAction();
-  const [picked, setPicked] = useState<string[]>(granted);
-  const dirty =
-    picked.length !== granted.length || picked.some((id) => !granted.includes(id));
-  return (
-    <div className="flex flex-col gap-1.5">
-      <div className="flex flex-wrap gap-x-3 gap-y-1">
-        {all.length === 0 && <span className="text-xs text-gray-400">no datasets yet</span>}
-        {all.map((d) => (
-          <label key={d.id} className="inline-flex items-center gap-1 text-xs">
-            <input
-              type="checkbox"
-              checked={picked.includes(d.id)}
-              onChange={(e) =>
-                setPicked((p) => (e.target.checked ? [...p, d.id] : p.filter((x) => x !== d.id)))
-              }
-            />
-            {/* The name is the tooltip: titles are not unique, and this is a
-                grant. */}
-            <span title={d.description ? `${d.name} — ${d.description}` : d.name}>{d.title}</span>
-          </label>
-        ))}
-      </div>
-      {dirty && (
-        <span className="inline-flex items-center gap-2">
-          <button
-            type="button"
-            className={BTN}
-            disabled={busy}
-            onClick={() => void run({ action: "set-datasets", name, datasetIds: picked })}
-          >
-            Save
-          </button>
-          <button type="button" className={BTN} disabled={busy} onClick={() => setPicked(granted)}>
-            Cancel
-          </button>
-        </span>
-      )}
-      {error && <span className="text-xs text-red-600 dark:text-red-400">{error}</span>}
-    </div>
-  );
-}
-
-/** The roles one person holds. */
-export function UserRoles({
-  userId,
-  all,
-  held,
-}: {
-  userId: string;
-  all: string[];
-  held: string[];
-}) {
-  const { run, busy, error } = useAction();
-  const [picked, setPicked] = useState<string[]>(held);
-  const dirty = picked.length !== held.length || picked.some((r) => !held.includes(r));
-  return (
-    <div className="flex flex-col gap-1">
-      <div className="flex flex-wrap gap-x-2.5 gap-y-1">
-        {all.map((r) => (
-          <label key={r} className="inline-flex items-center gap-1 text-xs">
-            <input
-              type="checkbox"
-              checked={picked.includes(r)}
-              onChange={(e) =>
-                setPicked((p) => (e.target.checked ? [...p, r] : p.filter((x) => x !== r)))
-              }
-            />
-            <span className={r.startsWith("MALLOYYO_") ? "text-gray-500 dark:text-gray-400" : ""}>{r}</span>
-          </label>
-        ))}
-      </div>
-      {dirty && (
-        <span className="inline-flex items-center gap-2">
-          <button
-            type="button"
-            className={BTN}
-            disabled={busy}
-            onClick={() => void run({ action: "set-user-roles", userId, roles: picked })}
-          >
-            Save
-          </button>
-          <button type="button" className={BTN} disabled={busy} onClick={() => setPicked(held)}>
-            Cancel
-          </button>
-        </span>
-      )}
-      {error && <span className="text-xs text-red-600 dark:text-red-400">{error}</span>}
-    </div>
   );
 }
 

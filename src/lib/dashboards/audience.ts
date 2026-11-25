@@ -6,8 +6,13 @@
  *
  * A dashboard is either open to everyone who can open its dataset, or PRIVATE:
  *
- *   modeled  private when its tag says so — `# artifact { private }`
- *   draft    private until its author opens it (`draft_dashboards.visibility`)
+ *   published  private when its stored setting says so, and until one is set,
+ *              when its tag does — `# artifact { private }`
+ *   draft      private until its author opens it (`draft_dashboards.visibility`)
+ *
+ * One setting, changed in one place (the Share dialog), for both kinds — so
+ * promoting a draft copies its audience across and changes nothing about who
+ * can see it.
  *
  * A private dashboard is seen by admins, by its author (a draft has one; a
  * modeled dashboard's author is the repo), and by the people it has been shared
@@ -38,6 +43,30 @@ export interface Audience {
 /** `# artifact { private }`, as the stored manifest carries it. */
 export function isPrivateManifest(manifest: Record<string, unknown> | null | undefined): boolean {
   return manifest?.private === true;
+}
+
+/** The stored audience of a dataset's published dashboards, by name
+    (`datasets.dashboard_audience`). */
+export type AudienceMap = Record<string, "private" | "dataset"> | null | undefined;
+
+/**
+ * Whether a PUBLISHED dashboard is private.
+ *
+ * The stored setting when there is one — what the Share dialog wrote, or what
+ * promoting a draft copied over — and otherwise what the model's tag says. So
+ * the tag decides what a dashboard starts as and nothing after that, which is
+ * what lets a draft keep its audience across promotion whatever the promoted
+ * file's tag happens to say.
+ */
+export function publishedIsPrivate(
+  name: string,
+  manifest: Record<string, unknown> | null | undefined,
+  stored: AudienceMap,
+): boolean {
+  const setting = stored?.[name];
+  if (setting === "private") return true;
+  if (setting === "dataset") return false;
+  return isPrivateManifest(manifest);
 }
 
 /** Whether opening it takes more than being able to open the dataset. A

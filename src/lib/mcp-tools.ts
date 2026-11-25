@@ -34,16 +34,16 @@ import {
 // it (see `queryableDatasetWhere`). Kept as a re-export rather than inlined
 // because every read path in the app funnels through these two names, and one
 // predicate each is the only way that stays true.
-export function visibleDatasetWhere(userId: string, isAdmin = false) {
-  return datasetAccessWhere(userId, "view", isAdmin);
+export function visibleDatasetWhere(userId: string) {
+  return datasetAccessWhere(userId, "view");
 }
 
-// The datasets a user may QUERY: the ones above, minus those that only a
-// view-only role opens for them (src/lib/roles.ts, `DatasetAccess`). What every
+// The datasets a user may QUERY: the ones above, minus those their roles open
+// at the dashboards-only level (src/lib/roles.ts, `DatasetAccess`). What every
 // query surface resolves through — the source catalogue, ltool, chat, the MCP
 // tools, saving a draft.
-export function queryableDatasetWhere(userId: string, isAdmin = false) {
-  return datasetAccessWhere(userId, "query", isAdmin);
+export function queryableDatasetWhere(userId: string) {
+  return datasetAccessWhere(userId, "query");
 }
 
 /** Whether this person may query a dataset they can already open — for a page
@@ -61,8 +61,7 @@ export async function canQueryDataset(userId: string, datasetId: string): Promis
 // those questions produced, a chat scoped to it. Deliberately a different rule
 // from visibleDatasetWhere above, which decides what may be RUN.
 //
-// Running returns ROWS, so it is owner-or-public with no admin exemption — an
-// admin does not get to query a private dataset just for being an admin.
+// Running is decided by roles and levels (datasetAccessWhere, src/lib/roles.ts).
 // Reading returns a question and a query, which is how an operator answers
 // "what is this instance being used for", so an admin does see everything.
 //

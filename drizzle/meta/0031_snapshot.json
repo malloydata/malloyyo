@@ -1,5 +1,5 @@
 {
-  "id": "8531ff20-0814-43db-b4c7-daa73ad01d62",
+  "id": "9b560554-0a22-4031-8bde-7ade3ca961e6",
   "prevId": "e13101ad-b09e-4ad4-8247-ac6e2124a3f2",
   "version": "7",
   "dialect": "postgresql",
@@ -889,6 +889,20 @@
           "primaryKey": false,
           "notNull": true,
           "default": "'{}'::text[]"
+        },
+        "view_only_roles": {
+          "name": "view_only_roles",
+          "type": "text[]",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::text[]"
+        },
+        "dashboard_audience": {
+          "name": "dashboard_audience",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{}'::jsonb"
         },
         "last_publish_at": {
           "name": "last_publish_at",
@@ -2972,13 +2986,6 @@
         },
         "builtin": {
           "name": "builtin",
-          "type": "boolean",
-          "primaryKey": false,
-          "notNull": true,
-          "default": false
-        },
-        "view_only": {
-          "name": "view_only",
           "type": "boolean",
           "primaryKey": false,
           "notNull": true,

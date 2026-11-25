@@ -6,7 +6,7 @@
 // this route stays a thin shell over them.
 
 import { NextResponse } from "next/server";
-import { and, eq, inArray, notInArray, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { db, datasets, givens, instanceSettings, roles, users } from "@/db";
 import { requireAdmin } from "@/lib/admin";
 import { UnauthorizedError } from "@/lib/user";
@@ -22,6 +22,8 @@ import {
 import { logger } from "@/lib/logger";
 
 export const runtime = "nodejs";
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const bad = (error: string, status = 400) => NextResponse.json({ ok: false, error }, { status });
 
@@ -68,7 +70,10 @@ export async function POST(req: Request) {
           sql`update ${users} set roles = array_remove(roles, ${name}) where ${name} = any(roles)`,
         );
         await tx.execute(
-          sql`update ${datasets} set roles = array_remove(roles, ${name}) where ${name} = any(roles)`,
+          sql`update ${datasets}
+                 set roles = array_remove(roles, ${name}),
+                     view_only_roles = array_remove(view_only_roles, ${name})
+               where ${name} = any(roles) or ${name} = any(view_only_roles)`,
         );
         await tx.execute(
           sql`update ${instanceSettings} set default_roles = array_remove(default_roles, ${name})
@@ -79,65 +84,44 @@ export async function POST(req: Request) {
       break;
     }
 
-    case "set-access": {
-      // What the role allows on the datasets it opens: query them (the default)
-      // or only open their dashboards. One flag on the role — see
-      // `DatasetAccess` in src/lib/roles.ts for how it combines across the
-      // roles one person holds.
-      if (typeof body?.viewOnly !== "boolean") return bad("viewOnly must be true or false");
-      // An admin publishes models and grants roles. A view-only admin role
-      // would be a contradiction the rest of the app then has to keep
-      // explaining, so it cannot be made.
-      if (name === MALLOYYO_ADMIN) return bad("MALLOYYO_ADMIN always allows everything");
-      const changed = await db
-        .update(roles)
-        .set({ viewOnly: body.viewOnly })
-        .where(eq(roles.name, name))
-        .returning({ name: roles.name });
-      if (changed.length === 0) return bad(`unknown role: ${name || "(none)"}`);
-      logger.info("role access set", { name, viewOnly: body.viewOnly, actorId: actor.id });
-      break;
-    }
-
-    case "set-datasets": {
-      // Which datasets this role opens, as a whole list — the UI sends the set
-      // it wants, so a checkbox cleared in the browser is a dataset removed
-      // here without a second action to forget.
-      const wanted = Array.isArray(body?.datasetIds) ? (body.datasetIds as unknown[]).filter((x): x is string => typeof x === "string") : [];
-      if (!name) return bad("name is required");
-      const [known] = await db.select({ name: roles.name }).from(roles).where(eq(roles.name, name));
-      if (!known) return bad(`unknown role: ${name}`);
-      // Two statements, not a read-modify-write loop. The loop read every row
-      // and wrote back a computed array, so two admins saving different roles'
-      // lists at the same time both read the same `roles` and the second write
-      // erased the first's grant, with no error — and it issued one round trip
-      // per changed dataset inside the transaction.
+    case "set-level": {
+      // What ONE role gets on ONE dataset: none, view (dashboards only) or
+      // query (full). The unit Admin → Roles edits, one switch at a time.
       //
-      // Both statements are scoped to `status = 'ready'`, because that is what
-      // the page offered. Without it the revoke arm reaches every row the admin
-      // could not see and strips the role from datasets that are mid-build,
-      // which is a silent revocation by a UI that never showed the row.
-      const ready = eq(datasets.status, "ready");
-      const holdsIt = sql`${name} = any(${datasets.roles})`;
-      await db.transaction(async (tx) => {
-        if (wanted.length > 0) {
-          await tx
-            .update(datasets)
-            .set({ roles: sql`array_append(${datasets.roles}, ${name})` })
-            .where(and(ready, inArray(datasets.id, wanted), sql`not ${holdsIt}`));
-        }
-        await tx
-          .update(datasets)
-          .set({ roles: sql`array_remove(${datasets.roles}, ${name})` })
-          .where(
-            and(
-              ready,
-              holdsIt,
-              ...(wanted.length > 0 ? [notInArray(datasets.id, wanted)] : []),
-            ),
-          );
-      });
-      logger.info("role datasets set", { name, count: wanted.length, actorId: actor.id });
+      // Stored as two arrays on the dataset — `roles` (any access) and
+      // `view_only_roles` (the subset that may only view); see `DatasetAccess`
+      // in src/lib/roles.ts. Both move in ONE statement, built from the row as
+      // it is when the statement runs, so two admins setting two roles on the
+      // same dataset cannot write over each other, and no reader ever sees a
+      // role half-moved (listed as view-only but not listed at all).
+      const datasetId = typeof body?.datasetId === "string" ? body.datasetId : "";
+      const level = body?.level;
+      if (!UUID_RE.test(datasetId)) return bad("datasetId is required");
+      if (level !== "none" && level !== "view" && level !== "query") {
+        return bad("level must be none, view or query");
+      }
+      // An admin opens every dataset in full, by rule rather than by grant.
+      // Offering a switch here would be offering a choice that does not exist.
+      if (name === MALLOYYO_ADMIN) return bad("MALLOYYO_ADMIN always has full access to every dataset");
+      const [known] = await db.select({ name: roles.name }).from(roles).where(eq(roles.name, name));
+      if (!known) return bad(`unknown role: ${name || "(none)"}`);
+
+      type RoleArray = typeof datasets.roles | typeof datasets.viewOnlyRoles;
+      const without = (col: RoleArray) => sql`array_remove(${col}, ${name})`;
+      const withIt = (col: RoleArray) =>
+        sql`case when ${name} = any(${col}) then ${col} else array_append(${col}, ${name}) end`;
+      const changed = await db
+        .update(datasets)
+        .set({
+          roles: level === "none" ? without(datasets.roles) : withIt(datasets.roles),
+          viewOnlyRoles: level === "view" ? withIt(datasets.viewOnlyRoles) : without(datasets.viewOnlyRoles),
+        })
+        // Ready datasets only, because that is what the page offers — the same
+        // rule the list it replaced had.
+        .where(and(eq(datasets.id, datasetId), eq(datasets.status, "ready")))
+        .returning({ id: datasets.id });
+      if (changed.length === 0) return bad("no such dataset", 404);
+      logger.info("role level set", { name, datasetId, level, actorId: actor.id });
       break;
     }
 
@@ -243,7 +227,7 @@ export async function POST(req: Request) {
 
     default:
       return bad(
-        "expected action: create | delete | set-access | set-datasets | set-user-roles | set-dataset-givens | set-default",
+        "expected action: create | delete | set-level | set-user-roles | set-dataset-givens | set-default",
       );
   }
 

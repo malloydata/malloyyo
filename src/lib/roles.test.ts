@@ -122,7 +122,7 @@ test("roleNameError: lowercase, because models compare against these", () => {
 // way they are meant to be. Replacing the body with `true` passes no test that
 // does not look at this.
 
-test("datasetVisibleWhere: owner OR public OR role overlap, AND ready", () => {
+test("datasetVisibleWhere: owner OR public OR role overlap OR admin, AND ready", () => {
   const { sql: text, params } = db
     .select()
     .from(datasets)
@@ -143,9 +143,9 @@ test("datasetVisibleWhere: owner OR public OR role overlap, AND ready", () => {
   // Bound, never interpolated.
   assert.ok(params.includes("11111111-1111-1111-1111-111111111111"), "the id is a parameter");
   assert.ok(!text.includes("11111111"), "…and appears nowhere in the SQL text");
-  // Being an admin is deliberately NOT a way in: running a query returns rows,
-  // and administering an instance has never been a reason to read its data.
-  assert.ok(!/is_admin/i.test(text), "admin is not a visibility clause");
+  // Being an admin IS a way in, and it is decided here rather than by the
+  // caller — see the admin test below.
+  assert.match(text, /is_admin/i, "admin is a clause of the predicate itself");
 });
 
 test("datasetRoleOverlap: a NULL roles column cannot match", () => {
@@ -162,36 +162,44 @@ test("datasetRoleOverlap: a NULL roles column cannot match", () => {
 
 // ── View vs query ───────────────────────────────────────────────────────────
 //
-// A role is full or view-only, and someone's level on a dataset is the best any
-// of their roles gives them there. The behaviour is pinned against a real
-// database in test/dashboard-audience.test.ts; what is pinned here is the shape
-// of the two predicates, because the difference between them is one subquery
-// and replacing either with the other passes every test that does not look.
+// A role has a level per dataset, stored as two arrays on the dataset: `roles`
+// (any access) and `view_only_roles` (the subset that may only view). The
+// behaviour is pinned against a real database in
+// test/dashboard-audience.test.ts; what is pinned here is the shape of the two
+// predicates, because the difference between them is one subquery and replacing
+// either with the other passes every test that does not look.
 
-test("datasetAccessWhere: query level drops the roles that are view-only", () => {
+test("datasetAccessWhere: query level subtracts the dataset's view-only roles", () => {
   const id = "33333333-3333-3333-3333-333333333333";
-  const view = db.select().from(datasets).where(datasetAccessWhere(id, "view")).toSQL().sql;
-  const query = db.select().from(datasets).where(datasetAccessWhere(id, "query")).toSQL().sql;
+  // One column selected, so the text below is the predicate and not a column list.
+  const where = (w: ReturnType<typeof datasetAccessWhere>) =>
+    db.select({ id: datasets.id }).from(datasets).where(w).toSQL().sql;
+  const view = where(datasetAccessWhere(id, "view"));
+  const query = where(datasetAccessWhere(id, "query"));
 
-  // Viewing asks only whether a role overlaps; it never consults the catalog.
-  assert.ok(!/view_only/i.test(view));
-  assert.equal(view, db.select().from(datasets).where(datasetVisibleWhere(id)).toSQL().sql);
+  // Viewing asks only whether a role overlaps.
+  assert.ok(!/view_only_roles/i.test(view));
+  assert.equal(view, where(datasetVisibleWhere(id)));
 
-  // Querying removes the view-only ones from what the person holds — and by
-  // exclusion, so a role with no catalog row still counts in full. Nothing
-  // changes for anyone until an admin marks a role view-only.
-  assert.match(query, /not exists \(select 1 from "roles" where[\s\S]*"view_only"\)/i);
-  assert.match(query, /unnest\(coalesce\(\s*"users"\."roles"/i);
+  // Querying takes the view-only ones out of the dataset's list first — by
+  // subtraction, so a role that is merely absent from `view_only_roles` is
+  // full. Nothing changes for anyone until an admin sets a level to dashboards.
+  assert.match(query, /array\(select unnest\("datasets"\."roles"\) except select unnest\("datasets"\."view_only_roles"\)\) &&/i);
   // Owning a dataset, and the legacy public flag, are not roles: both stay full.
   assert.match(query, /user_id[\s\S]*\sor\s[\s\S]*is_public[\s\S]*\sor\s[\s\S]*&&/i);
   // Still a parameter, still nowhere in the text.
   assert.ok(!query.includes("33333333"));
 });
 
-test("datasetAccessWhere: an admin passes at either level", () => {
+test("datasetAccessWhere: an admin passes at either level, by every way of being one", () => {
   for (const need of ["view", "query"] as const) {
-    const text = db.select().from(datasets).where(datasetAccessWhere("x", need, true)).toSQL().sql;
-    assert.ok(!/&&/.test(text), `${need}: no role clause for an admin`);
-    assert.match(text, /status/i, `${need}: still only READY datasets`);
+    const text = db.select().from(datasets).where(datasetAccessWhere("x", need)).toSQL().sql;
+    // In the predicate itself, not a flag the caller passes: a flag most
+    // callers did not pass is how the dashboards and the MCP tools went on
+    // refusing admins while the source list showed them everything.
+    assert.match(text, /'?MALLOYYO_ADMIN'?|\$\d+ = any\(coalesce\("users"\."roles"/i, `${need}: the role list`);
+    assert.match(text, /"users"\."role" in \('owner', 'admin'\)/i, `${need}: the legacy role column`);
+    assert.match(text, /"users"\."is_admin" = true/i, `${need}: the legacy flag`);
+    assert.match(text, /\)\s+and\s+[\s\S]*status/i, `${need}: still only READY datasets`);
   }
 });

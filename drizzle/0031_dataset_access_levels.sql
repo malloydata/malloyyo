@@ -1,0 +1,2 @@
+ALTER TABLE "datasets" ADD COLUMN "view_only_roles" text[] DEFAULT '{}'::text[] NOT NULL;--> statement-breakpoint
+ALTER TABLE "datasets" ADD COLUMN "dashboard_audience" jsonb DEFAULT '{}'::jsonb NOT NULL;

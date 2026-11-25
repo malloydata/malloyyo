@@ -1,1 +1,0 @@
-ALTER TABLE "roles" ADD COLUMN "view_only" boolean DEFAULT false NOT NULL;

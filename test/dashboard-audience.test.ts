@@ -4,25 +4,26 @@
 // Who sees which dashboard, and who may query behind it — against a real
 // Postgres. Two layers under dataset access:
 //
-//   • the dashboard AUDIENCE (src/lib/dashboards/audience.ts, sharing.ts)
-//   • VIEW vs QUERY: a role is full or view-only, and someone's level on a
-//     dataset is the best any of their roles gives them (src/lib/roles.ts)
+//   • LEVELS: a role has a level per dataset — none, dashboards (view) or full
+//     (query) — and someone's level is the best any of their roles gives them
+//     (src/lib/roles.ts, src/lib/role-access.ts)
+//   • the dashboard AUDIENCE: a dashboard is open to its dataset, or private
+//     and shared by email address (src/lib/dashboards/audience.ts, sharing.ts)
 //
 // Almost entirely DB-only: these functions read rows and decide, so the
 // artifacts are bare rows and the model is compiled once, by list_sources.
 // What this pins:
 //
-//   • someone with only a view-only role on a dataset opens its dashboards and
-//     is invisible to every query surface — the source resolver, the MCP tools,
-//     saving a draft — while one full role on it is enough to query
-//   • a draft is private until its author opens it; a modeled dashboard is
-//     private when its manifest says so (`# artifact { private }`)
+//   • a role at the dashboards level opens the dashboards and is invisible to
+//     every query surface; one full role on the dataset is enough to query
+//   • the page's arithmetic and the server's SQL give the same answer
+//   • an admin opens every dataset, in full
+//   • a draft is private until its author opens it; a published dashboard is
+//     private when its stored setting says so, else when its tag does
 //   • private means admins + its author + the people it is shared with — in
 //     every listing AND at the one lookup every route goes through
-//   • sharing never opens a dataset: someone who cannot open the dataset still
-//     sees nothing, and the share says so
-//   • who may change an audience: a draft's author or an admin; a modeled
-//     dashboard, admins only, and only its people (its privacy is the model's)
+//   • sharing never opens a dataset
+//   • promoting a draft copies its audience to the published dashboard
 //
 // Run via `npm run test:hosted`.
 
@@ -41,9 +42,10 @@ import {
   type User,
 } from "@/db";
 import { allDashboardsByDataset, getDashboard, listDashboards, listDashboardsAndDrafts } from "@/lib/dashboards";
-import { deleteDraft, getDraftFiles, saveDraftDashboard } from "@/lib/dashboards/draft";
-import { getSharing, setDraftVisibility, shareDashboard, unshareDashboard } from "@/lib/dashboards/sharing";
+import { deleteDraft, getDraftFiles, recordPromotion, saveDraftDashboard } from "@/lib/dashboards/draft";
+import { getSharing, setDashboardVisibility, shareDashboard, unshareDashboard } from "@/lib/dashboards/sharing";
 import { MALLOYYO_ADMIN, MALLOYYO_USER } from "@/lib/roles";
+import { resolveAccess } from "@/lib/role-access";
 import { buildHostedExploreSurface } from "@/lib/mcp-host";
 import { canQueryDataset, findByDatasetRef, findBySource } from "@/lib/mcp-tools";
 
@@ -57,15 +59,14 @@ const person = async (email: string, roles: string[], extra: Partial<typeof user
 const names = (list: { name: string }[]) => list.map((d) => d.name).sort();
 
 before(async () => {
-  // Two roles open the dataset. `staff` is full — and deliberately has NO
-  // catalog row, because a role nobody has described must still let its holders
-  // query: that is what keeps every existing instance unchanged. `readers` is
-  // view-only.
-  await db.insert(roles).values({ name: "readers", description: "Dashboards only.", viewOnly: true });
+  // Two roles open the dataset: `staff` in full, `readers` at the dashboards
+  // level. `staff` deliberately has NO catalog row — a role nobody described
+  // must still let its holders query, which is what keeps every existing
+  // instance unchanged.
+  await db.insert(roles).values({ name: "readers", description: "Dashboards only." });
 
-  // The admin holds `staff` too: MALLOYYO_ADMIN does not open a dataset on these
-  // paths, and the point here is what an admin sees INSIDE a dataset they can open.
-  admin = await person("admin@aud.test", [MALLOYYO_USER, MALLOYYO_ADMIN, "staff"], { role: "admin", isAdmin: true });
+  // The admin holds NEITHER: MALLOYYO_ADMIN opens every dataset by itself.
+  admin = await person("admin@aud.test", [MALLOYYO_USER, MALLOYYO_ADMIN], { role: "admin", isAdmin: true });
   author = await person("author@aud.test", [MALLOYYO_USER, "staff"]);
   member = await person("member@aud.test", [MALLOYYO_USER, "staff"]);
   viewer = await person("viewer@aud.test", [MALLOYYO_USER, "readers"]);
@@ -73,7 +74,16 @@ before(async () => {
 
   const [ds] = await db
     .insert(datasets)
-    .values({ userId: admin.id, name: DS, status: "ready", isPublic: false, roles: ["staff", "readers"] })
+    .values({
+      // Owned by someone who is not under test: owning a dataset gives full
+      // access, and that would hide whether the admin role alone opens it.
+      userId: (await person("owner@aud.test", [MALLOYYO_USER])).id,
+      name: DS,
+      status: "ready",
+      isPublic: false,
+      roles: ["staff", "readers"],
+      viewOnlyRoles: ["readers"],
+    })
     .returning();
   datasetId = ds.id;
   const [model] = await db
@@ -191,7 +201,7 @@ test("an admin shares a private modeled dashboard with one person", async () => 
   assert.equal(await getDashboard(member.id, DS, "secret"), null);
 });
 
-test("a view-only role opens the dashboards, like any role", async () => {
+test("a role at the dashboards level opens the dashboards, like any role", async () => {
   // Viewing is not a lesser kind of seeing: the same listing, the same lookup,
   // and a private dashboard is shared with them the same way.
   assert.deepEqual(names(await listDashboardsAndDrafts(viewer.id, DS)), ["draft-everyones", "open"]);
@@ -247,17 +257,44 @@ test("someone's level on a dataset is the best any of their roles gives them", a
   await db.update(users).set({ roles: [MALLOYYO_USER, "readers"] }).where(eq(users.id, viewer.id));
   assert.equal(await canQueryDataset(viewer.id, datasetId), false);
 
-  // …and the level belongs to the ROLE: marking it full gives every holder
-  // query access on the next request, with nothing changed on the person.
-  await db.update(roles).set({ viewOnly: false }).where(eq(roles.name, "readers"));
+  // …and the level is the ROLE's, on THIS dataset: moving `readers` to full
+  // here gives every holder query access on the next request, with nothing
+  // changed on the person.
+  await db.update(datasets).set({ viewOnlyRoles: [] }).where(eq(datasets.id, datasetId));
   assert.equal(await canQueryDataset(viewer.id, datasetId), true);
-  await db.update(roles).set({ viewOnly: true }).where(eq(roles.name, "readers"));
+  await db.update(datasets).set({ viewOnlyRoles: ["readers"] }).where(eq(datasets.id, datasetId));
   assert.equal(await canQueryDataset(viewer.id, datasetId), false);
 
-  // Owning a dataset is not a role, so it cannot be view-only.
-  assert.equal(await canQueryDataset(admin.id, datasetId), true);
-  // And no role at all is neither.
+  // No role at all is neither level.
   assert.equal(await findByDatasetRef(outsider.id, DS, "view"), null);
+});
+
+test("an admin opens every dataset in full, holding no role on it", async () => {
+  assert.deepEqual(admin.roles, [MALLOYYO_USER, MALLOYYO_ADMIN]);
+  assert.ok(await findByDatasetRef(admin.id, DS, "view"));
+  assert.ok(await findByDatasetRef(admin.id, DS, "query"));
+  assert.equal(await canQueryDataset(admin.id, datasetId), true);
+  // Every way of being an admin counts, not only the role list.
+  const legacy = await person("legacy-admin@aud.test", [], { role: "admin" });
+  assert.equal(await canQueryDataset(legacy.id, datasetId), true);
+});
+
+test("the admin page's arithmetic gives the answer the server enforces", async () => {
+  // src/lib/role-access.ts is what Admin → Roles shows; datasetAccessWhere is
+  // what decides. If these ever disagree the page is lying about access.
+  const [ds] = await db.select().from(datasets).where(eq(datasets.id, datasetId));
+  const grants = [{ id: ds.id, roles: ds.roles, viewOnlyRoles: ds.viewOnlyRoles, isPublic: ds.isPublic, ownerId: ds.userId }];
+  for (const who of [admin, author, member, viewer, outsider]) {
+    const [fresh] = await db.select().from(users).where(eq(users.id, who.id));
+    const held = [...(fresh.roles ?? []), ...(fresh.role === "admin" ? [MALLOYYO_ADMIN] : [])];
+    const [shown] = resolveAccess(held, grants, { userId: who.id });
+    const enforced = (await canQueryDataset(who.id, datasetId))
+      ? "query"
+      : (await findByDatasetRef(who.id, DS, "view"))
+        ? "view"
+        : "none";
+    assert.equal(shown.level, enforced, `${fresh.email}: page says ${shown.level}, server says ${enforced}`);
+  }
 });
 
 test("sharing never opens a dataset, and says so", async () => {
@@ -274,38 +311,69 @@ test("sharing never opens a dataset, and says so", async () => {
   await unshareDashboard(admin, DS, "secret", outsider.id);
 });
 
-test("who may change a modeled dashboard's audience: admins, and only its people", async () => {
+test("a published dashboard's audience is an admin's to change", async () => {
   // Not a member — and it is a 404, not a 403: they cannot see it to be told no.
   const hidden = await getSharing(member, DS, "secret");
   assert.ok(!hidden.ok && hidden.status === 404);
   // A member who CAN see a dashboard still may not manage it.
   const visible = await getSharing(member, DS, "open");
   assert.ok(!visible.ok && visible.status === 403);
-  // An open dashboard has no people list to add to; the model is where it is made private.
-  const open = await shareDashboard(admin, DS, "open", member.email!);
-  assert.ok(!open.ok && open.status === 400);
-  assert.match(open.ok ? "" : open.error, /artifact \{ private \}/);
-  // And there is no toggle for a modeled dashboard at all.
-  const toggled = await setDraftVisibility(admin, DS, "secret", "dataset");
-  assert.ok(!toggled.ok && toggled.status === 400);
+  const toggle = await setDashboardVisibility(member, DS, "open", "private");
+  assert.ok(!toggle.ok && toggle.status === 403);
   // Nobody on the instance by that address.
   const nobody = await shareDashboard(admin, DS, "secret", "ghost@aud.test");
   assert.ok(!nobody.ok && nobody.status === 404);
 });
 
+test("the stored setting outranks the model's tag, in both directions", async () => {
+  // `open` has no private tag. An admin restricts it from the Share dialog…
+  const closed = await setDashboardVisibility(admin, DS, "open", "private");
+  assert.ok(closed.ok && closed.value.kind === "published" && closed.value.isPrivate);
+  assert.equal(await getDashboard(member.id, DS, "open"), null);
+  assert.deepEqual(names(await listDashboards(member.id, DS)), []);
+  // …and shares it with one person, exactly as for any private dashboard.
+  assert.ok((await shareDashboard(admin, DS, "open", member.email!)).ok);
+  assert.ok(await getDashboard(member.id, DS, "open"));
+  assert.equal(await getDashboard(author.id, DS, "open"), null);
+
+  // `secret` IS tagged private. Opening it from the dialog wins over the tag,
+  // so the next publish — which carries the same tag — does not undo it.
+  const opened = await setDashboardVisibility(admin, DS, "secret", "dataset");
+  assert.ok(opened.ok && !opened.value.isPrivate);
+  assert.ok(await getDashboard(author.id, DS, "secret"));
+
+  // One entry each, set in place: neither write disturbed the other's.
+  const [ds] = await db.select().from(datasets).where(eq(datasets.id, datasetId));
+  assert.deepEqual(ds.dashboardAudience, { open: "private", secret: "dataset" });
+
+  // Back to how the model has them, for the tests below.
+  await db.update(datasets).set({ dashboardAudience: {} }).where(eq(datasets.id, datasetId));
+  await unshareDashboard(admin, DS, "open", member.id);
+  assert.ok(await getDashboard(author.id, DS, "open"));
+  assert.equal(await getDashboard(author.id, DS, "secret"), null);
+});
+
+test("someone can be added to a dashboard that is open to the dataset", async () => {
+  // It changes nothing today, and is who keeps access if it is later made
+  // private — the same as adding a person to a document anyone can already read.
+  const added = await shareDashboard(admin, DS, "open", member.email!);
+  assert.ok(added.ok && !added.value.isPrivate);
+  await unshareDashboard(admin, DS, "open", member.id);
+});
+
 test("a draft's author opens it to the dataset, closes it, and shares it with one person", async () => {
-  const opened = await setDraftVisibility(author, DS, "draft-mine", "dataset");
+  const opened = await setDashboardVisibility(author, DS, "draft-mine", "dataset");
   assert.ok(opened.ok && opened.value.visibility === "dataset");
   assert.ok(await getDashboard(member.id, DS, "draft-mine"));
 
-  const closed = await setDraftVisibility(author, DS, "draft-mine", "private");
+  const closed = await setDashboardVisibility(author, DS, "draft-mine", "private");
   assert.ok(closed.ok && closed.value.isPrivate);
   assert.equal(await getDashboard(member.id, DS, "draft-mine"), null);
 
   // Changing who sees a draft is not an edit to it: updated_at is its content
   // version (the runtime cache key and the edit-conflict check read it).
   const [before] = await db.select().from(draftDashboards).where(eq(draftDashboards.slug, "mine"));
-  await setDraftVisibility(author, DS, "draft-mine", "private");
+  await setDashboardVisibility(author, DS, "draft-mine", "private");
   const [after] = await db.select().from(draftDashboards).where(eq(draftDashboards.slug, "mine"));
   assert.equal(after.updatedAt.getTime(), before.updatedAt.getTime());
 
@@ -318,10 +386,47 @@ test("a draft's author opens it to the dataset, closes it, and shares it with on
   // Being shared with is not being able to re-share, or to open it to everyone.
   const reshare = await shareDashboard(member, DS, "draft-mine", viewer.email!);
   assert.ok(!reshare.ok && reshare.status === 403);
-  const reopen = await setDraftVisibility(member, DS, "draft-mine", "dataset");
+  const reopen = await setDashboardVisibility(member, DS, "draft-mine", "dataset");
   assert.ok(!reopen.ok && reopen.status === 403);
   // An admin can do either for any draft.
   assert.ok((await getSharing(admin, DS, "draft-mine")).ok);
+});
+
+test("promoting a draft copies who can see it to the published dashboard", async () => {
+  // `mine` is private and shared with `member`. Its author records that it was
+  // promoted as `forecast` — the moment its link is pointed at the published
+  // dashboard — and from then `forecast` has the draft's audience, whatever
+  // the promoted file's tag says (here: nothing, i.e. open).
+  assert.equal(await recordPromotion(author.id, DS, "mine", { name: "forecast" }), "recorded");
+  const [ds] = await db.select().from(datasets).where(eq(datasets.id, datasetId));
+  assert.equal(ds.dashboardAudience.forecast, "private");
+
+  const [model] = await db.select().from(malloyModels).where(eq(malloyModels.datasetId, datasetId));
+  await db.insert(malloyArtifacts).values({
+    modelId: model.id,
+    name: "forecast",
+    title: "Forecast",
+    manifest: { title: "Forecast", query: "q" },
+    source: "",
+  });
+
+  // The same people as before: the person it was shared with…
+  assert.ok(await getDashboard(member.id, DS, "forecast"));
+  // …its author, who saw the draft because it was theirs and must not lose the
+  // dashboard the day it ships…
+  assert.ok(await getDashboard(author.id, DS, "forecast"));
+  // …admins — and nobody else.
+  assert.ok(await getDashboard(admin.id, DS, "forecast"));
+  assert.equal(await getDashboard(viewer.id, DS, "forecast"), null);
+
+  // An OPEN draft promotes to an open dashboard even into a file tagged private.
+  assert.equal(await recordPromotion(author.id, DS, "everyones", { name: "secret" }), "recorded");
+  assert.ok(await getDashboard(viewer.id, DS, "secret"), "the draft was open, so the published one is");
+  await db.update(datasets).set({ dashboardAudience: {} }).where(eq(datasets.id, datasetId));
+  await db
+    .update(draftDashboards)
+    .set({ promotedAs: null, promotedHash: null, promotedAt: null })
+    .where(eq(draftDashboards.datasetId, datasetId));
 });
 
 test("deleting a draft takes its shares with it", async () => {

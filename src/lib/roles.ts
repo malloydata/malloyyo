@@ -23,7 +23,7 @@
  */
 
 import { and, eq, or, sql } from "drizzle-orm";
-import { datasets, db, instanceSettings, roles, users } from "@/db";
+import { datasets, db, instanceSettings, users } from "@/db";
 import { env } from "./env";
 
 export const MALLOYYO_USER = "MALLOYYO_USER";
@@ -140,12 +140,15 @@ export function canAuthor(user: RoleBearing): boolean {
  *   query  also query it: the query editor, chat, the MCP connector, saved
  *          questions, draft dashboards
  *
- * Every dataset someone can open they can at least VIEW. Whether they can also
- * QUERY it is decided by the roles that open it for them: a role is either
- * full or view-only (`roles.view_only`), and one full role on the dataset is
- * enough. So "dashboard-only" is not a kind of account — it is what someone is
- * when every role that reaches a dataset for them is view-only, and the same
- * person can query one dataset and only read dashboards on the next.
+ * A role holds a LEVEL PER DATASET — none, dashboards (view) or full (query) —
+ * which is what Admin → Roles edits. On the dataset row that is two arrays:
+ * `roles` lists every role with any access, and `view_only_roles` the subset
+ * that may only view. Someone's level on a dataset is the best any of their
+ * roles gives them there, so one full role on it is enough to query it, and the
+ * same person can query one dataset and only read dashboards on the next.
+ *
+ * "Dashboard-only" is therefore not a kind of account. It is what someone is
+ * when every role that reaches a dataset for them is view-only there.
  *
  * A TIER, NOT A WALL. A dashboard runs restricted Malloy against its dataset,
  * so someone with view access can still read what the dataset contains. What
@@ -154,41 +157,52 @@ export function canAuthor(user: RoleBearing): boolean {
  */
 export type DatasetAccess = "view" | "query";
 
+// The same rule as arithmetic, for the admin page to show its working — and
+// the level type both share. See src/lib/role-access.ts.
+export { bestLevel, resolveAccess, roleLevelOn, type RoleLevel } from "./role-access";
+
 /**
- * The roles this person holds, as a SQL array — all of them for `view`, minus
- * the view-only ones for `query`.
- *
- * Read from the user row in a subquery rather than passed in, so every caller
- * gets role filtering without threading a list through, and a stale list can
- * never be the thing that grants access.
- *
- * A held role with no catalog row counts as FULL. That is the only reading
- * under which nothing changes for anyone until an admin marks a role
- * view-only: a role name carried on a user row from before the catalog, or by
- * an integration, must not lose its holder the ability to query.
+ * The roles this person holds, as a SQL array. Read from the user row in a
+ * subquery rather than passed in, so every caller gets role filtering without
+ * threading a list through, and a stale list can never be the thing that grants
+ * access.
  */
-function heldRoles(userId: string, need: DatasetAccess) {
-  if (need === "view") {
-    return sql`(select coalesce(${users.roles}, '{}'::text[]) from ${users} where ${users.id} = ${userId}::uuid)`;
-  }
-  return sql`(
-    select coalesce(array_agg(held.name), '{}'::text[])
-      from ${users}, unnest(coalesce(${users.roles}, '{}'::text[])) as held(name)
-     where ${users.id} = ${userId}::uuid
-       and not exists (select 1 from ${roles} where ${roles.name} = held.name and ${roles.viewOnly})
-  )`;
+function heldRoles(userId: string) {
+  return sql`(select coalesce(${users.roles}, '{}'::text[]) from ${users} where ${users.id} = ${userId}::uuid)`;
 }
 
 /**
- * The SQL predicate for "one of this person's roles is listed on the dataset"
- * — any role for `view`, a full one for `query`.
+ * The SQL predicate for "one of this person's roles opens the dataset" — at any
+ * level for `view`, at full level for `query`.
  *
- * Note what is NOT here: being an admin. Running a query returns ROWS, and
- * administering an instance has never been a reason to read its data. An admin
- * who needs a dataset is granted a role on it like anyone else.
+ * Query level subtracts the dataset's view-only roles before testing the
+ * overlap, so a role that is merely absent from `view_only_roles` is full. That
+ * is the reading under which nothing changes for anyone until an admin sets a
+ * role to dashboards-only on a dataset.
  */
 export function datasetRoleOverlap(userId: string, need: DatasetAccess = "view") {
-  return sql`${datasets.roles} && ${heldRoles(userId, need)}`;
+  if (need === "view") return sql`${datasets.roles} && ${heldRoles(userId)}`;
+  return sql`array(select unnest(${datasets.roles}) except select unnest(${datasets.viewOnlyRoles})) && ${heldRoles(userId)}`;
+}
+
+/**
+ * "This person is an admin", as SQL — the same answer `rolesOf()` gives, which
+ * means all four ways of being one: the role list, the legacy `role` and
+ * `is_admin` columns, and `APP_ADMIN_EMAILS` (which is on no row, so it is
+ * bound here as a list). In SQL so that the access predicate below is whole by
+ * itself: a caller holding only a user id cannot forget to say they are an
+ * admin, which is exactly how most read paths came to ignore it.
+ */
+function isAdminSql(userId: string) {
+  const envAdmins = env.APP_ADMIN_EMAILS.map((e) => e.toLowerCase());
+  const byEnv =
+    envAdmins.length > 0
+      ? sql` or lower(${users.email}) in (${sql.join(
+          envAdmins.map((e) => sql`${e}`),
+          sql`, `,
+        )})`
+      : sql``;
+  return sql`exists (select 1 from ${users} where ${users.id} = ${userId}::uuid and (${MALLOYYO_ADMIN} = any(coalesce(${users.roles}, '{}'::text[])) or ${users.role} in ('owner', 'admin') or ${users.isAdmin} = true${byEnv}))`;
 }
 
 /**
@@ -197,28 +211,30 @@ export function datasetRoleOverlap(userId: string, need: DatasetAccess = "view")
  * Owning a dataset, and the legacy public flag, both give full access: neither
  * comes from a role, so neither can be view-only.
  *
- * `isAdmin` is passed rather than derived in SQL, and that is deliberate: the
- * canonical answer folds in the legacy `role`/`is_admin` columns and
- * `APP_ADMIN_EMAILS` (see `rolesOf`), so a query that only checked
- * `users.roles` would miss an admin whose authority comes from the env var and
- * silently show them nothing.
- *
- * MALLOYYO_ADMIN opens every dataset. This reverses what this file used to argue
- * — that administering an instance is not a reason to read its data — and the
- * reversal is deliberate: with per-dataset ownership gone, nothing else lets the
- * person who publishes a repo see what they just published, and nobody could
- * grant the first role on a dataset nobody can see.
+ * MALLOYYO_ADMIN opens every dataset, in full. This file once argued that
+ * administering an instance is not a reason to read its data, and the reversal
+ * is deliberate: with per-dataset ownership gone, nothing else lets the person
+ * who publishes a repo see what they just published, and nobody could grant the
+ * first role on a dataset nobody can see. It is decided in the predicate itself
+ * (`isAdminSql`) rather than by a flag the caller passes, because a flag most
+ * callers did not pass is how the dashboards, the query paths and the MCP tools
+ * all went on refusing admins while the source list showed them everything.
  */
-export function datasetAccessWhere(userId: string, need: DatasetAccess, isAdmin = false) {
-  const reach = isAdmin
-    ? sql`true`
-    : or(eq(datasets.userId, userId), eq(datasets.isPublic, true), datasetRoleOverlap(userId, need));
-  return and(reach, eq(datasets.status, "ready"));
+export function datasetAccessWhere(userId: string, need: DatasetAccess) {
+  return and(
+    or(
+      eq(datasets.userId, userId),
+      eq(datasets.isPublic, true),
+      datasetRoleOverlap(userId, need),
+      isAdminSql(userId),
+    ),
+    eq(datasets.status, "ready"),
+  );
 }
 
 /** Datasets this person may OPEN. The name every read path already uses. */
-export function datasetVisibleWhere(userId: string, isAdmin = false) {
-  return datasetAccessWhere(userId, "view", isAdmin);
+export function datasetVisibleWhere(userId: string) {
+  return datasetAccessWhere(userId, "view");
 }
 
 /**

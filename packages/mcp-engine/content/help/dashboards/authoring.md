@@ -126,11 +126,15 @@ to a chosen few, say so in the tag:
 # artifact { title="Board numbers" private }
 ```
 
-It publishes as usual, but on the instance only admins see it, and an admin
-shares it with people one at a time from the dashboard's own page. It decides
-who is shown the dashboard, not who can read the data: the dataset is still the
-unit of access, so data that must stay apart belongs in a separate dataset.
-`dashboard dev` and static bundles have no audience and ignore it.
+It publishes as usual, but on the instance it STARTS private: only admins see
+it, and an admin shares it with people by email from its Share button. The tag
+sets only that starting point. Once an admin changes who can open it, their
+setting stands across later publishes — and a dashboard promoted from a draft
+keeps the draft's audience whatever its tag says.
+
+It decides who is shown the dashboard, not who can read the data: the dataset
+is still the unit of access, so data that must stay apart belongs in a separate
+dataset. `dashboard dev` and static bundles have no audience and ignore it.
 
 ## Drill from a dimension
 

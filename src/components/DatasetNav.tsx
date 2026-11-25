@@ -26,6 +26,8 @@ export function DatasetNav({
   activeTitle,
   questionsActive = false,
   canQuery = true,
+  isDraft = false,
+  extras,
 }: {
   datasetId: string;
   /** What to CALL the dataset, resolved by the page that renders this.
@@ -58,6 +60,12 @@ export function DatasetNav({
       page, so the right set is in the first paint. Defaults to true for the
       pages that are themselves query surfaces. */
   canQuery?: boolean;
+  /** The active dashboard is a draft: tagged as one beside its name. */
+  isDraft?: boolean;
+  /** The active dashboard's own controls — its Share button — placed at the
+      right, ahead of the dataset's. Rendered whether or not the reader may
+      query: who can open a dashboard is not a query-surface question. */
+  extras?: React.ReactNode;
 }) {
   // Seeded from the server's answer when there is one, so the first paint is
   // already correct and the fetch below only confirms it.
@@ -169,6 +177,14 @@ export function DatasetNav({
         activeDashboard={activeDashboard}
         activeLabel={questionsActive ? "AI Q&A" : activeTitle}
       />
+      {isDraft && (
+        <span
+          title="A draft: saved on this instance, not yet part of the model"
+          className="rounded-full border border-dashed border-gray-500 px-2 py-0.5 text-gray-700 dark:border-gray-500 dark:text-gray-300"
+        >
+          Draft
+        </span>
+      )}
 
       {canQuery && (
       <>
@@ -223,9 +239,16 @@ export function DatasetNav({
         )}
       </div>
 
-      {/* Right-hand group: where this came from, how it's set up, then the
-          primary action. */}
-      <div className="ml-auto flex items-center gap-1">
+      </>
+      )}
+
+      {/* Right-hand group: the dashboard's own controls (who can open it), then
+          — for a reader who may query — where it came from, how it's set up,
+          and the primary action. */}
+      <div className="ml-auto flex flex-wrap items-center gap-2">
+        {extras}
+        {canQuery && (
+        <>
         {sourceUrl && (
           <a
             href={sourceUrl}
@@ -262,9 +285,9 @@ export function DatasetNav({
             <path d="M13 6l6 6-6 6" />
           </svg>
         </button>
+        </>
+        )}
       </div>
-      </>
-      )}
     </nav>
   );
 }

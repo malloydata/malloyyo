@@ -4,13 +4,15 @@
 /**
  * Changing who sees a dashboard — the write side of ./audience.
  *
- * Two levers, and which one applies depends on what the dashboard is:
+ * The same two levers for every dashboard, which is the point — a draft and
+ * the published dashboard it becomes behave identically:
  *
- *   a draft      its author (or an admin) flips it between `private` and
- *                `dataset`, and shares a private one with people
- *   a modeled    whether it is private is the MODEL's to say
- *   dashboard    (`# artifact { private }`); an admin shares a private one
- *                with people
+ *   general access   `private` (only the people listed) or `dataset`
+ *                    (everyone who can open the dataset)
+ *   people           email addresses it is shared with
+ *
+ * What differs is only who may pull them: a draft's author or an admin for a
+ * draft, an admin for a published dashboard.
  *
  * Nothing here opens a dataset. A person a dashboard is shared with still has
  * to be able to open the dataset it is built on, and sharing with someone who
@@ -24,7 +26,7 @@ import { dashboardGrants, datasets, db, draftDashboards, users, type DraftVisibi
 import { hasRole, MALLOYYO_ADMIN } from "@/lib/roles";
 import { findByDatasetRef, visibleDatasetWhere } from "@/lib/mcp-tools";
 import { logger } from "@/lib/logger";
-import { mayShare } from "./audience";
+import { mayShare, publishedIsPrivate } from "./audience";
 import { draftSlug, getDashboard } from "./meta";
 
 export interface SharedPerson {
@@ -33,14 +35,22 @@ export interface SharedPerson {
   name: string | null;
 }
 
+/** Someone a dashboard is shared with. `canOpen` is whether the share can take
+    effect: false means no role opens the dataset for them yet. */
+export interface SharedWith extends SharedPerson {
+  canOpen: boolean;
+}
+
 export interface SharingState {
-  kind: "draft" | "modeled";
+  kind: "draft" | "published";
+  /** General access. */
+  visibility: DraftVisibility;
   isPrivate: boolean;
-  /** Drafts only — the lever its author holds. */
-  visibility?: DraftVisibility;
-  /** Who it has been shared with. Meaningful while it is private; kept (and
-      shown again) if a draft is opened to the dataset and later closed. */
-  people: SharedPerson[];
+  /** What to call the dataset in "Everyone on <dataset>". */
+  datasetTitle: string;
+  /** A draft's author, who always has access. A published dashboard has none. */
+  author?: SharedPerson;
+  people: SharedWith[];
 }
 
 export type SharingResult<T> = { ok: true; value: T } | { ok: false; status: 400 | 403 | 404; error: string };
@@ -69,28 +79,65 @@ async function manageable(user: User, datasetRef: string, name: string) {
         : "only an admin can change who sees this dashboard",
     );
   }
-  return { ok: true as const, datasetId: found.ds.id, dash };
+  return { ok: true as const, ds: found.ds, datasetId: found.ds.id, dash };
 }
 
-async function sharedPeople(datasetId: string, dashboard: string): Promise<SharedPerson[]> {
-  return db
+type Managed = Extract<Awaited<ReturnType<typeof manageable>>, { ok: true }>;
+
+async function canOpenDataset(userId: string, datasetId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ id: datasets.id })
+    .from(datasets)
+    .where(and(visibleDatasetWhere(userId), eq(datasets.id, datasetId)))
+    .limit(1);
+  return !!row;
+}
+
+async function sharedPeople(datasetId: string, dashboard: string): Promise<SharedWith[]> {
+  const rows = await db
     .select({ id: users.id, email: users.email, name: users.name })
     .from(dashboardGrants)
     .innerJoin(users, eq(users.id, dashboardGrants.userId))
     .where(and(eq(dashboardGrants.datasetId, datasetId), eq(dashboardGrants.dashboard, dashboard)))
     .orderBy(asc(users.email));
+  // One check per person. The list is the people someone typed in by hand, so
+  // it is short, and "can they actually open it" is the thing the dialog most
+  // needs to say about each of them.
+  return Promise.all(rows.map(async (p) => ({ ...p, canOpen: await canOpenDataset(p.id, datasetId) })));
 }
 
-function stateOf(dash: NonNullable<Awaited<ReturnType<typeof getDashboard>>>, people: SharedPerson[]): SharingState {
-  return dash.draft
-    ? { kind: "draft", isPrivate: dash.draft.visibility === "private", visibility: dash.draft.visibility, people }
-    : { kind: "modeled", isPrivate: dash.isPrivate === true, people };
+/** The dialog's whole state, read fresh — after a write too, so what the
+    dialog shows is what is stored, not what the request hoped for. */
+async function stateOf(m: Managed, name: string): Promise<SharingState> {
+  const people = await sharedPeople(m.datasetId, name);
+  const datasetTitle = m.ds.title?.trim() || m.ds.name;
+  if (m.dash.draft) {
+    const [draft] = await db
+      .select({ visibility: draftDashboards.visibility })
+      .from(draftDashboards)
+      .where(eq(draftDashboards.id, m.dash.draft.id))
+      .limit(1);
+    const [author] = await db
+      .select({ id: users.id, email: users.email, name: users.name })
+      .from(users)
+      .where(eq(users.id, m.dash.draft.authorId))
+      .limit(1);
+    const visibility = draft?.visibility ?? m.dash.draft.visibility;
+    return { kind: "draft", visibility, isPrivate: visibility === "private", datasetTitle, author, people };
+  }
+  const [ds] = await db
+    .select({ stored: datasets.dashboardAudience })
+    .from(datasets)
+    .where(eq(datasets.id, m.datasetId))
+    .limit(1);
+  const isPrivate = publishedIsPrivate(name, m.dash.manifest, ds?.stored);
+  return { kind: "published", visibility: isPrivate ? "private" : "dataset", isPrivate, datasetTitle, people };
 }
 
 export async function getSharing(user: User, datasetRef: string, name: string): Promise<SharingResult<SharingState>> {
   const m = await manageable(user, datasetRef, name);
   if (!m.ok) return m;
-  return { ok: true, value: stateOf(m.dash, await sharedPeople(m.datasetId, name)) };
+  return { ok: true, value: await stateOf(m, name) };
 }
 
 /**
@@ -100,10 +147,15 @@ export async function getSharing(user: User, datasetRef: string, name: string): 
  * member, and the roster is not theirs to browse. An address that matches
  * nobody is refused as exactly that.
  *
+ * Allowed whatever the general access is: on a dashboard already open to the
+ * dataset it changes nothing today, and is who keeps access if it is later made
+ * private — the same as adding someone to a document anyone with the link can
+ * already read.
+ *
  * `warning` is set when the grant was recorded but cannot take effect yet: the
  * person has no role that opens the dataset. The share is kept — an admin often
- * grants the dashboard first and the role second — but saying "shared" and
- * nothing else would be a success message over a link that 404s.
+ * shares the dashboard first and grants the role second — but saying "shared"
+ * and nothing else would be a success message over a link that 404s.
  */
 export async function shareDashboard(
   user: User,
@@ -113,13 +165,6 @@ export async function shareDashboard(
 ): Promise<SharingResult<SharingState & { warning?: string }>> {
   const m = await manageable(user, datasetRef, name);
   if (!m.ok) return m;
-  if (!m.dash.draft && !m.dash.isPrivate) {
-    return refuse(
-      400,
-      "this dashboard is open to everyone who can open the dataset. To share it person by person, " +
-        "tag it private in the model — `# artifact { private }` — and publish.",
-    );
-  }
   const email = rawEmail.trim().toLowerCase();
   if (!email) return refuse(400, "an email address is required");
   const [target] = await db
@@ -128,7 +173,7 @@ export async function shareDashboard(
     .where(sql`lower(${users.email}) = ${email}`)
     .limit(1);
   if (!target || target.status !== "active") {
-    return refuse(404, `nobody on this instance signs in as ${email}`);
+    return refuse(404, `Nobody on this instance signs in as ${email}.`);
   }
 
   await db
@@ -137,12 +182,8 @@ export async function shareDashboard(
     .onConflictDoNothing();
   logger.info("dashboard shared", { datasetId: m.datasetId, dashboard: name, userId: target.id, actorId: user.id });
 
-  const [reachable] = await db
-    .select({ id: datasets.id })
-    .from(datasets)
-    .where(and(visibleDatasetWhere(target.id), eq(datasets.id, m.datasetId)))
-    .limit(1);
-  const state = stateOf(m.dash, await sharedPeople(m.datasetId, name));
+  const state = await stateOf(m, name);
+  const reachable = state.people.find((p) => p.id === target.id)?.canOpen ?? false;
   return {
     ok: true,
     value: reachable
@@ -174,13 +215,17 @@ export async function unshareDashboard(
       ),
     );
   logger.info("dashboard unshared", { datasetId: m.datasetId, dashboard: name, userId, actorId: user.id });
-  return { ok: true, value: stateOf(m.dash, await sharedPeople(m.datasetId, name)) };
+  return { ok: true, value: await stateOf(m, name) };
 }
 
-/** Open a draft to its dataset, or close it again. Drafts only: a modeled
-    dashboard's privacy is a line in the model, and a toggle here would be a
-    second answer to the same question that the next publish silently undoes. */
-export async function setDraftVisibility(
+/**
+ * Set a dashboard's general access: `private`, or open to its `dataset`.
+ *
+ * A draft's is a column on the draft. A published dashboard's is an entry in
+ * its dataset's `dashboard_audience`, which from then on outranks whatever the
+ * model's `# artifact` tag says — so the next publish does not undo it.
+ */
+export async function setDashboardVisibility(
   user: User,
   datasetRef: string,
   name: string,
@@ -188,25 +233,21 @@ export async function setDraftVisibility(
 ): Promise<SharingResult<SharingState>> {
   const m = await manageable(user, datasetRef, name);
   if (!m.ok) return m;
-  const slug = draftSlug(name);
-  if (!m.dash.draft || slug === null) {
-    return refuse(
-      400,
-      "a modeled dashboard's audience is set in the model: add or remove `private` on its `# artifact` tag and publish",
-    );
+  if (m.dash.draft && draftSlug(name) !== null) {
+    // By id, and deliberately WITHOUT touching updated_at: that column is the
+    // draft's content version (the runtime cache key and the edit-conflict
+    // check both read it), and who may see a draft is not a change to what it is.
+    await db.update(draftDashboards).set({ visibility }).where(eq(draftDashboards.id, m.dash.draft.id));
+  } else {
+    // One key, set in place: two admins changing two dashboards on the same
+    // dataset at once must not write over each other's entry.
+    await db
+      .update(datasets)
+      .set({
+        dashboardAudience: sql`jsonb_set(${datasets.dashboardAudience}, array[${name}]::text[], to_jsonb(${visibility}::text))`,
+      })
+      .where(eq(datasets.id, m.datasetId));
   }
-  // By id, and deliberately WITHOUT touching updated_at: that column is the
-  // draft's content version (the runtime cache key and the edit-conflict check
-  // both read it), and who may see a draft is not a change to what it is.
-  await db.update(draftDashboards).set({ visibility }).where(eq(draftDashboards.id, m.dash.draft.id));
-  logger.info("draft visibility set", { draftId: m.dash.draft.id, visibility, actorId: user.id });
-  return {
-    ok: true,
-    value: {
-      kind: "draft",
-      isPrivate: visibility === "private",
-      visibility,
-      people: await sharedPeople(m.datasetId, name),
-    },
-  };
+  logger.info("dashboard visibility set", { datasetId: m.datasetId, dashboard: name, visibility, actorId: user.id });
+  return { ok: true, value: await stateOf(m, name) };
 }

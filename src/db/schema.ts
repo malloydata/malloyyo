@@ -167,20 +167,6 @@ export const roles = pgTable("roles", {
   /** Built-ins are seeded and undeletable; the UI hides their delete button and
       the route refuses anyway. */
   builtin: boolean("builtin").notNull().default(false),
-  /**
-   * What this role lets its holder do on the datasets it opens.
-   *
-   * false (every role, until an admin says otherwise): QUERY them — the query
-   * editor, chat, the MCP connector, draft dashboards — and open their
-   * dashboards. true: open their dashboards, and nothing else.
-   *
-   * A property of the ROLE, not of each dataset it is listed on: a role names a
-   * group of people, and "these people read dashboards" is a fact about them.
-   * Someone's level on one dataset is the best any of their roles gives them
-   * there, so a single full role on it is enough to query it. See
-   * `datasetAccessWhere` in src/lib/roles.ts.
-   */
-  viewOnly: boolean("view_only").notNull().default(false),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .default(sql`now()`),
@@ -540,6 +526,40 @@ export const datasets = pgTable(
      * `isPublic`). Access only ever widens by someone granting it.
      */
     roles: text("roles").array().notNull().default(sql`'{}'::text[]`),
+    /**
+     * The subset of `roles` that may only VIEW this dataset: open its
+     * dashboards, and nothing else. A role in `roles` and not here has FULL
+     * access — dashboards plus the query editor, chat and the MCP connector.
+     *
+     * So one role holds a level per dataset (none / dashboards / full), which is
+     * what Admin → Roles edits. Someone's level on a dataset is the best any of
+     * their roles gives them there. A second array rather than a table of
+     * (role, dataset, level) because `roles` is what every read path already
+     * tests, and a role listed there with nothing here is exactly the full
+     * access every existing grant has always meant: nothing to backfill, and
+     * the live version keeps working while this column lands. See
+     * `datasetAccessWhere` in src/lib/roles.ts.
+     */
+    viewOnlyRoles: text("view_only_roles").array().notNull().default(sql`'{}'::text[]`),
+    /**
+     * Who may open each PUBLISHED dashboard, by dashboard name:
+     * `{ "board": "private" }`. `private` = admins and the people it is shared
+     * with (dashboard_grants); `dataset` = everyone who can open the dataset.
+     *
+     * A name with no entry takes what the model says — private if its tag is
+     * `# artifact { private }`, otherwise open. So the tag decides what a
+     * dashboard STARTS as, and this is the setting from then on: it is what the
+     * Share dialog writes, and what promoting a draft copies the draft's own
+     * `visibility` into, so promotion never changes who can see a dashboard.
+     *
+     * On the dataset row, keyed by name, because every listing already reads
+     * this row (no extra round trip) and an artifact is a new row on every
+     * publish — a setting stored there would not survive one.
+     */
+    dashboardAudience: jsonb("dashboard_audience")
+      .$type<Record<string, "private" | "dataset">>()
+      .notNull()
+      .default(sql`'{}'::jsonb`),
     // Last malloyyo-CLI publish attempt (success OR failure). Failures are recorded here
     // for visibility but never become a servable model version — see the transactional
     // publish design (docs/model-publishing-design.md §4.4). lastPublishError is null on success.

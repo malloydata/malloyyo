@@ -277,33 +277,48 @@ publish rights. Full guide: `docs/api-tokens.md`.
 
 ## Who sees what: three layers, and only the first is a boundary
 
-1. **Dataset access** — `datasets.roles` against `users.roles`
-   (`visibleDatasetWhere`). The unit of access, and the only security boundary
-   here. Row scoping inside a dataset is the model's (`$MALLOYYO_EMAIL`,
-   `$MALLOYYO_ROLES`). `docs/roles-and-access.md`.
+1. **Dataset access, with a level.** A role has a level per dataset — none,
+   dashboards (`view`) or full (`query`) — set at Admin → Roles. On the dataset
+   row: `roles` (every role with any access) and `view_only_roles` (the subset
+   that may only view); a role in the first and not the second is full, so
+   every grant from before levels existed is full. Someone's level is the best
+   any of their roles gives them. `MALLOYYO_ADMIN` opens every dataset in full,
+   decided INSIDE the predicate (`isAdminSql`), not by a flag callers pass.
+   - `datasetAccessWhere(userId, need)` in `src/lib/roles.ts` is the rule.
+     `visibleDatasetWhere` = may open; `queryableDatasetWhere` = may query.
+   - `findByDatasetRef(userId, ref, need)` takes the level as a REQUIRED
+     argument so no query surface can resolve at view level by omission.
+     `findBySource`, `findByDatasetId` and the MCP host are always query-level.
+   - `src/lib/role-access.ts` is the same rule as plain arithmetic, for the
+     admin page to show its working (client-safe, no imports). The two must
+     agree; `test/dashboard-audience.test.ts` holds them to it.
+   - Row scoping inside a dataset is the model's (`$MALLOYYO_EMAIL`,
+     `$MALLOYYO_ROLES`). `docs/roles-and-access.md`.
 2. **Dashboard audience** — `src/lib/dashboards/audience.ts`. A dashboard is
-   open to everyone on its dataset, or PRIVATE: a modeled one tagged
-   `# artifact { private }` (carried as `manifest.private`), or a draft whose
-   `draft_dashboards.visibility` is `private` (the default for new drafts; rows
-   from before the column are `dataset`). Private = admins + a draft's author +
-   `dashboard_grants`, which are per person and keyed by dashboard NAME
-   (`draft-<slug>` for a draft) so they survive a republish. Writes are
-   `src/lib/dashboards/sharing.ts`, behind `/api/dashboards/:ds/:name/sharing`.
-3. **View vs query** — `DatasetAccess` in `src/lib/roles.ts`. A role is full
-   or view-only (`roles.view_only`, set at Admin → Roles); someone's level on a
-   dataset is the best any role that opens it gives them, and a held role with
-   no catalog row counts as full, so nothing changes until an admin marks one.
-   There is no "dashboard-only user" setting — that is just someone whose every
-   role is view-only. `visibleDatasetWhere` = may open (dashboards);
-   `queryableDatasetWhere` = may query. `findByDatasetRef(userId, ref, need)`
-   takes the level as a REQUIRED argument so no query surface can resolve at
-   view level by omission; `findBySource`, `findByDatasetId` and the MCP host
-   are always query-level.
+   open to everyone on its dataset, or PRIVATE, and it is the same setting for
+   a draft and a published dashboard: a draft's is
+   `draft_dashboards.visibility` (new drafts are private; rows from before the
+   column are `dataset`); a published one's is its entry in
+   `datasets.dashboard_audience`, and until it has one, its tag
+   (`# artifact { private }` → `manifest.private`). Private = admins + a
+   draft's author + `dashboard_grants`, which are PER PERSON (never per role)
+   and keyed by dashboard NAME (`draft-<slug>` for a draft) so they survive a
+   republish. Writes are `src/lib/dashboards/sharing.ts`, behind
+   `/api/dashboards/:ds/:name/sharing`; the UI is `DashboardShare` in the
+   dataset nav. `recordPromotion` copies a draft's setting and people to the
+   published name, so promotion never changes who can see a dashboard.
+3. **Viewing as** — `src/lib/view-as.ts`. An admin sees the app as a non-admin
+   user. The swap is in `getSessionUser()` (`src/lib/user.ts`), re-decided per
+   request from a cookie that grants nothing by itself; `getRealSessionUser()`
+   is for the start/stop route only. LOOK-ONLY: while viewing as someone,
+   `getSessionUser()` refuses every non-GET except `/api/dashboards/run`, using
+   the method/path headers `src/proxy.ts` sets. Bearer credentials are
+   unaffected.
 
-Layers 2 and 3 are **curation, not security** — a dashboard's run route takes
-restricted Malloy, so anyone who can open one dashboard can query its whole
-dataset. Don't write code (or docs) that treats a private dashboard or
-view-only access as protecting data; separate data means separate datasets.
+The dashboards level and private dashboards are **curation, not security** — a
+dashboard's run route takes restricted Malloy, so anyone who can open one
+dashboard can query its whole dataset. Don't write code (or docs) that treats
+either as protecting data; separate data means separate datasets.
 
 **Every dashboard read goes through `./meta`** (`getDashboard` and the list
 functions), which is where the audience is enforced. `listDashboardsForModel`

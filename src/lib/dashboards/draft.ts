@@ -24,7 +24,7 @@
 import { createHash } from "node:crypto";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { modelArtifact, validateRestricted, type Problem } from "@malloyyo/mcp-engine";
-import { dashboardGrants, db, draftDashboards, DRAFT_VISIBILITIES, type DraftVisibility } from "@/db";
+import { dashboardGrants, datasets, db, draftDashboards, DRAFT_VISIBILITIES, type DraftVisibility } from "@/db";
 import { hasRole, MALLOYYO_ADMIN, type RoleBearing } from "@/lib/roles";
 import { findByDatasetRef, modelFileMap } from "@/lib/mcp-tools";
 import { fileUrl, runNamedMalloyFiles, withModelRuntime } from "@/lib/malloy";
@@ -556,14 +556,50 @@ export async function recordPromotion(
     .limit(1);
   if (!row) return "not-found";
   if (row.userId !== userId) return "not-yours";
-  await db
-    .update(draftDashboards)
-    .set({
-      promotedAs: promoted.name,
-      promotedHash: promoted.hash ?? draftHash(row),
-      promotedAt: new Date(),
-    })
-    .where(eq(draftDashboards.id, row.id));
+  const draftName = `${DRAFT_PREFIX}${row.slug}`;
+  await db.transaction(async (tx) => {
+    await tx
+      .update(draftDashboards)
+      .set({
+        promotedAs: promoted.name,
+        promotedHash: promoted.hash ?? draftHash(row),
+        promotedAt: new Date(),
+      })
+      .where(eq(draftDashboards.id, row.id));
+
+    // PROMOTION DOES NOT CHANGE WHO CAN SEE IT. This is the moment the draft's
+    // link is pointed at the published dashboard, so it is the moment the
+    // published dashboard takes the draft's audience: the same private-or-open
+    // setting, and the same people.
+    //
+    // The setting is written even when the draft is open, so it also overrides
+    // a `private` tag in the promoted file — the draft's audience is what
+    // people were promised, not whatever the file happens to say.
+    //
+    // A name that is itself a draft's is not a published dashboard; nothing to copy to.
+    if (promoted.name === draftName) return;
+    await tx
+      .update(datasets)
+      .set({
+        dashboardAudience: sql`jsonb_set(${datasets.dashboardAudience}, array[${promoted.name}]::text[], to_jsonb(${row.visibility}::text))`,
+      })
+      .where(eq(datasets.id, row.datasetId));
+    await tx.execute(sql`
+      insert into ${dashboardGrants} (dataset_id, dashboard, user_id, granted_by_id)
+      select dataset_id, ${promoted.name}, user_id, granted_by_id
+        from ${dashboardGrants}
+       where dataset_id = ${row.datasetId}::uuid and dashboard = ${draftName}
+      on conflict do nothing`);
+    // A draft's author sees it because it is theirs. A published dashboard has
+    // no author, so a private one would vanish from the person who built it the
+    // day it shipped. They are added as one of its people instead.
+    if (row.visibility === "private") {
+      await tx
+        .insert(dashboardGrants)
+        .values({ datasetId: row.datasetId, dashboard: promoted.name, userId: row.userId, grantedById: row.userId })
+        .onConflictDoNothing();
+    }
+  });
   return "recorded";
 }
 

@@ -18,7 +18,14 @@ import { qualifiedName } from "@/lib/repo-names";
 import { visibleDatasetWhere, findByDatasetRef, latestModel } from "@/lib/mcp-tools";
 import { previewModelRef } from "@/lib/repo-previews";
 import { aboutFirst } from "./about";
-import { audienceFilter, isPrivateManifest, isRestrictedFor, mayOpenDashboard, visibleDashboards } from "./audience";
+import {
+  audienceFilter,
+  isRestrictedFor,
+  mayOpenDashboard,
+  publishedIsPrivate,
+  visibleDashboards,
+  type AudienceMap,
+} from "./audience";
 import { imageHostsFromConfig } from "./image-hosts";
 
 export interface DashboardSummary {
@@ -86,6 +93,8 @@ function summary(
   datasetId: string,
   datasetName: string,
   a: { name: string; title: string | null; manifest: Record<string, unknown> },
+  /** The dataset's stored audiences (`datasets.dashboard_audience`). */
+  stored?: AudienceMap,
 ): DashboardSummary {
   const description = a.manifest?.description;
   return {
@@ -94,7 +103,7 @@ function summary(
     name: a.name,
     title: a.title ?? a.name,
     ...(typeof description === "string" && description ? { description } : {}),
-    ...(isPrivateManifest(a.manifest) ? { isPrivate: true } : {}),
+    ...(publishedIsPrivate(a.name, a.manifest, stored) ? { isPrivate: true } : {}),
   };
 }
 
@@ -117,9 +126,13 @@ export async function listDashboardsForModel(
   modelId: string,
   datasetId: string,
   datasetName: string,
+  /** The dataset's `dashboardAudience`, which decides which of them are
+      private. Required, so a caller cannot list a dataset's dashboards without
+      the setting that says who sees them. */
+  stored: AudienceMap,
 ): Promise<DashboardSummary[]> {
   const rows = await artifactsForModel(modelId);
-  return rows.map((a) => summary(datasetId, datasetName, a));
+  return rows.map((a) => summary(datasetId, datasetName, a, stored));
 }
 
 /** Dashboards on a single dataset's current (latest) model, if visible. */
@@ -131,7 +144,7 @@ export async function listDashboards(userId: string, datasetId: string): Promise
   return visibleDashboards(
     userId,
     found.ds.id,
-    await listDashboardsForModel(found.model.id, datasetId, found.ds.name),
+    await listDashboardsForModel(found.model.id, datasetId, found.ds.name, found.ds.dashboardAudience),
   );
 }
 
@@ -156,7 +169,7 @@ export async function listDashboardsAndDrafts(userId: string, datasetRef: string
   if ("preview" in found) return previewDashboards(found.preview.entry, datasetRef, found.ds.name);
   // Forwarding is decided against everything the model publishes, private or
   // not: a draft promoted into a private dashboard has still become it.
-  const own = await listDashboardsForModel(found.model.id, found.ds.id, found.ds.name);
+  const own = await listDashboardsForModel(found.model.id, found.ds.id, found.ds.name, found.ds.dashboardAudience);
   const drafts = await listDraftsOnDataset(found.ds.id, found.ds.name, new Set(own.map((d) => d.name)));
   return visibleDashboards(userId, found.ds.id, [...own, ...drafts]);
 }
@@ -242,12 +255,16 @@ export async function allDashboardsByDataset(userId: string): Promise<{
       title: datasets.title,
       description: datasets.description,
       repoSlug: repos.slug,
+      dashboardAudience: datasets.dashboardAudience,
     })
     .from(datasets)
     .leftJoin(repos, eq(datasets.repoId, repos.id))
     .where(visibleDatasetWhere(userId))
     .orderBy(desc(datasets.createdAt));
-  const dsList = rawList.map(({ repoSlug, ...ds }) => ({
+  // Which published dashboards are private, per dataset — read with the row
+  // this query already fetches, so it costs no round trip of its own.
+  const storedOf = new Map(rawList.map((ds) => [ds.id, ds.dashboardAudience]));
+  const dsList = rawList.map(({ repoSlug, dashboardAudience: _stored, ...ds }) => ({
     ...ds,
     qualified: repoSlug ? qualifiedName(repoSlug, ds.name) : ds.name,
   }));
@@ -288,7 +305,7 @@ export async function allDashboardsByDataset(userId: string): Promise<{
     for (const [modelId, rows] of perModel) {
       const dsId = datasetOfModel.get(modelId)!;
       const into = byDataset.get(dsId)!;
-      for (const a of aboutFirst(rows)) into.push(summary(dsId, nameOf.get(dsId)!, a));
+      for (const a of aboutFirst(rows)) into.push(summary(dsId, nameOf.get(dsId)!, a, storedOf.get(dsId)));
     }
   }
 
@@ -438,7 +455,7 @@ export async function getDashboard(userId: string, datasetId: string, name: stri
     .where(and(eq(malloyArtifacts.modelId, found.model.id), eq(malloyArtifacts.name, name)))
     .limit(1);
   if (!a) return null;
-  const isPrivate = isPrivateManifest(a.manifest);
+  const isPrivate = publishedIsPrivate(a.name, a.manifest, found.ds.dashboardAudience);
   if (!(await mayOpenDashboard(userId, found.ds.id, { name: a.name, isPrivate }))) return null;
   return {
     datasetId,

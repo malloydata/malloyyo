@@ -3,7 +3,7 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { PoolWaitTimeoutError, RuntimePool, queueWaitMs } from "./runtime-pool";
+import { PoolRegistry, PoolWaitTimeoutError, RuntimePool, maxPools, queueWaitMs } from "./runtime-pool";
 
 type Entry = { id: number; cleanup: () => Promise<void>; cleaned: boolean };
 
@@ -111,16 +111,50 @@ test("waiters are served first in, first out", async () => {
   assert.deepEqual(order, ["w1", "w2"]);
 });
 
-test("a served waiter's deadline is cleared", async () => {
-  const pool = new RuntimePool(entries(), 1, { name: "v1", waitMs: 30 });
+/** Timers that never fire on their own, and say which are still pending. */
+function fakeTimers() {
+  const live = new Map<number, () => void>();
+  let next = 0;
+  return {
+    live,
+    timers: {
+      set: (fn: () => void) => {
+        live.set(++next, fn);
+        return next;
+      },
+      clear: (h: unknown) => {
+        live.delete(h as number);
+      },
+    },
+    fireAll() {
+      for (const [h, fn] of [...live]) {
+        live.delete(h);
+        fn();
+      }
+    },
+  };
+}
+
+test("a served waiter's deadline is cleared, not left to fire", async () => {
+  const t = fakeTimers();
+  const pool = new RuntimePool(entries(), 1, { name: "v1", waitMs: 60_000, timers: t.timers });
   const held = await pool.acquire();
   const waiting = pool.acquire();
+  assert.equal(t.live.size, 1, "the waiter has a deadline");
   pool.release(held);
   await waiting;
-  await new Promise((r) => setTimeout(r, 60));
-  // Had the timer fired, the promise above would have rejected first; this
-  // just proves nothing threw late and the entry is still leased once.
-  assert.deepEqual(pool.stats(), { size: 1, idle: 0, waiting: 0, draining: false });
+  assert.equal(t.live.size, 0, "serving it cancelled the deadline");
+});
+
+test("onIdle fires when the last lease comes back, and not before", async () => {
+  let idle = 0;
+  const pool = new RuntimePool(entries(), 2, { ...opts, onIdle: () => idle++ });
+  const a = await pool.acquire();
+  const b = await pool.acquire();
+  pool.release(a);
+  assert.equal(idle, 0, "one still leased");
+  pool.release(b);
+  assert.equal(idle, 1);
 });
 
 test("busy() is true while anything is leased, building or queued", async () => {
@@ -139,4 +173,77 @@ test("queueWaitMs reads MALLOYYO_QUEUE_WAIT_SECONDS, defaulting to 120s", () => 
   assert.equal(queueWaitMs({ MALLOYYO_QUEUE_WAIT_SECONDS: "30" }), 30_000);
   assert.equal(queueWaitMs({ MALLOYYO_QUEUE_WAIT_SECONDS: "0" }), 120_000);
   assert.equal(queueWaitMs({ MALLOYYO_QUEUE_WAIT_SECONDS: "nope" }), 120_000);
+});
+
+test("maxPools reads MALLOYYO_MAX_POOLS, defaulting to 64 and never below keepIdle", () => {
+  assert.equal(maxPools(16, {}), 64);
+  assert.equal(maxPools(16, { MALLOYYO_MAX_POOLS: "200" }), 200);
+  assert.equal(maxPools(16, { MALLOYYO_MAX_POOLS: "4" }), 16);
+});
+
+// ── PoolRegistry: which pools go, and what waits ─────────────────────────────
+
+/** A registry whose pools are plain RuntimePools over cheap entries. */
+function registry(keepIdle: number, max: number, waitMs = 60_000) {
+  const reg = new PoolRegistry<Entry>({ keepIdle, maxPools: max, waitMs });
+  const make = (key: string) => (onIdle: () => void) =>
+    new RuntimePool(entries(), 2, { name: key, waitMs, onIdle });
+  return { reg, get: (key: string, dataset?: string) => reg.get(key, make(key), dataset) };
+}
+
+test("the registry hands back the same pool for a key", async () => {
+  const { get } = registry(4, 8);
+  assert.equal(await get("a"), await get("a"));
+});
+
+test("past keepIdle, idle pools close least recently used first; busy ones never", async () => {
+  const { reg, get } = registry(2, 8);
+  const a = await get("a");
+  const leased = await a.acquire(); // a is busy
+  await get("b");
+  await get("c"); // over keepIdle: b is the oldest IDLE pool
+  assert.equal(reg.stats().pools, 2);
+  assert.equal(await get("a"), a, "the busy pool survived");
+  assert.equal(a.stats().draining, false);
+  a.release(leased);
+});
+
+test("at maxPools with every pool busy, a new pool waits for one to go idle", async () => {
+  const { reg, get } = registry(1, 2);
+  const a = await get("a");
+  const la = await a.acquire(); // busy before b arrives, or b's arrival closes it
+  const b = await get("b");
+  const lb = await b.acquire();
+  const c = get("c");
+  assert.equal(await settle(c, 50), "HUNG", "no room yet");
+  assert.equal(reg.stats().waitingForRoom, 1);
+  a.release(la); // a goes idle: it is closed, and c gets its place
+  assert.equal(await settle(c), "resolved");
+  assert.equal(a.stats().draining, true);
+  assert.deepEqual(reg.stats(), { pools: 2, busy: 1, waitingForRoom: 0 });
+  b.release(lb);
+});
+
+test("waiting for room has a deadline whose error says the query did not run", async () => {
+  const { get } = registry(1, 1, 50);
+  const a = await get("a");
+  const held = await a.acquire();
+  await assert.rejects(get("b", "sales/orders"), (err: unknown) => {
+    assert.ok(err instanceof PoolWaitTimeoutError);
+    assert.match(err.message, /^Query on dataset 'sales\/orders' waited 0\.1s for the server to open its connections and did not run: 1 other datasets were busy/);
+    return true;
+  });
+  a.release(held);
+});
+
+test("two requests waiting for the same new key get one pool, not two", async () => {
+  const { reg, get } = registry(1, 1);
+  const a = await get("a");
+  const held = await a.acquire();
+  const c1 = get("c");
+  const c2 = get("c");
+  a.release(held);
+  const [p1, p2] = await Promise.all([c1, c2]);
+  assert.equal(p1, p2);
+  assert.equal(reg.stats().pools, 1);
 });

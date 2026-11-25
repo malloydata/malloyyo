@@ -20,7 +20,7 @@ import type { GitHubURLReader } from "./github";
 import { logger, serializeErr } from "./logger";
 import { readModelDef, writeModelDef, packModelDef, unpackModelDef, extractModelDef, rehydrateModel } from "./model-cache";
 import { configEnvOverlay } from "./config-env";
-import { PoolWaitTimeoutError, RuntimePool, queueWaitMs } from "./runtime-pool";
+import { PoolRegistry, PoolWaitTimeoutError, RuntimePool, maxPools, queueWaitMs } from "./runtime-pool";
 import { discardScratchRoot, makeScratchRoot, sandboxConnectionOptions, sandboxDuckDBConnections } from "./duckdb-sandbox";
 
 // DuckDB extension autoloading requires a writable home directory. Vercel/Lambda
@@ -190,6 +190,8 @@ export async function introspectModelWithReader(
   reader: malloy.URLReader | GitHubURLReader,
   entryPath: string,
   configJson?: string,
+  /** Share compiled models with later runtimes over the same files (newCompileCache). */
+  cacheManager?: malloy.CacheManager,
 ): Promise<
   | { ok: true; sources: SourceInfo[]; declaredGivens: string[]; meta: DatasetMeta }
   | { ok: false; error: string }
@@ -197,7 +199,7 @@ export async function introspectModelWithReader(
   logger.debug("introspectModel start", { entryPath, hasConfig: !!configJson });
   let handle: RuntimeParts | undefined;
   try {
-    handle = await buildPartsWithReader(reader as malloy.URLReader, configJson, []);
+    handle = await buildPartsWithReader(reader as malloy.URLReader, configJson, [], cacheManager);
     const compiled = await runtimeFrom(handle).getModel(fileUrl(entryPath));
     // Only the model's public surface — exported sources. Unexported intermediates
     // (e.g. `_base`) stay private.
@@ -450,6 +452,16 @@ function runtimeFrom(parts: RuntimeParts, givens?: Record<string, malloy.GivenVa
   } as ConstructorParameters<typeof malloy.Runtime>[0]);
 }
 
+/**
+ * A compiled-model cache to hand several runtimes over the SAME files and
+ * config (publish's introspection, catalog and dashboard compiles), so each
+ * file is translated and each table's schema fetched once, not once per
+ * runtime. Content-hashed: an entry whose files changed is never served.
+ */
+export function newCompileCache(): malloy.CacheManager {
+  return new malloy.CacheManager(new malloy.InMemoryModelCache());
+}
+
 /** Run `fn` against a fresh Runtime backed by an on-demand `reader` (e.g. a
     GitHubURLReader that fetches each file as the compiler resolves an import).
     Used by the GitHub refresh to compile per-dashboard entries — the reader
@@ -458,8 +470,10 @@ export async function withReaderRuntime<T>(
   reader: malloy.URLReader | GitHubURLReader,
   configJson: string | undefined,
   fn: (runtime: malloy.Runtime) => Promise<T>,
+  /** Share compiled models with other runtimes over the same files (newCompileCache). */
+  cacheManager?: malloy.CacheManager,
 ): Promise<T> {
-  const parts = await buildPartsWithReader(reader as malloy.URLReader, configJson, []);
+  const parts = await buildPartsWithReader(reader as malloy.URLReader, configJson, [], cacheManager);
   try {
     return await fn(runtimeFrom(parts));
   } finally {
@@ -511,15 +525,22 @@ async function buildParts(
 // pool ages out of the LRU and is drained. Module-level state resets on cold
 // start.
 //
-// The cap is soft: a pool that is busy (leased, building, or queued for) is
-// never evicted, because draining it would close connections in use and drop
-// the compiled models its waiters are about to need. When every pool is busy
-// the map runs over the cap until one goes idle. The queueing itself, and the
-// guarantee that no waiter is ever stranded, live in ./runtime-pool.ts.
-const MAX_POOLS = 16; // distinct model versions kept warm
+// Pools live in a PoolRegistry (./runtime-pool.ts), which owns eviction and the
+// guarantee that no waiter is ever stranded. A busy pool (leased, building, or
+// queued for) is never evicted. KEEP_IDLE_POOLS is how many idle versions stay
+// warm; MALLOYYO_MAX_POOLS (default 64) caps how many exist at once, busy or
+// not, which is what bounds open connections (about max pools × pool size)
+// until the connection budget in docs/model-cache-and-pooling.md lands. A new
+// version past that cap waits, under the same deadline, for a pool to go idle.
+const KEEP_IDLE_POOLS = 16; // idle model versions kept warm
 const DEFAULT_POOL_SIZE = 5; // connections per model version
 
-const pools = new Map<string, RuntimePool<RuntimeParts>>();
+const registry = new PoolRegistry<RuntimeParts>({
+  keepIdle: KEEP_IDLE_POOLS,
+  maxPools: maxPools(KEEP_IDLE_POOLS),
+  waitMs: queueWaitMs(),
+  onDrainError: (err) => logger.warn("pool drain failed", serializeErr(err)),
+});
 
 // Per-repo pool size, optionally read from malloy-config.json. Field name is
 // provisional — wired here so the size can be repo-controlled without touching
@@ -535,33 +556,24 @@ function poolSizeFromConfig(configJson: string | undefined): number {
   return DEFAULT_POOL_SIZE;
 }
 
-// Least recently used first, idle pools only, until back under the cap.
-function evictIdlePools(keep: string): void {
-  for (const [key, pool] of pools) {
-    if (pools.size <= MAX_POOLS) return;
-    if (key === keep || pool.busy()) continue;
-    pools.delete(key);
-    void pool.drain().catch((err) => logger.warn("pool drain failed", serializeErr(err)));
-  }
-}
-
-function poolFor(cacheKey: string, files: Map<string, string>, finalize: readonly string[]): RuntimePool<RuntimeParts> {
-  const existing = pools.get(cacheKey);
-  if (existing) {
-    // LRU bump: re-insert as most recently used.
-    pools.delete(cacheKey);
-    pools.set(cacheKey, existing);
-    return existing;
-  }
-  const { urlMap, configJson } = splitFiles(files);
-  // One CacheManager shared by every connection in this pool.
-  const cacheManager = new malloy.CacheManager(new malloy.InMemoryModelCache());
-  const factory = () =>
-    buildPartsWithReader(new malloy.InMemoryURLReader(new Map(urlMap)), configJson, finalize, cacheManager);
-  const pool = new RuntimePool(factory, poolSizeFromConfig(configJson), { name: cacheKey, waitMs: queueWaitMs() });
-  pools.set(cacheKey, pool);
-  evictIdlePools(cacheKey);
-  return pool;
+function poolFor(
+  cacheKey: string,
+  files: Map<string, string>,
+  finalize: readonly string[],
+  dataset: string | undefined,
+): Promise<RuntimePool<RuntimeParts>> {
+  return registry.get(
+    cacheKey,
+    (onIdle) => {
+      const { urlMap, configJson } = splitFiles(files);
+      // One CacheManager shared by every connection in this pool.
+      const cacheManager = new malloy.CacheManager(new malloy.InMemoryModelCache());
+      const factory = () =>
+        buildPartsWithReader(new malloy.InMemoryURLReader(new Map(urlMap)), configJson, finalize, cacheManager);
+      return new RuntimePool(factory, poolSizeFromConfig(configJson), { name: cacheKey, waitMs: queueWaitMs(), onIdle });
+    },
+    dataset,
+  );
 }
 
 // Run `fn` with a Runtime. With a cacheKey the Runtime is leased from (and
@@ -580,13 +592,19 @@ async function withRuntime<T>(
     // The finalized set rides in the pool key: it is baked into the MalloyConfig
     // the pool holds, so a dataset whose requirements changed must not be served
     // from entries built under the old set.
-    const pool = poolFor(finalize.length ? `${cacheKey}|${finalize.join(",")}` : cacheKey, files, finalize);
+    let pool: RuntimePool<RuntimeParts> | undefined;
     let entry: RuntimeParts;
     try {
+      pool = await poolFor(finalize.length ? `${cacheKey}|${finalize.join(",")}` : cacheKey, files, finalize, scope.dataset);
       entry = await pool.acquire(scope.dataset);
     } catch (err) {
       if (err instanceof PoolWaitTimeoutError) {
-        logger.warn("pool wait timed out", { cacheKey, dataset: scope.dataset, ...pool.stats() });
+        logger.warn("pool wait timed out", {
+          cacheKey,
+          dataset: scope.dataset,
+          ...registry.stats(),
+          ...(pool ? pool.stats() : {}),
+        });
       }
       throw err;
     }

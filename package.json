@@ -25,6 +25,7 @@
     "test:migrate": "bash scripts/migrate-test.sh",
     "test": "tsx --test 'src/lib/*.test.ts' 'src/lib/**/*.test.ts'",
     "test:hosted": "bash scripts/hosted-test.sh",
+    "load-test": "bash scripts/hosted-test.sh --run scripts/load-test.ts",
     "smoke:telemetry": "tsx scripts/telemetry-smoke.ts"
   },
   "dependencies": {

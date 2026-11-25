@@ -215,6 +215,20 @@ reset_schema() {
   printf '%s\n' "$SCHEMA_SQL" | "${PSQL[@]}" -q -v ON_ERROR_STOP=1 >/dev/null
 }
 
+# ── one script instead of the suite ──────────────────────────────────────────
+
+# `hosted-test.sh --run <file.ts> [args…]` runs that one script against a fresh
+# schema in the same throwaway Postgres, then tears it down. It is how
+# `npm run load-test` (scripts/load-test.ts) gets a database.
+if [ "${1:-}" = "--run" ]; then
+  shift
+  [ $# -gt 0 ] || { echo "✗ --run needs a script"; exit 1; }
+  reset_schema
+  echo "→ running $*"
+  npx tsx "$@"
+  exit $?
+fi
+
 # ── tests ────────────────────────────────────────────────────────────────────
 
 echo "→ running client-profile unit test (no DB)"

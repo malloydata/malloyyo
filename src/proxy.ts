@@ -8,6 +8,7 @@ import { auth } from "@/auth";
 import { signInPath } from "@/lib/auth-paths";
 import { requestHasCookie, renewAppSessionInPlace } from "@/lib/app-session";
 import { hostedIntegration } from "@/lib/hosted-auth-integration";
+import { REQUEST_METHOD_HEADER, REQUEST_PATH_HEADER } from "@/lib/view-as";
 import {
   ALWAYS_ALLOW,
   reauthPath,
@@ -57,6 +58,12 @@ const handleAuth = auth(async (req: NextAuthRequest, _event: NextFetchEvent) => 
   // Propagate requestId so route handlers can correlate logs.
   const headers = new Headers(req.headers);
   headers.set("x-request-id", requestId);
+  // What kind of request this is, for code downstream that has only headers to
+  // go on — viewing as another user is look-only, and "is this a write" is the
+  // question that decides it (src/lib/view-as.ts). SET, never merged: a value a
+  // client sent under these names is overwritten here.
+  headers.set(REQUEST_METHOD_HEADER, req.method);
+  headers.set(REQUEST_PATH_HEADER, pathname);
   const next = () => NextResponse.next({ request: { headers } });
 
   if (ALWAYS_ALLOW.test(pathname)) {

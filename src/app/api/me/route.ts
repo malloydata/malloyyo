@@ -8,7 +8,7 @@ import { isAdmin } from "@/lib/admin";
 import { getSettings } from "@/lib/settings";
 import { env } from "@/lib/env";
 import { configuredAuthProviders, partialAuthProviders } from "@/lib/auth-providers";
-import { getSessionUser, UnauthorizedError } from "@/lib/user";
+import { getSessionUser, getViewAs, UnauthorizedError } from "@/lib/user";
 import { askConfig, askEnabled } from "@/lib/ask";
 import { hostedSignIn } from "@/lib/hosted-auth-integration";
 import { signInPath, signOutPath } from "@/lib/auth-paths";
@@ -80,7 +80,11 @@ export async function GET() {
     });
   }
   const claudeConnected = await hasActiveClaudeConnection(u.id);
+  // An admin viewing as someone: `u` above is already THAT person, so the rest
+  // of this answer is theirs. This says so, for the banner on every page.
+  const viewAs = await getViewAs().catch(() => null);
   return NextResponse.json({
+    ...(viewAs ? { viewingAs: { name: viewAs.target.name, email: viewAs.target.email } } : {}),
     instanceName: env.INSTANCE_NAME,
     tagline,
     signinNotice,

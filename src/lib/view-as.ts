@@ -5,7 +5,7 @@
  * Viewing as another user — the names and the one rule, with no imports, so the
  * proxy, the session code and the browser can all share them.
  *
- * An admin picks a person on Admin → Users & roles and sees the app as that person
+ * An admin picks a person on Admin → Users and sees the app as that person
  * does. The swap itself is in `getSessionUser()` (src/lib/user.ts); starting
  * and stopping are /api/admin/view-as.
  *

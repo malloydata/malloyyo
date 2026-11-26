@@ -86,7 +86,7 @@ export async function POST(req: Request) {
 
     case "set-level": {
       // What ONE role gets on ONE dataset: none, view (dashboards only) or
-      // query (full). The unit Admin → Users & roles edits, one switch at a time.
+      // query (full). The unit Admin → Roles edits, one switch at a time.
       //
       // Stored as two arrays on the dataset — `roles` (any access) and
       // `view_only_roles` (the subset that may only view); see `DatasetAccess`

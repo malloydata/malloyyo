@@ -1,12 +1,10 @@
 // Copyright (c) The Malloy Foundation
 // SPDX-License-Identifier: MIT
 
-// The /admin tab set: the application's own tabs, how an integration's contributed
-// pages appear, and the one-people-surface rule — people and roles are one page, and
-// an integration that owns sign-in brings its own people page, so there that page is
-// called "Roles" and never presents as a roster. The
-// catch-all shell renders whatever page matches a slug; this module is what decides a
-// slug's URL, so hostile slugs are pinned here too.
+// The /admin tab set: the application's own tabs — Users, Datasets, Roles — and
+// how an integration's contributed pages appear after them. The catch-all shell
+// renders whatever page matches a slug; this module is what decides a slug's
+// URL, so hostile slugs are pinned here too.
 //
 // Run: npm test
 
@@ -15,26 +13,15 @@ import assert from "node:assert/strict";
 import { adminTabs } from "./admin-tabs.js";
 import { hostedIntegration } from "./hosted-auth-integration.js";
 
-test("no integration: exactly the application's own tabs", () => {
-  assert.deepEqual(adminTabs(null), [
-    { href: "/admin", label: "General", exact: true },
-    // One tab for both: a person's roles and whether they may sign in are one
-    // row on one page, not two lists of the same people.
-    { href: "/admin/roles", label: "Users & roles" },
-  ]);
-});
+const OWN = [
+  { href: "/admin", label: "General", exact: true },
+  { href: "/admin/users", label: "Users" },
+  { href: "/admin/datasets", label: "Datasets" },
+  { href: "/admin/roles", label: "Roles" },
+];
 
-// Roles stay whatever owns sign-in. An integration may supply the people; which
-// datasets those people may open is this instance's decision. What yields is the
-// NAME: beside the integration's own people page it must not read as a second roster.
-test("Roles survives an integration taking over the people surface, and stops calling itself Users", () => {
-  const tabs = adminTabs({ adminPages: [{ slug: "members", label: "Members", Component: () => null }] });
-  assert.deepEqual(
-    tabs.find((t) => t.href === "/admin/roles"),
-    { href: "/admin/roles", label: "Roles" },
-  );
-  assert.ok(!tabs.some((t) => /users/i.test(t.label)), "no people-shaped tab beside the integration's");
-  assert.ok(!tabs.some((t) => t.href === "/admin/users"));
+test("no integration: exactly the application's own tabs", () => {
+  assert.deepEqual(adminTabs(null), OWN);
 });
 
 // Ties the seam's absent case to the surface: this build must not grow or lose admin
@@ -43,7 +30,11 @@ test("this build contributes no tabs", () => {
   assert.deepEqual(adminTabs(hostedIntegration()), adminTabs(null));
 });
 
-test("an integration's pages follow the application's own, which no longer claims the people", () => {
+// An integration may supply the people, but which roles they hold is decided on
+// the Users page and what a role opens on Roles — so none of the three goes
+// away. (The Users PAGE drops its admission controls there; that is the page's
+// concern, src/app/admin/users/page.tsx, not the tab set's.)
+test("an integration's pages follow the application's own, all of which stay", () => {
   const tabs = adminTabs({
     adminPages: [
       { slug: "members", label: "Members", Component: () => null },
@@ -51,20 +42,11 @@ test("an integration's pages follow the application's own, which no longer claim
     ],
   });
   assert.deepEqual(tabs, [
-    { href: "/admin", label: "General", exact: true },
-    { href: "/admin/roles", label: "Roles" },
+    ...OWN,
     { href: "/admin/x/members", label: "Members" },
     { href: "/admin/x/session", label: "Session" },
   ]);
-});
-
-// The rule keys on the integration existing, not on it contributing pages: membership
-// lives with whoever owns sign-in even when nothing is contributed yet.
-test("an integration with no pages still takes the people surface", () => {
-  assert.deepEqual(adminTabs({ adminPages: [] }), [
-    { href: "/admin", label: "General", exact: true },
-    { href: "/admin/roles", label: "Roles" },
-  ]);
+  assert.deepEqual(adminTabs({ adminPages: [] }), OWN);
 });
 
 // Slugs are the integration's, but the URL is ours: a slug that tries to path-traverse

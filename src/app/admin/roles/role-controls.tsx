@@ -6,7 +6,8 @@ import { useRouter } from "next/navigation";
 import { useState } from "react";
 
 /** One POST to /api/admin/roles, then a refresh so the page shows what is
-    stored. Shared with ./roles-workspace. */
+    stored. Shared by the Roles, Users and Datasets pages: roles, a person's
+    roles and a dataset's scoping are all written through that one route. */
 export function useAction() {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -39,7 +40,7 @@ export const BTN =
 export const INPUT =
   "px-2 py-1 rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950 text-sm";
 
-export function NewRoleForm() {
+export function NewRoleForm({ onDone }: { onDone?: () => void }) {
   const { run, busy, error } = useAction();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -51,11 +52,13 @@ export function NewRoleForm() {
         if (await run({ action: "create", name, description })) {
           setName("");
           setDescription("");
+          onDone?.();
         }
       }}
     >
       <input
         className={INPUT}
+        autoFocus={!!onDone}
         placeholder="finance"
         value={name}
         onChange={(e) => setName(e.target.value)}
@@ -71,6 +74,11 @@ export function NewRoleForm() {
       <button type="submit" className={BTN} disabled={busy || !name.trim()}>
         Add role
       </button>
+      {onDone && (
+        <button type="button" className={BTN} disabled={busy} onClick={onDone}>
+          Cancel
+        </button>
+      )}
       {error && <span className="text-xs text-red-600 dark:text-red-400">{error}</span>}
     </form>
   );
@@ -100,47 +108,6 @@ export function DeleteRoleButton({ name, holders }: { name: string; holders: num
   );
 }
 
-/** What a newly admitted person is given. */
-export function DefaultRoles({ all, current }: { all: string[]; current: string[] }) {
-  const { run, busy, error } = useAction();
-  const [picked, setPicked] = useState<string[]>(current);
-  const dirty = picked.length !== current.length || picked.some((r) => !current.includes(r));
-  return (
-    <div className="flex flex-col gap-1.5">
-      <div className="flex flex-wrap gap-x-3 gap-y-1">
-        {all.map((r) => (
-          <label key={r} className="inline-flex items-center gap-1 text-xs">
-            <input
-              type="checkbox"
-              checked={picked.includes(r)}
-              onChange={(e) =>
-                setPicked((p) => (e.target.checked ? [...p, r] : p.filter((x) => x !== r)))
-              }
-            />
-            {r}
-          </label>
-        ))}
-      </div>
-      {dirty && (
-        <span className="inline-flex items-center gap-2">
-          <button
-            type="button"
-            className={BTN}
-            disabled={busy}
-            onClick={() => void run({ action: "set-default", roles: picked })}
-          >
-            Save
-          </button>
-          <button type="button" className={BTN} disabled={busy} onClick={() => setPicked(current)}>
-            Cancel
-          </button>
-        </span>
-      )}
-      {error && <span className="text-xs text-red-600 dark:text-red-400">{error}</span>}
-    </div>
-  );
-}
-
 /** What a dataset is scoped by. Configured, not inferred from the model — the
     model must then declare what is ticked here or its next publish is refused. */
 export function DatasetGivens({
@@ -157,9 +124,9 @@ export function DatasetGivens({
   const dirty = picked.length !== required.length || picked.some((g) => !required.includes(g));
   return (
     <div className="flex flex-col gap-1">
-      <div className="flex flex-wrap gap-x-3 gap-y-1">
+      <div className="flex flex-col gap-1">
         {all.map((g) => (
-          <label key={g.name} className="inline-flex items-center gap-1 text-xs" title={g.description ?? undefined}>
+          <label key={g.name} className="inline-flex items-center gap-1.5 text-xs" title={g.description ?? undefined}>
             <input
               type="checkbox"
               checked={picked.includes(g.name)}

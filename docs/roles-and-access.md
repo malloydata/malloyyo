@@ -1,10 +1,12 @@
 # Roles and access
 
 > **Status: shipped.** The role catalog, dataset grants, `$MALLOYYO_ROLES`, row
-> scoping and multi-dataset repos all work today. People and roles are managed
-> on one page, **Admin → Users & roles** (the tab is called **Roles** where an
-> identity provider owns sign-in, and leaves out approving, inviting and
-> disabling people, which that provider does); `lloydtabb/malloyyo_examples` is a live multi-dataset repo.
+> scoping and multi-dataset repos all work today. They are managed on three
+> admin pages: **Users** (who may sign in, the roles each person holds, and what
+> those add up to), **Datasets** (what is published, from which repo, and how
+> its rows are scoped) and **Roles** (what each role opens). Where an identity
+> provider owns sign-in, the Users page leaves out adding, approving and
+> disabling people, which that provider does; `lloydtabb/malloyyo_examples` is a live multi-dataset repo.
 
 Two questions decide what anyone sees, and they are answered in different
 places:
@@ -73,8 +75,8 @@ A role is a list of datasets, and for each one, what its people get there:
 | **Dashboards** | open its dashboards, and nothing else |
 | **Full** | open its dashboards, and query it — the query editor, chat, AI Q&A, the MCP connector, draft dashboards |
 
-Set them at **Admin → Users & roles**: pick a role, and each dataset has one three-way
-switch.
+Set them at **Admin → Roles**: pick a role, and each dataset has one three-way
+switch. The same page says whether new users are given the role.
 
 ```
 clients      Client reports: Dashboards
@@ -83,10 +85,12 @@ analysts     Client reports: Full     Finance: Full     Support: Dashboards
 
 **Someone with several roles gets the most any of them gives, dataset by
 dataset.** Hold `clients` and you read the dashboards on Client reports. Hold
-`analysts` too and you can query it. The **People** section of the same page
-works this out for you: beside each person is what their roles add up to, a row
-opens to show which role is why, and *Edit roles* previews the result of a
-change before you save it.
+`analysts` too and you can query it. **Admin → Users** works this out for you:
+beside each person is what their roles add up to, a row opens to show which
+role is why, and *Edit roles* previews the result of a change before you save
+it. *Add user* takes an email address and the roles that person starts with,
+with the same preview; they are let in the first time they sign in with that
+address.
 
 There is no "dashboard-only user" to configure. Someone is dashboard-only
 exactly when no role gives them Full on anything; their home page is then the
@@ -119,7 +123,7 @@ audience, opened at the Dashboards level.
 ### Seeing what someone sees
 
 An admin can **view as** any non-admin: *View as* beside a person on Admin →
-Roles opens the app exactly as that person sees it — their datasets, their
+Users opens the app exactly as that person sees it — their datasets, their
 dashboards, their rows under row scoping, and no admin pages. A bar across every
 page says who you are viewing as and how to stop.
 
@@ -166,7 +170,8 @@ the model without it would be refused rather than run unscoped.
 `$MALLOYYO_EMAIL` is the signed-in address. `$MALLOYYO_ROLES` is the list of
 roles that person holds, built-in and your own together.
 
-The two halves check each other. Tick a given on the dataset and a model that
+The two halves check each other. Tick a given on the dataset (**Admin →
+Datasets**, which lists each one under the repo that publishes it) and a model that
 does not declare it cannot be published. Declare one that is not ticked and
 nothing supplies it — the model's default applies, and `publish` says so.
 

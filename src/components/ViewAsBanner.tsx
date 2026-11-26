@@ -55,7 +55,7 @@ export function ViewAsBanner() {
     // Back to where it was started, and by a full load for the same reason
     // starting is one: nothing built for the other person may survive.
     // eslint-disable-next-line @next/next/no-location-assign-relative-destination -- a full load, deliberately; see above
-    window.location.assign("/admin/roles");
+    window.location.assign("/admin/users");
   }
 
   return (

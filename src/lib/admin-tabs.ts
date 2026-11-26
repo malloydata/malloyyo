@@ -20,21 +20,24 @@ export function adminTabs(
 ): AdminTab[] {
   const tabs: AdminTab[] = [{ href: "/admin", label: "General", exact: true }];
 
-  // People and roles are ONE page (src/app/admin/roles): who may use the
-  // instance, what each of them can reach, and what each role opens. It used to
-  // be two tabs that listed the same people twice.
+  // Three pages, one question each: who may use the instance and what each of
+  // them reaches (Users), what is published here and how its rows are scoped
+  // (Datasets), and what each role opens (Roles). They were briefly ONE page,
+  // seven sections long; nobody could find anything on it.
   //
-  // What it is CALLED depends on who owns sign-in. With no integration, the
-  // application's own roster is on it — approve, invite, disable — so it is the
-  // admin's people page and says so. When an integration owns sign-in,
-  // membership lives with it, the pages it contributes include its own people
-  // surface, and this page leaves the roster controls out; a tab named "Users"
-  // beside that one would read as a competing roster. There it is "Roles":
-  // which datasets those people may open is still this instance's decision.
+  // All three stay when an integration owns sign-in. Membership lives with the
+  // integration then, and the Users page leaves the admission controls out —
+  // adding, approving, disabling — but who holds which role, and so which
+  // datasets they open, is still this instance's decision, and that page is
+  // where it is made.
   //
   // Before the contributed pages, so the application's own surface reads as one
-  // group. /admin/users still resolves — it redirects here.
-  tabs.push({ href: "/admin/roles", label: integration === null ? "Users & roles" : "Roles" });
+  // group.
+  tabs.push(
+    { href: "/admin/users", label: "Users" },
+    { href: "/admin/datasets", label: "Datasets" },
+    { href: "/admin/roles", label: "Roles" },
+  );
 
   for (const page of integration?.adminPages ?? []) {
     tabs.push({ href: `/admin/x/${encodeURIComponent(page.slug)}`, label: page.label });

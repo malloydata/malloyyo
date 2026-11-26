@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT
 
 // What a set of roles adds up to (src/lib/role-access.ts) — the arithmetic
-// Admin → Users & roles shows. That it MATCHES what the server enforces is pinned
+// the admin pages show. That it MATCHES what the server enforces is pinned
 // against a database in test/dashboard-audience.test.ts; this pins the
 // arithmetic itself, case by case.
 

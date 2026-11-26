@@ -215,7 +215,7 @@ export async function shareDashboard(
           ...state,
           warning:
             `Shared — but ${target.email ?? email} cannot open this dataset yet, so the dashboard will not appear for them. ` +
-            "An admin needs to give them a role that opens it (Admin → Users & roles).",
+            "An admin needs to give them a role that opens it (Admin → Users).",
         },
   };
 }

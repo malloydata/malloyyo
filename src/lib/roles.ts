@@ -141,7 +141,7 @@ export function canAuthor(user: RoleBearing): boolean {
  *          questions, draft dashboards
  *
  * A role holds a LEVEL PER DATASET — none, dashboards (view) or full (query) —
- * which is what Admin → Users & roles edits. On the dataset row that is two arrays:
+ * which is what Admin → Roles edits. On the dataset row that is two arrays:
  * `roles` lists every role with any access, and `view_only_roles` the subset
  * that may only view. Someone's level on a dataset is the best any of their
  * roles gives them there, so one full role on it is enough to query it, and the

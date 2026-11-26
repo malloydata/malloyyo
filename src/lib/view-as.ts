@@ -50,8 +50,28 @@ export const REQUEST_PATH_HEADER = "x-yo-path";
  */
 const RUNS_A_QUERY = ["/api/dashboards/run", "/api/run"];
 
+/**
+ * What is the PERSON's rather than the dataset's, and so is not shown while
+ * viewing as them — reads included.
+ *
+ * Impersonating someone is for seeing what the instance gives them: their
+ * datasets, their dashboards, their rows. It is not a way to read what they
+ * wrote or hold. An admin has no access to another person's unpublished chats
+ * (`readableChat` has no admin bypass, on purpose — they carry stored result
+ * rows) or to their API tokens (the tokens page says so), and the identity
+ * swap must not hand over by the side door what the front door refuses.
+ *
+ * A prefix each: `/api/chats` covers a chat and its messages, `/chat` the page.
+ */
+const PERSONAL = ["/api/chats", "/chat", "/api/tokens", "/settings/tokens"];
+
+function isPersonal(path: string): boolean {
+  return PERSONAL.some((p) => path === p || path.startsWith(`${p}/`));
+}
+
 /** May this request go ahead while viewing as someone? */
 export function viewAsAllows(method: string, path: string): boolean {
+  if (isPersonal(path)) return false;
   const m = method.toUpperCase();
   if (m === "GET" || m === "HEAD" || m === "OPTIONS") return true;
   return m === "POST" && RUNS_A_QUERY.includes(path);
@@ -69,6 +89,21 @@ const NEVER_REFUSED = ["/api/admin/view-as", "/api/auth/", "/api/telemetry/"];
 export const VIEW_AS_REFUSAL =
   "You are impersonating another user, which is look-only: this would change something as them. " +
   'Press "Stop impersonating" at the top of the page to make changes.';
+
+export const VIEW_AS_PERSONAL_REFUSAL =
+  "You are impersonating another user. Their chats and API tokens are theirs, and are not shown: " +
+  "impersonating shows what the instance gives someone, not what they wrote or hold.";
+
+/** The refusal for this path: personal things say why they are not shown. */
+export function viewAsRefusal(path: string): string {
+  return isPersonal(path) ? VIEW_AS_PERSONAL_REFUSAL : VIEW_AS_REFUSAL;
+}
+
+/** A page (not an API route) that is refused: the proxy sends the browser
+    home instead of answering a navigation with JSON. */
+export function isRefusedPage(path: string): boolean {
+  return isPersonal(path) && !path.startsWith("/api/");
+}
 
 /**
  * Should the PROXY refuse this request because a view-as is in progress?

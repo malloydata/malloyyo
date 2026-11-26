@@ -8,11 +8,12 @@ import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
 import { resolveDatasetRef } from "@/lib/repos";
 import { canReadDataset } from "@/lib/mcp-tools";
-import { openToMemberSql, rolesOf } from "@/lib/roles";
+import { othersActivityReadableSql, rolesOf } from "@/lib/roles";
 import { RUN_LABELS } from "@/lib/tool-names";
 
 // A row someone else ran is visible only when its dataset is open to every
-// member and the reader is one (`openToMemberSql`). Your own
+// member, the reader is one, and the dataset is not scoped per person
+// (`othersActivityReadableSql`). Your own
 // runs are always yours to see — which is also what covers the rows that predate
 // dataset_id being recorded, since an unattributable row cannot be shown to be
 // public and so is shown to nobody else. An admin sees everything.
@@ -20,11 +21,11 @@ import { RUN_LABELS } from "@/lib/tool-names";
 // Applies to the JOINED datasets row, so it must be used with that left join.
 function rowReadable(userId: string, admin: boolean) {
   if (admin) return undefined;
-  return or(eq(history.userId, userId), openToMemberSql(userId));
+  return or(eq(history.userId, userId), othersActivityReadableSql(userId));
 }
 function savedReadable(userId: string, admin: boolean) {
   if (admin) return undefined;
-  return or(eq(savedQueries.userId, userId), openToMemberSql(userId));
+  return or(eq(savedQueries.userId, userId), othersActivityReadableSql(userId));
 }
 
 // --- favorites view: sourced from the DURABLE saved_queries, so favorites keep
@@ -177,7 +178,13 @@ async function datasetQuestions(
   const ref = await resolveDatasetRef(idOrName);
   if (!ref.ok) return [];
   const [ds] = await db
-    .select({ id: datasets.id, roles: datasets.roles, viewOnlyRoles: datasets.viewOnlyRoles, userId: datasets.userId })
+    .select({
+      id: datasets.id,
+      roles: datasets.roles,
+      viewOnlyRoles: datasets.viewOnlyRoles,
+      userId: datasets.userId,
+      requiredGivens: datasets.requiredGivens,
+    })
     .from(datasets)
     .where(eq(datasets.id, ref.dataset.id))
     .limit(1);

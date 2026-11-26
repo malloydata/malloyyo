@@ -21,6 +21,7 @@ import { hasRole, MALLOYYO_ADMIN } from "@/lib/roles";
 import { getRealSessionUser, UnauthorizedError } from "@/lib/user";
 import { logger } from "@/lib/logger";
 import { VIEW_AS_COOKIE, VIEW_AS_MARKER_COOKIE, VIEW_AS_MAX_AGE_SECONDS } from "@/lib/view-as";
+import { mintViewAsToken } from "@/lib/view-as-token";
 
 export const runtime = "nodejs";
 
@@ -36,12 +37,14 @@ async function realUser() {
   }
 }
 
-function setCookies(res: NextResponse, userId: string | null) {
+/** `token` is the signed value naming who is impersonated, by whom, since when
+    (src/lib/view-as-token.ts) — or null to clear. */
+function setCookies(res: NextResponse, token: string | null) {
   const base = { path: "/", sameSite: "lax" as const, secure: process.env.NODE_ENV === "production" };
-  const maxAge = userId ? VIEW_AS_MAX_AGE_SECONDS : 0;
-  res.cookies.set(VIEW_AS_COOKIE, userId ?? "", { ...base, httpOnly: true, maxAge });
+  const maxAge = token ? VIEW_AS_MAX_AGE_SECONDS : 0;
+  res.cookies.set(VIEW_AS_COOKIE, token ?? "", { ...base, httpOnly: true, maxAge });
   // Readable, and carries no id: only "there is something to ask about".
-  res.cookies.set(VIEW_AS_MARKER_COOKIE, userId ? "1" : "", { ...base, httpOnly: false, maxAge });
+  res.cookies.set(VIEW_AS_MARKER_COOKIE, token ? "1" : "", { ...base, httpOnly: false, maxAge });
   return res;
 }
 
@@ -63,9 +66,14 @@ export async function POST(req: Request) {
   if (!authorize(target).allowed) return bad("that person cannot sign in, so there is nothing to see as them");
   if (hasRole(target, MALLOYYO_ADMIN)) return bad("admins cannot be impersonated");
 
+  // The cookie is minted HERE and nowhere else, signed for this admin and good
+  // for an hour. That is what makes the next line a record: there is no way to
+  // be impersonating someone that did not pass through it.
+  const token = mintViewAsToken({ adminId: actor.id, targetId: target.id });
+  if (!token) return bad("impersonation needs AUTH_SECRET to be set on this instance", 500);
   // Kept: who looked as whom, and when. This is the record the banner promises.
   logger.info("view-as started", { actorId: actor.id, targetId: target.id });
-  return setCookies(NextResponse.json({ ok: true, viewingAs: { id: target.id, name: target.name, email: target.email } }), target.id);
+  return setCookies(NextResponse.json({ ok: true, viewingAs: { id: target.id, name: target.name, email: target.email } }), token);
 }
 
 export async function DELETE() {

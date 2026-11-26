@@ -337,7 +337,25 @@ publish rights. Full guide: `docs/api-tokens.md`.
    `src/proxy.ts` sets. A route on that list must itself write nothing as the
    target: `/api/run` reads `viewedBy` off `getSession()` and runs with
    `record: false` (no history row, no slug, no save). Bearer credentials are
-   unaffected.
+   unaffected. The cookie is a signed token (`src/lib/view-as-token.ts`):
+   minted only by the start route, bound to that admin, good for an hour,
+   verified on every request. And the person's OWN things — `/api/chats`,
+   `/chat`, `/api/tokens`, `/settings/tokens` — are refused while impersonating,
+   reads included (`PERSONAL` in `view-as.ts`): it shows what the instance
+   gives someone, not what they wrote or hold.
+
+**Row scoping is the model's `where:` plus two server rules, and the second is
+easy to forget.** The usage gate (`unreferencedGivens`) refuses a query that
+references no required given. That is only sound for text the PUBLISHER wrote,
+so text anyone else wrote on a scoped dataset — an ad-hoc query, a panel's
+inline Malloy, a run-expression, a draft's `.malloy` file — also goes through
+`scopeEscape` (`packages/mcp-engine/src/host-givens.ts`): no `$MALLOYYO_…`
+reference, no `join_*`, no `# image` / `# link` tags. Each of those returned or
+carried off other tenants' rows before the rule existed. A new path that runs
+caller-written Malloy must call it; `runRestricted`, `runRestrictedMalloyFiles`
+and `runNamedMalloyFiles` already do. Other people's question history and share
+links are likewise unreadable on a scoped dataset (`canReadDataset`,
+`othersActivityReadableSql`, `maySeeSharedQuery`).
 
 The dashboards level and private dashboards are **curation, not security** — a
 dashboard's run route takes restricted Malloy, so anyone who can open one

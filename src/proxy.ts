@@ -12,8 +12,9 @@ import {
   REQUEST_METHOD_HEADER,
   REQUEST_PATH_HEADER,
   VIEW_AS_COOKIE,
-  VIEW_AS_REFUSAL,
+  isRefusedPage,
   proxyRefusesForViewAs,
+  viewAsRefusal,
 } from "@/lib/view-as";
 import {
   ALWAYS_ALLOW,
@@ -78,7 +79,11 @@ const handleAuth = auth(async (req: NextAuthRequest, _event: NextFetchEvent) => 
   // this is the readable answer, not the guard.
   if (proxyRefusesForViewAs(req.cookies.has(VIEW_AS_COOKIE), req.method, pathname)) {
     logRequest();
-    return NextResponse.json({ ok: false, error: VIEW_AS_REFUSAL }, { status: 403 });
+    // A page the person's own (their chats, their tokens): back to the home
+    // page, where the bar says who is being impersonated — not a JSON body in
+    // place of a page.
+    if (isRefusedPage(pathname)) return NextResponse.redirect(new URL("/", req.url));
+    return NextResponse.json({ ok: false, error: viewAsRefusal(pathname) }, { status: 403 });
   }
 
   if (ALWAYS_ALLOW.test(pathname)) {

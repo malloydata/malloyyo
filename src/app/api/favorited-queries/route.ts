@@ -3,7 +3,7 @@
 
 import { NextResponse } from "next/server";
 import { eq, and, ne, or, inArray, sql, desc } from "drizzle-orm";
-import { datasetAccessWhere } from "@/lib/roles";
+import { MALLOYYO_ADMIN, othersActivityReadableSql } from "@/lib/roles";
 import { db, datasets, savedQueries, favorites, users } from "@/db";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
@@ -28,10 +28,18 @@ export async function GET() {
   if (!me) return NextResponse.json([]);
 
   const admin = isAdmin(me);
-  // The datasets the caller can query — the same rule /api/sources lists by,
-  // which is what the comment above always claimed. It used to be "public
-  // ones", so a favourite on a dataset a role opened for you never showed.
-  const visible = admin ? ne(datasets.status, "failed") : datasetAccessWhere(me.id, "query");
+  // The SAME rule the share link behind each row is checked with
+  // (/api/ltool/share/[slug]): a saved query you authored is yours; someone
+  // else's shows only where their activity on that dataset is readable to you —
+  // open to every member, you being one, and not scoped per person, since a
+  // favourite's question is then one tenant's. So the list never offers a link
+  // that answers "not found".
+  const visible = admin
+    ? ne(datasets.status, "failed")
+    : and(
+        ne(datasets.status, "failed"),
+        or(eq(savedQueries.userId, me.id), othersActivityReadableSql(me.id)),
+      );
 
   // Whose favorites count: mine + every admin's (admin = role column, the
   // legacy is_admin column, OR the APP_ADMIN_EMAILS list, which isn't stored
@@ -41,6 +49,9 @@ export async function GET() {
     .select({ id: users.id })
     .from(users)
     .where(or(
+      // The role list first: it is how someone is made an admin now, and an
+      // admin who is one only there was being left out of "admins' favourites".
+      sql`${MALLOYYO_ADMIN} = any(coalesce(${users.roles}, '{}'::text[]))`,
       inArray(users.role, ["owner", "admin"]),
       eq(users.isAdmin, true),
       adminEmails.length ? inArray(sql`lower(${users.email})`, adminEmails) : sql`false`,

@@ -1106,19 +1106,34 @@ test("a draft's own files are refused when they reach past the model", async () 
 });
 
 test("a draft can only be overwritten by the person who made it", async () => {
-  const { slug } = await makeDraft({ name: "by_state", title: "By state", source: DRAFT_COMPONENT });
+  // Opened to the dataset, so the other person can SEE it — that is what makes
+  // "belongs to someone else" the honest answer rather than a leak.
+  const { slug } = await makeDraft({ name: "by_state", title: "By state", source: DRAFT_COMPONENT, visibility: "dataset" });
 
   // Someone who can see the dataset (every member can) but didn't make the draft.
   await db.update(datasets).set({ roles: ["MALLOYYO_USER"] }).where(eq(datasets.name, DS_DRAFT));
   const other = await seedMember(`other-${RUN}@test.local`);
-  const res = await fetch(`${serverUrl}/api/datasets/${DS_DRAFT}/drafts`, {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${await mintFor(other.id, ["mcp"])}` },
-    body: JSON.stringify({ name: "by_state", source: DRAFT_COMPONENT, slug }),
-  });
-  const out = (await res.json()) as { ok: boolean; error?: string };
+  const attempt = async (target: string) => {
+    const res = await fetch(`${serverUrl}/api/datasets/${DS_DRAFT}/drafts`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${await mintFor(other.id, ["mcp"])}` },
+      body: JSON.stringify({ name: "by_state", source: DRAFT_COMPONENT, slug: target }),
+    });
+    return (await res.json()) as { ok: boolean; error?: string };
+  };
+  const out = await attempt(slug);
   assert.equal(out.ok, false);
   assert.match(out.error ?? "", /belongs to someone else/);
+
+  // A PRIVATE draft (what a new one is) they cannot open is not there for them
+  // at all: the same answer as a slug that never existed, so the save route is
+  // not a way to find out which slugs are real.
+  const hidden = await makeDraft({ name: "hidden", title: "Hidden", source: DRAFT_COMPONENT });
+  const refused = await attempt(hidden.slug);
+  const absent = await attempt("nosuchslug00");
+  assert.equal(refused.ok, false);
+  assert.match(refused.error ?? "", /no draft dashboard/);
+  assert.equal(refused.error?.replace(hidden.slug, "X"), absent.error?.replace("nosuchslug00", "X"));
 });
 
 test("draft promote validates --name instead of writing outside dashboards/", async () => {

@@ -320,6 +320,23 @@ export function openToMemberSql(userId: string) {
   return sql`(${MALLOYYO_USER} = any(${datasets.roles}) and not (${MALLOYYO_USER} = any(${datasets.viewOnlyRoles})) and array[${MALLOYYO_USER}]::text[] && ${heldRoles(userId)})`;
 }
 
+/**
+ * May this person read what OTHER people asked of a dataset — their questions,
+ * the Malloy those produced, a shared-query link — as a SQL predicate on the
+ * datasets row. (Their own are always theirs; an admin reads everything.)
+ *
+ * Open to every member, the reader being one, AND NOT SCOPED PER PERSON. The
+ * last part was missing: on a dataset scoped by `$MALLOYYO_EMAIL` every tenant
+ * could read every other tenant's questions and query text — filter values and
+ * all, customer names included — because the rule looked only at who may open
+ * the dataset. Opening it is the same for all of them; what each may see in it
+ * is not, and a question is about what they saw. Publishing a chat already
+ * refused scoped datasets for this reason (src/lib/chat/shareability.ts).
+ */
+export function othersActivityReadableSql(userId: string) {
+  return sql`(${openToMemberSql(userId)} and cardinality(${datasets.requiredGivens}) = 0)`;
+}
+
 /** Datasets this person may OPEN. The name every read path already uses. */
 export function datasetVisibleWhere(userId: string) {
   return datasetAccessWhere(userId, "view");
@@ -339,6 +356,9 @@ export async function defaultRoles(): Promise<string[]> {
     .from(instanceSettings)
     .where(eq(instanceSettings.instanceCode, env.INSTANCE_CODE))
     .limit(1);
-  const configured = row?.defaultRoles ?? null;
-  return configured && configured.length > 0 ? configured : [...DEFAULT_ROLES];
+  // Filtered on READ as well as refused on write (the `set-default` action).
+  // A value stored before that refusal existed, or written by hand, would
+  // otherwise make every approval and every open-policy arrival an admin.
+  const configured = (row?.defaultRoles ?? []).filter((r) => !NEVER_A_DEFAULT.includes(r));
+  return configured.length > 0 ? configured : [...DEFAULT_ROLES];
 }

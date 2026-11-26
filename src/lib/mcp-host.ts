@@ -44,10 +44,10 @@ import { rolesOf } from "./roles";
 import { isAdmin } from "./admin";
 import { logger, serializeErr } from "./logger";
 import {
-  canReadDataset,
   findByDatasetRef,
   findPreview,
   loadSharedQuery,
+  maySeeSharedQuery,
   modelFileMap,
   recordHistory,
   queryableDatasetWhere,
@@ -448,14 +448,11 @@ async function openShareLink(
   // product's primary endpoint, so closing the web route and leaving this one
   // open would have moved the leak rather than fixed it. Fails closed on a slug
   // with no dataset — deleting a dataset nulls history.dataset_id.
-  if (!viewer.admin) {
-    if (!res.datasetId) return errText("share link not found");
-    const [ds] = await db
-      .select({ roles: datasets.roles, viewOnlyRoles: datasets.viewOnlyRoles, userId: datasets.userId })
-      .from(datasets)
-      .where(eq(datasets.id, res.datasetId));
-    if (!ds || !canReadDataset(ds, viewer, false)) return errText("share link not found");
-  }
+  // `maySeeSharedQuery` — one rule with the web route. It used to check the
+  // dataset alone, which told someone their OWN link (the one a `query` call
+  // had just handed them) was not found whenever the dataset was not open to
+  // every member.
+  if (!(await maySeeSharedQuery(viewer, slug, res.datasetId))) return errText("share link not found");
   return text({
     instance: res.instance,
     source: res.source,

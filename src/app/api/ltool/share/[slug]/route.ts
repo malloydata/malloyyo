@@ -5,9 +5,7 @@ import { NextResponse } from "next/server";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
 import { rolesOf } from "@/lib/roles";
-import { canReadDataset, datasetNameById, loadSharedQuery, sharedQueryListContext } from "@/lib/mcp-tools";
-import { db, datasets } from "@/db";
-import { eq } from "drizzle-orm";
+import { datasetNameById, loadSharedQuery, maySeeSharedQuery, sharedQueryListContext } from "@/lib/mcp-tools";
 
 export const runtime = "nodejs";
 
@@ -16,20 +14,6 @@ export const runtime = "nodejs";
 // so the page can open on a tab+scope that actually contains the query.
 // Requires sign-in; actually running the query is gated separately by /api/run
 // (which enforces source visibility).
-async function mayRead(
-  datasetId: string | null | undefined,
-  user: Parameters<typeof isAdmin>[0],
-  authoredByMe: boolean,
-): Promise<boolean> {
-  if (isAdmin(user) || authoredByMe) return true;
-  if (!datasetId) return false;
-  const [ds] = await db
-    .select({ roles: datasets.roles, viewOnlyRoles: datasets.viewOnlyRoles, userId: datasets.userId })
-    .from(datasets)
-    .where(eq(datasets.id, datasetId));
-  return !!ds && canReadDataset(ds, { id: user.id, roles: rolesOf(user) }, false);
-}
-
 export async function GET(
   _req: Request,
   ctx: RouteContext<"/api/ltool/share/[slug]">,
@@ -58,7 +42,8 @@ export async function GET(
   // permission would make deleting a private dataset publish every query ever
   // run against it. The history list says an unattributable row is shown to
   // nobody else, and this is that same rule — you may still see one you wrote.
-  if (!(await mayRead(res.datasetId, user, ctxFlags?.authoredByMe === true))) {
+  const viewer = { id: user.id, roles: rolesOf(user), admin: isAdmin(user) };
+  if (!(await maySeeSharedQuery(viewer, slug, res.datasetId))) {
     return NextResponse.json({ error: "not found" }, { status: 404 });
   }
   return NextResponse.json({

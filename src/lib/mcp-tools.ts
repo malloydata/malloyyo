@@ -73,12 +73,23 @@ export async function canQueryDataset(userId: string, datasetId: string): Promis
 // one (`openToMember`): a dataset open to the members role is not open to
 // someone on the instance who does not hold it. It used to be the `is_public`
 // flag, which nothing reads any more.
+//
+// AND NOT SCOPED PER PERSON. On a dataset scoped by `$MALLOYYO_EMAIL` every
+// tenant may open it, and what each sees in it differs — so one tenant's
+// questions and query text (filter values, customer names) are not another's
+// to read. `othersActivityReadableSql` in ./roles is this rule as a WHERE.
 export function canReadDataset(
-  ds: { roles: string[] | null; viewOnlyRoles: string[] | null; userId: string | null },
+  ds: {
+    roles: string[] | null;
+    viewOnlyRoles: string[] | null;
+    userId: string | null;
+    requiredGivens: string[] | null;
+  },
   viewer: { id: string; roles: readonly string[] },
   admin: boolean,
 ): boolean {
-  return admin || openToMember(ds, viewer.roles) || ds.userId === viewer.id;
+  if (admin || ds.userId === viewer.id) return true;
+  return openToMember(ds, viewer.roles) && (ds.requiredGivens ?? []).length === 0;
 }
 
 // Normalize DB sources column — legacy string[] or new {name, description?}[] format.
@@ -479,6 +490,49 @@ export async function sharedQueryListContext(slug: string, userId: string): Prom
     favoritedByMe,
     authoredByMe: Number(authored?.n ?? 0) > 0,
   };
+}
+
+/**
+ * May this person see the query behind a share slug — its question, its Malloy,
+ * even just which source it runs on?
+ *
+ * One rule for every surface that takes a slug, because they had drifted: the
+ * share route checked, the page that renders a shared query put its source name
+ * in the HTML for anyone with a session, favouriting accepted any slug at all,
+ * and the MCP tool refused people their own links.
+ *
+ *   - an admin: yes;
+ *   - whoever ran it: yes, always — it is theirs;
+ *   - anyone else: only where other people's activity on that dataset is
+ *     readable to them (`canReadDataset`).
+ *
+ * FAILS CLOSED on a slug with no dataset. `history.dataset_id` is ON DELETE SET
+ * NULL, so treating a missing one as permission would publish every query ever
+ * run against a private dataset the moment it was deleted.
+ */
+export async function maySeeSharedQuery(
+  viewer: { id: string; roles: readonly string[]; admin: boolean },
+  slug: string,
+  datasetId: string | null | undefined,
+): Promise<boolean> {
+  if (viewer.admin) return true;
+  const [mine] = await db
+    .select({ n: count() })
+    .from(history)
+    .where(and(eq(history.slug, slug), eq(history.userId, viewer.id)));
+  if (Number(mine?.n ?? 0) > 0) return true;
+  if (!datasetId) return false;
+  const [ds] = await db
+    .select({
+      roles: datasets.roles,
+      viewOnlyRoles: datasets.viewOnlyRoles,
+      userId: datasets.userId,
+      requiredGivens: datasets.requiredGivens,
+    })
+    .from(datasets)
+    .where(eq(datasets.id, datasetId))
+    .limit(1);
+  return !!ds && canReadDataset(ds, viewer, false);
 }
 
 export type WebRunResult =

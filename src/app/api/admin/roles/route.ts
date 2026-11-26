@@ -9,6 +9,7 @@ import { NextResponse } from "next/server";
 import { and, eq, inArray } from "drizzle-orm";
 import { db, datasets, givens, instanceSettings, roles, users } from "@/db";
 import { requireAdmin } from "@/lib/admin";
+import { hostedSignIn } from "@/lib/hosted-auth-integration";
 import { UnauthorizedError } from "@/lib/user";
 import { env } from "@/lib/env";
 import {
@@ -122,32 +123,54 @@ export async function POST(req: Request) {
         );
       }
 
-      // An admin who is one ONLY because APP_ADMIN_EMAILS names them holds
-      // MALLOYYO_ADMIN in `rolesOf()` and nowhere on their row — and the page
-      // sends back the list it was shown, so editing any OTHER role for them
-      // arrived here carrying it. Writing it would make the env-granted admin a
-      // permanent one: taking the address out of the variable later would no
-      // longer remove it. So it is left where it is, in the environment.
-      const heldOnRow =
-        (target.roles ?? []).includes(MALLOYYO_ADMIN) || target.role === "admin" || target.isAdmin === true;
-      if (!heldOnRow && isEnvAdmin(target.email)) next.delete(MALLOYYO_ADMIN);
+      // WHERE THIS PERSON'S ADMIN COMES FROM decides what may be written.
+      //
+      // `rolesOf()` reports MALLOYYO_ADMIN for someone who holds it in any of
+      // three places, and the page sends back the list it was shown — so
+      // editing any OTHER role for an admin arrives here carrying it. Writing
+      // it into the role list is right only when the row is where it lives:
+      //
+      //   - APP_ADMIN_EMAILS names them: it lives in the environment. Written
+      //     here it would outlast the address being taken out of the variable.
+      //   - An integration owns sign-in and mirrors the provider's admin flag
+      //     into `role` / `is_admin` on every sign-in: it lives at the provider.
+      //     Written here it would outlast being revoked there — the sign-in
+      //     mirror resets those two columns and never touches the list.
+      //
+      // In both cases it is left where it is. (On an ordinary instance the two
+      // legacy columns ARE the row's own record, and move with the list below.)
+      const hosted = hostedSignIn();
+      const inList = (target.roles ?? []).includes(MALLOYYO_ADMIN);
+      const legacyAdmin = target.role === "admin" || target.isAdmin === true;
+      const providerAdmin = hosted && legacyAdmin;
+      if (losingAdmin && providerAdmin) {
+        return bad(
+          `${target.email ?? "This person"} is an admin at the identity provider this instance signs in with. Remove it there; it cannot be taken away here.`,
+        );
+      }
+      const heldOnRow = inList || (!hosted && legacyAdmin);
+      if (!heldOnRow && (isEnvAdmin(target.email) || providerAdmin)) next.delete(MALLOYYO_ADMIN);
 
-      // The legacy columns move WITH the array. `rolesOf()` still folds
-      // `role`/`is_admin` in — every row backfilled by 0021 kept them — so
-      // writing only the array made un-ticking MALLOYYO_ADMIN a no-op that
-      // reported success, and ticking it produced an admin whom
-      // `applyUserAction('demote')` then refused as "not an admin". One writer,
-      // both representations.
+      // The legacy columns move WITH the list — on an instance that owns its
+      // own sign-in. `rolesOf()` still folds `role`/`is_admin` in (every row
+      // backfilled by 0021 kept them), so writing only the list made un-ticking
+      // MALLOYYO_ADMIN a no-op that reported success, and ticking it produced
+      // an admin whom `applyUserAction('demote')` then refused as "not an
+      // admin". Where an integration owns sign-in those two columns are its
+      // mirror of the provider and are not this route's to write: a grant made
+      // here lives in the list alone.
       const gainingAdmin = next.has(MALLOYYO_ADMIN);
       await db
         .update(users)
         .set({
           roles: [...next],
-          ...(gainingAdmin
-            ? { role: "admin" as const, isAdmin: true }
-            : target.role === "admin" || target.isAdmin
-              ? { role: "member" as const, isAdmin: false }
-              : {}),
+          ...(hosted
+            ? {}
+            : gainingAdmin
+              ? { role: "admin" as const, isAdmin: true }
+              : legacyAdmin
+                ? { role: "member" as const, isAdmin: false }
+                : {}),
         })
         .where(eq(users.id, userId));
       logger.info("user roles set", { userId, roles: wanted, actorId: actor.id });

@@ -138,9 +138,15 @@ is the way to test a multi-tenant dataset: impersonate one tenant's user, run th
 query, and see exactly the rows they would.
 
 Otherwise it is look-only. Nothing is saved, changed or created as them: a
-query you run is not added to their history and cannot be saved, and chat,
-favourites, tokens, sharing and drafts are refused. Starting, stopping and each
-query run this way are logged against you, and it ends by itself after an hour.
+query you run is not added to their history and cannot be saved, and
+favourites, sharing and drafts are refused. Starting, stopping and each query
+run this way are logged against you, and it ends by itself after an hour — on
+the server, not just in your browser.
+
+**It shows what the instance gives them, not what is theirs.** Their chats and
+their API tokens are not shown while you impersonate them: an admin cannot read
+another person's unpublished chats or see their tokens, and impersonating is
+not a way around that.
 
 ## Datasets name the roles that may open them
 

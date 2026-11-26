@@ -23,7 +23,7 @@
 
 import { createHash } from "node:crypto";
 import { and, desc, eq, sql } from "drizzle-orm";
-import { modelArtifact, validateRestricted, type Problem } from "@malloyyo/mcp-engine";
+import { modelArtifact, scopeEscape, validateRestricted, type Problem } from "@malloyyo/mcp-engine";
 import {
   dashboardGrants,
   datasets,
@@ -31,9 +31,11 @@ import {
   draftDashboards,
   DRAFT_VISIBILITIES,
   malloyArtifacts,
+  users,
   type DraftVisibility,
 } from "@/db";
-import { hasRole, MALLOYYO_ADMIN, type RoleBearing } from "@/lib/roles";
+import { hasRole, MALLOYYO_ADMIN, rolesOf, type RoleBearing } from "@/lib/roles";
+import { leaseScope } from "@/lib/tenancy";
 import { findByDatasetRef, modelFileMap } from "@/lib/mcp-tools";
 import { fileUrl, runNamedMalloyFiles, withModelRuntime } from "@/lib/malloy";
 import { newDatasetSlug } from "@/lib/slug";
@@ -228,8 +230,16 @@ export async function saveDraftDashboard(
       .from(draftDashboards)
       .where(and(eq(draftDashboards.slug, input.slug), eq(draftDashboards.datasetId, found.ds.id)))
       .limit(1);
-    if (!existing) return { ok: false, error: `no draft dashboard '${input.slug}' in '${found.ds.name}'` };
-    if (existing.userId !== userId) return { ok: false, error: "that draft dashboard belongs to someone else" };
+    const none = { ok: false as const, error: `no draft dashboard '${input.slug}' in '${found.ds.name}'` };
+    if (!existing) return none;
+    if (existing.userId !== userId) {
+      // Someone else's — and if it is private and not shared with this person,
+      // it is not there for them at all. Saying "belongs to someone else"
+      // would confirm a slug they have no way to open.
+      return (await mayOpenDraft(userId, existing))
+        ? { ok: false, error: "that draft dashboard belongs to someone else" }
+        : none;
+    }
   }
 
   if (editing) {
@@ -277,6 +287,17 @@ export async function saveDraftDashboard(
     title,
     ...(description ? { description } : {}),
   };
+
+  // What this dataset is scoped by. A draft's file is text a MEMBER wrote, so on
+  // scoped data it is held to the same rule as any ad-hoc query: it may not name
+  // the scoping given or define a join (`scopeEscape`). Without that, a draft
+  // was the easy way to read every tenant's rows — define the join in the file
+  // and let the dashboard run it.
+  const required = found.ds.requiredGivens ?? [];
+  if (malloy.trim()) {
+    const escape = scopeEscape(malloy, required);
+    if (escape) return { ok: false, error: `dashboards/${name}.malloy: ${escape}` };
+  }
 
   if (malloy.trim()) {
     // 1. The gate — against the model's own files, before this file is compiled.
@@ -399,10 +420,26 @@ export async function saveDraftDashboard(
       ? [manifest.query]
       : [];
   const cacheKey = `${found.model.id}:draft:${row.id}:${row.updatedAt.toISOString()}`;
+  // AS THE AUTHOR, AND GATED. This test-run used to pass neither a scope nor
+  // the required givens, so on a scoped dataset it ran with the model's DEFAULT
+  // for the given and skipped the usage gate: the three sample rows per tile
+  // could be rows every other run path refuses, and a tile could page a source
+  // out three at a time. It is the author's own run, so it sees what the author
+  // would see on the dashboard — their rows, or a refusal.
+  const [author] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+  const scope = {
+    ...leaseScope(required, { email: author?.email ?? null, roles: author ? rolesOf(author) : [] }),
+    dataset: found.ref ?? datasetRef,
+  };
   const tiles: DraftTileReport[] = [];
   for (const run of runs) {
     try {
-      const r = await runNamedMalloyFiles(files, entryFile, run, {}, { rowLimit: TILE_SAMPLE_ROWS, cacheKey });
+      const r = await runNamedMalloyFiles(files, entryFile, run, {}, {
+        rowLimit: TILE_SAMPLE_ROWS,
+        cacheKey,
+        scope,
+        requireGivens: required,
+      });
       const sample = (r.rows ?? []).slice(0, TILE_SAMPLE_ROWS);
       const first = sample[0];
       tiles.push({
@@ -652,6 +689,19 @@ export async function recordPromotion(
   return "recorded";
 }
 
+/** May this person open that draft at all — its author, or someone it is open
+    to or shared with. The audience check every read of a draft goes through. */
+async function mayOpenDraft(
+  userId: string,
+  row: { slug: string; userId: string; datasetId: string; visibility: string },
+): Promise<boolean> {
+  return mayOpenDashboard(userId, row.datasetId, {
+    name: `${DRAFT_PREFIX}${row.slug}`,
+    isPrivate: row.visibility === "private",
+    authorId: row.userId,
+  });
+}
+
 /** The CLI's hash shape (sha256 over each file then a NUL, first 16 hex), over the draft's own files. */
 function draftHash(row: { malloy: string; source: string }): string {
   const hash = createHash("sha256");
@@ -682,7 +732,11 @@ export async function deleteDraft(
     .where(and(eq(draftDashboards.slug, slug), eq(draftDashboards.datasetId, found.ds.id)))
     .limit(1);
   if (!row) return { outcome: "not-found" };
-  if (row.userId !== user.id && !hasRole(user, MALLOYYO_ADMIN)) return { outcome: "not-yours" };
+  if (row.userId !== user.id && !hasRole(user, MALLOYYO_ADMIN)) {
+    // A private draft this person cannot open is not there for them: the same
+    // answer as a slug that does not exist, as `getDraftFiles` gives.
+    return { outcome: (await mayOpenDraft(user.id, row)) ? "not-yours" : "not-found" };
+  }
   // Its shares go with it. They are keyed by name, not by this row, so nothing
   // cascades — and a slug is never reused, so they would only ever be litter.
   await db.transaction(async (tx) => {

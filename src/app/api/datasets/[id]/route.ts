@@ -20,6 +20,16 @@ export async function GET(
   _req: Request,
   ctx: RouteContext<"/api/datasets/[id]">,
 ) {
+  // WHO IS ASKING, before anything is looked up. Signed out (or pending, or
+  // disabled): not found, whatever was asked for. Resolving the name first
+  // answered an unauthenticated request for an ambiguous one with the list of
+  // repos that publish it.
+  let me;
+  try { me = await getSessionUser(); } catch (err) {
+    if (err instanceof UnauthorizedError) return NextResponse.json({ error: "not found" }, { status: 404 });
+    throw err;
+  }
+
   const { id } = await ctx.params;
   // A uuid, `repo:dataset`, an old bare name (pinned by an alias), or a bare
   // name that is still unambiguous - one ordered rule, in src/lib/repos.ts, so
@@ -34,26 +44,52 @@ export async function GET(
   const ds = resolved.dataset;
   const repo = resolved.repo;
 
-  let me;
-  try { me = await getSessionUser(); } catch (err) {
-    // Signed out (or pending, or disabled): not found, whatever the dataset.
-    // A dataset flagged public used to answer here with its sources and its
-    // dashboards' source; there is no such flag now, and "every member can
-    // open it" is no reason to show it to someone who is not a member.
-    if (err instanceof UnauthorizedError) return NextResponse.json({ error: "not found" }, { status: 404 });
-    throw err;
-  }
-
-  // What your roles open, at any level — the same arithmetic the admin pages
-  // show (src/lib/role-access.ts). This used to ask the `is_public` flag
-  // instead, so someone whose role opened a dataset that was not "public" could
-  // query it and still be told here that it did not exist.
-  if (resolveAccess(rolesOf(me), [{ ...ds, ownerId: ds.userId }], { userId: me.id })[0].level === "none") {
+  // What your roles give you here — the same arithmetic the admin pages show
+  // (src/lib/role-access.ts). This used to ask the `is_public` flag instead, so
+  // someone whose role opened a dataset that was not "public" could query it
+  // and still be told here that it did not exist.
+  const level = resolveAccess(rolesOf(me), [{ ...ds, ownerId: ds.userId }], { userId: me.id })[0].level;
+  // last-publish detail (incl. failure text) is management-only.
+  const canManage = isAdmin(me) || ds.userId === me.id;
+  // A dataset that is not ready is nobody's to open but its managers', exactly
+  // as the access rule itself says (`datasetAccessWhere`).
+  if (level === "none" || (ds.status !== "ready" && !canManage)) {
     return NextResponse.json({ error: "not found" }, { status: 404 });
   }
 
-  // last-publish detail (incl. failure text) is management-only.
-  const canManage = isAdmin(me) || ds.userId === me.id;
+  // DASHBOARDS LEVEL GETS THE DASHBOARDS, AND NOTHING ABOUT THE MODEL. When
+  // this route answered only for public datasets, owners and admins, everyone
+  // it answered could query. It now answers for every level — and at the
+  // dashboards level that meant the whole `index.malloy`, each dashboard's
+  // component source, the GitHub repo and branch, the live revision and any
+  // build error, to someone the level exists to keep to dashboards. They get
+  // what the page needs to name the dataset and list what they may open.
+  if (level !== "query") {
+    const model = await latestModel(ds.id);
+    const rows = model
+      ? await db
+          .select({ name: malloyArtifacts.name, title: malloyArtifacts.title, manifest: malloyArtifacts.manifest })
+          .from(malloyArtifacts)
+          .where(eq(malloyArtifacts.modelId, model.id))
+          .orderBy(malloyArtifacts.name)
+      : [];
+    const open = await visibleDashboards(
+      me.id,
+      ds.id,
+      rows.map((d) => ({ ...d, isPrivate: publishedIsPrivate(d.name, d.manifest, ds.dashboardAudience) })),
+    );
+    return NextResponse.json({
+      id: ds.id,
+      name: ds.name,
+      status: ds.status,
+      title: datasetTitle(ds.name, ds.title),
+      qualified: qualifiedName(repo?.slug, ds.name),
+      repo: repo ? { slug: repo.slug, title: repo.title } : null,
+      isAdmin: false,
+      dashboards: open.map((d) => ({ name: d.name, title: d.title })),
+      malloyModel: null,
+    });
+  }
 
   // The model the dataset SERVES, and the files it serves with - which for a
   // repo-backed model come out of its revision's zip rather than a per-file

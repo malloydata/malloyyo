@@ -10,9 +10,10 @@ import {
   REQUEST_METHOD_HEADER,
   REQUEST_PATH_HEADER,
   VIEW_AS_COOKIE,
-  VIEW_AS_REFUSAL,
   viewAsAllows,
+  viewAsRefusal,
 } from "./view-as";
+import { verifyViewAsToken } from "./view-as-token";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -95,7 +96,7 @@ export async function getSession(): Promise<SessionIdentity> {
   if (!viewAsAllows(request.method, request.path)) {
     // The proxy answers this first, with the same sentence and a 403; this is
     // the guard behind it, for a request the proxy did not describe.
-    throw new UnauthorizedError(VIEW_AS_REFUSAL);
+    throw new UnauthorizedError(viewAsRefusal(request.path));
   }
   return { user: target, viewedBy: real };
 }
@@ -109,20 +110,24 @@ export async function getSessionUser(): Promise<User> {
  * The person this admin is viewing as, or null.
  *
  * Re-decided on every request from rows read on that request, the same way
- * authorization is: the cookie only NAMES someone. It grants nothing to a
- * non-admin, so a stale or forged one is ignored, and it stops working the
- * moment the admin is demoted or the target is disabled or made an admin.
+ * authorization is: the cookie only NAMES someone, signed by the start route
+ * for one admin and good for an hour. It grants nothing to a non-admin, so a
+ * stale or forged one is ignored, and it stops working the moment the admin is
+ * demoted or the target is disabled or made an admin.
  */
 async function viewedAs(real: User): Promise<User | null> {
-  let id: string | undefined;
+  let token: string | undefined;
   try {
     const { cookies } = await import("next/headers");
-    id = (await cookies()).get(VIEW_AS_COOKIE)?.value;
+    token = (await cookies()).get(VIEW_AS_COOKIE)?.value;
   } catch {
     return null; // no request scope: nothing to view as
   }
-  if (!id || !UUID_RE.test(id) || id === real.id) return null;
   if (!hasRole(real, MALLOYYO_ADMIN)) return null;
+  // Minted by the start route, for THIS admin, within the last hour — or it is
+  // nothing (src/lib/view-as-token.ts). A bare id set by hand is not a start.
+  const id = verifyViewAsToken(token, real.id);
+  if (!id || !UUID_RE.test(id) || id === real.id) return null;
   const [target] = await db.select().from(users).where(eq(users.id, id)).limit(1);
   if (!target || !authorize(target).allowed) return null;
   // Not another admin: that would be acting with someone else's authority,

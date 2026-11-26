@@ -20,6 +20,7 @@ import {
   dashboardGivenSpecs,
   rowLimitTruncation,
   runRestricted,
+  scopeEscape,
   type DashboardGivenSpec,
   type DashboardGivenSpecsResult,
   type TruncationInfo,
@@ -132,6 +133,17 @@ export async function runDashboard(
   const scope = { ...leaseScope(required, { email: user.email, roles: rolesOf(user) }), dataset: found.ref ?? datasetId };
   const a = await getDashboard(userId, datasetId, name);
   if (!a) return { ok: false, error: `dashboard '${name}' not found` };
+  // A DRAFT's file is text a member wrote, and it is about to be compiled as
+  // the dashboard's own model. On scoped data it is held to the rule every
+  // caller-written query is (`scopeEscape`): the save path refuses such a file,
+  // and this refuses one that was saved before that rule existed.
+  if (a.draft) {
+    for (const [path, content] of Object.entries(a.draft.files)) {
+      if (!path.endsWith(".malloy")) continue;
+      const escape = scopeEscape(content, required);
+      if (escape) return { ok: false, error: `this draft cannot run here: ${escape}` };
+    }
+  }
   const { files, cacheKey } = await dashboardFiles(a);
 
   const manifest = a.manifest;

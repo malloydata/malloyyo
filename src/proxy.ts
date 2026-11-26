@@ -9,6 +9,14 @@ import { signInPath } from "@/lib/auth-paths";
 import { requestHasCookie, renewAppSessionInPlace } from "@/lib/app-session";
 import { hostedIntegration } from "@/lib/hosted-auth-integration";
 import {
+  REQUEST_METHOD_HEADER,
+  REQUEST_PATH_HEADER,
+  VIEW_AS_COOKIE,
+  isRefusedPage,
+  proxyRefusesForViewAs,
+  viewAsRefusal,
+} from "@/lib/view-as";
+import {
   ALWAYS_ALLOW,
   reauthPath,
   renewalApplies,
@@ -57,7 +65,26 @@ const handleAuth = auth(async (req: NextAuthRequest, _event: NextFetchEvent) => 
   // Propagate requestId so route handlers can correlate logs.
   const headers = new Headers(req.headers);
   headers.set("x-request-id", requestId);
+  // What kind of request this is, for code downstream that has only headers to
+  // go on — viewing as another user is look-only, and "is this a write" is the
+  // question that decides it (src/lib/view-as.ts). SET, never merged: a value a
+  // client sent under these names is overwritten here.
+  headers.set(REQUEST_METHOD_HEADER, req.method);
+  headers.set(REQUEST_PATH_HEADER, pathname);
   const next = () => NextResponse.next({ request: { headers } });
+
+  // Viewing as another user is look-only. Refused here, with a sentence that
+  // says so, before the route can turn the same refusal into "sign in
+  // required" (src/lib/view-as.ts). `getSession()` still decides for itself;
+  // this is the readable answer, not the guard.
+  if (proxyRefusesForViewAs(req.cookies.has(VIEW_AS_COOKIE), req.method, pathname)) {
+    logRequest();
+    // A page the person's own (their chats, their tokens): back to the home
+    // page, where the bar says who is being impersonated — not a JSON body in
+    // place of a page.
+    if (isRefusedPage(pathname)) return NextResponse.redirect(new URL("/", req.url));
+    return NextResponse.json({ ok: false, error: viewAsRefusal(pathname) }, { status: 403 });
+  }
 
   if (ALWAYS_ALLOW.test(pathname)) {
     logRequest();

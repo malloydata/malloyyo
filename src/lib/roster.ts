@@ -16,9 +16,9 @@
 // - Transitions are checked against the CURRENT row, so a stale page cannot
 //   e.g. re-approve someone an admin just disabled.
 
-import { and, eq, isNull } from "drizzle-orm";
-import { db, invitations, users, type Invitation, type User, type UserRole } from "@/db";
-import { defaultRoles, MALLOYYO_ADMIN } from "./roles";
+import { and, eq, inArray, isNull } from "drizzle-orm";
+import { db, invitations, roles as rolesTable, users, type Invitation, type User, type UserRole } from "@/db";
+import { defaultRoles, isBuiltinRole, MALLOYYO_ADMIN } from "./roles";
 import { logger } from "./logger";
 
 export class RosterError extends Error {
@@ -96,15 +96,41 @@ export type InviteOutcome =
 
 /**
  * Admit an address ahead of arrival. If the person already arrived and is
- * waiting in the queue, inviting them IS approving them (with the invited
- * role); re-inviting an already-open address just updates its role.
+ * waiting in the queue, adding them IS approving them; re-adding an address
+ * that is already open just updates what it carries.
+ *
+ * `roles` is what Admin → Users → Add user ticked: the roles the person starts
+ * with, exactly. Left out, nobody chose, and they get the instance default at
+ * the moment they sign in (what an invitation meant before roles could be
+ * chosen). The legacy `role` flag and MALLOYYO_ADMIN are one fact said twice,
+ * so whichever the caller gives, both are stored in step.
  */
-export async function createInvitation(actor: User, rawEmail: string, role: UserRole): Promise<InviteOutcome> {
+export async function createInvitation(
+  actor: User,
+  rawEmail: string,
+  role: UserRole,
+  roles?: readonly string[],
+): Promise<InviteOutcome> {
   const email = rawEmail.trim().toLowerCase();
   // Deliberately loose: providers own address validity. This only rejects
   // things that cannot be an address at all.
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new RosterError("not an email address");
   if (role !== "member" && role !== "admin") throw new RosterError("role must be member or admin");
+
+  let chosen: string[] | null = null;
+  if (roles) {
+    const wanted = [...new Set(roles)];
+    if (role === "admin" && !wanted.includes(MALLOYYO_ADMIN)) wanted.push(MALLOYYO_ADMIN);
+    if (wanted.length > 0) {
+      // Only names from the catalog, as everywhere else roles are written: a
+      // typo here would be a role on a person that no checkbox can show.
+      const known = await db.select({ name: rolesTable.name }).from(rolesTable).where(inArray(rolesTable.name, wanted));
+      const unknown = wanted.filter((r) => !isBuiltinRole(r) && !known.some((k) => k.name === r));
+      if (unknown.length) throw new RosterError(`unknown role(s): ${unknown.join(", ")}`);
+    }
+    chosen = wanted;
+    if (wanted.includes(MALLOYYO_ADMIN)) role = "admin";
+  }
 
   const [existing] = await db.select().from(users).where(eq(users.email, email)).limit(1);
   if (existing) {
@@ -115,8 +141,11 @@ export async function createInvitation(actor: User, rawEmail: string, role: User
         // legacy columns left the row with `roles = '{}'`, which the SQL access
         // predicate reads as holding nothing while the admin page listed them as
         // holding the default — a grant the UI asserted and every query denied.
+        //
+        // Roles the admin just ticked win over both: they were chosen for this
+        // person, a moment ago, by someone looking at what they add up to.
         const granted =
-          (existing.roles ?? []).length > 0 ? existing.roles! : await defaultRoles();
+          chosen ?? ((existing.roles ?? []).length > 0 ? existing.roles! : await defaultRoles());
         const [approved] = await db
           .update(users)
           .set({
@@ -144,10 +173,23 @@ export async function createInvitation(actor: User, rawEmail: string, role: User
     .where(and(eq(invitations.email, email), isNull(invitations.acceptedAt)))
     .limit(1);
   if (open) {
-    if (open.role === role) return { kind: "invited", invitation: open };
+    // Re-adding without choosing roles leaves whatever was chosen before.
+    if (open.role === role && chosen === null) return { kind: "invited", invitation: open };
+    // ...except for the one role the flag IS. A caller that sends only the
+    // older `role` is changing admin-or-not, and the stored roles have to move
+    // with it: left alone, "make this invitation a member" kept MALLOYYO_ADMIN
+    // in the list admission copies onto the user, and they arrived an admin.
+    const kept = open.roles;
+    const inStep =
+      chosen ??
+      (kept === null
+        ? null
+        : role === "admin"
+          ? [...new Set([...kept, MALLOYYO_ADMIN])]
+          : kept.filter((r) => r !== MALLOYYO_ADMIN));
     const [updated] = await db
       .update(invitations)
-      .set({ role })
+      .set({ role, ...(inStep ? { roles: inStep } : {}) })
       .where(eq(invitations.id, open.id))
       .returning();
     return { kind: "invited", invitation: updated };
@@ -155,9 +197,9 @@ export async function createInvitation(actor: User, rawEmail: string, role: User
 
   const [created] = await db
     .insert(invitations)
-    .values({ email, role, invitedById: actor.id })
+    .values({ email, role, roles: chosen, invitedById: actor.id })
     .returning();
-  logger.info("invitation created", { email, role, actorId: actor.id });
+  logger.info("invitation created", { email, role, roles: chosen, actorId: actor.id });
   return { kind: "invited", invitation: created };
 }
 

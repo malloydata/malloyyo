@@ -25,6 +25,7 @@
 
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import postgres from "postgres";
 import { asc, eq } from "drizzle-orm";
 import { db, instanceSettings, invitations, users } from "@/db";
@@ -182,6 +183,28 @@ test("an open invitation admits on arrival and is consumed, carrying its role", 
   assert.equal(inv.acceptedById, id);
 });
 
+test("someone added with roles starts with exactly those; one added without starts on the default", async () => {
+  await resetData();
+  await db.insert(users).values({ email: "owner@example.com", status: "active", role: "owner" });
+  await db.insert(invitations).values([
+    { email: "picked@example.com", role: "member", roles: ["analysts"] },
+    { email: "boss@example.com", role: "admin", roles: ["analysts", "MALLOYYO_ADMIN"] },
+    { email: "legacy@example.com", role: "member" },
+  ]);
+
+  await admitNewUser(await insertNewUser("picked@example.com"), "picked@example.com");
+  assert.deepEqual((await userByEmail("picked@example.com")).roles, ["analysts"]);
+
+  await admitNewUser(await insertNewUser("boss@example.com"), "boss@example.com");
+  const boss = await userByEmail("boss@example.com");
+  assert.deepEqual(boss.roles, ["analysts", "MALLOYYO_ADMIN"]);
+  assert.equal(boss.role, "admin");
+
+  // No roles on the invitation: whatever the instance gives new users now.
+  await admitNewUser(await insertNewUser("legacy@example.com"), "legacy@example.com");
+  assert.deepEqual((await userByEmail("legacy@example.com")).roles, ["MALLOYYO_USER"]);
+});
+
 test("policy open admits a stranger as an ordinary member; policy invite leaves them pending", async () => {
   await resetData();
   await db.insert(users).values({ email: "owner@example.com", status: "active", role: "owner" });
@@ -196,4 +219,28 @@ test("policy open admits a stranger as an ordinary member; policy invite leaves 
   const inviteId = await insertNewUser("uninvited@example.com");
   await admitNewUser(inviteId, "uninvited@example.com");
   assert.equal((await userByEmail("uninvited@example.com")).status, "pending");
+});
+
+// --- 0034_members_without_a_role ----------------------------------------------
+//
+// Run from the file, so this is the migration and not a paraphrase of it.
+test("0034: people an integration made with no role get the members role, and nobody else is touched", async () => {
+  await resetData();
+  // As a hosted integration made them: active, holding nothing.
+  await db.insert(users).values({ email: "hosted@example.com", status: "active", roles: [], externalAccountId: "ext-1" });
+  // Every box unticked by an admin, on an instance that owns its own sign-in:
+  // holding nothing is what was chosen.
+  await db.insert(users).values({ email: "unticked@example.com", status: "active", roles: [] });
+  // Chosen for them by an admin: left exactly as chosen.
+  await db.insert(users).values({ email: "chosen@example.com", status: "active", roles: ["finance"], externalAccountId: "ext-2" });
+  // Not let in: still holds nothing.
+  await db.insert(users).values({ email: "off@example.com", status: "disabled", roles: [], externalAccountId: "ext-3" });
+
+  const migration = readFileSync(new URL("../drizzle/0034_members_without_a_role.sql", import.meta.url), "utf8");
+  for (const statement of migration.split("--> statement-breakpoint")) await sql.unsafe(statement);
+
+  assert.deepEqual((await userByEmail("hosted@example.com")).roles, ["MALLOYYO_USER"], "holds nothing → the members role");
+  assert.deepEqual((await userByEmail("unticked@example.com")).roles, [], "nothing, chosen by an admin, stays nothing");
+  assert.deepEqual((await userByEmail("chosen@example.com")).roles, ["finance"], "chosen roles are left alone");
+  assert.deepEqual((await userByEmail("off@example.com")).roles, [], "someone who cannot sign in is left alone");
 });

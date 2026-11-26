@@ -1,0 +1,127 @@
+// Copyright (c) The Malloy Foundation
+// SPDX-License-Identifier: MIT
+
+/**
+ * What a set of roles adds up to, dataset by dataset — as plain arithmetic.
+ *
+ * The rule itself is enforced in SQL (`datasetAccessWhere`, src/lib/roles.ts).
+ * This is the same rule written out for the ADMIN PAGE, which has to show its
+ * working: "what does this person get, and which role is why", and "what would
+ * they get if I ticked this one". No database and no server imports, so the
+ * browser runs it on every tick of a checkbox.
+ *
+ * The two must agree, and test/dashboard-audience.test.ts holds them to it.
+ */
+
+/** What one role — or, combined, one person — has on one dataset. */
+export type RoleLevel = "none" | "view" | "query";
+
+export const LEVEL_LABEL: Record<RoleLevel, string> = {
+  none: "None",
+  view: "Dashboards",
+  query: "Full",
+};
+
+const RANK: Record<RoleLevel, number> = { none: 0, view: 1, query: 2 };
+
+/** The built-in admin role, by name — repeated here because this file cannot
+    import the server module that defines it. */
+const ADMIN_ROLE = "MALLOYYO_ADMIN";
+
+/** The slice of a dataset row that decides access. */
+export interface DatasetGrants {
+  id: string;
+  /** Every role with any access. */
+  roles?: readonly string[] | null;
+  /** The subset of `roles` that may only view. */
+  viewOnlyRoles?: readonly string[] | null;
+  /** Its owner, who has full access whatever roles they hold. */
+  ownerId?: string | null;
+}
+
+/** Read one role's level off the two arrays. The one place that says what they
+    mean together. */
+export function roleLevelOn(ds: Pick<DatasetGrants, "roles" | "viewOnlyRoles">, role: string): RoleLevel {
+  if (!(ds.roles ?? []).includes(role)) return "none";
+  return (ds.viewOnlyRoles ?? []).includes(role) ? "view" : "query";
+}
+
+/** The built-in role every member is given, by name — repeated here for the
+    same reason as the admin role above. */
+const MEMBERS_ROLE = "MALLOYYO_USER";
+
+/**
+ * "Every member can query this": the members role at full.
+ *
+ * This is what the retired `datasets.is_public` flag used to claim, and the
+ * only thing that claim ever meant on a server with no anonymous read path. The
+ * flag was a second grant beside the roles — it opened a dataset in full to
+ * everyone signed in whatever any role said, so a role set to None went on
+ * opening it. Nothing reads the flag now; the places that need to know whether
+ * a dataset is open to everybody (may a chat about it be shared, may its
+ * question history be read by someone who did not ask) ask this instead, so
+ * there is one fact and one place to change it: Admin → Roles.
+ */
+export function openToMembers(ds: Pick<DatasetGrants, "roles" | "viewOnlyRoles">): boolean {
+  return roleLevelOn(ds, MEMBERS_ROLE) === "query";
+}
+
+/**
+ * ...and is THIS person one of those members.
+ *
+ * `openToMembers` is a fact about the dataset alone, which is all the old flag
+ * was. It is not, by itself, a reason to show anyone anything: "every member"
+ * means everyone holding the members role, and someone can be on the instance
+ * without it — added with only `finance` ticked, say. Asking the dataset alone
+ * would hand that person the question history, shared queries and published
+ * chats of a dataset the access rule refuses them. So every reader of "is this
+ * open to all" that is deciding what to show a particular person asks this.
+ */
+export function openToMember(
+  ds: Pick<DatasetGrants, "roles" | "viewOnlyRoles">,
+  held: readonly string[],
+): boolean {
+  return openToMembers(ds) && held.includes(MEMBERS_ROLE);
+}
+
+/** The best of several levels — how the roles one person holds combine. */
+export function bestLevel(levels: readonly RoleLevel[]): RoleLevel {
+  return levels.reduce<RoleLevel>((best, l) => (RANK[l] > RANK[best] ? l : best), "none");
+}
+
+export interface ResolvedAccess {
+  datasetId: string;
+  level: RoleLevel;
+  /** What gives them that level: role names, or a reason that is not a role
+      ("owner"). Empty when the level is none. */
+  because: string[];
+}
+
+/**
+ * What someone holding `held` gets on each dataset, and why.
+ *
+ * The higher level wins when two roles name the same dataset, and `because`
+ * lists every role that gives the winning level — so the page can say "Full,
+ * from analysts" and not just "Full".
+ */
+export function resolveAccess(
+  held: readonly string[],
+  datasets: readonly DatasetGrants[],
+  who: { userId?: string } = {},
+): ResolvedAccess[] {
+  const admin = held.includes(ADMIN_ROLE);
+  return datasets.map((ds) => {
+    if (admin) return { datasetId: ds.id, level: "query", because: [ADMIN_ROLE] };
+    const reasons: { level: RoleLevel; why: string }[] = held.map((role) => ({
+      level: roleLevelOn(ds, role),
+      why: role,
+    }));
+    if (who.userId && ds.ownerId === who.userId) reasons.push({ level: "query", why: "owner" });
+    const level = bestLevel(reasons.map((r) => r.level));
+    return {
+      datasetId: ds.id,
+      level,
+      because: level === "none" ? [] : reasons.filter((r) => r.level === level).map((r) => r.why),
+    };
+  });
+}

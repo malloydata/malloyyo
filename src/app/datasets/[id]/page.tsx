@@ -20,7 +20,7 @@ import { and, eq, inArray, isNull, isNotNull, sql } from "drizzle-orm";
 import { db, history, savedQueries } from "@/db";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { decodeDatasetRef } from "@/lib/repos";
-import { findByDatasetRef, normalizeSources } from "@/lib/mcp-tools";
+import { canQueryDataset, findByDatasetRef, normalizeSources } from "@/lib/mcp-tools";
 import { listDashboards } from "@/lib/dashboards/meta";
 import { datasetLandingPath } from "@/lib/dataset-landing";
 import { signInPath } from "@/lib/auth-paths";
@@ -86,21 +86,26 @@ export default async function DatasetLandingPage({ params }: { params: Promise<{
     throw err;
   }
 
-  const found = await findByDatasetRef(userId, ref);
+  const found = await findByDatasetRef(userId, ref, "view");
   // Not visible, or has no model yet: config is the only page that can say
   // something useful about a dataset in that state, so send them there rather
   // than to a dashboard list that would be empty for a reason we can't explain.
   if (!found) redirect(`/datasets/${encodeURIComponent(ref)}/config`);
 
-  const [dashboards, questions] = await Promise.all([
+  const [dashboards, questions, canQuery] = await Promise.all([
     listDashboards(userId, ref),
     hasQuestions(found.ds.id),
+    // A branch preview is an admin's own fetch and always queryable. Asking
+    // the access predicate about it would ask about the stand-in dataset id a
+    // preview of a NEW dataset carries, which nobody has access to.
+    "preview" in found ? true : canQueryDataset(userId, found.ds.id),
   ]);
 
   redirect(
     datasetLandingPath(ref, {
       dashboards,
       hasQuestions: questions,
+      viewOnly: !canQuery,
       firstSource: normalizeSources(found.model.sources)[0]?.name ?? null,
     }),
   );

@@ -23,15 +23,26 @@
 
 import { createHash } from "node:crypto";
 import { and, desc, eq, sql } from "drizzle-orm";
-import { modelArtifact, validateRestricted, type Problem } from "@malloyyo/mcp-engine";
-import { db, draftDashboards } from "@/db";
-import { hasRole, MALLOYYO_ADMIN, type RoleBearing } from "@/lib/roles";
+import { modelArtifact, scopeEscape, validateRestricted, type Problem } from "@malloyyo/mcp-engine";
+import {
+  dashboardGrants,
+  datasets,
+  db,
+  draftDashboards,
+  DRAFT_VISIBILITIES,
+  malloyArtifacts,
+  users,
+  type DraftVisibility,
+} from "@/db";
+import { hasRole, MALLOYYO_ADMIN, rolesOf, type RoleBearing } from "@/lib/roles";
+import { leaseScope } from "@/lib/tenancy";
 import { findByDatasetRef, modelFileMap } from "@/lib/mcp-tools";
 import { fileUrl, runNamedMalloyFiles, withModelRuntime } from "@/lib/malloy";
 import { newDatasetSlug } from "@/lib/slug";
 import { bundleDashboard } from "./bundle";
 import { declaredRuns, explainProblems } from "./engine";
 import { artifactManifest } from "./manifest";
+import { mayOpenDashboard } from "./audience";
 import { DRAFT_PREFIX } from "./meta";
 import { applyDraftEdits, draftBody, draftFile, type DraftEdit } from "./draft-text";
 
@@ -62,6 +73,14 @@ export interface DraftInput {
       edits applied to the stored draft. Each `find` must occur exactly once in
       its file (`source` by default, or `malloy`). */
   edits?: DraftEdit[];
+  /** Who else may open it: `private` (its author, admins, and the people it is
+      shared with) or `dataset` (everyone who can open the dataset). A new draft
+      is private; an update that leaves this out keeps what the draft has. */
+  visibility?: DraftVisibility;
+}
+
+export function isDraftVisibility(v: unknown): v is DraftVisibility {
+  return (DRAFT_VISIBILITIES as readonly unknown[]).includes(v);
 }
 
 export interface DraftTileReport {
@@ -82,6 +101,8 @@ export type DraftSaveResult =
       dataset: string;
       title: string;
       url: string;
+      /** Who else can open that URL — see DraftInput.visibility. */
+      visibility: DraftVisibility;
       tiles: DraftTileReport[];
       component: { ok: boolean; error?: string; line?: number };
     }
@@ -168,6 +189,9 @@ export async function saveDraftDashboard(
   if (editing && (hasText(input.source) || hasText(input.malloy))) {
     return { ok: false, error: "send edits or whole files, not both" };
   }
+  if (input.visibility !== undefined && !isDraftVisibility(input.visibility)) {
+    return { ok: false, error: `visibility must be one of: ${DRAFT_VISIBILITIES.join(", ")}` };
+  }
 
   // Whole files are checked here, before any database work; edited ones once
   // the stored draft they apply to has been read.
@@ -178,7 +202,10 @@ export async function saveDraftDashboard(
     if (bad) return { ok: false, error: bad };
   }
 
-  const found = await findByDatasetRef(userId, datasetRef);
+  // A draft is built out of queries its author wrote, so saving one takes the
+  // right to QUERY the dataset. Someone who can only view it gets the same
+  // answer as someone who cannot see it at all.
+  const found = await findByDatasetRef(userId, datasetRef, "query");
   if (!found) return { ok: false, error: `dataset '${datasetRef}' not found` };
   // A draft belongs to a published dataset and is listed to its readers; one
   // validated against an unpublished preview's model would land there anyway.
@@ -203,8 +230,16 @@ export async function saveDraftDashboard(
       .from(draftDashboards)
       .where(and(eq(draftDashboards.slug, input.slug), eq(draftDashboards.datasetId, found.ds.id)))
       .limit(1);
-    if (!existing) return { ok: false, error: `no draft dashboard '${input.slug}' in '${found.ds.name}'` };
-    if (existing.userId !== userId) return { ok: false, error: "that draft dashboard belongs to someone else" };
+    const none = { ok: false as const, error: `no draft dashboard '${input.slug}' in '${found.ds.name}'` };
+    if (!existing) return none;
+    if (existing.userId !== userId) {
+      // Someone else's — and if it is private and not shared with this person,
+      // it is not there for them at all. Saying "belongs to someone else"
+      // would confirm a slug they have no way to open.
+      return (await mayOpenDraft(userId, existing))
+        ? { ok: false, error: "that draft dashboard belongs to someone else" }
+        : none;
+    }
   }
 
   if (editing) {
@@ -252,6 +287,17 @@ export async function saveDraftDashboard(
     title,
     ...(description ? { description } : {}),
   };
+
+  // What this dataset is scoped by. A draft's file is text a MEMBER wrote, so on
+  // scoped data it is held to the same rule as any ad-hoc query: it may not name
+  // the scoping given or define a join (`scopeEscape`). Without that, a draft
+  // was the easy way to read every tenant's rows — define the join in the file
+  // and let the dashboard run it.
+  const required = found.ds.requiredGivens ?? [];
+  if (malloy.trim()) {
+    const escape = scopeEscape(malloy, required);
+    if (escape) return { ok: false, error: `dashboards/${name}.malloy: ${escape}` };
+  }
 
   if (malloy.trim()) {
     // 1. The gate — against the model's own files, before this file is compiled.
@@ -338,6 +384,9 @@ export async function saveDraftDashboard(
     manifest,
     malloy,
     source,
+    // Only when asked. Left out, an update keeps the draft's audience and a new
+    // row takes the column default, which is private.
+    ...(input.visibility ? { visibility: input.visibility } : {}),
     updatedAt: new Date(),
   };
   // Edits were applied to the draft read above, and the checks since then take
@@ -371,10 +420,26 @@ export async function saveDraftDashboard(
       ? [manifest.query]
       : [];
   const cacheKey = `${found.model.id}:draft:${row.id}:${row.updatedAt.toISOString()}`;
+  // AS THE AUTHOR, AND GATED. This test-run used to pass neither a scope nor
+  // the required givens, so on a scoped dataset it ran with the model's DEFAULT
+  // for the given and skipped the usage gate: the three sample rows per tile
+  // could be rows every other run path refuses, and a tile could page a source
+  // out three at a time. It is the author's own run, so it sees what the author
+  // would see on the dashboard — their rows, or a refusal.
+  const [author] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+  const scope = {
+    ...leaseScope(required, { email: author?.email ?? null, roles: author ? rolesOf(author) : [] }),
+    dataset: found.ref ?? datasetRef,
+  };
   const tiles: DraftTileReport[] = [];
   for (const run of runs) {
     try {
-      const r = await runNamedMalloyFiles(files, entryFile, run, {}, { rowLimit: TILE_SAMPLE_ROWS, cacheKey });
+      const r = await runNamedMalloyFiles(files, entryFile, run, {}, {
+        rowLimit: TILE_SAMPLE_ROWS,
+        cacheKey,
+        scope,
+        requireGivens: required,
+      });
       const sample = (r.rows ?? []).slice(0, TILE_SAMPLE_ROWS);
       const first = sample[0];
       tiles.push({
@@ -425,6 +490,7 @@ export async function saveDraftDashboard(
     // name sent `save_draft_dashboard(dataset: "globex:orders")` a link to
     // acme's dataset.
     url: `${origin.replace(/\/$/, "")}/datasets/${encodeURIComponent(qualified)}/dashboard/${dashboard}`,
+    visibility: row.visibility,
     tiles,
     component,
   };
@@ -446,7 +512,7 @@ export interface DraftSummary {
 /** This user's drafts on a dataset, newest first — what `malloyyo draft list`
     shows so a promoter can pick one without hunting for a slug. */
 export async function listDrafts(userId: string, datasetRef: string): Promise<DraftSummary[]> {
-  const found = await findByDatasetRef(userId, datasetRef);
+  const found = await findByDatasetRef(userId, datasetRef, "view");
   if (!found) return [];
   const rows = await db
     .select()
@@ -474,10 +540,11 @@ export interface DraftFiles extends DraftSummary {
   inline: string[];
 }
 
-/** One draft's files. Readable by anyone who can see the dataset: they can
-    already open the dashboard and read its compiled bundle. */
+/** One draft's files. Readable by anyone who can OPEN the draft: they can
+    already read its compiled bundle. A private draft answers null to everyone
+    else, the same as a slug that does not exist. */
 export async function getDraftFiles(userId: string, datasetRef: string, slug: string): Promise<DraftFiles | null> {
-  const found = await findByDatasetRef(userId, datasetRef);
+  const found = await findByDatasetRef(userId, datasetRef, "view");
   if (!found) return null;
   const [r] = await db
     .select()
@@ -485,6 +552,8 @@ export async function getDraftFiles(userId: string, datasetRef: string, slug: st
     .where(and(eq(draftDashboards.slug, slug), eq(draftDashboards.datasetId, found.ds.id)))
     .limit(1);
   if (!r) return null;
+  const audience = { name: `${DRAFT_PREFIX}${r.slug}`, isPrivate: r.visibility === "private", authorId: r.userId };
+  if (!(await mayOpenDashboard(userId, found.ds.id, audience))) return null;
   return {
     slug: r.slug,
     dashboard: `${DRAFT_PREFIX}${r.slug}`,
@@ -502,28 +571,50 @@ export async function getDraftFiles(userId: string, datasetRef: string, slug: st
 
 /**
  * Record that a draft was written into a repo as `name`, with a hash of what
- * was written.
+ * was written — and give the published dashboard the draft's audience.
  *
  * NOT a delete and NOT a lock. The draft stays the only usable copy until the
  * model version carrying the promoted dashboard goes live, people hold its
  * URL, and nothing bad happens if it keeps being edited afterwards — the hash
  * is what shows the two have diverged.
  *
- * The draft's OWNER writes this, as with saving one: the record is what a
- * later forward and any divergence check read, so it should say what the
- * author did, not what a passer-by did with a copy. Anyone who can see the
- * dataset may still read the files and write them into a checkout.
+ * AN ADMIN records it, for ANYONE's draft. Promotion is an admin's job — it
+ * ends in a publish, which only an admin can do — and it is usually someone
+ * else's draft they are promoting. This used to be the reverse: only the
+ * draft's own author could record it, so in the ordinary case (a member builds
+ * a draft, an admin moves it into the repo) nothing was recorded at all: the
+ * draft's link never forwarded and the draft stayed listed beside its copy.
+ *
+ * It is also admin-only because of what it now WRITES. Recording copies the
+ * draft's audience onto the published name when that name has none yet (see
+ * below: a dashboard that is already live keeps its own), and that name is
+ * whatever the caller says — there is no mechanical way to check a hand-written file really
+ * is this draft. Someone who may not change a published dashboard's audience
+ * must not be able to do it by calling this with that dashboard's name. An
+ * admin already may, so for them the copy grants nothing they lacked.
+ *
+ * Anyone who can open the draft may still READ its files (`getDraftFiles`) and
+ * write them into a checkout; that needs no record.
  */
 export async function recordPromotion(
-  userId: string,
+  user: RoleBearing & { id: string },
   datasetRef: string,
   slug: string,
   /** `hash` is of what was written; the CLI knows it. Without one (a chat that
       wrote the files into its clone) the draft's own content is hashed —
       "promoted from this version" — which is what a divergence check compares. */
   promoted: { name: string; hash?: string },
-): Promise<"recorded" | "not-found" | "not-yours"> {
-  const found = await findByDatasetRef(userId, datasetRef);
+): Promise<"recorded" | "not-found" | "not-admin" | "bad-name"> {
+  // Before anything is looked up, so the answer is the same whether or not the
+  // draft exists: a slug is not something to confirm the existence of.
+  if (!hasRole(user, MALLOYYO_ADMIN)) return "not-admin";
+  // A repo publishes `dashboards/<name>.malloy`. A `draft-…` name is a draft's
+  // address, and copying an audience onto one would be re-audiencing someone
+  // else's draft.
+  const name = promoted.name.trim();
+  if (!name || name.startsWith(DRAFT_PREFIX)) return "bad-name";
+
+  const found = await findByDatasetRef(user.id, datasetRef, "view");
   if (!found) return "not-found";
   const [row] = await db
     .select()
@@ -531,16 +622,84 @@ export async function recordPromotion(
     .where(and(eq(draftDashboards.slug, slug), eq(draftDashboards.datasetId, found.ds.id)))
     .limit(1);
   if (!row) return "not-found";
-  if (row.userId !== userId) return "not-yours";
-  await db
-    .update(draftDashboards)
-    .set({
-      promotedAs: promoted.name,
-      promotedHash: promoted.hash ?? draftHash(row),
-      promotedAt: new Date(),
-    })
-    .where(eq(draftDashboards.id, row.id));
+  const draftName = `${DRAFT_PREFIX}${row.slug}`;
+
+  // DOES THAT NAME ALREADY HAVE AN AUDIENCE? It does if a dashboard by that
+  // name is live on the dataset, or if a setting is stored for it (the Share
+  // dialog wrote one, or an earlier recording of this same promotion did).
+  //
+  // Then it keeps it, untouched. "Promotion does not change who can see a
+  // dashboard" has to hold for the dashboard that is already there, too: a
+  // member revising the live, open `sales` in a draft of the same name (private,
+  // as new drafts are) would otherwise turn `sales` private for everyone the
+  // moment an admin recorded the promotion — before the revised file had even
+  // merged — and recording a second time would undo whatever an admin had set
+  // in the Share dialog since the first.
+  const [live] = found.model
+    ? await db
+        .select({ id: malloyArtifacts.id })
+        .from(malloyArtifacts)
+        .where(and(eq(malloyArtifacts.modelId, found.model.id), eq(malloyArtifacts.name, name)))
+        .limit(1)
+    : [];
+  const hasAudience = live !== undefined || found.ds.dashboardAudience?.[name] !== undefined;
+
+  await db.transaction(async (tx) => {
+    await tx
+      .update(draftDashboards)
+      .set({
+        promotedAs: name,
+        promotedHash: promoted.hash ?? draftHash(row),
+        promotedAt: new Date(),
+      })
+      .where(eq(draftDashboards.id, row.id));
+    if (hasAudience) return;
+
+    // A NEW name takes the draft's audience: the same private-or-open setting,
+    // and the same people. This is the moment the draft's link is pointed at
+    // the published dashboard, so it is the moment that dashboard's audience
+    // is decided.
+    //
+    // The setting is written even when the draft is open, so it also overrides
+    // a `private` tag in the promoted file — the draft's audience is what
+    // people were promised, not whatever the file happens to say.
+    await tx
+      .update(datasets)
+      .set({
+        dashboardAudience: sql`jsonb_set(${datasets.dashboardAudience}, array[${name}]::text[], to_jsonb(${row.visibility}::text))`,
+      })
+      .where(eq(datasets.id, row.datasetId));
+    await tx.execute(sql`
+      insert into ${dashboardGrants} (dataset_id, dashboard, user_id, granted_by_id)
+      select dataset_id, ${name}, user_id, granted_by_id
+        from ${dashboardGrants}
+       where dataset_id = ${row.datasetId}::uuid and dashboard = ${draftName}
+      on conflict do nothing`);
+    // A draft's author sees it because it is theirs. A published dashboard has
+    // no author, so a private one would vanish from the person who built it the
+    // day it shipped. They are added as one of its people instead, by the
+    // admin recording this.
+    if (row.visibility === "private") {
+      await tx
+        .insert(dashboardGrants)
+        .values({ datasetId: row.datasetId, dashboard: name, userId: row.userId, grantedById: user.id })
+        .onConflictDoNothing();
+    }
+  });
   return "recorded";
+}
+
+/** May this person open that draft at all — its author, or someone it is open
+    to or shared with. The audience check every read of a draft goes through. */
+async function mayOpenDraft(
+  userId: string,
+  row: { slug: string; userId: string; datasetId: string; visibility: string },
+): Promise<boolean> {
+  return mayOpenDashboard(userId, row.datasetId, {
+    name: `${DRAFT_PREFIX}${row.slug}`,
+    isPrivate: row.visibility === "private",
+    authorId: row.userId,
+  });
 }
 
 /** The CLI's hash shape (sha256 over each file then a NUL, first 16 hex), over the draft's own files. */
@@ -551,9 +710,9 @@ function draftHash(row: { malloy: string; source: string }): string {
 }
 
 /**
- * Delete a draft. Its author may, and so may an admin — a draft is listed to
- * everyone who can see the dataset, so a stale one is everyone's clutter and
- * someone has to be able to clear it.
+ * Delete a draft. Its author may, and so may an admin — a draft opened to the
+ * dataset is everyone's clutter once it is stale, and someone has to be able
+ * to clear it.
  *
  * A real delete: the row goes, and its URL 404s. A promoted draft whose
  * dashboard is published doesn't need deleting — listings already leave it
@@ -565,7 +724,7 @@ export async function deleteDraft(
   datasetRef: string,
   slug: string,
 ): Promise<{ outcome: "deleted"; promotedAs: string | null } | { outcome: "not-found" | "not-yours" }> {
-  const found = await findByDatasetRef(user.id, datasetRef);
+  const found = await findByDatasetRef(user.id, datasetRef, "view");
   if (!found) return { outcome: "not-found" };
   const [row] = await db
     .select()
@@ -573,7 +732,20 @@ export async function deleteDraft(
     .where(and(eq(draftDashboards.slug, slug), eq(draftDashboards.datasetId, found.ds.id)))
     .limit(1);
   if (!row) return { outcome: "not-found" };
-  if (row.userId !== user.id && !hasRole(user, MALLOYYO_ADMIN)) return { outcome: "not-yours" };
-  await db.delete(draftDashboards).where(eq(draftDashboards.id, row.id));
+  if (row.userId !== user.id && !hasRole(user, MALLOYYO_ADMIN)) {
+    // A private draft this person cannot open is not there for them: the same
+    // answer as a slug that does not exist, as `getDraftFiles` gives.
+    return { outcome: (await mayOpenDraft(user.id, row)) ? "not-yours" : "not-found" };
+  }
+  // Its shares go with it. They are keyed by name, not by this row, so nothing
+  // cascades — and a slug is never reused, so they would only ever be litter.
+  await db.transaction(async (tx) => {
+    await tx
+      .delete(dashboardGrants)
+      .where(
+        and(eq(dashboardGrants.datasetId, row.datasetId), eq(dashboardGrants.dashboard, `${DRAFT_PREFIX}${row.slug}`)),
+      );
+    await tx.delete(draftDashboards).where(eq(draftDashboards.id, row.id));
+  });
   return { outcome: "deleted", promotedAs: row.promotedAs };
 }

@@ -23,8 +23,9 @@
  */
 
 import { and, eq, or, sql } from "drizzle-orm";
-import { datasets, db, instanceSettings, users } from "@/db";
+import { datasets, db, instanceSettings, invitations, roles as rolesTable, users } from "@/db";
 import { env } from "./env";
+import type { RoleLevel } from "./role-access";
 
 export const MALLOYYO_USER = "MALLOYYO_USER";
 export const MALLOYYO_ADMIN = "MALLOYYO_ADMIN";
@@ -134,41 +135,211 @@ export function canAuthor(user: RoleBearing): boolean {
 }
 
 /**
- * The SQL predicate for "datasets this person may open".
+ * What someone may do with a dataset they can open.
  *
- * Owner, or public, or one of their roles is listed on the dataset. The roles
- * come from a subquery on the user row rather than from an argument, so every
- * caller of `visibleDatasetWhere` gets role filtering without threading a list
- * through — and so a stale list can never be the thing that grants access.
+ *   view   open its dashboards
+ *   query  also query it: the query editor, chat, the MCP connector, saved
+ *          questions, draft dashboards
  *
- * Note what is NOT here: being an admin. Running a query returns ROWS, and
- * administering an instance has never been a reason to read its data. An admin
- * who needs a dataset is granted a role on it like anyone else.
+ * A role holds a LEVEL PER DATASET — none, dashboards (view) or full (query) —
+ * which is what Admin → Roles edits. On the dataset row that is two arrays:
+ * `roles` lists every role with any access, and `view_only_roles` the subset
+ * that may only view. Someone's level on a dataset is the best any of their
+ * roles gives them there, so one full role on it is enough to query it, and the
+ * same person can query one dataset and only read dashboards on the next.
+ *
+ * "Dashboard-only" is therefore not a kind of account. It is what someone is
+ * when every role that reaches a dataset for them is view-only there.
+ *
+ * A TIER, NOT A WALL. A dashboard runs restricted Malloy against its dataset,
+ * so someone with view access can still read what the dataset contains. What
+ * people must not see belongs in a dataset they are not granted, or behind the
+ * model's row scoping. See docs/roles-and-access.md.
  */
-export function datasetRoleOverlap(userId: string) {
-  return sql`${datasets.roles} && (select coalesce(${users.roles}, '{}'::text[]) from ${users} where ${users.id} = ${userId}::uuid)`;
+export type DatasetAccess = "view" | "query";
+
+// The same rule as arithmetic, for the admin page to show its working — and
+// the level type both share. See src/lib/role-access.ts.
+export { bestLevel, openToMember, openToMembers, resolveAccess, roleLevelOn, type RoleLevel } from "./role-access";
+
+/**
+ * The roles this person holds, as a SQL array. Read from the user row in a
+ * subquery rather than passed in, so every caller gets role filtering without
+ * threading a list through, and a stale list can never be the thing that grants
+ * access.
+ */
+function heldRoles(userId: string) {
+  return sql`(select coalesce(${users.roles}, '{}'::text[]) from ${users} where ${users.id} = ${userId}::uuid)`;
 }
 
 /**
- * Which datasets this person may read.
+ * The SQL predicate for "one of this person's roles opens the dataset" — at any
+ * level for `view`, at full level for `query`.
  *
- * `isAdmin` is passed rather than derived in SQL, and that is deliberate: the
- * canonical answer folds in the legacy `role`/`is_admin` columns and
- * `APP_ADMIN_EMAILS` (see `rolesOf`), so a query that only checked
- * `users.roles` would miss an admin whose authority comes from the env var and
- * silently show them nothing.
- *
- * MALLOYYO_ADMIN opens every dataset. This reverses what this file used to argue
- * — that administering an instance is not a reason to read its data — and the
- * reversal is deliberate: with per-dataset ownership gone, nothing else lets the
- * person who publishes a repo see what they just published, and nobody could
- * grant the first role on a dataset nobody can see.
+ * Query level subtracts the dataset's view-only roles before testing the
+ * overlap, so a role that is merely absent from `view_only_roles` is full. That
+ * is the reading under which nothing changes for anyone until an admin sets a
+ * role to dashboards-only on a dataset.
  */
-export function datasetVisibleWhere(userId: string, isAdmin = false) {
-  const reach = isAdmin
-    ? sql`true`
-    : or(eq(datasets.userId, userId), eq(datasets.isPublic, true), datasetRoleOverlap(userId));
-  return and(reach, eq(datasets.status, "ready"));
+export function datasetRoleOverlap(userId: string, need: DatasetAccess = "view") {
+  if (need === "view") return sql`${datasets.roles} && ${heldRoles(userId)}`;
+  return sql`array(select unnest(${datasets.roles}) except select unnest(${datasets.viewOnlyRoles})) && ${heldRoles(userId)}`;
+}
+
+/**
+ * "This person is an admin", as SQL — the same answer `rolesOf()` gives, which
+ * means all four ways of being one: the role list, the legacy `role` and
+ * `is_admin` columns, and `APP_ADMIN_EMAILS` (which is on no row, so it is
+ * bound here as a list). In SQL so that the access predicate below is whole by
+ * itself: a caller holding only a user id cannot forget to say they are an
+ * admin, which is exactly how most read paths came to ignore it.
+ */
+function isAdminSql(userId: string) {
+  const envAdmins = env.APP_ADMIN_EMAILS.map((e) => e.toLowerCase());
+  const byEnv =
+    envAdmins.length > 0
+      ? sql` or lower(${users.email}) in (${sql.join(
+          envAdmins.map((e) => sql`${e}`),
+          sql`, `,
+        )})`
+      : sql``;
+  return sql`exists (select 1 from ${users} where ${users.id} = ${userId}::uuid and (${MALLOYYO_ADMIN} = any(coalesce(${users.roles}, '{}'::text[])) or ${users.role} in ('owner', 'admin') or ${users.isAdmin} = true${byEnv}))`;
+}
+
+/**
+ * Which datasets this person may open (`view`) or query (`query`).
+ *
+ * Owning a dataset gives full access: it does not come from a role, so it
+ * cannot be view-only.
+ *
+ * A role's level is the ONLY other grant. `datasets.is_public` used to be one
+ * too: it opened a dataset in full to everyone signed in, whatever any role
+ * said — so a role set to None on Admin → Roles went on opening the dataset,
+ * and that page disagreed with the one listing what each person gets. It is not
+ * read here or anywhere else now (0033 carried every public dataset across to
+ * MALLOYYO_USER at full first, so nobody lost one). "Open to every member" is
+ * `openToMembers`: the members role at full — and `openToMember` /
+ * `openToMemberSql` where the question is about a particular person.
+ *
+ * MALLOYYO_ADMIN opens every dataset, in full. This file once argued that
+ * administering an instance is not a reason to read its data, and the reversal
+ * is deliberate: with per-dataset ownership gone, nothing else lets the person
+ * who publishes a repo see what they just published, and nobody could grant the
+ * first role on a dataset nobody can see. It is decided in the predicate itself
+ * (`isAdminSql`) rather than by a flag the caller passes, because a flag most
+ * callers did not pass is how the dashboards, the query paths and the MCP tools
+ * all went on refusing admins while the source list showed them everything.
+ */
+export function datasetAccessWhere(userId: string, need: DatasetAccess) {
+  return and(
+    or(
+      eq(datasets.userId, userId),
+      datasetRoleOverlap(userId, need),
+      isAdminSql(userId),
+    ),
+    eq(datasets.status, "ready"),
+  );
+}
+
+/**
+ * The column values that put ONE role at ONE level on a dataset, for a
+ * `db.update(datasets).set(...)`.
+ *
+ * Both arrays move in one statement, built from the row as it is when the
+ * statement runs, so two admins setting two roles on the same dataset cannot
+ * write over each other, and no reader ever sees a role half-moved (listed as
+ * view-only but not listed at all).
+ */
+export function roleLevelUpdate(name: string, level: RoleLevel) {
+  type RoleArray = typeof datasets.roles | typeof datasets.viewOnlyRoles;
+  const without = (col: RoleArray) => sql`array_remove(${col}, ${name})`;
+  const withIt = (col: RoleArray) =>
+    sql`case when ${name} = any(${col}) then ${col} else array_append(${col}, ${name}) end`;
+  return {
+    roles: level === "none" ? without(datasets.roles) : withIt(datasets.roles),
+    viewOnlyRoles: level === "view" ? withIt(datasets.viewOnlyRoles) : without(datasets.viewOnlyRoles),
+  };
+}
+
+/**
+ * Delete a role, and revoke it everywhere it lives, in the same breath.
+ *
+ * A role left behind after its definition is gone is a grant nobody can see in
+ * the UI and nobody thinks to audit. There are FIVE places it lives:
+ *
+ *   - the catalog row;
+ *   - `users.roles`;
+ *   - `datasets.roles` and `datasets.view_only_roles`;
+ *   - `instance_settings.default_roles` — left there, a deleted role keeps
+ *     being written onto every new arrival, where no checkbox can show it and
+ *     `set-user-roles` would refuse the same name as unknown;
+ *   - `invitations.roles` — someone added by address who has not signed in yet
+ *     carries the roles ticked for them, and admission copies those onto the
+ *     user as they stand. Left there, the deleted role would arrive with them:
+ *     on a person whose roles could then not be edited (the page sends the list
+ *     back and the unknown name is refused), and granted again silently if a
+ *     role by that name is ever re-created.
+ *
+ * Each UPDATE is scoped to the rows that actually hold it, so deleting a role
+ * nobody holds does not row-lock every user and every dataset. The caller has
+ * already refused a built-in name.
+ */
+export async function deleteRole(name: string): Promise<void> {
+  await db.transaction(async (tx) => {
+    await tx.delete(rolesTable).where(eq(rolesTable.name, name));
+    await tx.execute(sql`update ${users} set roles = array_remove(roles, ${name}) where ${name} = any(roles)`);
+    await tx.execute(
+      sql`update ${datasets}
+             set roles = array_remove(roles, ${name}),
+                 view_only_roles = array_remove(view_only_roles, ${name})
+           where ${name} = any(roles) or ${name} = any(view_only_roles)`,
+    );
+    await tx.execute(
+      sql`update ${instanceSettings} set default_roles = array_remove(default_roles, ${name})
+          where ${name} = any(default_roles)`,
+    );
+    await tx.execute(
+      sql`update ${invitations} set roles = array_remove(roles, ${name}) where ${name} = any(roles)`,
+    );
+  });
+}
+
+/**
+ * `openToMember` (src/lib/role-access.ts) as a SQL predicate on the datasets
+ * row: every member can query this, AND this person is one of them. What
+ * replaced `is_public = true` where that was a WHERE clause deciding whose
+ * question history someone who did not ask may read.
+ *
+ * The second half is not optional. The dataset being open to the members role
+ * says nothing about a caller who does not hold it, and there is no such thing
+ * as a signed-out member: nothing here is ever true of nobody.
+ */
+export function openToMemberSql(userId: string) {
+  // `&&` against the subquery, as `datasetRoleOverlap` does — `= any(<subquery>)`
+  // would read the subquery as a set of rows and compare a text to a text[].
+  return sql`(${MALLOYYO_USER} = any(${datasets.roles}) and not (${MALLOYYO_USER} = any(${datasets.viewOnlyRoles})) and array[${MALLOYYO_USER}]::text[] && ${heldRoles(userId)})`;
+}
+
+/**
+ * May this person read what OTHER people asked of a dataset — their questions,
+ * the Malloy those produced, a shared-query link — as a SQL predicate on the
+ * datasets row. (Their own are always theirs; an admin reads everything.)
+ *
+ * Open to every member, the reader being one, AND NOT SCOPED PER PERSON. The
+ * last part was missing: on a dataset scoped by `$MALLOYYO_EMAIL` every tenant
+ * could read every other tenant's questions and query text — filter values and
+ * all, customer names included — because the rule looked only at who may open
+ * the dataset. Opening it is the same for all of them; what each may see in it
+ * is not, and a question is about what they saw. Publishing a chat already
+ * refused scoped datasets for this reason (src/lib/chat/shareability.ts).
+ */
+export function othersActivityReadableSql(userId: string) {
+  return sql`(${openToMemberSql(userId)} and cardinality(${datasets.requiredGivens}) = 0)`;
+}
+
+/** Datasets this person may OPEN. The name every read path already uses. */
+export function datasetVisibleWhere(userId: string) {
+  return datasetAccessWhere(userId, "view");
 }
 
 /**
@@ -185,6 +356,9 @@ export async function defaultRoles(): Promise<string[]> {
     .from(instanceSettings)
     .where(eq(instanceSettings.instanceCode, env.INSTANCE_CODE))
     .limit(1);
-  const configured = row?.defaultRoles ?? null;
-  return configured && configured.length > 0 ? configured : [...DEFAULT_ROLES];
+  // Filtered on READ as well as refused on write (the `set-default` action).
+  // A value stored before that refusal existed, or written by hand, would
+  // otherwise make every approval and every open-policy arrival an admin.
+  const configured = (row?.defaultRoles ?? []).filter((r) => !NEVER_A_DEFAULT.includes(r));
+  return configured.length > 0 ? configured : [...DEFAULT_ROLES];
 }

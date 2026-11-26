@@ -218,6 +218,34 @@
       "when": 1795630766481,
       "tag": "0030_malloy_models_catalog",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1795648119576,
+      "tag": "0031_dashboard_permissions",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1795657894203,
+      "tag": "0032_invitation_roles",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1795660552960,
+      "tag": "0033_public_is_the_members_role",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1795724932053,
+      "tag": "0034_members_without_a_role",
+      "breakpoints": true
     }
   ]
 }

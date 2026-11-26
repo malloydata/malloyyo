@@ -445,6 +445,18 @@ export const datasets = pgTable(
     /** The model's own doc string (`##"`) — what this dataset is, for someone
         deciding whether they want it or who should see it. */
     description: text("description"),
+    /**
+     * RETIRED. Nothing reads or writes this any more, and it must not be read
+     * again: it was a second grant beside the roles — full access for everyone
+     * signed in, whatever any role said — so a role set to None went on opening
+     * the dataset. 0033 carried every public dataset across to MALLOYYO_USER at
+     * full; "open to every member" is now `openToMembers` (src/lib/role-access.ts).
+     *
+     * The COLUMN stays for one release, on purpose: the version live during a
+     * deploy still selects it, and a migration that drops it would take that
+     * version down for the length of the deploy (CLAUDE.md, "Ordering
+     * matters"). Drop it in the release after this one.
+     */
     isPublic: boolean("is_public").notNull().default(false),
     status: datasetStatus("status").notNull().default("pending"),
     statusError: text("status_error"),
@@ -526,6 +538,40 @@ export const datasets = pgTable(
      * `isPublic`). Access only ever widens by someone granting it.
      */
     roles: text("roles").array().notNull().default(sql`'{}'::text[]`),
+    /**
+     * The subset of `roles` that may only VIEW this dataset: open its
+     * dashboards, and nothing else. A role in `roles` and not here has FULL
+     * access — dashboards plus the query editor, chat and the MCP connector.
+     *
+     * So one role holds a level per dataset (none / dashboards / full), which is
+     * what Admin → Roles edits. Someone's level on a dataset is the best any of
+     * their roles gives them there. A second array rather than a table of
+     * (role, dataset, level) because `roles` is what every read path already
+     * tests, and a role listed there with nothing here is exactly the full
+     * access every existing grant has always meant: nothing to backfill, and
+     * the live version keeps working while this column lands. See
+     * `datasetAccessWhere` in src/lib/roles.ts.
+     */
+    viewOnlyRoles: text("view_only_roles").array().notNull().default(sql`'{}'::text[]`),
+    /**
+     * Who may open each PUBLISHED dashboard, by dashboard name:
+     * `{ "board": "private" }`. `private` = admins and the people it is shared
+     * with (dashboard_grants); `dataset` = everyone who can open the dataset.
+     *
+     * A name with no entry takes what the model says — private if its tag is
+     * `# artifact { private }`, otherwise open. So the tag decides what a
+     * dashboard STARTS as, and this is the setting from then on: it is what the
+     * Share dialog writes, and what promoting a draft copies the draft's own
+     * `visibility` into, so promotion never changes who can see a dashboard.
+     *
+     * On the dataset row, keyed by name, because every listing already reads
+     * this row (no extra round trip) and an artifact is a new row on every
+     * publish — a setting stored there would not survive one.
+     */
+    dashboardAudience: jsonb("dashboard_audience")
+      .$type<Record<string, "private" | "dataset">>()
+      .notNull()
+      .default(sql`'{}'::jsonb`),
     // Last malloyyo-CLI publish attempt (success OR failure). Failures are recorded here
     // for visibility but never become a servable model version — see the transactional
     // publish design (docs/model-publishing-design.md §4.4). lastPublishError is null on success.
@@ -972,6 +1018,15 @@ export const invitations = pgTable(
     // Stored lowercase; matched case-insensitively at sign-in.
     email: text("email").notNull(),
     role: userRole("role").notNull().default("member"),
+    /**
+     * The roles this person starts with, chosen when they were added (Admin →
+     * Users → Add user). NULL means nobody chose: they get whatever the
+     * instance gives new users at the moment they sign in, which is what every
+     * invitation from before this column does. `role` above is the legacy
+     * member/admin flag and moves with it — MALLOYYO_ADMIN here means `admin`
+     * there (src/lib/roster.ts keeps the two in step).
+     */
+    roles: text("roles").array(),
     invitedById: uuid("invited_by_id").references(() => users.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
@@ -1126,11 +1181,12 @@ export const chatResults = pgTable(
 // addressed as the dashboard name `draft-<slug>` so every dashboard route
 // (page, frame, bundle, run, the MCP panel) serves it unchanged.
 //
-// Unlisted, not private: anyone who can read the dataset and has the slug can
-// view it; only its creator can overwrite it. The .malloy text has passed the
-// restricted gate (no raw SQL / connections / imports) before it is stored —
-// see src/lib/dashboards/draft.ts — which is what makes it safe to compile
-// as a model file.
+// Private until its author says otherwise: `visibility` decides who else on
+// the dataset may open it (see src/lib/dashboards/audience.ts); only its
+// creator can overwrite it. The .malloy text has passed the restricted gate
+// (no raw SQL / connections / imports) before it is stored — see
+// src/lib/dashboards/draft.ts — which is what makes it safe to compile as a
+// model file.
 export const draftDashboards = pgTable(
   "draft_dashboards",
   {
@@ -1165,10 +1221,54 @@ export const draftDashboards = pgTable(
     promotedAs: text("promoted_as"),
     promotedHash: text("promoted_hash"),
     promotedAt: timestamp("promoted_at", { withTimezone: true }),
+    // Who, beyond its author and the admins, may open it.
+    //   private — nobody, except people it is shared with (dashboard_grants)
+    //   dataset — everyone who can open the dataset
+    // New drafts are private: a draft is work in progress, and listing it to
+    // the whole dataset is its author's call. Rows that predate the column were
+    // listed to everyone and stay `dataset` (the migration says so), so no link
+    // anyone already holds stops working.
+    visibility: text("visibility").$type<DraftVisibility>().notNull().default("private"),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().default(sql`now()`),
   },
   (t) => [index("draft_dashboards_user_idx").on(t.userId, t.updatedAt)],
+);
+
+export const DRAFT_VISIBILITIES = ["private", "dataset"] as const;
+export type DraftVisibility = (typeof DRAFT_VISIBILITIES)[number];
+
+// A PRIVATE dashboard shared with one person.
+//
+// Private means a draft whose author has not opened it to the dataset, or a
+// modeled dashboard tagged `# artifact { private }`. Admins and (for a draft)
+// its author see it regardless; a row here adds one more person.
+//
+// This NARROWS what a dataset shows and never widens it: the grantee still has
+// to be able to open the dataset, which stays the unit of access. It is
+// curation, not a security boundary — anyone who can open one dashboard on a
+// dataset can query the whole dataset through it.
+//
+// Keyed by the dashboard's NAME as every route addresses it (`draft-<slug>` for
+// a draft) rather than by an artifact row id: a modeled dashboard is a new
+// artifact row on every publish, and a grant has to survive that.
+export const dashboardGrants = pgTable(
+  "dashboard_grants",
+  {
+    datasetId: uuid("dataset_id")
+      .notNull()
+      .references(() => datasets.id, { onDelete: "cascade" }),
+    dashboard: text("dashboard").notNull(),
+    userId: uuid("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    grantedById: uuid("granted_by_id").references(() => users.id, { onDelete: "set null" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).notNull().default(sql`now()`),
+  },
+  (t) => [
+    primaryKey({ columns: [t.datasetId, t.dashboard, t.userId] }),
+    index("dashboard_grants_user_idx").on(t.userId),
+  ],
 );
 
 export type Repo = typeof repos.$inferSelect;
@@ -1197,3 +1297,4 @@ export type Chat = typeof chats.$inferSelect;
 export type ChatMessage = typeof chatMessages.$inferSelect;
 export type ChatResult = typeof chatResults.$inferSelect;
 export type DraftDashboard = typeof draftDashboards.$inferSelect;
+export type DashboardGrant = typeof dashboardGrants.$inferSelect;

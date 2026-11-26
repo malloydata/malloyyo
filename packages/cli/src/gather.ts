@@ -101,6 +101,7 @@ export async function gatherDashboards(dir: string): Promise<DashboardPayload[]>
       if (a.description) manifest.description = a.description;
       if (a.givens) manifest.givens = a.givens;
       if (a.autorun === false) manifest.autorun = false;
+      if (a.private) manifest.private = true;
       const component = ["jsx", "tsx"]
         .map((ext) => join(dashDir, `${base}.${ext}`))
         .find((p) => existsSync(p));

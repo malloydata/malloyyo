@@ -542,8 +542,9 @@ after(async () => {
 
 test("the dashboard listing carries drafts, with their author", async () => {
   // A draft belongs to a person, so the listing that shows it says whose it
-  // is — and shows it to everyone who can see the dataset, the same rule its
-  // URL and the dataset's own dashboards follow.
+  // is. This one has been opened to the dataset (`visibility: "dataset"`), so
+  // it is listed to everyone who can see the dataset; a draft left private is
+  // test/dashboard-audience.test.ts's subject.
   const [ds] = await db.select().from(datasets).where(eq(datasets.name, "petshop"));
   const [model] = await db
     .select()
@@ -565,6 +566,7 @@ test("the dashboard listing carries drafts, with their author", async () => {
     manifest: { title: "Work in progress", description: "Half an idea" },
     malloy: "",
     source: "export default function D() { return <div/>; }",
+    visibility: "dataset",
   });
 
   const all = await listAllDashboards(user.id);

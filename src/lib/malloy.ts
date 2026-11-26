@@ -9,6 +9,7 @@ import {
   jsonRows,
   readDatasetMeta,
   type DatasetMeta,
+  scopeEscape,
   unreferencedGivens,
   unreferencedGivensMessage,
   withoutReservedGivens,
@@ -808,6 +809,18 @@ export async function describeSourceFields(
  * serve unscoped rows while looking exactly like one that didn't, which is the
  * whole failure mode this feature exists to prevent. See ./tenancy.ts.
  */
+/**
+ * Refuse caller-written text that could satisfy the usage gate by itself — it
+ * names the scoping given, or defines a join. The engine applies the same rule
+ * inside `runRestricted`; repeated here for the same reason `gateOnUsage` is.
+ * See `scopeEscape` in packages/mcp-engine/src/host-givens.ts for the two
+ * queries that returned every tenant's rows before it existed.
+ */
+function refuseScopeEscape(text: string, requireGivens: readonly string[] | undefined): void {
+  const escape = scopeEscape(text, requireGivens ?? []);
+  if (escape) throw new Error(escape);
+}
+
 async function gateOnUsage(
   runner: { getPreparedQuery(): Promise<unknown> },
   requireGivens: readonly string[] | undefined,
@@ -845,6 +858,7 @@ export async function runRestrictedMalloyFiles(
   const t0 = Date.now();
   return withRuntime(files, opts.cacheKey, async (runtime) => {
     const tBuild = Date.now();
+    refuseScopeEscape(query, opts.requireGivens);
     const { mm, persist } = await acquireModel(runtime, opts.cacheKey, entryPath);
     const runner = mm.loadRestrictedQuery(query);
     await gateOnUsage(runner, opts.requireGivens);
@@ -890,6 +904,9 @@ export async function runNamedMalloyFiles(
   } = {},
 ): Promise<RunResult> {
   return withRuntime(files, opts.cacheKey, async (runtime) => {
+    // A run-expression is caller-reachable too: a draft's manifest names its
+    // own, and `source -> { … }` is a whole query.
+    refuseScopeEscape(runExpr, opts.requireGivens);
     const { mm, persist } = await acquireModel(runtime, opts.cacheKey, entryPath);
     const runner = mm.loadQuery(`run: ${runExpr}`);
     await gateOnUsage(runner, opts.requireGivens);

@@ -8,8 +8,10 @@ import { createInvitation, revokeInvitation, RosterError } from "@/lib/roster";
 
 export const runtime = "nodejs";
 
-// Create a standing invitation: { email, role?: "member" | "admin" }.
-// Inviting an address already waiting in the queue approves it instead —
+// Add someone ahead of their first sign-in: { email, roles?: string[] }.
+// `roles` is what they start with; without it they get the instance default
+// when they arrive. The older { role: "member" | "admin" } is still read.
+// Adding an address already waiting in the queue approves it instead —
 // the route reports which happened so the UI can say so.
 export async function POST(req: Request) {
   let actor;
@@ -19,12 +21,15 @@ export async function POST(req: Request) {
     if (err instanceof UnauthorizedError) return NextResponse.json({ error: err.message }, { status: 403 });
     throw err;
   }
-  const body = (await req.json().catch(() => null)) as { email?: unknown; role?: unknown } | null;
+  const body = (await req.json().catch(() => null)) as { email?: unknown; role?: unknown; roles?: unknown } | null;
   const email = typeof body?.email === "string" ? body.email : null;
   const role = body?.role === "admin" ? "admin" : "member";
-  if (!email) return NextResponse.json({ error: "expected { email, role? }" }, { status: 400 });
+  const roles = Array.isArray(body?.roles)
+    ? (body.roles as unknown[]).filter((r): r is string => typeof r === "string")
+    : undefined;
+  if (!email) return NextResponse.json({ error: "expected { email, roles? }" }, { status: 400 });
   try {
-    const outcome = await createInvitation(actor, email, role);
+    const outcome = await createInvitation(actor, email, role, roles);
     return NextResponse.json(
       outcome.kind === "invited"
         ? { kind: "invited", invitation: { id: outcome.invitation.id, email: outcome.invitation.email, role: outcome.invitation.role } }

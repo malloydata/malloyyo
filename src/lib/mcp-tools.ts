@@ -10,7 +10,7 @@ import type { SourceInfo } from "./malloy";
 // so modules that only READ the DB — notably loadSharedQuery, used by the
 // /ltool/[slug] page — don't drag DuckDB into their serverless bundle and 500
 // with "libduckdb.so: cannot open shared object file".
-import { datasetVisibleWhere, hasRole, MALLOYYO_ADMIN, rolesOf, type RoleBearing } from "./roles";
+import { datasetAccessWhere, hasRole, MALLOYYO_ADMIN, openToMember, rolesOf, type DatasetAccess, type RoleBearing } from "./roles";
 import { env } from "./env";
 import { leaseScope } from "./tenancy";
 import { qualifiedName } from "./repo-names";
@@ -29,34 +29,67 @@ import {
 // src/lib/mcp-host.ts. What remains here is the DB/query plumbing that the host
 // (and the web UI) share: model resolution, file maps, recording, sharing.
 
-// The datasets a user may query: their own or public, and ready. One home for
-// the predicate — the host's findModelByRef and findBySource both build on it.
-export function visibleDatasetWhere(userId: string, isAdmin = false) {
-  // Owner, public, granted by a role — or MALLOYYO_ADMIN, which opens every
-  // dataset. Kept as a re-export rather than inlined because every read path in
-  // the app funnels through this name, and one predicate is the only way that
-  // stays true.
-  return datasetVisibleWhere(userId, isAdmin);
+// The datasets a user may OPEN — owned, public, or granted by any role — and
+// ready. Opening one is enough to see its dashboards; it is not enough to query
+// it (see `queryableDatasetWhere`). Kept as a re-export rather than inlined
+// because every read path in the app funnels through these two names, and one
+// predicate each is the only way that stays true.
+export function visibleDatasetWhere(userId: string) {
+  return datasetAccessWhere(userId, "view");
+}
+
+// The datasets a user may QUERY: the ones above, minus those their roles open
+// at the dashboards-only level (src/lib/roles.ts, `DatasetAccess`). What every
+// query surface resolves through — the source catalogue, ltool, chat, the MCP
+// tools, saving a draft.
+export function queryableDatasetWhere(userId: string) {
+  return datasetAccessWhere(userId, "query");
+}
+
+/** Whether this person may query a dataset they can already open — for a page
+    deciding which ways into the data to offer beside a dashboard. */
+export async function canQueryDataset(userId: string, datasetId: string): Promise<boolean> {
+  const [row] = await db
+    .select({ id: datasets.id })
+    .from(datasets)
+    .where(and(queryableDatasetWhere(userId), eq(datasets.id, datasetId)))
+    .limit(1);
+  return !!row;
 }
 
 // What a viewer may READ ABOUT a dataset: the questions asked of it, the Malloy
 // those questions produced, a chat scoped to it. Deliberately a different rule
 // from visibleDatasetWhere above, which decides what may be RUN.
 //
-// Running returns ROWS, so it is owner-or-public with no admin exemption — an
-// admin does not get to query a private dataset just for being an admin.
+// Running is decided by roles and levels (datasetAccessWhere, src/lib/roles.ts).
 // Reading returns a question and a query, which is how an operator answers
 // "what is this instance being used for", so an admin does see everything.
 //
 // Between those two sits the thing that made this necessary: a question and its
 // Malloy name the private model's fields, its filters, and what someone wanted
 // to know. That is not nothing, and it was visible to every signed-in user.
+//
+// "Open to every member" is the members role at full, and the viewer has to BE
+// one (`openToMember`): a dataset open to the members role is not open to
+// someone on the instance who does not hold it. It used to be the `is_public`
+// flag, which nothing reads any more.
+//
+// AND NOT SCOPED PER PERSON. On a dataset scoped by `$MALLOYYO_EMAIL` every
+// tenant may open it, and what each sees in it differs — so one tenant's
+// questions and query text (filter values, customer names) are not another's
+// to read. `othersActivityReadableSql` in ./roles is this rule as a WHERE.
 export function canReadDataset(
-  ds: { isPublic: boolean; userId: string | null },
-  viewerId: string,
+  ds: {
+    roles: string[] | null;
+    viewOnlyRoles: string[] | null;
+    userId: string | null;
+    requiredGivens: string[] | null;
+  },
+  viewer: { id: string; roles: readonly string[] },
   admin: boolean,
 ): boolean {
-  return admin || ds.isPublic || ds.userId === viewerId;
+  if (admin || ds.userId === viewer.id) return true;
+  return openToMember(ds, viewer.roles) && (ds.requiredGivens ?? []).length === 0;
 }
 
 // Normalize DB sources column — legacy string[] or new {name, description?}[] format.
@@ -71,7 +104,8 @@ export async function findBySource(userId: string, sourceName: string) {
   const dsList = await db
     .select()
     .from(datasets)
-    .where(visibleDatasetWhere(userId))
+    // A source is addressed in order to query it.
+    .where(queryableDatasetWhere(userId))
     .orderBy(desc(datasets.createdAt));
 
   for (const ds of dsList) {
@@ -94,7 +128,8 @@ export async function findByDatasetId(userId: string, datasetId: string) {
   const [ds] = await db
     .select()
     .from(datasets)
-    .where(and(visibleDatasetWhere(userId), eq(datasets.id, datasetId)))
+    // Replaying a recorded query runs it.
+    .where(and(queryableDatasetWhere(userId), eq(datasets.id, datasetId)))
     .limit(1);
   if (!ds) return null;
   const model = await latestModel(ds.id);
@@ -111,8 +146,13 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
  * to give the same answer for everyone, or two people following the same share
  * link reach different datasets. So the ref is resolved first and the viewer's
  * visibility is applied to the answer.
+ *
+ * `need` is what the caller is about to do with it, and it has no default on
+ * purpose: `view` to show a dashboard, `query` to run anything the reader
+ * wrote. A caller that could leave it out would be a query surface quietly
+ * resolving at view level — so every one of them says.
  */
-export async function findByDatasetRef(userId: string, ref: string) {
+export async function findByDatasetRef(userId: string, ref: string, need: DatasetAccess) {
   // `repo@ref:dataset` — a fetched branch snapshot (repo-previews.ts). Admins
   // only; anyone else gets the same null as a dataset they can't see.
   const asPreview = parsePreviewRef(ref);
@@ -126,7 +166,7 @@ export async function findByDatasetRef(userId: string, ref: string) {
   const [visible] = await db
     .select()
     .from(datasets)
-    .where(and(visibleDatasetWhere(userId), eq(datasets.id, r.dataset.id)))
+    .where(and(datasetAccessWhere(userId, need), eq(datasets.id, r.dataset.id)))
     .limit(1);
   if (!visible) return null;
   const model = await latestModel(visible.id);
@@ -452,6 +492,49 @@ export async function sharedQueryListContext(slug: string, userId: string): Prom
   };
 }
 
+/**
+ * May this person see the query behind a share slug — its question, its Malloy,
+ * even just which source it runs on?
+ *
+ * One rule for every surface that takes a slug, because they had drifted: the
+ * share route checked, the page that renders a shared query put its source name
+ * in the HTML for anyone with a session, favouriting accepted any slug at all,
+ * and the MCP tool refused people their own links.
+ *
+ *   - an admin: yes;
+ *   - whoever ran it: yes, always — it is theirs;
+ *   - anyone else: only where other people's activity on that dataset is
+ *     readable to them (`canReadDataset`).
+ *
+ * FAILS CLOSED on a slug with no dataset. `history.dataset_id` is ON DELETE SET
+ * NULL, so treating a missing one as permission would publish every query ever
+ * run against a private dataset the moment it was deleted.
+ */
+export async function maySeeSharedQuery(
+  viewer: { id: string; roles: readonly string[]; admin: boolean },
+  slug: string,
+  datasetId: string | null | undefined,
+): Promise<boolean> {
+  if (viewer.admin) return true;
+  const [mine] = await db
+    .select({ n: count() })
+    .from(history)
+    .where(and(eq(history.slug, slug), eq(history.userId, viewer.id)));
+  if (Number(mine?.n ?? 0) > 0) return true;
+  if (!datasetId) return false;
+  const [ds] = await db
+    .select({
+      roles: datasets.roles,
+      viewOnlyRoles: datasets.viewOnlyRoles,
+      userId: datasets.userId,
+      requiredGivens: datasets.requiredGivens,
+    })
+    .from(datasets)
+    .where(eq(datasets.id, datasetId))
+    .limit(1);
+  return !!ds && canReadDataset(ds, viewer, false);
+}
+
 export type WebRunResult =
   | { ok: true; slug: string | null; rows: Record<string, unknown>[]; sql: string; rowCount: number; truncated: boolean; durationMs: number; stableResult: unknown }
   | { ok: false; error: string };
@@ -468,6 +551,10 @@ export type WebRunOpts = {
   authorModel?: string | null;
   question?: string | null;
   entrypoint?: QueryEntrypoint;
+  /** False: run, and write nothing — no history row, no share slug. For an
+      admin viewing as this user (src/lib/view-as.ts): the rows are what that
+      person would get, and nothing appears in their history for it. */
+  record?: boolean;
 };
 
 // Run a Malloy query for the web UI, recording it to history (a browser run —
@@ -493,7 +580,7 @@ export async function runQueryForWeb(
   // read carries the dataset's NAME (`/ltool?dataset=babynames`), and
   // findByDatasetRef takes either. Resolving only by id made a named link fail
   // in the ugliest way available — Postgres refusing to cast the name to uuid.
-  const found = datasetId ? await findByDatasetRef(userId, datasetId) : await findBySource(userId, source);
+  const found = datasetId ? await findByDatasetRef(userId, datasetId, "query") : await findBySource(userId, source);
   if (!found) return { ok: false, error: `source '${source}' not found` };
   const { ds, model } = found;
   if (ds.status !== "ready") return { ok: false, error: `source '${source}' is not ready` };
@@ -514,11 +601,14 @@ export async function runQueryForWeb(
     });
     const durationMs = Date.now() - t0;
     const capped = res.rows.slice(0, maxRows);
-    const { slug } = await recordHistory({
-      userId, entrypoint: opts.entrypoint ?? "ltool", datasetId: ds.id, toolName: "query", question: opts.question ?? null,
-      source, malloyInput: malloyQuery, compiledSql: res.sql, rowCount: res.rowCount, durationMs,
-      executed: true, userAgent: opts.userAgent, authorModel: opts.authorModel, mintSlug: !isPreview,
-    });
+    const { slug } =
+      opts.record === false
+        ? { slug: null }
+        : await recordHistory({
+            userId, entrypoint: opts.entrypoint ?? "ltool", datasetId: ds.id, toolName: "query", question: opts.question ?? null,
+            source, malloyInput: malloyQuery, compiledSql: res.sql, rowCount: res.rowCount, durationMs,
+            executed: true, userAgent: opts.userAgent, authorModel: opts.authorModel, mintSlug: !isPreview,
+          });
     return {
       ok: true,
       slug,
@@ -532,11 +622,13 @@ export async function runQueryForWeb(
   } catch (err) {
     const durationMs = Date.now() - t0;
     const msg = err instanceof Error ? err.message : String(err);
-    await recordHistory({
-      userId, entrypoint: opts.entrypoint ?? "ltool", datasetId: ds.id, toolName: "query", question: opts.question ?? null,
-      source, malloyInput: malloyQuery, durationMs, executed: true, error: msg,
-      userAgent: opts.userAgent, authorModel: opts.authorModel,
-    });
+    if (opts.record !== false) {
+      await recordHistory({
+        userId, entrypoint: opts.entrypoint ?? "ltool", datasetId: ds.id, toolName: "query", question: opts.question ?? null,
+        source, malloyInput: malloyQuery, durationMs, executed: true, error: msg,
+        userAgent: opts.userAgent, authorModel: opts.authorModel,
+      });
+    }
     return { ok: false, error: msg };
   }
 }
@@ -563,7 +655,7 @@ export async function saveWebQuery(
 ): Promise<WebSaveResult> {
   const userId = user.id;
   // By ref, for the same reason as runQueryForWeb above.
-  const found = datasetId ? await findByDatasetRef(userId, datasetId) : await findBySource(userId, source);
+  const found = datasetId ? await findByDatasetRef(userId, datasetId, "query") : await findBySource(userId, source);
   if (!found) return { ok: false, error: `source '${source}' not found` };
   if ("preview" in found) {
     return { ok: false, error: "This is a branch preview, so its queries can't be saved. Save it on the published dataset once the branch is merged." };

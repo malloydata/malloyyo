@@ -2,14 +2,16 @@
 // SPDX-License-Identifier: MIT
 
 import { NextResponse } from "next/server";
-import { getSessionUser, UnauthorizedError } from "@/lib/user";
+import { getSession, UnauthorizedError } from "@/lib/user";
+import { logger } from "@/lib/logger";
 import { runQueryForWeb, saveWebQuery, resolveLtoolAuthor } from "@/lib/mcp-tools";
 
 export const runtime = "nodejs";
 
 export async function POST(req: Request) {
   let user;
-  try { user = await getSessionUser(); } catch (err) {
+  let viewedBy;
+  try { ({ user, viewedBy } = await getSession()); } catch (err) {
     if (err instanceof UnauthorizedError) return NextResponse.json({ error: "sign in required" }, { status: 401 });
     throw err;
   }
@@ -30,6 +32,18 @@ export async function POST(req: Request) {
   const userAgent = req.headers.get("user-agent");
   const authorModel = await resolveLtoolAuthor(baseSlug, malloy);
   const opts = { userAgent, authorModel, question: question ?? title ?? null };
+
+  // An admin VIEWING AS this user (src/lib/view-as.ts). The query runs exactly
+  // as it would for them — their datasets, their rows under row scoping, which
+  // is the whole reason to do it on a multi-tenant dataset — and leaves no
+  // trace as them: no history row, no share slug, and "Run & save" is a plain
+  // run. What IS written down is that the admin did it.
+  if (viewedBy) {
+    logger.info("view-as query", { actorId: viewedBy.id, targetId: user.id, source, dataset: dataset ?? null });
+    const result = await runQueryForWeb(user, source, malloy, maxRows, dataset, { ...opts, record: false });
+    if (!result.ok) return NextResponse.json({ error: result.error }, { status: 400 });
+    return NextResponse.json(result);
+  }
 
   // `save` persists the run as a durable saved_query with a fresh slug (used
   // when the user edits a loaded query). Otherwise it's a transient run (still

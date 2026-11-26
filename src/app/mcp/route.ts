@@ -522,6 +522,7 @@ function registerAuthoringTools(server: McpServer, scope: RequestScope): void {
     description?: string;
     slug?: string;
     edits?: DraftEdit[];
+    visibility?: "private" | "dataset";
   };
   server.registerTool(
     SAVE_DRAFT_TOOL,
@@ -540,7 +541,9 @@ function registerAuthoringTools(server: McpServer, scope: RequestScope): void {
         `already saved; show_dashboard renders it by the returned \`dashboard\` name. ` +
         `For a small change to a saved draft, pass \`slug\` and \`edits\` ([{find, replace}], exact text ` +
         `from the stored draft as get_draft_dashboard returns it, each find unique) instead of resending ` +
-        `the whole \`source\`; name may then be left out.`,
+        `the whole \`source\`; name may then be left out. A new draft is PRIVATE — its author and ` +
+        `admins only — until \`visibility: "dataset"\` opens it to everyone who can see the dataset; ` +
+        `sharing with individual people is done on the draft's own page.`,
       annotations: { readOnlyHint: false },
       inputSchema: fromJsonSchema<SaveArgs>({
         type: "object",
@@ -561,6 +564,13 @@ function registerAuthoringTools(server: McpServer, scope: RequestScope): void {
             description: "One line on what it answers, shown under the title in listings.",
           },
           slug: { type: "string", description: "Update this draft instead of creating one." },
+          visibility: {
+            type: "string",
+            enum: ["private", "dataset"],
+            description:
+              'Who else may open it. "private" (the default for a new draft): only you and admins, plus anyone you share it with on its page. ' +
+              '"dataset": everyone who can see the dataset. Left out on an update, the draft keeps what it has.',
+          },
           edits: {
             type: "array",
             description:
@@ -596,7 +606,12 @@ function registerAuthoringTools(server: McpServer, scope: RequestScope): void {
           `Saved '${r.title}' as ${r.dashboard} — ${r.url}\n` +
             `Tiles: ${r.tiles.length - failed.length}/${r.tiles.length} ran` +
             (failed.length ? `; failed: ${failed.map((t) => `${t.run} (${t.error})`).join("; ")}` : "") +
-            (r.component.ok ? "" : `\nComponent error${r.component.line ? ` (line ${r.component.line})` : ""}: ${r.component.error}`),
+            (r.component.ok ? "" : `\nComponent error${r.component.line ? ` (line ${r.component.line})` : ""}: ${r.component.error}`) +
+            // Said every time, because the URL is the thing people forward and
+            // a private one opens for nobody else.
+            (r.visibility === "private"
+              ? `\nPrivate: only its author and admins can open that link. Save again with visibility: "dataset" to open it to everyone who can see the dataset, or share it with individual people from the draft's page.`
+              : `\nOpen to everyone who can see the dataset.`),
         ),
         structuredContent: r as unknown as Json,
       };
@@ -616,7 +631,7 @@ function registerAuthoringTools(server: McpServer, scope: RequestScope): void {
         `${tag} A draft dashboard's files — its dashboards/<name>.malloy (when it has one), its component, and ` +
         `the Malloy the component runs inline — so it can be promoted into the model repo: write them into ` +
         `the clone as dashboards/<name>.malloy + component, lifting the inline queries into named queries ` +
-        `in the .malloy (yo_help("dashboards/drafts")). Read-only; anyone who can see the dataset.`,
+        `in the .malloy (yo_help("dashboards/drafts")). Read-only; anyone who can open the draft.`,
       annotations: { readOnlyHint: true },
       inputSchema: fromJsonSchema<DraftRefArgs>({
         type: "object",
@@ -676,7 +691,8 @@ function registerAuthoringTools(server: McpServer, scope: RequestScope): void {
         `dashboard's name there, i.e. dashboards/<promoted_as>.malloy). Call it after the files are ` +
         `committed. Once the dataset publishes that dashboard, the draft's link redirects to it and the ` +
         `draft leaves the listings, so saved links keep working. Until then the draft still serves. ` +
-        `The draft's author records it.`,
+        `Admins only, for anyone's draft: the published dashboard also takes the draft's audience ` +
+        `(private or open, and the people it is shared with).`,
       annotations: { readOnlyHint: false },
       inputSchema: fromJsonSchema<PromotedArgs>({
         type: "object",
@@ -691,8 +707,14 @@ function registerAuthoringTools(server: McpServer, scope: RequestScope): void {
     logged(scope, PROMOTED_DRAFT_TOOL, async (a: PromotedArgs) => {
       const name = a.promoted_as.trim();
       if (!name || draftSlug(name) !== null) return fail(`'${a.promoted_as}' isn't a dashboard name a repo publishes.`);
-      const outcome = await recordPromotion(userId, a.dataset, slugOf(a.dashboard), { name });
-      if (outcome === "not-yours") return fail("That draft belongs to someone else; its author records its promotion.");
+      const outcome = await recordPromotion(scope.user, a.dataset, slugOf(a.dashboard), { name });
+      if (outcome === "not-admin") {
+        return fail(
+          "Only an admin records a promotion: it decides who can see the published dashboard. " +
+            "The draft still works; ask an admin to promote it.",
+        );
+      }
+      if (outcome === "bad-name") return fail(`'${a.promoted_as}' isn't a dashboard name a repo publishes.`);
       if (outcome === "not-found") return fail(`No draft '${a.dashboard}' in '${a.dataset}'.`);
       const live = await draftForward(userId, a.dataset, `${DRAFT_PREFIX}${slugOf(a.dashboard)}`);
       return {

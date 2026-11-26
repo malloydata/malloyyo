@@ -8,9 +8,12 @@ import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
 import { resolveDatasetRef } from "@/lib/repos";
 import { canReadDataset } from "@/lib/mcp-tools";
+import { othersActivityReadableSql, rolesOf } from "@/lib/roles";
 import { RUN_LABELS } from "@/lib/tool-names";
 
-// A row someone else ran is visible only when its dataset is public. Your own
+// A row someone else ran is visible only when its dataset is open to every
+// member, the reader is one, and the dataset is not scoped per person
+// (`othersActivityReadableSql`). Your own
 // runs are always yours to see — which is also what covers the rows that predate
 // dataset_id being recorded, since an unattributable row cannot be shown to be
 // public and so is shown to nobody else. An admin sees everything.
@@ -18,11 +21,11 @@ import { RUN_LABELS } from "@/lib/tool-names";
 // Applies to the JOINED datasets row, so it must be used with that left join.
 function rowReadable(userId: string, admin: boolean) {
   if (admin) return undefined;
-  return or(eq(history.userId, userId), eq(datasets.isPublic, true));
+  return or(eq(history.userId, userId), othersActivityReadableSql(userId));
 }
 function savedReadable(userId: string, admin: boolean) {
   if (admin) return undefined;
-  return or(eq(savedQueries.userId, userId), eq(datasets.isPublic, true));
+  return or(eq(savedQueries.userId, userId), othersActivityReadableSql(userId));
 }
 
 // --- favorites view: sourced from the DURABLE saved_queries, so favorites keep
@@ -64,7 +67,7 @@ export async function GET(req: Request) {
 
   const datasetId = url.searchParams.get("dataset");
   if (datasetId) {
-    return NextResponse.json(await datasetQuestions(datasetId, user.id, admin));
+    return NextResponse.json(await datasetQuestions(datasetId, { id: user.id, roles: rolesOf(user) }, admin));
   }
 
   if (view === "favorites") {
@@ -157,7 +160,7 @@ type DatasetQuestion = {
 
 async function datasetQuestions(
   idOrName: string,
-  viewerId: string,
+  viewer: { id: string; roles: readonly string[] },
   admin: boolean,
 ): Promise<DatasetQuestion[]> {
   // Resolved the way every other surface resolves one — `resolveDatasetRef`
@@ -175,7 +178,13 @@ async function datasetQuestions(
   const ref = await resolveDatasetRef(idOrName);
   if (!ref.ok) return [];
   const [ds] = await db
-    .select({ id: datasets.id, isPublic: datasets.isPublic, userId: datasets.userId })
+    .select({
+      id: datasets.id,
+      roles: datasets.roles,
+      viewOnlyRoles: datasets.viewOnlyRoles,
+      userId: datasets.userId,
+      requiredGivens: datasets.requiredGivens,
+    })
     .from(datasets)
     .where(eq(datasets.id, ref.dataset.id))
     .limit(1);
@@ -183,7 +192,7 @@ async function datasetQuestions(
   // Dataset names are readable and guessable, and this route took one from the
   // query string and answered with every question ever asked of it. The page
   // above it checked visibility; this did not.
-  if (!canReadDataset(ds, viewerId, admin)) return [];
+  if (!canReadDataset(ds, viewer, admin)) return [];
   const datasetId = ds.id;
 
   const fromHistory = db

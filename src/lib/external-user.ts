@@ -11,6 +11,7 @@
 import { and, eq, inArray, max, sql } from "drizzle-orm";
 import { db, datasets, history, users } from "@/db";
 import { logger } from "@/lib/logger";
+import { defaultRoles } from "@/lib/roles";
 
 /** Did this write fail because another row already holds the address? */
 function isEmailTaken(err: unknown): boolean {
@@ -79,7 +80,15 @@ export async function findOrCreateExternalUser(input: {
   // Created `active`: existence of a verified sign-in from the provider IS the
   // admission decision on such a deployment — there is no approval queue the
   // provider's admin cannot see.
-  const row = { externalAccountId, email, isAdmin, role, status: "active" as const };
+  //
+  // WITH THE ROLES NEW USERS GET. This used to insert no roles at all, which
+  // went unnoticed while a dataset flagged public opened to everyone signed in:
+  // such a member held nothing and saw every public dataset. That flag is gone
+  // — a role's level is the only thing that opens a dataset — so a row created
+  // holding nothing would open nothing, on every instance where the provider
+  // owns sign-in. They get what "New users get" says, like anyone admitted any
+  // other way (src/lib/admission.ts).
+  const row = { externalAccountId, email, isAdmin, role, status: "active" as const, roles: await defaultRoles() };
   try {
     const [created] = await db.insert(users).values(row).returning();
     return created;

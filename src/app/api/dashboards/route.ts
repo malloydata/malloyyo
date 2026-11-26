@@ -57,7 +57,7 @@ export async function GET(req: Request) {
   const ids = [...new Set(list.map((d) => d.datasetId))];
   const owners = ids.length
     ? await db
-        .select({ id: datasets.id, name: datasets.name, repoSlug: repos.slug })
+        .select({ id: datasets.id, name: datasets.name, title: datasets.title, repoSlug: repos.slug })
         .from(datasets)
         .leftJoin(repos, eq(datasets.repoId, repos.id))
         .where(inArray(datasets.id, ids))
@@ -66,10 +66,16 @@ export async function GET(req: Request) {
     owners.map((o) => [o.id, o.repoSlug ? qualifiedName(o.repoSlug, o.name) : o.name]),
   );
 
+  // What to CALL the dataset. The front page gets its titles from the source
+  // catalogue, which lists only what the reader may QUERY — so for a dataset
+  // they can only view, this listing is the one place a title can come from.
+  const titleById = new Map(owners.map((o) => [o.id, datasetTitle(o.name, o.title)]));
+
   return NextResponse.json(
     list.map((d) => ({
       dataset: d.datasetName,
       qualified: qualifiedById.get(d.datasetId) ?? d.datasetName,
+      datasetTitle: titleById.get(d.datasetId) ?? d.datasetName,
       ...wire(d, user.id),
     })),
   );
@@ -78,7 +84,7 @@ export async function GET(req: Request) {
 /** A summary as the browser sees it. `mine` rather than the author id: a
     listing sorts a reader's own first, and no client needs other people's ids. */
 function wire(
-  { name, title, description, isDraft, author, authorId }: DashboardSummary,
+  { name, title, description, isDraft, author, authorId, isPrivate }: DashboardSummary,
   userId: string,
 ) {
   return {
@@ -86,5 +92,9 @@ function wire(
     title,
     ...(description ? { description } : {}),
     ...(isDraft ? { isDraft: true, author, mine: authorId === userId } : {}),
+    // So a menu can mark what is not listed to everyone — the person reading
+    // it is one of the few who can see it, and should know that before
+    // forwarding the link.
+    ...(isPrivate ? { isPrivate: true } : {}),
   };
 }

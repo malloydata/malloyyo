@@ -20,6 +20,8 @@
 
 import { redirect } from "next/navigation";
 import { resolveDatasetRef } from "@/lib/repos";
+import { resolveAccess, rolesOf } from "@/lib/roles";
+import { getSessionUserOrNull } from "@/lib/user";
 import { DatasetConfig } from "./dataset-config";
 
 export const runtime = "nodejs";
@@ -32,8 +34,20 @@ export default async function Page({ params }: { params: Promise<{ id: string }>
   // `repo:dataset`, an alias, or a bare name — so a link that worked before the
   // rename still lands here. It already carries the repo, so this needs no query
   // of its own.
-  const ref = await resolveDatasetRef(id);
-  if (ref.ok && ref.repo) redirect(`/repos/${encodeURIComponent(ref.repo.slug)}`);
+  //
+  // ONLY FOR SOMEONE WHO CAN OPEN IT. The redirect below names the repo that
+  // publishes a dataset, and this page used to do it for any browser holding a
+  // session cookie: someone with no access, or still waiting for approval,
+  // could ask about any dataset name and learn that it exists and where it
+  // comes from. Everyone else falls through to the page, whose own request
+  // answers "not found".
+  const me = await getSessionUserOrNull();
+  const ref = me ? await resolveDatasetRef(id) : null;
+  if (me && ref?.ok && ref.repo) {
+    const { dataset } = ref;
+    const level = resolveAccess(rolesOf(me), [{ ...dataset, ownerId: dataset.userId }], { userId: me.id })[0].level;
+    if (level !== "none") redirect(`/repos/${encodeURIComponent(ref.repo.slug)}`);
+  }
 
   // Not found, ambiguous, or simply has no repo: let the page itself say so,
   // the way it always did.

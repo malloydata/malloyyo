@@ -1,8 +1,12 @@
 # Roles and access
 
 > **Status: shipped.** The role catalog, dataset grants, `$MALLOYYO_ROLES`, row
-> scoping and multi-dataset repos all work today. Roles are managed at
-> **Admin → Roles**; `lloydtabb/malloyyo_examples` is a live multi-dataset repo.
+> scoping and multi-dataset repos all work today. They are managed on three
+> admin pages: **Users** (who may sign in, the roles each person holds, and what
+> those add up to), **Datasets** (what is published, from which repo, and how
+> its rows are scoped) and **Roles** (what each role opens). Where an identity
+> provider owns sign-in, the Users page leaves out adding, approving and
+> disabling people, which that provider does; `lloydtabb/malloyyo_examples` is a live multi-dataset repo.
 
 Two questions decide what anyone sees, and they are answered in different
 places:
@@ -61,12 +65,96 @@ managed here, so that a group membership revoked upstream takes effect on the
 next sign-in. Name your roles to match what that system already calls them and
 the switch costs you nothing.
 
+## A role sets a level on each dataset
+
+A role is a list of datasets, and for each one, what its people get there:
+
+| level | what it lets them do on that dataset |
+|---|---|
+| **None** | nothing: the dataset is not there for them |
+| **Dashboards** | open its dashboards, and nothing else |
+| **Full** | open its dashboards, and query it — the query editor, chat, AI Q&A, the MCP connector, draft dashboards |
+
+Set them at **Admin → Roles**: pick a role, and each dataset has one three-way
+switch. That switch is the only thing that opens a dataset. There is no separate
+"public" setting: a dataset every member should have is `MALLOYYO_USER` at Full
+(which is what datasets that used to be marked public were converted to), and
+setting it to None takes it away. The same page says whether new users are given the role.
+
+```
+clients      Client reports: Dashboards
+analysts     Client reports: Full     Finance: Full     Support: Dashboards
+```
+
+**Someone with several roles gets the most any of them gives, dataset by
+dataset.** Hold `clients` and you read the dashboards on Client reports. Hold
+`analysts` too and you can query it. **Admin → Users** works this out for you:
+beside each person is what their roles add up to, a row opens to show which
+role is why, and *Edit roles* previews the result of a change before you save
+it. *Add user* takes an email address and the roles that person starts with,
+with the same preview; they are let in the first time they sign in with that
+address.
+
+There is no "dashboard-only user" to configure. Someone is dashboard-only
+exactly when no role gives them Full on anything; their home page is then the
+dashboards they can open, with no query editor, chat or connector offered,
+because for them there is nothing those could reach. The same person can query
+one dataset and only read dashboards on the next.
+
+Where Dashboards shows:
+
+- The dataset's dashboards open as usual; the ways into its data that are not a
+  dashboard — AI Q&A, Query, Chat, config, *Explore in Claude* — are left off.
+- It is absent from `list_sources`, from the query editor's and chat's source
+  lists, and a query naming it is refused the same way an unknown dataset is.
+- A draft dashboard cannot be saved on it. A draft is built from queries its
+  author wrote.
+
+`MALLOYYO_ADMIN` has Full on every dataset, always; it has no switches.
+`MALLOYYO_USER` is a role like any other here — give it a level on a dataset to
+open that dataset to everyone who holds it.
+
+Every grant made before levels existed is Full, which is what it always meant.
+
+**Dashboards is a product tier, not a wall around data.** A dashboard runs
+queries against its dataset, so someone at the Dashboards level can still reach
+whatever that dataset contains. What they must not see goes in a dataset they
+have None on, or behind the model's own row scoping (below) — which applies to
+dashboards the same as to queries. The usual shape is a dataset curated for the
+audience, opened at the Dashboards level.
+
+### Impersonating a user
+
+An admin can **impersonate** any non-admin: *Impersonate* beside a person on
+Admin → Users opens the app exactly as that person sees it — their datasets,
+their dashboards, their rows under row scoping, and no admin pages. A bar across
+every page says who you are impersonating and how to stop. It is how you answer
+"what does this look like for them" when someone asks for help, without asking
+them for a screenshot.
+
+**Queries run as them.** Dashboards load their data and the query editor's Run
+works, both with that person's datasets and their rows under row scoping. That
+is the way to test a multi-tenant dataset: impersonate one tenant's user, run the
+query, and see exactly the rows they would.
+
+Otherwise it is look-only. Nothing is saved, changed or created as them: a
+query you run is not added to their history and cannot be saved, and
+favourites, sharing and drafts are refused. Starting, stopping and each query
+run this way are logged against you, and it ends by itself after an hour — on
+the server, not just in your browser.
+
+**It shows what the instance gives them, not what is theirs.** Their chats and
+their API tokens are not shown while you impersonate them: an admin cannot read
+another person's unpublished chats or see their tokens, and impersonating is
+not a way around that.
+
 ## Datasets name the roles that may open them
 
-A dataset lists the roles that grant access to it. Hold one of them and you can
-query its sources and open its dashboards; hold none and the dataset is not
-there for you — it does not appear in `list_sources`, and a query naming it is
-refused the same way an unknown dataset is.
+Seen from the dataset's side, the same settings are a list: the roles that have
+any level on it. Hold one of them and you can open its dashboards — and query
+its sources, if one you hold has Full. Hold none and the dataset is not there
+for you: it is in no menu, it does not appear in `list_sources`, and a query
+naming it is refused the same way an unknown dataset is.
 
 There is no per-source permission inside a dataset. **A dataset is the unit of
 access**: everything it publishes, you get. If two groups need different
@@ -93,7 +181,8 @@ the model without it would be refused rather than run unscoped.
 `$MALLOYYO_EMAIL` is the signed-in address. `$MALLOYYO_ROLES` is the list of
 roles that person holds, built-in and your own together.
 
-The two halves check each other. Tick a given on the dataset and a model that
+The two halves check each other. Tick a given on the dataset (**Admin →
+Datasets**, which lists each one under the repo that publishes it) and a model that
 does not declare it cannot be published. Declare one that is not ticked and
 nothing supplies it — the model's default applies, and `publish` says so.
 
@@ -144,11 +233,12 @@ Express it as access instead:
 
 ```
 datasets/orders_mine    scoped by $MALLOYYO_EMAIL   roles: sales, finance
-datasets/orders_all     unscoped                    roles: MALLOYYO_ADMIN
+datasets/orders_all     unscoped                    roles: (none — admins only)
 ```
 
-Now "admins see everything" is a grant you can read off a list, rather than a
-clause buried in a `where`. Someone auditing access looks in one place, and the
+An admin opens every dataset, so a dataset no role is given is one only admins
+reach. Now "admins see everything" is a dataset you can read off a list, rather
+than a clause buried in a `where`. Someone auditing access looks in one place, and the
 model stays honest about what it does.
 
 `in $MALLOYYO_ROLES` on its own is fine — it narrows. It is the `or` that is
@@ -237,8 +327,67 @@ nobody ever sees both. Where people genuinely need both, give the variants
 different names — `orders` and `orders_with_support` — so the choice is made on
 meaning rather than on which dataset it came from.
 
+## Who sees a dashboard
+
+Being able to open a dataset shows you its dashboards — except the ones that
+are **private**. Every dashboard, draft or published, has the same two
+settings, in the same place: the **Share** button beside its name.
+
+- **General access.** *Restricted* (private): only the people listed.
+  *Everyone on the dataset*: anyone who can open the dataset, and it is in
+  their menu.
+- **People.** Email addresses it is shared with.
+
+**A private dashboard is seen by:**
+
+- admins,
+- its author, if it is a draft,
+- the people it has been shared with.
+
+To everyone else it is not there: it is missing from every menu and from
+`list_sources`, and its URL answers "not found". Dashboards are shared with
+people, never with roles: a role decides a dataset, and a dashboard decides its
+own audience.
+
+What each kind starts as:
+
+- **A draft starts private.** Its author and admins see it until its author
+  opens it or shares it. (Drafts that existed before this was introduced were
+  listed to everyone, and still are.)
+- **A published dashboard starts open**, unless its tag says otherwise:
+
+  ```malloy
+  # artifact { title="Board numbers" private }
+  query: board_numbers is orders -> { … }
+  ```
+
+  The tag decides only what it starts as. Once an admin changes it in the Share
+  dialog, that setting stands, and later publishes do not undo it.
+
+Who may change it: a draft's author or an admin for a draft; an admin for a
+published dashboard.
+
+**Promoting a draft does not change who can see it.** When an admin records
+that a draft was promoted into the model (any admin, for anyone's draft), the
+published dashboard takes the draft's general access and its people — whatever the promoted file's tag says — and the draft's author is
+added to its people if it is private, so they do not lose their own dashboard
+the day it ships.
+
+Sharing **never opens a dataset**. The person still needs a role that gives
+them Dashboards or Full on the dataset the dashboard is built on; share with
+someone who has neither and the dialog says so beside their name, and the share
+takes effect once they are given one.
+
+**This narrows a menu; it is not a security boundary.** Anyone who can open one
+dashboard on a dataset can query all of that dataset through it. A private
+dashboard hides a view, not the rows behind it. If two audiences must not see
+each other's data, that is two datasets — see [Organising a
+repo](#organising-a-repo).
+
 ## What each person sees
 
-`list_sources` — and every dashboard list, and the home page — shows only the
-datasets your roles grant. A dataset you have no role for is not something you
-are told you cannot see; it simply is not in the answer.
+`list_sources` shows the datasets you have Full on. Every dashboard list, and
+the home page, shows the ones you can open — those, plus any you have
+Dashboards on. A dataset you have no role for is not something you
+are told you cannot see; it simply is not in the answer. The same goes for a
+private dashboard nobody shared with you.

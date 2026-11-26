@@ -5,6 +5,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import Script from "next/script";
 import { TelemetryPageView } from "@/components/TelemetryPageView";
+import { ViewAsBanner } from "@/components/ViewAsBanner";
 import { env } from "@/lib/env";
 import { telemetryPageTrackingEnabled } from "@/lib/telemetry";
 import "./globals.css";
@@ -53,6 +54,9 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">
+        {/* First, so it sits above every page: while an admin is viewing as
+            someone, no screen may be the one that does not say so. */}
+        <ViewAsBanner />
         {children}
         {telemetryPageTrackingEnabled() ? <TelemetryPageView /> : null}
         <Analytics id={env.ANALYTICS_ID} />

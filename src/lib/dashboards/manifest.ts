@@ -20,5 +20,7 @@ export function artifactManifest(base: string, a: ArtifactInfo): Record<string, 
   if (a.description) manifest.description = a.description;
   if (a.givens) manifest.givens = a.givens;
   if (a.autorun === false) manifest.autorun = false;
+  // What ./audience reads to decide who is shown this dashboard.
+  if (a.private) manifest.private = true;
   return manifest;
 }

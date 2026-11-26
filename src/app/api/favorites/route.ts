@@ -5,7 +5,9 @@ import { NextResponse } from "next/server";
 import { eq, and } from "drizzle-orm";
 import { db, favorites } from "@/db";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
-import { promoteToSaved } from "@/lib/mcp-tools";
+import { loadSharedQuery, maySeeSharedQuery, promoteToSaved } from "@/lib/mcp-tools";
+import { isAdmin } from "@/lib/admin";
+import { rolesOf } from "@/lib/roles";
 import { captureTelemetry } from "@/lib/telemetry";
 
 export const runtime = "nodejs";
@@ -20,6 +22,16 @@ export async function POST(req: Request) {
   const body = await req.json() as { slug?: string };
   const { slug } = body;
   if (!slug) return NextResponse.json({ error: "slug required" }, { status: 400 });
+
+  // Only a query this person may see. This used to take any slug: it copied
+  // the author's question, Malloy and SQL out of disposable history into a
+  // durable saved query, and answered 200 or 404 by whether the slug existed —
+  // for someone the share link itself would have told "not found".
+  const shared = await loadSharedQuery(slug);
+  const viewer = { id: user.id, roles: rolesOf(user), admin: isAdmin(user) };
+  if (!shared.ok || !(await maySeeSharedQuery(viewer, slug, shared.datasetId))) {
+    return NextResponse.json({ error: "query not found" }, { status: 404 });
+  }
 
   // Favoriting promotes the run (by slug) into a durable saved_query — so the
   // favorite survives history trimming — then toggles the favorite on it.

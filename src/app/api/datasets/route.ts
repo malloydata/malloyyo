@@ -292,24 +292,10 @@ export async function GET() {
   try {
     user = await getSessionUser();
   } catch (err) {
-    if (err instanceof UnauthorizedError) {
-      const rows = await db
-        .select({
-          id: datasets.id,
-          name: datasets.name,
-          status: datasets.status,
-          createdAt: datasets.createdAt,
-          readyAt: datasets.readyAt,
-          isPublic: datasets.isPublic,
-          repo: repos.slug,
-        })
-        .from(datasets)
-        .leftJoin(repos, eq(datasets.repoId, repos.id))
-        .where(and(eq(datasets.isPublic, true), ne(datasets.status, "failed")))
-        .orderBy(desc(datasets.createdAt))
-        .limit(50);
-      return NextResponse.json(rows);
-    }
+    // Signed out (or pending, or disabled): nothing. This used to list the
+    // datasets flagged public; there is no such flag now, and which datasets
+    // every member can open is not something to tell a non-member.
+    if (err instanceof UnauthorizedError) return NextResponse.json([]);
     throw err;
   }
 
@@ -321,7 +307,6 @@ export async function GET() {
         status: datasets.status,
         createdAt: datasets.createdAt,
         readyAt: datasets.readyAt,
-        isPublic: datasets.isPublic,
         repo: repos.slug,
         ownerEmail: users.email,
         ownerName: users.name,
@@ -336,7 +321,7 @@ export async function GET() {
     return NextResponse.json(rows);
   }
 
-  // Owned, public, or opened by one of their roles — the same predicate the run
+  // Owned, or opened by one of their roles — the same predicate the run
   // paths use, so a dataset someone can query is a dataset they can see listed.
   const rows = await db
     .select({
@@ -345,7 +330,6 @@ export async function GET() {
       status: datasets.status,
       createdAt: datasets.createdAt,
       readyAt: datasets.readyAt,
-      isPublic: datasets.isPublic,
       repo: repos.slug,
     })
     .from(datasets)

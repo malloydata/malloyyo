@@ -26,6 +26,7 @@ import { fileURLToPath } from "node:url";
 import { createHash, randomBytes } from "node:crypto";
 import { and, desc, eq, sql } from "drizzle-orm";
 import {
+  dashboardGrants,
   db,
   users,
   datasets,
@@ -292,7 +293,12 @@ async function datasetRows(name: string) {
 
 /** An ordinary admitted user — no admin role, which is the point. */
 async function seedMember(email: string): Promise<User> {
-  const [u] = await db.insert(users).values({ email, status: "active", role: "member" }).returning();
+  // Holding what a new member is given (src/lib/roles.ts, DEFAULT_ROLES) — which
+  // opens a dataset only where that dataset grants it.
+  const [u] = await db
+    .insert(users)
+    .values({ email, status: "active", role: "member", roles: ["MALLOYYO_USER"] })
+    .returning();
   seededUsers.push(u.id);
   return u;
 }
@@ -1100,19 +1106,34 @@ test("a draft's own files are refused when they reach past the model", async () 
 });
 
 test("a draft can only be overwritten by the person who made it", async () => {
-  const { slug } = await makeDraft({ name: "by_state", title: "By state", source: DRAFT_COMPONENT });
+  // Opened to the dataset, so the other person can SEE it — that is what makes
+  // "belongs to someone else" the honest answer rather than a leak.
+  const { slug } = await makeDraft({ name: "by_state", title: "By state", source: DRAFT_COMPONENT, visibility: "dataset" });
 
-  // Someone who can see the dataset (it's public) but didn't make the draft.
-  await db.update(datasets).set({ isPublic: true }).where(eq(datasets.name, DS_DRAFT));
+  // Someone who can see the dataset (every member can) but didn't make the draft.
+  await db.update(datasets).set({ roles: ["MALLOYYO_USER"] }).where(eq(datasets.name, DS_DRAFT));
   const other = await seedMember(`other-${RUN}@test.local`);
-  const res = await fetch(`${serverUrl}/api/datasets/${DS_DRAFT}/drafts`, {
-    method: "POST",
-    headers: { "content-type": "application/json", authorization: `Bearer ${await mintFor(other.id, ["mcp"])}` },
-    body: JSON.stringify({ name: "by_state", source: DRAFT_COMPONENT, slug }),
-  });
-  const out = (await res.json()) as { ok: boolean; error?: string };
+  const attempt = async (target: string) => {
+    const res = await fetch(`${serverUrl}/api/datasets/${DS_DRAFT}/drafts`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${await mintFor(other.id, ["mcp"])}` },
+      body: JSON.stringify({ name: "by_state", source: DRAFT_COMPONENT, slug: target }),
+    });
+    return (await res.json()) as { ok: boolean; error?: string };
+  };
+  const out = await attempt(slug);
   assert.equal(out.ok, false);
   assert.match(out.error ?? "", /belongs to someone else/);
+
+  // A PRIVATE draft (what a new one is) they cannot open is not there for them
+  // at all: the same answer as a slug that never existed, so the save route is
+  // not a way to find out which slugs are real.
+  const hidden = await makeDraft({ name: "hidden", title: "Hidden", source: DRAFT_COMPONENT });
+  const refused = await attempt(hidden.slug);
+  const absent = await attempt("nosuchslug00");
+  assert.equal(refused.ok, false);
+  assert.match(refused.error ?? "", /no draft dashboard/);
+  assert.equal(refused.error?.replace(hidden.slug, "X"), absent.error?.replace("nosuchslug00", "X"));
 });
 
 test("draft promote validates --name instead of writing outside dashboards/", async () => {
@@ -1124,19 +1145,68 @@ test("draft promote validates --name instead of writing outside dashboards/", as
   assert.equal(existsSync(join(dir, "..", "escape.malloy")), false, "nothing written outside the checkout");
 });
 
-test("a draft is recorded by its own author; a colleague gets the files and a note", async () => {
+test("an admin records the promotion of someone else's draft; a non-admin gets the files and a note", async () => {
   const { dir, env } = await draftFixture();
   const { slug } = await makeDraft({ name: "by_state", title: "By state", source: DRAFT_COMPONENT });
-  await db.update(datasets).set({ isPublic: true }).where(eq(datasets.name, DS_DRAFT));
+  await db.update(datasets).set({ roles: ["MALLOYYO_USER"] }).where(eq(datasets.name, DS_DRAFT));
   const colleague = await seedMember(`promoter-${RUN}@test.local`);
   const theirToken = await mintFor(colleague.id, ["mcp"]);
+  const promote = () => runCli(["draft", "promote", slug, ".", "--name", "theirs", "--token", theirToken], dir, env);
 
-  const r = await runCli(["draft", "promote", slug, ".", "--name", "theirs", "--token", theirToken], dir, env);
+  // A new draft is private, and a private draft's files are as private as the
+  // draft: to a colleague it is a slug that does not exist.
+  const refused = await promote();
+  assert.notEqual(refused.code, 0, "a private draft is not a colleague's to promote");
+  assert.match(refused.stderr + refused.stdout, /no draft/);
+  assert.ok(!existsSync(join(dir, "dashboards", "theirs.jsx")), "nothing was written");
+
+  // Once it is open to the dataset, anyone who can open it may take the files
+  // — that is how a member proposes a draft for the repo. RECORDING the
+  // promotion is an admin's: it sets who can see the published dashboard.
+  await db.update(draftDashboards).set({ visibility: "dataset" }).where(eq(draftDashboards.slug, slug));
+  const r = await promote();
   assert.equal(r.code, 0, r.stderr + r.stdout);
   assert.ok(existsSync(join(dir, "dashboards", "theirs.jsx")), "the files are still written");
-  assert.match(r.stdout, /not recorded on the draft/);
+  assert.match(r.stdout, /not recorded on the draft: only an admin records a promotion/);
   const [row] = await db.select().from(draftDashboards).where(eq(draftDashboards.slug, slug));
-  assert.equal(row?.promotedAs, null, "the author's row is untouched");
+  assert.equal(row?.promotedAs, null, "nothing was recorded");
+
+  // THE REPORTED CASE: the promoter is not the drafter. A member builds a
+  // draft; an admin promotes it. This used to write the files and record
+  // nothing — "its author records its promotion" — so the draft's link never
+  // forwarded and the draft stayed listed beside its published copy.
+  const made = await fetch(`${serverUrl}/api/datasets/${DS_DRAFT}/drafts`, {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${theirToken}` },
+    body: JSON.stringify({ name: "members_own", title: "A member's own", source: DRAFT_COMPONENT }),
+  });
+  const theirs = (await made.json()) as { ok: boolean; error?: string; slug: string };
+  assert.equal(theirs.ok, true, theirs.error);
+
+  const byAdmin = await runCli(
+    ["draft", "promote", theirs.slug, ".", "--name", "from_member", "--token", token],
+    dir,
+    env,
+  );
+  assert.equal(byAdmin.code, 0, byAdmin.stderr + byAdmin.stdout);
+  assert.doesNotMatch(byAdmin.stdout, /not recorded/);
+  assert.ok(existsSync(join(dir, "dashboards", "from_member.jsx")));
+  const [promoted] = await db.select().from(draftDashboards).where(eq(draftDashboards.slug, theirs.slug));
+  assert.equal(promoted?.promotedAs, "from_member", "recorded on a draft that is not the admin's own");
+  assert.equal(promoted?.userId, colleague.id);
+
+  // And who can see it came across: the draft was private, so the published
+  // dashboard is, and its original author is one of its people.
+  const [ds] = await db.select().from(datasets).where(eq(datasets.name, DS_DRAFT));
+  assert.equal(ds.dashboardAudience.from_member, "private");
+  const people = await db
+    .select()
+    .from(dashboardGrants)
+    .where(and(eq(dashboardGrants.datasetId, ds.id), eq(dashboardGrants.dashboard, "from_member")));
+  assert.deepEqual(
+    people.map((g) => g.userId),
+    [colleague.id],
+  );
 });
 
 // ── Tenant scoping: the dataset is the authority ────────────────────────────

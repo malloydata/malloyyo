@@ -95,6 +95,27 @@ const REVIEWED_AFTER_REWRITE = [
   "0028_drop_failed_datasets",
   "0029_repo_revision_previews",
   "0030_malloy_models_catalog",
+  // Additive throughout: a new table the live version never reads, and three
+  // columns with defaults it never writes. A draft the live version saves
+  // during the deploy takes the default (private), which is what the new
+  // version would give it. Every existing grant stays full, and every
+  // published dashboard keeps the audience its model gives it, so nobody's
+  // access changes when this lands.
+  "0031_dashboard_permissions",
+  // One nullable column the live version never reads or writes. An invitation
+  // the live version creates during the deploy leaves it NULL, which means
+  // "the instance default at sign-in": exactly what that version does anyway.
+  "0032_invitation_roles",
+  // Data only (two UPDATEs). Gives MALLOYYO_USER full on every dataset flagged
+  // `is_public`, which is what the flag already gave everyone: the live
+  // version reads the flag, untouched, so nothing changes for it. It is what
+  // lets the NEW version stop reading the flag without anyone losing a dataset.
+  "0033_public_is_the_members_role",
+  // Data only (one UPDATE). Gives MALLOYYO_USER to active people an integration
+  // created who hold no role, so they keep the datasets that 0033 moved from
+  // the public flag to that role. The live version reads `users.roles` the same
+  // way, and for it the role opens only what the flag already opens.
+  "0034_members_without_a_role",
 ];
 
 /** What the journal should currently end with. */

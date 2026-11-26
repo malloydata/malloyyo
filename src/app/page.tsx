@@ -5,6 +5,7 @@
 import { useEffect, useState } from "react";
 import { signIn } from "next-auth/react";
 import Link from "next/link";
+import { LockIcon } from "lucide-react";
 import { QueryIcon } from "@/components/QueryIcon";
 import { repoUrl, codespaceUrl } from "@/lib/github-source-link";
 import {
@@ -51,7 +52,6 @@ type DatasetGroup = {
   qualified: string;
   /** Still served from per-file rows rather than a verified revision. */
   needsUpdate: boolean;
-  isPublic: boolean;
   status: string;
   githubRepo: string | null;
   githubBranch: string | null;
@@ -117,7 +117,7 @@ export default function HomePage() {
   const [sources, setSources] = useState<DatasetGroup[] | null>(null);
   const [favQueries, setFavQueries] = useState<FavQuery[]>([]);
   const [dashboards, setDashboards] = useState<
-    Array<DashboardChip & { dataset: string; qualified: string }>
+    Array<DashboardChip & { dataset: string; qualified: string; datasetTitle?: string }>
   >([]);
   // Claude connect-instructions modal — shown when clicking a source's Claude
   // button before the connector is linked. claudeTargetUrl is the explore chat
@@ -172,7 +172,43 @@ export default function HomePage() {
   isDraft?: boolean;
   author?: string;
   mine?: boolean;
+  isPrivate?: boolean;
 };
+
+type HomeDataset = { qualified: string; title: string; dashboards: DashboardChip[] };
+
+/**
+ * The datasets a reader can open but not query, each with the dashboards on it
+ * they can see. No source rows and no ways in beside the dashboards, because
+ * for this reader there are none.
+ */
+function ViewOnlyDatasets({ datasets }: { datasets: HomeDataset[] }) {
+  return (
+    <section>
+      <h2 className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-3">Dashboards</h2>
+      <div className="space-y-4">
+        {datasets.map((ds) => (
+          <div key={ds.qualified} className="border border-gray-200 dark:border-gray-800 rounded p-4 space-y-2">
+            <h3 className="font-semibold">{ds.title}</h3>
+            {/* The model's own, then the drafts people opened or shared — the
+                same two rows, in the same order, as a dataset card above. */}
+            {modelDashboards(ds.dashboards).length > 0 && (
+              <DashboardRow label="dashboards" dataset={ds.qualified} items={modelDashboards(ds.dashboards)} />
+            )}
+            {userDashboards(ds.dashboards).length > 0 && (
+              <DashboardRow
+                label="user dashboards"
+                dataset={ds.qualified}
+                items={userDashboards(ds.dashboards)}
+                collapseAfter={6}
+              />
+            )}
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
 
 const modelDashboards = (all: DashboardChip[]): DashboardChip[] => all.filter((d) => !d.isDraft);
 // Yours first: on a dataset other people also build on, your own are what you
@@ -204,7 +240,15 @@ function DashboardRow({
         <Link
           key={d.name}
           href={`/datasets/${encodeURIComponent(dataset)}/dashboard/${encodeURIComponent(d.name)}`}
-          title={[d.description, d.isDraft && d.author ? `by ${d.author}` : null].filter(Boolean).join(" — ") || undefined}
+          title={
+            [
+              d.description,
+              d.isDraft && d.author ? `by ${d.author}` : null,
+              d.isPrivate ? "private — not listed to everyone on this dataset" : null,
+            ]
+              .filter(Boolean)
+              .join(" — ") || undefined
+          }
           className={
             "text-xs px-2 py-0.5 rounded border hover:bg-gray-50 dark:hover:bg-gray-900 " +
             (d.isDraft
@@ -213,6 +257,7 @@ function DashboardRow({
           }
         >
           {d.title}
+          {d.isPrivate && <LockIcon size={9} aria-label="Private" className="ml-1 inline opacity-60" />}
           {d.isDraft && d.author && !d.mine && (
             <span className="ml-1 text-[9px] text-gray-400 dark:text-gray-500">{shortAuthor(d.author)}</span>
           )}
@@ -256,9 +301,32 @@ function shortAuthor(author: string): string {
     // every dashboard rendered twice under each.
     let arr = dashByDataset.get(d.qualified);
     if (!arr) { arr = []; dashByDataset.set(d.qualified, arr); }
-    arr.push({ name: d.name, title: d.title, description: d.description, isDraft: d.isDraft, author: d.author, mine: d.mine });
+    arr.push({ name: d.name, title: d.title, description: d.description, isDraft: d.isDraft, author: d.author, mine: d.mine, isPrivate: d.isPrivate });
   }
 
+
+  // Datasets this reader can OPEN but not QUERY: their roles on them are
+  // view-only (src/lib/roles.ts, `DatasetAccess`). The source catalogue above
+  // lists only what they may query, so these are the datasets that have
+  // dashboards for them and no card of their own. Computed only once the
+  // catalogue has answered — before that, every dataset would look view-only.
+  const viewOnlyByQualified = new Map<string, HomeDataset>();
+  if (sources !== null) {
+    for (const d of dashboards) {
+      if (datasetByQualified.has(d.qualified)) continue;
+      let ds = viewOnlyByQualified.get(d.qualified);
+      if (!ds) {
+        ds = { qualified: d.qualified, title: d.datasetTitle ?? d.dataset, dashboards: [] };
+        viewOnlyByQualified.set(d.qualified, ds);
+      }
+      ds.dashboards.push(d);
+    }
+  }
+  const viewOnlyDatasets = [...viewOnlyByQualified.values()];
+  // Nothing to query anywhere, and something to look at: for this reader the
+  // instance IS its dashboards. An admin always has the rest (they publish).
+  const viewOnlyEverywhere =
+    !me?.isAdmin && sources !== null && datasetGroups.length === 0 && viewOnlyDatasets.length > 0;
 
   // Datasets to render: those with questions first (recency order), then the
   // rest. Ordered as objects rather than as names, because a name no longer
@@ -411,15 +479,19 @@ function shortAuthor(author: string): string {
         </section>
       ) : (
         <>
-          {/* Tokens is everyone's — a member holds their own CLI credential; admin
-              is the instance. Both live in the same right-aligned row. */}
+          {/* Tokens is everyone's who has something to query — a member holds
+              their own CLI credential; admin is the instance. Both live in the
+              same right-aligned row. Someone whose every dataset is view-only
+              has nothing a token could reach, so the link is left out. */}
           <section className="flex gap-3">
-            <Link
-              href="/settings/tokens"
-              className="inline-block rounded border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 px-4 py-2 text-xs hover:bg-gray-50 dark:hover:bg-gray-900 ml-auto"
-            >
-              tokens
-            </Link>
+            {!viewOnlyEverywhere && (
+              <Link
+                href="/settings/tokens"
+                className="inline-block rounded border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-300 px-4 py-2 text-xs hover:bg-gray-50 dark:hover:bg-gray-900 ml-auto"
+              >
+                tokens
+              </Link>
+            )}
             {me.isAdmin && (
               <Link
                 href="/admin"
@@ -434,6 +506,11 @@ function shortAuthor(author: string): string {
               row with its ways in — [query][chat][claude] — and the questions
               asked of it beneath. Sources that have been asked about lead, in
               recency order; the rest follow with their descriptions. */}
+          {/* Datasets they can open but not query — dashboards, and nothing to
+              run. First when it is all they have; after the rest otherwise. */}
+          {viewOnlyEverywhere && <ViewOnlyDatasets datasets={viewOnlyDatasets} />}
+
+          {!viewOnlyEverywhere && (
           <section>
             <div className="flex items-baseline justify-between mb-3">
               <h2 className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Datasets</h2>
@@ -541,11 +618,6 @@ function shortAuthor(author: string): string {
                         </span>
                         <div className="flex items-center gap-2 flex-shrink-0">
                           {g && g.status !== "ready" && <StatusBadge status={g.status} />}
-                          {g && (
-                            <span className={`text-xs px-1.5 py-0.5 rounded ${g.isPublic ? "bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300" : "bg-gray-100 text-gray-500 dark:bg-gray-800 dark:text-gray-400"}`}>
-                              {g.isPublic ? "public" : "private"}
-                            </span>
-                          )}
                           <button
                             type="button"
                             onClick={() => openClaude(claudeExploreDatasetUrl(g?.dataset ?? "dataset"))}
@@ -671,6 +743,9 @@ function shortAuthor(author: string): string {
               </div>
             )}
           </section>
+          )}
+
+          {!viewOnlyEverywhere && viewOnlyDatasets.length > 0 && <ViewOnlyDatasets datasets={viewOnlyDatasets} />}
         </>
       )}
 

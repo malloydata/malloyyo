@@ -184,7 +184,6 @@ export async function GET(_req: Request, ctx: { params: Promise<{ id: string }> 
       statusError: datasets.statusError,
       repoDir: datasets.repoDir,
       createdAt: datasets.createdAt,
-      isPublic: datasets.isPublic,
       /** Still served from per-file rows: no model of its own carries a revision. */
       legacyModels: sql<number>`(
         select count(*) from ${malloyModels}

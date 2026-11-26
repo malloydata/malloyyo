@@ -266,6 +266,8 @@ const EXACT_PAGES = new Set([
   "/",
   "/admin",
   "/admin/users",
+  "/admin/datasets",
+  "/admin/roles",
   "/authenticate",
   "/datasets/new",
   "/datasets/new/github",

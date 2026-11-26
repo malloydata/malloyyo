@@ -4,6 +4,7 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { LockIcon } from "lucide-react";
 import { filterTree, type TreeDashboard, type TreeDataset } from "@/lib/dashboard-tree";
 import { useDashboardTree } from "@/components/use-dashboard-tree";
 
@@ -108,6 +109,11 @@ export function DashboardTree({
         }`}
       >
         <span className="truncate">{d.title}</span>
+        {d.isPrivate && (
+          <span title="Private — not listed to everyone on this dataset" className="shrink-0 opacity-60">
+            <LockIcon size={10} aria-label="Private" />
+          </span>
+        )}
         {d.isDraft && !d.mine && d.author && (
           <span className={`ml-auto shrink-0 text-[10px] ${active ? "opacity-70" : "text-gray-400 dark:text-gray-500"}`}>
             {d.author.split(/\s+/)[0]}

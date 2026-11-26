@@ -34,6 +34,7 @@ import {
     the model it resolved to, and the host-only SQL channel. */
 type QueryRunResult = WithHostOnly<RunResult & { model_ref?: string }>;
 import { listDashboardsForModels } from "./dashboards";
+import { audienceFilter, isRestrictedFor } from "./dashboards/audience";
 import { CATALOG_VERSION, CatalogBackfill, catalogEntry, computeCatalog, isStale } from "./catalog";
 import { withModelRuntime } from "./malloy";
 import { leaseScope } from "./tenancy";
@@ -43,13 +44,13 @@ import { rolesOf } from "./roles";
 import { isAdmin } from "./admin";
 import { logger, serializeErr } from "./logger";
 import {
-  canReadDataset,
   findByDatasetRef,
   findPreview,
   loadSharedQuery,
+  maySeeSharedQuery,
   modelFileMap,
   recordHistory,
-  visibleDatasetWhere,
+  queryableDatasetWhere,
   type RecordHistoryFields,
 } from "./mcp-tools";
 import { env } from "./env";
@@ -132,6 +133,8 @@ export function dashboardUrl(baseUrl: string, modelRef: string, name: string): s
 type DatasetRow = {
   id: string;
   name: string;
+  /** Which of its published dashboards are private — see dashboards/audience. */
+  dashboardAudience: Record<string, "private" | "dataset"> | null;
   /** The repo that publishes it, or null for one no repo does. */
   repoSlug: string | null;
   /**
@@ -151,7 +154,9 @@ type DatasetRow = {
   requiredGivens: string[];
 };
 
-// Datasets this user may query — via the shared visibility predicate.
+// Datasets this user may QUERY — the shared predicate, at query level. Every
+// tool here runs or describes something to be run, so a dataset someone can
+// only view (src/lib/roles.ts, `DatasetAccess`) is not in this surface at all.
 async function visibleDatasets(userId: string): Promise<DatasetRow[]> {
   const rows = await db
     // requiredGivens rides along: every lease needs it, and a second lookup per
@@ -162,10 +167,11 @@ async function visibleDatasets(userId: string): Promise<DatasetRow[]> {
       name: datasets.name,
       repoSlug: repos.slug,
       requiredGivens: datasets.requiredGivens,
+      dashboardAudience: datasets.dashboardAudience,
     })
     .from(datasets)
     .leftJoin(repos, eq(datasets.repoId, repos.id))
-    .where(visibleDatasetWhere(userId))
+    .where(queryableDatasetWhere(userId))
     .orderBy(desc(datasets.createdAt));
   return rows.map((r) => ({ ...r, ref: qualifiedName(r.repoSlug, r.name) }));
 }
@@ -182,7 +188,7 @@ async function visibleDatasets(userId: string): Promise<DatasetRow[]> {
  * back first.
  */
 async function findModelByRef(userId: string, ref: string) {
-  const found = await findByDatasetRef(userId, ref);
+  const found = await findByDatasetRef(userId, ref, "query");
   return found
     ? { ds: found.ds, model: found.model, ref: found.ref, preview: "preview" in found ? found.preview : undefined }
     : null;
@@ -363,11 +369,29 @@ function makeExploreHost(user: User, baseUrl: string): ExploreHost {
       // GUARDED, because dashboards are advisory and the sources are what this
       // tool is for: an artifact-table failure degrades to "no dashboards"
       // rather than taking the whole catalog down with it.
-      let dashboards: Awaited<ReturnType<typeof listDashboardsForModels>> = new Map();
+      const dashboards: Awaited<ReturnType<typeof listDashboardsForModels>> = new Map();
       try {
-        dashboards = await listDashboardsForModels(
-          rows.map((r) => ({ modelId: r.model.id, datasetId: r.ds.id, datasetName: r.ds.name })),
+        const all = await listDashboardsForModels(
+          rows.map((r) => ({
+            modelId: r.model.id,
+            datasetId: r.ds.id,
+            datasetName: r.ds.name,
+            stored: r.ds.dashboardAudience,
+          })),
         );
+        // Minus the private ones this person was not given: the catalog is a
+        // listing like any other, and it would otherwise advertise a URL that
+        // answers "not found". One decision for every dataset at once, and no
+        // query at all unless something listed is private — so this stays the
+        // same cost with three datasets or three thousand.
+        const restrictedIn = rows
+          .filter((r) => (all.get(r.model.id) ?? []).some((d) => isRestrictedFor(d, userId)))
+          .map((r) => r.ds.id);
+        const allow = await audienceFilter(userId, restrictedIn);
+        for (const r of rows) {
+          const own = (all.get(r.model.id) ?? []).filter((d) => allow(r.ds.id, d));
+          if (own.length) dashboards.set(r.model.id, own);
+        }
       } catch (err) {
         logger.warn("list_sources: dashboards unavailable", { err: serializeErr(err) });
       }
@@ -413,7 +437,7 @@ function resultError(result: Record<string, unknown>): string | undefined {
 async function openShareLink(
   args: Record<string, unknown>,
   baseUrl: string,
-  viewer: { id: string; admin: boolean },
+  viewer: { id: string; admin: boolean; roles: readonly string[] },
 ): Promise<ToolResult> {
   const slug = String(args.slug ?? "").trim().replace(/^.*\/ltool\//, "");
   if (!slug) return errText("slug is required");
@@ -424,14 +448,11 @@ async function openShareLink(
   // product's primary endpoint, so closing the web route and leaving this one
   // open would have moved the leak rather than fixed it. Fails closed on a slug
   // with no dataset — deleting a dataset nulls history.dataset_id.
-  if (!viewer.admin) {
-    if (!res.datasetId) return errText("share link not found");
-    const [ds] = await db
-      .select({ isPublic: datasets.isPublic, userId: datasets.userId })
-      .from(datasets)
-      .where(eq(datasets.id, res.datasetId));
-    if (!ds || !canReadDataset(ds, viewer.id, false)) return errText("share link not found");
-  }
+  // `maySeeSharedQuery` — one rule with the web route. It used to check the
+  // dataset alone, which told someone their OWN link (the one a `query` call
+  // had just handed them) was not found whenever the dataset was not open to
+  // every member.
+  if (!(await maySeeSharedQuery(viewer, slug, res.datasetId))) return errText("share link not found");
   return text({
     instance: res.instance,
     source: res.source,
@@ -617,6 +638,7 @@ export function buildHostedExploreSurface(
         const result = await openShareLink(toolArgs, baseUrl, {
           id: user.id,
           admin: isAdmin(user),
+          roles: rolesOf(user),
         });
         await record({ error: resultError(result as unknown as Record<string, unknown>) });
         return withTiming(result, start);

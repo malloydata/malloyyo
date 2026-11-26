@@ -42,6 +42,26 @@ returns it — not from what you sent: a dashboard file that uses givens is
 stored with an `##! experimental.givens` line added at the top. Edits keep
 the draft's name, so `name` can be left out.
 
+## Who can open it
+
+**A new draft is private.** Its author and admins can open the `url`; to anyone
+else it does not exist. So before telling someone to send that link to a
+colleague, open it up:
+
+- `save_draft_dashboard({ …, slug, visibility: "dataset" })` — everyone who can
+  see the dataset can open it, and it appears in their dashboard menu.
+  `visibility: "private"` closes it again. Leave `visibility` out when
+  iterating and the draft keeps what it has.
+- To share with particular people instead, the author adds them by email from
+  the Share button on the draft's own page. There is no tool for that.
+
+Either way the reader must already be able to open the dataset. Sharing a
+dashboard never gives anyone access to data; it only decides who is shown this
+view.
+
+Promoting a draft keeps this: the published dashboard takes the draft's
+setting and its people.
+
 ## The queries
 
 Inline Malloy runs against what the model PUBLISHES — the same rules as the
@@ -130,6 +150,13 @@ work from. Then `malloyyo lint`, and the usual PR.
    `mark_draft_promoted(dataset, dashboard: "draft-<slug>", promoted_as: "<name>")`.
 
 `malloyyo draft promote` records the promotion itself.
+
+Recording a promotion takes an admin, for anyone's draft — it is usually
+someone else's. Without one, the files can still be written into a clone and
+proposed; the draft keeps working, and an admin records it when it ships.
+Recording also carries the draft's audience over: the published dashboard is
+private or open as the draft was, shared with the same people, and a private
+one is shared with the draft's author too.
 
 **What happens to the draft.** Once the dataset publishes the promoted
 dashboard, the draft's URL **redirects** to it, keeping any query string, and

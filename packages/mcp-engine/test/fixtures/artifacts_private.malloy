@@ -1,0 +1,18 @@
+source: nums is duckdb.sql("""
+  SELECT 1 as v UNION ALL SELECT 2 as v
+""")
+
+# artifact { name="braced" title="Braced" private }
+query: braced is nums -> { select: v }
+
+# artifact name="flat" title="Flat" private
+query: flat is nums -> { select: v }
+
+# artifact { name="explicit" title="Explicit" private=true }
+query: explicit is nums -> { select: v }
+
+# artifact { name="opened" title="Opened" private=false }
+query: opened is nums -> { select: v }
+
+# artifact { name="plain" title="Plain" }
+query: plain is nums -> { select: v }

@@ -6,22 +6,27 @@
 // this route stays a thin shell over them.
 
 import { NextResponse } from "next/server";
-import { and, eq, inArray, notInArray, sql } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { db, datasets, givens, instanceSettings, roles, users } from "@/db";
 import { requireAdmin } from "@/lib/admin";
+import { hostedSignIn } from "@/lib/hosted-auth-integration";
 import { UnauthorizedError } from "@/lib/user";
 import { env } from "@/lib/env";
 import {
   isBuiltinRole,
   isEnvAdmin,
   MALLOYYO_ADMIN,
+  deleteRole,
   NEVER_A_DEFAULT,
+  roleLevelUpdate,
   roleNameError,
   rolesOf,
 } from "@/lib/roles";
 import { logger } from "@/lib/logger";
 
 export const runtime = "nodejs";
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const bad = (error: string, status = 400) => NextResponse.json({ ok: false, error }, { status });
 
@@ -53,71 +58,40 @@ export async function POST(req: Request) {
 
     case "delete": {
       if (isBuiltinRole(name)) return bad("built-in roles cannot be deleted");
-      // Revoke it everywhere in the same breath. A role left on a user or a
-      // dataset after its definition is gone is a grant nobody can see in the
-      // UI and nobody thinks to audit — and `default_roles` is the fourth place
-      // it lives, not the third: a deleted role left there keeps being written
-      // onto every new arrival, where no checkbox can show it and
-      // `set-user-roles` would refuse the same name as unknown.
-      //
-      // Each UPDATE is scoped to the rows that actually hold it, so deleting a
-      // role nobody holds does not row-lock every user and every dataset.
-      await db.transaction(async (tx) => {
-        await tx.delete(roles).where(eq(roles.name, name));
-        await tx.execute(
-          sql`update ${users} set roles = array_remove(roles, ${name}) where ${name} = any(roles)`,
-        );
-        await tx.execute(
-          sql`update ${datasets} set roles = array_remove(roles, ${name}) where ${name} = any(roles)`,
-        );
-        await tx.execute(
-          sql`update ${instanceSettings} set default_roles = array_remove(default_roles, ${name})
-              where ${name} = any(default_roles)`,
-        );
-      });
+      // Revoked everywhere it lives, in one transaction: `deleteRole`.
+      await deleteRole(name);
       logger.info("role deleted", { name, actorId: actor.id });
       break;
     }
 
-    case "set-datasets": {
-      // Which datasets this role opens, as a whole list — the UI sends the set
-      // it wants, so a checkbox cleared in the browser is a dataset removed
-      // here without a second action to forget.
-      const wanted = Array.isArray(body?.datasetIds) ? (body.datasetIds as unknown[]).filter((x): x is string => typeof x === "string") : [];
-      if (!name) return bad("name is required");
-      const [known] = await db.select({ name: roles.name }).from(roles).where(eq(roles.name, name));
-      if (!known) return bad(`unknown role: ${name}`);
-      // Two statements, not a read-modify-write loop. The loop read every row
-      // and wrote back a computed array, so two admins saving different roles'
-      // lists at the same time both read the same `roles` and the second write
-      // erased the first's grant, with no error — and it issued one round trip
-      // per changed dataset inside the transaction.
+    case "set-level": {
+      // What ONE role gets on ONE dataset: none, view (dashboards only) or
+      // query (full). The unit Admin → Roles edits, one switch at a time.
       //
-      // Both statements are scoped to `status = 'ready'`, because that is what
-      // the page offered. Without it the revoke arm reaches every row the admin
-      // could not see and strips the role from datasets that are mid-build,
-      // which is a silent revocation by a UI that never showed the row.
-      const ready = eq(datasets.status, "ready");
-      const holdsIt = sql`${name} = any(${datasets.roles})`;
-      await db.transaction(async (tx) => {
-        if (wanted.length > 0) {
-          await tx
-            .update(datasets)
-            .set({ roles: sql`array_append(${datasets.roles}, ${name})` })
-            .where(and(ready, inArray(datasets.id, wanted), sql`not ${holdsIt}`));
-        }
-        await tx
-          .update(datasets)
-          .set({ roles: sql`array_remove(${datasets.roles}, ${name})` })
-          .where(
-            and(
-              ready,
-              holdsIt,
-              ...(wanted.length > 0 ? [notInArray(datasets.id, wanted)] : []),
-            ),
-          );
-      });
-      logger.info("role datasets set", { name, count: wanted.length, actorId: actor.id });
+      // Stored as two arrays on the dataset — `roles` (any access) and
+      // `view_only_roles` (the subset that may only view); see `DatasetAccess`
+      // and `roleLevelUpdate` in src/lib/roles.ts, which is the one writer.
+      const datasetId = typeof body?.datasetId === "string" ? body.datasetId : "";
+      const level = body?.level;
+      if (!UUID_RE.test(datasetId)) return bad("datasetId is required");
+      if (level !== "none" && level !== "view" && level !== "query") {
+        return bad("level must be none, view or query");
+      }
+      // An admin opens every dataset in full, by rule rather than by grant.
+      // Offering a switch here would be offering a choice that does not exist.
+      if (name === MALLOYYO_ADMIN) return bad("MALLOYYO_ADMIN always has full access to every dataset");
+      const [known] = await db.select({ name: roles.name }).from(roles).where(eq(roles.name, name));
+      if (!known) return bad(`unknown role: ${name || "(none)"}`);
+
+      const changed = await db
+        .update(datasets)
+        .set(roleLevelUpdate(name, level))
+        // Ready datasets only, because that is what the page offers — the same
+        // rule the list it replaced had.
+        .where(and(eq(datasets.id, datasetId), eq(datasets.status, "ready")))
+        .returning({ id: datasets.id });
+      if (changed.length === 0) return bad("no such dataset", 404);
+      logger.info("role level set", { name, datasetId, level, actorId: actor.id });
       break;
     }
 
@@ -149,22 +123,54 @@ export async function POST(req: Request) {
         );
       }
 
-      // The legacy columns move WITH the array. `rolesOf()` still folds
-      // `role`/`is_admin` in — every row backfilled by 0021 kept them — so
-      // writing only the array made un-ticking MALLOYYO_ADMIN a no-op that
-      // reported success, and ticking it produced an admin whom
-      // `applyUserAction('demote')` then refused as "not an admin". One writer,
-      // both representations.
+      // WHERE THIS PERSON'S ADMIN COMES FROM decides what may be written.
+      //
+      // `rolesOf()` reports MALLOYYO_ADMIN for someone who holds it in any of
+      // three places, and the page sends back the list it was shown — so
+      // editing any OTHER role for an admin arrives here carrying it. Writing
+      // it into the role list is right only when the row is where it lives:
+      //
+      //   - APP_ADMIN_EMAILS names them: it lives in the environment. Written
+      //     here it would outlast the address being taken out of the variable.
+      //   - An integration owns sign-in and mirrors the provider's admin flag
+      //     into `role` / `is_admin` on every sign-in: it lives at the provider.
+      //     Written here it would outlast being revoked there — the sign-in
+      //     mirror resets those two columns and never touches the list.
+      //
+      // In both cases it is left where it is. (On an ordinary instance the two
+      // legacy columns ARE the row's own record, and move with the list below.)
+      const hosted = hostedSignIn();
+      const inList = (target.roles ?? []).includes(MALLOYYO_ADMIN);
+      const legacyAdmin = target.role === "admin" || target.isAdmin === true;
+      const providerAdmin = hosted && legacyAdmin;
+      if (losingAdmin && providerAdmin) {
+        return bad(
+          `${target.email ?? "This person"} is an admin at the identity provider this instance signs in with. Remove it there; it cannot be taken away here.`,
+        );
+      }
+      const heldOnRow = inList || (!hosted && legacyAdmin);
+      if (!heldOnRow && (isEnvAdmin(target.email) || providerAdmin)) next.delete(MALLOYYO_ADMIN);
+
+      // The legacy columns move WITH the list — on an instance that owns its
+      // own sign-in. `rolesOf()` still folds `role`/`is_admin` in (every row
+      // backfilled by 0021 kept them), so writing only the list made un-ticking
+      // MALLOYYO_ADMIN a no-op that reported success, and ticking it produced
+      // an admin whom `applyUserAction('demote')` then refused as "not an
+      // admin". Where an integration owns sign-in those two columns are its
+      // mirror of the provider and are not this route's to write: a grant made
+      // here lives in the list alone.
       const gainingAdmin = next.has(MALLOYYO_ADMIN);
       await db
         .update(users)
         .set({
           roles: [...next],
-          ...(gainingAdmin
-            ? { role: "admin" as const, isAdmin: true }
-            : target.role === "admin" || target.isAdmin
-              ? { role: "member" as const, isAdmin: false }
-              : {}),
+          ...(hosted
+            ? {}
+            : gainingAdmin
+              ? { role: "admin" as const, isAdmin: true }
+              : legacyAdmin
+                ? { role: "member" as const, isAdmin: false }
+                : {}),
         })
         .where(eq(users.id, userId));
       logger.info("user roles set", { userId, roles: wanted, actorId: actor.id });
@@ -223,7 +229,7 @@ export async function POST(req: Request) {
 
     default:
       return bad(
-        "expected action: create | delete | set-datasets | set-user-roles | set-dataset-givens | set-default",
+        "expected action: create | delete | set-level | set-user-roles | set-dataset-givens | set-default",
       );
   }
 

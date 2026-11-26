@@ -5,7 +5,10 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
-function useAction() {
+/** One POST to /api/admin/roles, then a refresh so the page shows what is
+    stored. Shared by the Roles, Users and Datasets pages: roles, a person's
+    roles and a dataset's scoping are all written through that one route. */
+export function useAction() {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -32,12 +35,12 @@ function useAction() {
   return { run, busy, error };
 }
 
-const BTN =
+export const BTN =
   "px-2 py-1 rounded border border-gray-300 dark:border-gray-700 text-xs hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-50";
-const INPUT =
+export const INPUT =
   "px-2 py-1 rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-950 text-sm";
 
-export function NewRoleForm() {
+export function NewRoleForm({ onDone }: { onDone?: () => void }) {
   const { run, busy, error } = useAction();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -49,11 +52,13 @@ export function NewRoleForm() {
         if (await run({ action: "create", name, description })) {
           setName("");
           setDescription("");
+          onDone?.();
         }
       }}
     >
       <input
         className={INPUT}
+        autoFocus={!!onDone}
         placeholder="finance"
         value={name}
         onChange={(e) => setName(e.target.value)}
@@ -69,6 +74,11 @@ export function NewRoleForm() {
       <button type="submit" className={BTN} disabled={busy || !name.trim()}>
         Add role
       </button>
+      {onDone && (
+        <button type="button" className={BTN} disabled={busy} onClick={onDone}>
+          Cancel
+        </button>
+      )}
       {error && <span className="text-xs text-red-600 dark:text-red-400">{error}</span>}
     </form>
   );
@@ -98,150 +108,6 @@ export function DeleteRoleButton({ name, holders }: { name: string; holders: num
   );
 }
 
-/** Which datasets a role opens. Saved as a whole set, so unchecking is a real
-    edit rather than something you have to remember to apply separately. */
-export function RoleDatasets({
-  name,
-  all,
-  granted,
-}: {
-  name: string;
-  all: { id: string; name: string; title: string; description?: string }[];
-  granted: string[];
-}) {
-  const { run, busy, error } = useAction();
-  const [picked, setPicked] = useState<string[]>(granted);
-  const dirty =
-    picked.length !== granted.length || picked.some((id) => !granted.includes(id));
-  return (
-    <div className="flex flex-col gap-1.5">
-      <div className="flex flex-wrap gap-x-3 gap-y-1">
-        {all.length === 0 && <span className="text-xs text-gray-400">no datasets yet</span>}
-        {all.map((d) => (
-          <label key={d.id} className="inline-flex items-center gap-1 text-xs">
-            <input
-              type="checkbox"
-              checked={picked.includes(d.id)}
-              onChange={(e) =>
-                setPicked((p) => (e.target.checked ? [...p, d.id] : p.filter((x) => x !== d.id)))
-              }
-            />
-            {/* The name is the tooltip: titles are not unique, and this is a
-                grant. */}
-            <span title={d.description ? `${d.name} — ${d.description}` : d.name}>{d.title}</span>
-          </label>
-        ))}
-      </div>
-      {dirty && (
-        <span className="inline-flex items-center gap-2">
-          <button
-            type="button"
-            className={BTN}
-            disabled={busy}
-            onClick={() => void run({ action: "set-datasets", name, datasetIds: picked })}
-          >
-            Save
-          </button>
-          <button type="button" className={BTN} disabled={busy} onClick={() => setPicked(granted)}>
-            Cancel
-          </button>
-        </span>
-      )}
-      {error && <span className="text-xs text-red-600 dark:text-red-400">{error}</span>}
-    </div>
-  );
-}
-
-/** The roles one person holds. */
-export function UserRoles({
-  userId,
-  all,
-  held,
-}: {
-  userId: string;
-  all: string[];
-  held: string[];
-}) {
-  const { run, busy, error } = useAction();
-  const [picked, setPicked] = useState<string[]>(held);
-  const dirty = picked.length !== held.length || picked.some((r) => !held.includes(r));
-  return (
-    <div className="flex flex-col gap-1">
-      <div className="flex flex-wrap gap-x-2.5 gap-y-1">
-        {all.map((r) => (
-          <label key={r} className="inline-flex items-center gap-1 text-xs">
-            <input
-              type="checkbox"
-              checked={picked.includes(r)}
-              onChange={(e) =>
-                setPicked((p) => (e.target.checked ? [...p, r] : p.filter((x) => x !== r)))
-              }
-            />
-            <span className={r.startsWith("MALLOYYO_") ? "text-gray-500 dark:text-gray-400" : ""}>{r}</span>
-          </label>
-        ))}
-      </div>
-      {dirty && (
-        <span className="inline-flex items-center gap-2">
-          <button
-            type="button"
-            className={BTN}
-            disabled={busy}
-            onClick={() => void run({ action: "set-user-roles", userId, roles: picked })}
-          >
-            Save
-          </button>
-          <button type="button" className={BTN} disabled={busy} onClick={() => setPicked(held)}>
-            Cancel
-          </button>
-        </span>
-      )}
-      {error && <span className="text-xs text-red-600 dark:text-red-400">{error}</span>}
-    </div>
-  );
-}
-
-/** What a newly admitted person is given. */
-export function DefaultRoles({ all, current }: { all: string[]; current: string[] }) {
-  const { run, busy, error } = useAction();
-  const [picked, setPicked] = useState<string[]>(current);
-  const dirty = picked.length !== current.length || picked.some((r) => !current.includes(r));
-  return (
-    <div className="flex flex-col gap-1.5">
-      <div className="flex flex-wrap gap-x-3 gap-y-1">
-        {all.map((r) => (
-          <label key={r} className="inline-flex items-center gap-1 text-xs">
-            <input
-              type="checkbox"
-              checked={picked.includes(r)}
-              onChange={(e) =>
-                setPicked((p) => (e.target.checked ? [...p, r] : p.filter((x) => x !== r)))
-              }
-            />
-            {r}
-          </label>
-        ))}
-      </div>
-      {dirty && (
-        <span className="inline-flex items-center gap-2">
-          <button
-            type="button"
-            className={BTN}
-            disabled={busy}
-            onClick={() => void run({ action: "set-default", roles: picked })}
-          >
-            Save
-          </button>
-          <button type="button" className={BTN} disabled={busy} onClick={() => setPicked(current)}>
-            Cancel
-          </button>
-        </span>
-      )}
-      {error && <span className="text-xs text-red-600 dark:text-red-400">{error}</span>}
-    </div>
-  );
-}
-
 /** What a dataset is scoped by. Configured, not inferred from the model — the
     model must then declare what is ticked here or its next publish is refused. */
 export function DatasetGivens({
@@ -258,9 +124,9 @@ export function DatasetGivens({
   const dirty = picked.length !== required.length || picked.some((g) => !required.includes(g));
   return (
     <div className="flex flex-col gap-1">
-      <div className="flex flex-wrap gap-x-3 gap-y-1">
+      <div className="flex flex-col gap-1">
         {all.map((g) => (
-          <label key={g.name} className="inline-flex items-center gap-1 text-xs" title={g.description ?? undefined}>
+          <label key={g.name} className="inline-flex items-center gap-1.5 text-xs" title={g.description ?? undefined}>
             <input
               type="checkbox"
               checked={picked.includes(g.name)}

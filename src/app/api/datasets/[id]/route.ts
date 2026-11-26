@@ -10,6 +10,8 @@ import { latestModel, modelFileMap } from "@/lib/mcp-tools";
 import { qualifiedName, resolveDatasetRef } from "@/lib/repos";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
+import { resolveAccess, rolesOf } from "@/lib/roles";
+import { publishedIsPrivate, visibleDashboards } from "@/lib/dashboards/audience";
 import { captureTelemetry } from "@/lib/telemetry";
 
 export const runtime = "nodejs";
@@ -18,6 +20,16 @@ export async function GET(
   _req: Request,
   ctx: RouteContext<"/api/datasets/[id]">,
 ) {
+  // WHO IS ASKING, before anything is looked up. Signed out (or pending, or
+  // disabled): not found, whatever was asked for. Resolving the name first
+  // answered an unauthenticated request for an ambiguous one with the list of
+  // repos that publish it.
+  let me;
+  try { me = await getSessionUser(); } catch (err) {
+    if (err instanceof UnauthorizedError) return NextResponse.json({ error: "not found" }, { status: 404 });
+    throw err;
+  }
+
   const { id } = await ctx.params;
   // A uuid, `repo:dataset`, an old bare name (pinned by an alias), or a bare
   // name that is still unambiguous - one ordered rule, in src/lib/repos.ts, so
@@ -32,20 +44,52 @@ export async function GET(
   const ds = resolved.dataset;
   const repo = resolved.repo;
 
-  let me;
-  try { me = await getSessionUser(); } catch (err) {
-    if (err instanceof UnauthorizedError) {
-      if (!ds.isPublic) return NextResponse.json({ error: "not found" }, { status: 404 });
-      me = null;
-    } else throw err;
-  }
-
-  if (me && !ds.isPublic && !isAdmin(me) && ds.userId !== me.id) {
+  // What your roles give you here — the same arithmetic the admin pages show
+  // (src/lib/role-access.ts). This used to ask the `is_public` flag instead, so
+  // someone whose role opened a dataset that was not "public" could query it
+  // and still be told here that it did not exist.
+  const level = resolveAccess(rolesOf(me), [{ ...ds, ownerId: ds.userId }], { userId: me.id })[0].level;
+  // last-publish detail (incl. failure text) is management-only.
+  const canManage = isAdmin(me) || ds.userId === me.id;
+  // A dataset that is not ready is nobody's to open but its managers', exactly
+  // as the access rule itself says (`datasetAccessWhere`).
+  if (level === "none" || (ds.status !== "ready" && !canManage)) {
     return NextResponse.json({ error: "not found" }, { status: 404 });
   }
 
-  // last-publish detail (incl. failure text) is management-only — don't expose to public viewers.
-  const canManage = me ? isAdmin(me) || ds.userId === me.id : false;
+  // DASHBOARDS LEVEL GETS THE DASHBOARDS, AND NOTHING ABOUT THE MODEL. When
+  // this route answered only for public datasets, owners and admins, everyone
+  // it answered could query. It now answers for every level — and at the
+  // dashboards level that meant the whole `index.malloy`, each dashboard's
+  // component source, the GitHub repo and branch, the live revision and any
+  // build error, to someone the level exists to keep to dashboards. They get
+  // what the page needs to name the dataset and list what they may open.
+  if (level !== "query") {
+    const model = await latestModel(ds.id);
+    const rows = model
+      ? await db
+          .select({ name: malloyArtifacts.name, title: malloyArtifacts.title, manifest: malloyArtifacts.manifest })
+          .from(malloyArtifacts)
+          .where(eq(malloyArtifacts.modelId, model.id))
+          .orderBy(malloyArtifacts.name)
+      : [];
+    const open = await visibleDashboards(
+      me.id,
+      ds.id,
+      rows.map((d) => ({ ...d, isPrivate: publishedIsPrivate(d.name, d.manifest, ds.dashboardAudience) })),
+    );
+    return NextResponse.json({
+      id: ds.id,
+      name: ds.name,
+      status: ds.status,
+      title: datasetTitle(ds.name, ds.title),
+      qualified: qualifiedName(repo?.slug, ds.name),
+      repo: repo ? { slug: repo.slug, title: repo.title } : null,
+      isAdmin: false,
+      dashboards: open.map((d) => ({ name: d.name, title: d.title })),
+      malloyModel: null,
+    });
+  }
 
   // The model the dataset SERVES, and the files it serves with - which for a
   // repo-backed model come out of its revision's zip rather than a per-file
@@ -80,7 +124,13 @@ export async function GET(
       : [];
 
   // Dashboard artifacts (manifest + Dashboard.tsx) shown alongside the model files.
-  const dashboards = model
+  //
+  // Read straight off the table rather than through `./meta`, because this is
+  // the one caller that wants the component SOURCE — so the audience is applied
+  // here, by hand, to what comes back (below). Without it a private dashboard
+  // was "not found" to someone on its own page and listed here, source and all,
+  // to the same person.
+  const allDashboards = model
     ? await db
         .select({
           name: malloyArtifacts.name,
@@ -92,6 +142,14 @@ export async function GET(
         .where(eq(malloyArtifacts.modelId, model.id))
         .orderBy(malloyArtifacts.name)
     : [];
+
+  const dashboards = (
+    await visibleDashboards(
+      me.id,
+      ds.id,
+      allDashboards.map((d) => ({ ...d, isPrivate: publishedIsPrivate(d.name, d.manifest, ds.dashboardAudience) })),
+    )
+  ).map((d) => ({ name: d.name, title: d.title, manifest: d.manifest, source: d.source }));
 
   const [live] = repo
     ? await db
@@ -105,7 +163,6 @@ export async function GET(
     id: ds.id, name: ds.name,
     status: ds.status, statusError: ds.statusError,
     createdAt: ds.createdAt, readyAt: ds.readyAt,
-    isPublic: ds.isPublic,
     // The label. `name` stays the identity — URLs, grants and publishes use it.
     title: datasetTitle(ds.name, ds.title),
     // The public identity. `name` stays the local one, which is what the repo's
@@ -178,7 +235,6 @@ export async function PATCH(
 
   const { id } = await ctx.params;
   const body = (await req.json()) as {
-    isPublic?: boolean;
     githubRepo?: string | null;
     githubBranch?: string | null;
     githubUseToken?: boolean;
@@ -186,10 +242,6 @@ export async function PATCH(
 
   const [ds] = await db.select().from(datasets).where(eq(datasets.id, id)).limit(1);
   if (!ds) return NextResponse.json({ error: "not found" }, { status: 404 });
-
-  if (body.isPublic !== undefined) {
-    await db.update(datasets).set({ isPublic: body.isPublic }).where(eq(datasets.id, id));
-  }
 
   // THE GITHUB ATTACHMENT IS THE REPO'S. Writing it here per dataset is what
   // made one repo in production carry three rows with two different credential
@@ -253,7 +305,6 @@ export async function PATCH(
   const [updated] = await db.select().from(datasets).where(eq(datasets.id, id)).limit(1);
   return NextResponse.json({
     id: updated.id,
-    isPublic: updated.isPublic,
     repo: repo?.slug ?? null,
     githubRepo: repo?.githubRepo ?? null,
     githubBranch: repo?.githubBranch ?? null,

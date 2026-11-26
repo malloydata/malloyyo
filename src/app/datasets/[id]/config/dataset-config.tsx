@@ -13,7 +13,6 @@ type DatasetDetail = {
   statusError: string | null;
   createdAt: string;
   readyAt: string | null;
-  isPublic: boolean;
   isAdmin: boolean;
   githubRepo: string | null;
   githubBranch: string | null;
@@ -146,14 +145,12 @@ export function DatasetConfig({ id }: { id: string }) {
             live on the repo's page. Showing them here offered one copy per
             dataset of settings there is only one of, which is how a repo ended
             up with rows disagreeing about its own credential.
-            Visibility is a role grant now (/admin/roles), and deleting one
+            Who opens a dataset is a role's level on it (/admin/roles) — there
+            is no public/private toggle here or anywhere any more — and deleting one
             dataset of a repo means nothing: the next publish recreates it from
             the directory that is still there. */}
         {data.isAdmin && !data.repo && (
-          <div className="flex items-center gap-2">
-            <VisibilityToggle datasetId={data.id} initialIsPublic={data.isPublic} />
-            <DeleteButton datasetId={data.id} datasetName={data.name} />
-          </div>
+          <DeleteButton datasetId={data.id} datasetName={data.name} />
         )}
       </header>
 
@@ -361,36 +358,6 @@ function MoveToRepo({ datasetId, datasetName }: { datasetId: string; datasetName
       </div>
       {error && <p className="text-xs text-red-700 dark:text-red-300">{error}</p>}
     </section>
-  );
-}
-
-function VisibilityToggle({ datasetId, initialIsPublic }: { datasetId: string; initialIsPublic: boolean }) {
-  const [isPublic, setIsPublic] = useState(initialIsPublic);
-  const [busy, setBusy] = useState(false);
-
-  async function toggle() {
-    setBusy(true);
-    const res = await fetch(`/api/datasets/${datasetId}`, {
-      method: "PATCH",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ isPublic: !isPublic }),
-    });
-    if (res.ok) setIsPublic(!isPublic);
-    setBusy(false);
-  }
-
-  return (
-    <button
-      onClick={toggle}
-      disabled={busy}
-      className={`text-xs px-3 py-1.5 rounded border disabled:opacity-50 whitespace-nowrap ${
-        isPublic
-          ? "border-blue-300 dark:border-blue-700 text-blue-700 dark:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/20"
-          : "border-gray-300 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-900"
-      }`}
-    >
-      {busy ? "saving…" : isPublic ? "public — make private" : "private — make public"}
-    </button>
   );
 }
 

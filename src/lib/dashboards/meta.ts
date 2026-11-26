@@ -13,11 +13,19 @@
 // This module must NEVER import ./engine or @/lib/malloy (statically or lazily).
 
 import { and, eq, asc, desc, inArray } from "drizzle-orm";
-import { db, datasets, malloyArtifacts, malloyModels, draftDashboards, repos, users, type PreviewDataset } from "@/db";
+import { db, datasets, malloyArtifacts, malloyModels, draftDashboards, repos, users, type DraftVisibility, type PreviewDataset } from "@/db";
 import { qualifiedName } from "@/lib/repo-names";
 import { visibleDatasetWhere, findByDatasetRef, latestModel } from "@/lib/mcp-tools";
 import { previewModelRef } from "@/lib/repo-previews";
 import { aboutFirst } from "./about";
+import {
+  audienceFilter,
+  isRestrictedFor,
+  mayOpenDashboard,
+  publishedIsPrivate,
+  visibleDashboards,
+  type AudienceMap,
+} from "./audience";
 import { imageHostsFromConfig } from "./image-hosts";
 
 export interface DashboardSummary {
@@ -37,6 +45,10 @@ export interface DashboardSummary {
   author?: string;
   /** Its author's id, so a caller can tell a reader's own from everyone else's. */
   authorId?: string;
+  /** Not open to everyone on the dataset: a draft its author has not opened, or
+      a modeled dashboard tagged `# artifact { private }`. Admins, its author and
+      the people it is shared with see it — see ./audience. */
+  isPrivate?: boolean;
 }
 
 export interface DashboardDetail extends DashboardSummary {
@@ -52,6 +64,7 @@ export interface DashboardDetail extends DashboardSummary {
     /** Who may delete it (with admins), and what it was promoted as, for the page's draft bar. */
     authorId: string;
     promotedAs: string | null;
+    visibility: DraftVisibility;
   };
 }
 
@@ -80,6 +93,8 @@ function summary(
   datasetId: string,
   datasetName: string,
   a: { name: string; title: string | null; manifest: Record<string, unknown> },
+  /** The dataset's stored audiences (`datasets.dashboard_audience`). */
+  stored?: AudienceMap,
 ): DashboardSummary {
   const description = a.manifest?.description;
   return {
@@ -88,6 +103,7 @@ function summary(
     name: a.name,
     title: a.title ?? a.name,
     ...(typeof description === "string" && description ? { description } : {}),
+    ...(publishedIsPrivate(a.name, a.manifest, stored) ? { isPrivate: true } : {}),
   };
 }
 
@@ -102,23 +118,36 @@ function summary(
  *
  * Takes no userId and does NO visibility check: the model id is the
  * authorization. Only call it with a model the caller has already established
- * the user may see — `listDashboards` below is the checked entry point. */
+ * the user may see — `listDashboards` below is the checked entry point.
+ *
+ * That includes the model's PRIVATE dashboards (`isPrivate`). A caller showing
+ * the result to someone passes it through `visibleDashboards` (./audience). */
 export async function listDashboardsForModel(
   modelId: string,
   datasetId: string,
   datasetName: string,
+  /** The dataset's `dashboardAudience`, which decides which of them are
+      private. Required, so a caller cannot list a dataset's dashboards without
+      the setting that says who sees them. */
+  stored: AudienceMap,
 ): Promise<DashboardSummary[]> {
   const rows = await artifactsForModel(modelId);
-  return rows.map((a) => summary(datasetId, datasetName, a));
+  return rows.map((a) => summary(datasetId, datasetName, a, stored));
 }
 
 /**
  * `listDashboardsForModel` for many models in ONE query, keyed by model id —
  * for list_sources, which lists every visible dataset and must cost the same
  * with three of them or three thousand. Models with no dashboards are absent.
+ *
+ * Unfiltered, like the one-model form: PRIVATE dashboards are included and
+ * marked. A caller showing the result to someone filters it with
+ * `audienceFilter` (./audience), once for the whole batch.
  */
 export async function listDashboardsForModels(
-  models: Array<{ modelId: string; datasetId: string; datasetName: string }>,
+  /** `stored` is each dataset's `dashboardAudience`, which decides which of its
+      dashboards are private — required, as for the one-model form above. */
+  models: Array<{ modelId: string; datasetId: string; datasetName: string; stored: AudienceMap }>,
 ): Promise<Map<string, DashboardSummary[]>> {
   const out = new Map<string, DashboardSummary[]>();
   if (models.length === 0) return out;
@@ -139,7 +168,7 @@ export async function listDashboardsForModels(
     const m = byModel.get(modelId)!;
     out.set(
       modelId,
-      aboutFirst(list).map((a) => summary(m.datasetId, m.datasetName, a)),
+      aboutFirst(list).map((a) => summary(m.datasetId, m.datasetName, a, m.stored)),
     );
   }
   return out;
@@ -147,10 +176,15 @@ export async function listDashboardsForModels(
 
 /** Dashboards on a single dataset's current (latest) model, if visible. */
 export async function listDashboards(userId: string, datasetId: string): Promise<DashboardSummary[]> {
-  const found = await findByDatasetRef(userId, datasetId);
+  const found = await findByDatasetRef(userId, datasetId, "view");
   if (!found) return [];
+  // A preview is an admin's own fetch of a branch: nothing in it is hidden from them.
   if ("preview" in found) return previewDashboards(found.preview.entry, datasetId, found.ds.name);
-  return listDashboardsForModel(found.model.id, datasetId, found.ds.name);
+  return visibleDashboards(
+    userId,
+    found.ds.id,
+    await listDashboardsForModel(found.model.id, datasetId, found.ds.name, found.ds.dashboardAudience),
+  );
 }
 
 /** A branch preview's dashboards: compiled at fetch time, not artifact rows. */
@@ -168,12 +202,15 @@ function previewDashboards(entry: PreviewDataset, datasetId: string, datasetName
     stays the model's own: a draft is not a sibling of a published dashboard
     (the frame injects that list into a dashboard's own switcher). */
 export async function listDashboardsAndDrafts(userId: string, datasetRef: string): Promise<DashboardSummary[]> {
-  const found = await findByDatasetRef(userId, datasetRef);
+  const found = await findByDatasetRef(userId, datasetRef, "view");
   if (!found) return [];
   // A preview has no drafts: drafts belong to the published dataset.
   if ("preview" in found) return previewDashboards(found.preview.entry, datasetRef, found.ds.name);
-  const own = await listDashboardsForModel(found.model.id, found.ds.id, found.ds.name);
-  return [...own, ...(await listDraftsOnDataset(found.ds.id, found.ds.name, new Set(own.map((d) => d.name))))];
+  // Forwarding is decided against everything the model publishes, private or
+  // not: a draft promoted into a private dashboard has still become it.
+  const own = await listDashboardsForModel(found.model.id, found.ds.id, found.ds.name, found.ds.dashboardAudience);
+  const drafts = await listDraftsOnDataset(found.ds.id, found.ds.name, new Set(own.map((d) => d.name)));
+  return visibleDashboards(userId, found.ds.id, [...own, ...drafts]);
 }
 
 /** A draft whose promoted dashboard the dataset now publishes has BECOME that
@@ -195,7 +232,7 @@ function forwarded(draft: { promotedAs: string | null }, published: Set<string>)
 export async function draftForward(userId: string, datasetRef: string, name: string): Promise<string | null> {
   const slug = draftSlug(name);
   if (slug === null) return null;
-  const found = await findByDatasetRef(userId, datasetRef);
+  const found = await findByDatasetRef(userId, datasetRef, "view");
   if (!found || "preview" in found) return null;
   const [d] = await db
     .select({ promotedAs: draftDashboards.promotedAs })
@@ -257,12 +294,16 @@ export async function allDashboardsByDataset(userId: string): Promise<{
       title: datasets.title,
       description: datasets.description,
       repoSlug: repos.slug,
+      dashboardAudience: datasets.dashboardAudience,
     })
     .from(datasets)
     .leftJoin(repos, eq(datasets.repoId, repos.id))
     .where(visibleDatasetWhere(userId))
     .orderBy(desc(datasets.createdAt));
-  const dsList = rawList.map(({ repoSlug, ...ds }) => ({
+  // Which published dashboards are private, per dataset — read with the row
+  // this query already fetches, so it costs no round trip of its own.
+  const storedOf = new Map(rawList.map((ds) => [ds.id, ds.dashboardAudience]));
+  const dsList = rawList.map(({ repoSlug, dashboardAudience: _stored, ...ds }) => ({
     ...ds,
     qualified: repoSlug ? qualifiedName(repoSlug, ds.name) : ds.name,
   }));
@@ -303,7 +344,7 @@ export async function allDashboardsByDataset(userId: string): Promise<{
     for (const [modelId, rows] of perModel) {
       const dsId = datasetOfModel.get(modelId)!;
       const into = byDataset.get(dsId)!;
-      for (const a of aboutFirst(rows)) into.push(summary(dsId, nameOf.get(dsId)!, a));
+      for (const a of aboutFirst(rows)) into.push(summary(dsId, nameOf.get(dsId)!, a, storedOf.get(dsId)));
     }
   }
 
@@ -322,15 +363,28 @@ export async function allDashboardsByDataset(userId: string): Promise<{
     into.push(draftSummary(row.draft.datasetId, nameOf.get(row.draft.datasetId)!, row));
   }
 
+  // Last, over the whole tree at once: which of these may this person see? One
+  // decision for every dataset, and no query at all unless something listed is
+  // someone else's private dashboard.
+  const restrictedIn = [...byDataset]
+    .filter(([, list]) => list.some((d) => isRestrictedFor(d, userId)))
+    .map(([id]) => id);
+  if (restrictedIn.length > 0) {
+    const allow = await audienceFilter(userId, restrictedIn);
+    for (const [id, list] of byDataset) byDataset.set(id, list.filter((d) => allow(id, d)));
+  }
+
   return { datasets: dsList, byDataset };
 }
 
 /**
  * Every draft on one dataset, newest first — carrying its author, because a
  * draft is someone's work in progress and "whose?" is the first question a
- * reader has. Listed to everyone who can see the dataset, which is the same
- * rule its URL already follows (and the rule the dataset's own dashboards
- * follow).
+ * reader has.
+ *
+ * EVERY draft, private ones included, and no viewer is asked for: the caller
+ * filters with `visibleDashboards` (./audience), as `listDashboardsAndDrafts`
+ * does.
  */
 export async function listDraftsOnDataset(
   datasetId: string,
@@ -368,11 +422,12 @@ function draftSummary(
     isDraft: true,
     author: authorName || authorEmail || "unknown",
     authorId: r.userId,
+    ...(r.visibility === "private" ? { isPrivate: true } : {}),
   };
 }
 
 export async function getDashboard(userId: string, datasetId: string, name: string): Promise<DashboardDetail | null> {
-  const found = await findByDatasetRef(userId, datasetId);
+  const found = await findByDatasetRef(userId, datasetId, "view");
   if (!found) return null;
   if ("preview" in found) {
     const a = (found.preview.entry.artifacts ?? []).find((x) => x.name === name);
@@ -389,13 +444,18 @@ export async function getDashboard(userId: string, datasetId: string, name: stri
   }
   const slug = draftSlug(name);
   if (slug !== null) {
-    // Visibility is the dataset's (checked above); the slug must belong to it.
+    // The dataset's visibility is checked above; the slug must belong to it,
+    // and a private draft is its author's, the admins' and whoever it was
+    // shared with. Refused as "no such dashboard", like a dataset you cannot
+    // see: a slug is not something to confirm the existence of.
     const [d] = await db
       .select()
       .from(draftDashboards)
       .where(and(eq(draftDashboards.slug, slug), eq(draftDashboards.datasetId, found.ds.id)))
       .limit(1);
     if (d) {
+      const isPrivate = d.visibility === "private";
+      if (!(await mayOpenDashboard(userId, found.ds.id, { name, isPrivate, authorId: d.userId }))) return null;
       const entryFile =
         typeof d.manifest.entryFile === "string" ? d.manifest.entryFile : `dashboards/${d.name}.malloy`;
       return {
@@ -405,6 +465,9 @@ export async function getDashboard(userId: string, datasetId: string, name: stri
         title: d.title ?? d.name,
         manifest: d.manifest,
         source: d.source,
+        isDraft: true,
+        authorId: d.userId,
+        ...(isPrivate ? { isPrivate: true } : {}),
         // The dataset's CURRENT model, not the version this draft was saved
         // against (kept on the row as provenance): an additive model change
         // reaches a draft at once, and a real break surfaces now rather than
@@ -417,6 +480,7 @@ export async function getDashboard(userId: string, datasetId: string, name: stri
           version: d.updatedAt.toISOString(),
           authorId: d.userId,
           promotedAs: d.promotedAs,
+          visibility: d.visibility,
         },
       };
     }
@@ -430,6 +494,8 @@ export async function getDashboard(userId: string, datasetId: string, name: stri
     .where(and(eq(malloyArtifacts.modelId, found.model.id), eq(malloyArtifacts.name, name)))
     .limit(1);
   if (!a) return null;
+  const isPrivate = publishedIsPrivate(a.name, a.manifest, found.ds.dashboardAudience);
+  if (!(await mayOpenDashboard(userId, found.ds.id, { name: a.name, isPrivate }))) return null;
   return {
     datasetId,
     datasetName: found.ds.name,
@@ -438,6 +504,7 @@ export async function getDashboard(userId: string, datasetId: string, name: stri
     manifest: a.manifest,
     source: a.source,
     modelId: found.model.id,
+    ...(isPrivate ? { isPrivate: true } : {}),
   };
 }
 

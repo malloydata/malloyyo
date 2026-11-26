@@ -3,8 +3,9 @@
 
 "use client";
 
-// The interactive half of the Users tab: buttons and one form, posting to the
-// admin APIs and refreshing the server-rendered page. The two actions that
+// The membership controls on Admin → Users & roles (src/app/admin/roles):
+// buttons and one form, posting to the admin APIs and refreshing the
+// server-rendered page. The two actions that
 // take someone's access away — Disable and Deny — confirm first through the
 // house dialog (src/components/ui/dialog.tsx); everything else is reversible
 // from this same page and stays a plain button.
@@ -63,7 +64,7 @@ export function UserActions({
   const act = (action: string) => void post(action);
 
   // The server refuses these too; hiding them just keeps the row honest.
-  if (role === "owner") return <span className="text-gray-400">owner</span>;
+  if (role === "owner") return null;
 
   return (
     <span className="inline-flex flex-wrap items-center gap-1.5">
@@ -93,12 +94,9 @@ export function UserActions({
       {status === "disabled" && (
         <button className={BUTTON} disabled={busy} onClick={() => act("enable")}>Enable</button>
       )}
-      {status !== "pending" && role === "member" && (
-        <button className={BUTTON} disabled={busy} onClick={() => act("promote")}>Make admin</button>
-      )}
-      {status !== "pending" && role === "admin" && !isSelf && (
-        <button className={BUTTON} disabled={busy} onClick={() => act("demote")}>Remove admin</button>
-      )}
+      {/* No "Make admin" / "Remove admin" here any more. Being an admin is
+          holding MALLOYYO_ADMIN, which is ticked like any other role in the
+          same row's "Edit roles" — two controls for one fact was one too many. */}
       {error && <span className="text-red-600 dark:text-red-400">{error}</span>}
     </span>
   );
@@ -201,7 +199,7 @@ export function PolicyPicker({ current }: { current: "open" | "invite" }) {
 
   return (
     <div className="space-y-2 text-xs">
-      {choice("invite", "Invite only", "Newcomers wait for approval below; invited addresses get in immediately.")}
+      {choice("invite", "Invite only", "Newcomers wait for approval at the top of this page; invited addresses get in immediately.")}
       {choice("open", "Open", "Anyone who can sign in becomes a member — with a public provider, that is anyone at all.")}
       {error && <p className="text-red-600 dark:text-red-400">{error}</p>}
     </div>

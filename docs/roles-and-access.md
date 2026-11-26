@@ -1,8 +1,10 @@
 # Roles and access
 
 > **Status: shipped.** The role catalog, dataset grants, `$MALLOYYO_ROLES`, row
-> scoping and multi-dataset repos all work today. Roles are managed at
-> **Admin → Roles**; `lloydtabb/malloyyo_examples` is a live multi-dataset repo.
+> scoping and multi-dataset repos all work today. People and roles are managed
+> on one page, **Admin → Users & roles** (the tab is called **Roles** where an
+> identity provider owns sign-in, and leaves out approving, inviting and
+> disabling people, which that provider does); `lloydtabb/malloyyo_examples` is a live multi-dataset repo.
 
 Two questions decide what anyone sees, and they are answered in different
 places:
@@ -71,7 +73,7 @@ A role is a list of datasets, and for each one, what its people get there:
 | **Dashboards** | open its dashboards, and nothing else |
 | **Full** | open its dashboards, and query it — the query editor, chat, AI Q&A, the MCP connector, draft dashboards |
 
-Set them at **Admin → Roles**: pick a role, and each dataset has one three-way
+Set them at **Admin → Users & roles**: pick a role, and each dataset has one three-way
 switch.
 
 ```

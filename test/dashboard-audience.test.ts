@@ -282,7 +282,7 @@ test("an admin opens every dataset in full, holding no role on it", async () => 
 });
 
 test("the admin page's arithmetic gives the answer the server enforces", async () => {
-  // src/lib/role-access.ts is what Admin → Roles shows; datasetAccessWhere is
+  // src/lib/role-access.ts is what Admin → Users & roles shows; datasetAccessWhere is
   // what decides. If these ever disagree the page is lying about access.
   const [ds] = await db.select().from(datasets).where(eq(datasets.id, datasetId));
   const grants = [{ id: ds.id, roles: ds.roles, viewOnlyRoles: ds.viewOnlyRoles, isPublic: ds.isPublic, ownerId: ds.userId }];

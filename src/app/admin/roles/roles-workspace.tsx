@@ -3,7 +3,7 @@
 
 "use client";
 
-// The two working surfaces of Admin → Roles.
+// The two working surfaces of Admin → Users & roles.
 //
 //   RolesPanel   pick a role; set what it gets on each dataset — None,
 //                Dashboards, Full — one switch per dataset.
@@ -25,6 +25,7 @@ import {
   type RoleLevel,
 } from "@/lib/role-access";
 import { ViewAsButton } from "@/components/ViewAsButton";
+import { UserActions } from "../users/roster-controls";
 import { BTN, DeleteRoleButton, NewRoleForm, useAction } from "./role-controls";
 
 const ADMIN = "MALLOYYO_ADMIN";
@@ -52,6 +53,9 @@ export interface PersonRow {
   /** The instance owner, whose roles this page cannot change. */
   isOwner: boolean;
   isSelf: boolean;
+  /** Whether they may sign in at all. A disabled person keeps their roles —
+      enabling them gives back exactly what they had — but reaches nothing. */
+  status: "active" | "disabled";
 }
 
 /** A private dashboard shared with one person by email. */
@@ -299,7 +303,9 @@ function RoleDetail({
                   <div className="text-sm">{personLabel(p)}</div>
                   {p.name && p.email && <div className={MUTED}>{p.email}</div>}
                 </div>
-                {canViewAs && !p.isAdmin && <ViewAsButton userId={p.id} label={personLabel(p)} />}
+                {canViewAs && !p.isAdmin && p.status === "active" && (
+                  <ViewAsButton userId={p.id} label={personLabel(p)} />
+                )}
               </div>
             ))}
           </div>
@@ -347,6 +353,7 @@ export function PeoplePanel({
   datasets,
   shared,
   canViewAs,
+  manageMembership,
 }: {
   people: PersonRow[];
   roles: RoleRow[];
@@ -354,6 +361,9 @@ export function PeoplePanel({
   /** Private dashboards shared with each person, by user id. */
   shared: Record<string, SharedDashboard[]>;
   canViewAs?: boolean;
+  /** Offer Disable / Enable on each person. Only where this application owns
+      sign-in: where an integration does, membership is decided there. */
+  manageMembership?: boolean;
 }) {
   const [open, setOpen] = useState<string | null>(null);
   return (
@@ -403,9 +413,17 @@ export function PeoplePanel({
                       <path d="M9 6l6 6-6 6" />
                     </svg>
                     <span className="min-w-0">
-                      <span className="block truncate text-sm">
-                        {personLabel(p)}
-                        {p.isSelf && <span className="ml-1 text-xs text-gray-500">(you)</span>}
+                      {/* The name gives way before the tags do: "disabled" cut
+                          to "disabl…" reads as a broken row, a long name cut
+                          short still reads as a name. */}
+                      <span className="flex min-w-0 items-baseline text-sm">
+                        <span className="truncate">{personLabel(p)}</span>
+                        {p.isSelf && <span className="ml-1 shrink-0 text-xs text-gray-500">(you)</span>}
+                        {p.status === "disabled" && (
+                          <span className="ml-1.5 shrink-0 rounded border border-gray-400 px-1 text-xs text-gray-600 dark:border-gray-600 dark:text-gray-400">
+                            disabled
+                          </span>
+                        )}
                       </span>
                       {p.name && p.email && <span className={`block truncate ${MUTED}`}>{p.email}</span>}
                     </span>
@@ -428,13 +446,17 @@ export function PeoplePanel({
                       <LevelBadge level="query" />
                       <span className="text-xs">Every dataset, and this admin panel</span>
                     </div>
+                  ) : p.status === "disabled" ? (
+                    // Their roles are untouched, and add up to nothing while they
+                    // cannot sign in. Showing the sum would read as access.
+                    <span className={MUTED}>Nothing: cannot sign in.</span>
                   ) : (
                     <AccessSummary access={access} datasets={datasets} />
                   )}
                   <div className="text-right">
                     {p.isAdmin ? (
                       canViewAs ? <span className={MUTED}>admins cannot be viewed as</span> : null
-                    ) : canViewAs ? (
+                    ) : canViewAs && p.status === "active" ? (
                       <ViewAsButton userId={p.id} label={personLabel(p)} />
                     ) : null}
                   </div>
@@ -449,6 +471,7 @@ export function PeoplePanel({
                       roles={roles}
                       datasets={datasets}
                       shared={shared[p.id] ?? []}
+                      manageMembership={manageMembership}
                     />
                   </div>
                 )}
@@ -472,11 +495,13 @@ function PersonDetail({
   roles,
   datasets,
   shared,
+  manageMembership,
 }: {
   person: PersonRow;
   roles: RoleRow[];
   datasets: DatasetRow[];
   shared: SharedDashboard[];
+  manageMembership?: boolean;
 }) {
   const { run, busy, error } = useAction();
   const [editing, setEditing] = useState(false);
@@ -649,6 +674,17 @@ function PersonDetail({
           <button type="button" className={BTN} onClick={() => setEditing(true)}>
             Edit roles
           </button>
+        )}
+        {/* Whether they may sign in at all — beside the roles, because it is
+            the other half of "what can this person reach". */}
+        {manageMembership && !editing && (
+          <UserActions
+            userId={person.id}
+            status={person.status}
+            role={person.isOwner ? "owner" : person.isAdmin ? "admin" : "member"}
+            isSelf={person.isSelf}
+            label={personLabel(person)}
+          />
         )}
         {error && <span className="text-xs text-red-600 dark:text-red-400">{error}</span>}
       </div>

@@ -6,7 +6,7 @@
 import { useState } from "react";
 
 /**
- * "View as" beside a person on Admin → Roles: start seeing the app exactly as
+ * "View as" beside a person on Admin → Users & roles: start seeing the app exactly as
  * they do, and go to their home page. Stopping is the banner's job
  * (ViewAsBanner), which is on every page from then on.
  *

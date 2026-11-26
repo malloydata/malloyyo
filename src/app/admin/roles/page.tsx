@@ -1,15 +1,39 @@
 // Copyright (c) The Malloy Foundation
 // SPDX-License-Identifier: MIT
 
-// Roles: what people may do, and which datasets they may open.
+// Users & roles: who may use this instance, what each of them can reach, and
+// what each role opens.
 //
-// Ordered the way the question is usually asked — what roles exist, what each
-// one opens, who holds it — with the new-arrival default last, because it is
-// set once and then forgotten.
+// One page, because it is one question. This used to be two tabs — "Users"
+// (the roster: approve, invite, disable, make admin) and "Roles" (what roles
+// open, and who holds them) — which listed the same people twice and gave
+// "is an admin" two controls. Now a person has one row: their roles, what
+// those add up to, and whether they may sign in.
+//
+// Ordered by how often each part is used: people waiting to be let in, then
+// the people and what they get, then the roles themselves, then the settings
+// that are made once (what new arrivals get, who may join, row scoping).
+//
+// WHERE AN INTEGRATION OWNS SIGN-IN, membership is decided there, not here:
+// the approval queue, invitations, the admission policy and Disable/Enable are
+// left out, and the tab is called "Roles" (src/lib/admin-tabs.ts). Which
+// datasets those people may open is still this instance's to say, so
+// everything else is the same.
 
-import { asc, desc, eq } from "drizzle-orm";
-import { dashboardGrants, db, datasets, givens as givensTable, roles as rolesTable, users } from "@/db";
+import { asc, desc, eq, isNull } from "drizzle-orm";
+import {
+  dashboardGrants,
+  db,
+  datasets,
+  givens as givensTable,
+  invitations,
+  roles as rolesTable,
+  users,
+} from "@/db";
 import { requireAdminPage } from "@/lib/admin";
+import { getAccessPolicy } from "@/lib/access-policy";
+import { hostedSignIn } from "@/lib/hosted-auth-integration";
+import { InviteForm, PolicyPicker, RevokeInviteButton, UserActions } from "../users/roster-controls";
 import { defaultRoles, MALLOYYO_ADMIN, NEVER_A_DEFAULT, rolesOf } from "@/lib/roles";
 import { datasetTitle } from "@malloyyo/mcp-engine";
 import { DatasetGivens, DefaultRoles } from "./role-controls";
@@ -27,7 +51,11 @@ const THEAD =
 export default async function AdminRolesPage() {
   const me = await requireAdminPage();
 
-  const [catalog, dsRows, people, fallback, givenCatalog, grants] = await Promise.all([
+  // Whether membership is this application's to manage. Where an integration
+  // owns sign-in it is not, and the admission controls below are left out.
+  const ownsSignIn = !hostedSignIn();
+
+  const [catalog, dsRows, people, fallback, givenCatalog, grants, openInvites, policy] = await Promise.all([
     db.select().from(rolesTable).orderBy(asc(rolesTable.builtin), asc(rolesTable.name)),
     // Ready datasets only. A failed or half-built row cannot be opened by
     // anyone, and listing it here means two rows with the same label and no
@@ -59,7 +87,12 @@ export default async function AdminRolesPage() {
         dashboard: dashboardGrants.dashboard,
       })
       .from(dashboardGrants),
+    ownsSignIn
+      ? db.select().from(invitations).where(isNull(invitations.acceptedAt)).orderBy(asc(invitations.createdAt))
+      : Promise.resolve([]),
+    ownsSignIn ? getAccessPolicy() : Promise.resolve(null),
   ]);
+  const pending = ownsSignIn ? people.filter((u) => u.status === "pending") : [];
 
   const allRoleNames = catalog.map((r) => r.name);
   // Title for reading, NAME underneath. This page is where access is decided,
@@ -88,6 +121,7 @@ export default async function AdminRolesPage() {
         isAdmin: held.includes(MALLOYYO_ADMIN),
         isOwner: u.role === "owner",
         isSelf: u.id === me.id,
+        status: u.status === "disabled" ? ("disabled" as const) : ("active" as const),
       };
     });
   const shared: Record<string, SharedDashboard[]> = {};
@@ -96,9 +130,105 @@ export default async function AdminRolesPage() {
 
   return (
     <div className="flex flex-col gap-10">
+      {pending.length > 0 && (
+        <section className="flex flex-col gap-3">
+          <h2 className="text-sm font-medium text-amber-700 dark:text-amber-400">Waiting for approval</h2>
+          <div className="overflow-hidden rounded border border-amber-300 dark:border-amber-700">
+            <table className="w-full text-xs">
+              <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+                {pending.map((u) => (
+                  <tr key={u.id}>
+                    <td className="px-4 py-2">{u.name ?? <span className="text-gray-400">—</span>}</td>
+                    <td className="px-4 py-2 text-gray-600 dark:text-gray-400">{u.email ?? "—"}</td>
+                    <td className="px-4 py-2 text-gray-500">{u.createdAt.toISOString().slice(0, 10)}</td>
+                    <td className="px-4 py-2 text-right">
+                      <UserActions
+                        userId={u.id}
+                        status={u.status}
+                        role={u.role}
+                        isSelf={u.id === me.id}
+                        label={u.name ?? u.email ?? "this user"}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      <PeoplePanel
+        people={members}
+        roles={roleRows}
+        datasets={allDatasets}
+        shared={shared}
+        canViewAs
+        manageMembership={ownsSignIn}
+      />
+
       <RolesPanel roles={roleRows} datasets={allDatasets} people={members} canViewAs />
 
-      <PeoplePanel people={members} roles={roleRows} datasets={allDatasets} shared={shared} canViewAs />
+      <section className="flex flex-col gap-2">
+        <div>
+          <h2 className="text-sm font-medium">New users get</h2>
+          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 max-w-2xl">
+            The roles someone holds the first time they sign in. If none of them opens a
+            dataset, a new person signs in to an empty page until you give them a role.
+          </p>
+        </div>
+        <DefaultRoles
+          key={fallback.join(",")}
+          all={allRoleNames.filter((r) => !NEVER_A_DEFAULT.includes(r))}
+          current={fallback}
+        />
+      </section>
+
+      {ownsSignIn && policy && (
+        <section className="flex flex-col gap-3">
+          <div>
+            <h2 className="text-sm font-medium">Invite</h2>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 max-w-2xl">
+              An invited address is admitted the moment it first signs in, with no approval step, and gets
+              the roles under &ldquo;New users get&rdquo;.
+            </p>
+          </div>
+          <InviteForm />
+          {openInvites.length > 0 && (
+            <div className={TABLE_WRAP}>
+              <table className="w-full text-xs">
+                <thead className={THEAD}>
+                  <tr>
+                    <th className={TH}>invited</th>
+                    <th className={TH}>role</th>
+                    <th className={TH}>since</th>
+                    <th className={TH} />
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100 dark:divide-gray-800">
+                  {openInvites.map((i) => (
+                    <tr key={i.id}>
+                      <td className="px-4 py-2 text-gray-600 dark:text-gray-400">{i.email}</td>
+                      <td className="px-4 py-2">{i.role}</td>
+                      <td className="px-4 py-2 text-gray-500">{i.createdAt.toISOString().slice(0, 10)}</td>
+                      <td className="px-4 py-2 text-right">
+                        <RevokeInviteButton id={i.id} />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      )}
+
+      {ownsSignIn && policy && (
+        <section className="flex flex-col gap-3">
+          <h2 className="text-sm font-medium">Who may join</h2>
+          <PolicyPicker current={policy} />
+        </section>
+      )}
 
       <section className="flex flex-col gap-3">
         <div>
@@ -144,21 +274,6 @@ export default async function AdminRolesPage() {
             </tbody>
           </table>
         </div>
-      </section>
-
-      <section className="flex flex-col gap-2">
-        <div>
-          <h2 className="text-sm font-medium">New users get</h2>
-          <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 max-w-2xl">
-            The roles someone holds the first time they sign in. If none of them opens a
-            dataset, a new person signs in to an empty page until you give them a role.
-          </p>
-        </div>
-        <DefaultRoles
-          key={fallback.join(",")}
-          all={allRoleNames.filter((r) => !NEVER_A_DEFAULT.includes(r))}
-          current={fallback}
-        />
       </section>
     </div>
   );

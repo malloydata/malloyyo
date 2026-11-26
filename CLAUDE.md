@@ -287,7 +287,7 @@ publish rights. Full guide: `docs/api-tokens.md`.
 ## Who sees what: three layers, and only the first is a boundary
 
 1. **Dataset access, with a level.** A role has a level per dataset — none,
-   dashboards (`view`) or full (`query`) — set at Admin → Roles. On the dataset
+   dashboards (`view`) or full (`query`) — set at Admin → Users & roles. On the dataset
    row: `roles` (every role with any access) and `view_only_roles` (the subset
    that may only view); a role in the first and not the second is full, so
    every grant from before levels existed is full. Someone's level is the best

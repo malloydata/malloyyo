@@ -532,7 +532,7 @@ export const datasets = pgTable(
      * access — dashboards plus the query editor, chat and the MCP connector.
      *
      * So one role holds a level per dataset (none / dashboards / full), which is
-     * what Admin → Roles edits. Someone's level on a dataset is the best any of
+     * what Admin → Users & roles edits. Someone's level on a dataset is the best any of
      * their roles gives them there. A second array rather than a table of
      * (role, dataset, level) because `roles` is what every read path already
      * tests, and a role listed there with nothing here is exactly the full

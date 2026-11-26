@@ -492,6 +492,10 @@ export type WebRunOpts = {
   authorModel?: string | null;
   question?: string | null;
   entrypoint?: QueryEntrypoint;
+  /** False: run, and write nothing — no history row, no share slug. For an
+      admin viewing as this user (src/lib/view-as.ts): the rows are what that
+      person would get, and nothing appears in their history for it. */
+  record?: boolean;
 };
 
 // Run a Malloy query for the web UI, recording it to history (a browser run —
@@ -538,11 +542,14 @@ export async function runQueryForWeb(
     });
     const durationMs = Date.now() - t0;
     const capped = res.rows.slice(0, maxRows);
-    const { slug } = await recordHistory({
-      userId, entrypoint: opts.entrypoint ?? "ltool", datasetId: ds.id, toolName: "query", question: opts.question ?? null,
-      source, malloyInput: malloyQuery, compiledSql: res.sql, rowCount: res.rowCount, durationMs,
-      executed: true, userAgent: opts.userAgent, authorModel: opts.authorModel, mintSlug: !isPreview,
-    });
+    const { slug } =
+      opts.record === false
+        ? { slug: null }
+        : await recordHistory({
+            userId, entrypoint: opts.entrypoint ?? "ltool", datasetId: ds.id, toolName: "query", question: opts.question ?? null,
+            source, malloyInput: malloyQuery, compiledSql: res.sql, rowCount: res.rowCount, durationMs,
+            executed: true, userAgent: opts.userAgent, authorModel: opts.authorModel, mintSlug: !isPreview,
+          });
     return {
       ok: true,
       slug,
@@ -556,11 +563,13 @@ export async function runQueryForWeb(
   } catch (err) {
     const durationMs = Date.now() - t0;
     const msg = err instanceof Error ? err.message : String(err);
-    await recordHistory({
-      userId, entrypoint: opts.entrypoint ?? "ltool", datasetId: ds.id, toolName: "query", question: opts.question ?? null,
-      source, malloyInput: malloyQuery, durationMs, executed: true, error: msg,
-      userAgent: opts.userAgent, authorModel: opts.authorModel,
-    });
+    if (opts.record !== false) {
+      await recordHistory({
+        userId, entrypoint: opts.entrypoint ?? "ltool", datasetId: ds.id, toolName: "query", question: opts.question ?? null,
+        source, malloyInput: malloyQuery, durationMs, executed: true, error: msg,
+        userAgent: opts.userAgent, authorModel: opts.authorModel,
+      });
+    }
     return { ok: false, error: msg };
   }
 }

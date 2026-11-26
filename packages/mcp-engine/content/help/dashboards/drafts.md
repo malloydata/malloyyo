@@ -151,6 +151,13 @@ work from. Then `malloyyo lint`, and the usual PR.
 
 `malloyyo draft promote` records the promotion itself.
 
+Recording a promotion takes an admin, for anyone's draft — it is usually
+someone else's. Without one, the files can still be written into a clone and
+proposed; the draft keeps working, and an admin records it when it ships.
+Recording also carries the draft's audience over: the published dashboard is
+private or open as the draft was, shared with the same people, and a private
+one is shared with the draft's author too.
+
 **What happens to the draft.** Once the dataset publishes the promoted
 dashboard, the draft's URL **redirects** to it, keeping any query string, and
 the draft drops out of listings. Saved links keep working, and nobody picks the

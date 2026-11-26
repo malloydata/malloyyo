@@ -691,7 +691,8 @@ function registerAuthoringTools(server: McpServer, scope: RequestScope): void {
         `dashboard's name there, i.e. dashboards/<promoted_as>.malloy). Call it after the files are ` +
         `committed. Once the dataset publishes that dashboard, the draft's link redirects to it and the ` +
         `draft leaves the listings, so saved links keep working. Until then the draft still serves. ` +
-        `The draft's author records it.`,
+        `Admins only, for anyone's draft: the published dashboard also takes the draft's audience ` +
+        `(private or open, and the people it is shared with).`,
       annotations: { readOnlyHint: false },
       inputSchema: fromJsonSchema<PromotedArgs>({
         type: "object",
@@ -706,8 +707,14 @@ function registerAuthoringTools(server: McpServer, scope: RequestScope): void {
     logged(scope, PROMOTED_DRAFT_TOOL, async (a: PromotedArgs) => {
       const name = a.promoted_as.trim();
       if (!name || draftSlug(name) !== null) return fail(`'${a.promoted_as}' isn't a dashboard name a repo publishes.`);
-      const outcome = await recordPromotion(userId, a.dataset, slugOf(a.dashboard), { name });
-      if (outcome === "not-yours") return fail("That draft belongs to someone else; its author records its promotion.");
+      const outcome = await recordPromotion(scope.user, a.dataset, slugOf(a.dashboard), { name });
+      if (outcome === "not-admin") {
+        return fail(
+          "Only an admin records a promotion: it decides who can see the published dashboard. " +
+            "The draft still works; ask an admin to promote it.",
+        );
+      }
+      if (outcome === "bad-name") return fail(`'${a.promoted_as}' isn't a dashboard name a repo publishes.`);
       if (outcome === "not-found") return fail(`No draft '${a.dashboard}' in '${a.dataset}'.`);
       const live = await draftForward(userId, a.dataset, `${DRAFT_PREFIX}${slugOf(a.dashboard)}`);
       return {

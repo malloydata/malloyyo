@@ -30,9 +30,13 @@ export async function GET(req: Request, ctx: Ctx) {
  * into a repo as `name`, with a hash of what was written. Body: { name, hash }.
  *
  * Records, never deletes: the draft stays the only usable copy until the model
- * version carrying it is live, and its URL keeps working afterwards. The
- * draft's own author records it; anyone who can see the dataset may still read
- * the files above and write them into a checkout.
+ * version carrying it is live, and its URL keeps working afterwards.
+ *
+ * An ADMIN records it, for anyone's draft — promotion ends in a publish, and it
+ * copies the draft's audience onto the published dashboard (see
+ * `recordPromotion`). Anyone who can open the draft may still read the files
+ * above and write them into a checkout; a 403 here leaves that untouched, which
+ * is what `malloyyo draft promote` relies on.
  */
 export async function POST(req: Request, ctx: Ctx) {
   const auth = await requireBearer(req, { scope: "mcp" });
@@ -47,14 +51,28 @@ export async function POST(req: Request, ctx: Ctx) {
   const hash = String(body.hash ?? "");
   if (!name || !hash) return NextResponse.json({ ok: false, error: "name and hash are required" }, { status: 400 });
   const { id, slug } = await ctx.params;
-  const outcome = await recordPromotion(auth.user.id, id, slug, { name, hash });
-  if (outcome === "recorded") return NextResponse.json({ ok: true, promotedAs: name });
-  return outcome === "not-yours"
-    ? NextResponse.json(
-        { ok: false, error: "that draft belongs to someone else — its own author records a promotion" },
+  const outcome = await recordPromotion(auth.user, id, slug, { name, hash });
+  switch (outcome) {
+    case "recorded":
+      return NextResponse.json({ ok: true, promotedAs: name.trim() });
+    case "not-admin":
+      return NextResponse.json(
+        {
+          ok: false,
+          error:
+            "only an admin records a promotion — it decides who can see the published dashboard. " +
+            "Ask an admin to promote this draft, or to record it once it is published",
+        },
         { status: 403 },
-      )
-    : NextResponse.json({ ok: false, error: `no draft '${slug}' in '${id}'` }, { status: 404 });
+      );
+    case "bad-name":
+      return NextResponse.json(
+        { ok: false, error: `'${name}' isn't a dashboard name a repo publishes` },
+        { status: 400 },
+      );
+    default:
+      return NextResponse.json({ ok: false, error: `no draft '${slug}' in '${id}'` }, { status: 404 });
+  }
 }
 
 /**

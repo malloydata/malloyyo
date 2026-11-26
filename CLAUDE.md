@@ -315,13 +315,19 @@ publish rights. Full guide: `docs/api-tokens.md`.
    republish. Writes are `src/lib/dashboards/sharing.ts`, behind
    `/api/dashboards/:ds/:name/sharing`; the UI is `DashboardShare` in the
    dataset nav. `recordPromotion` copies a draft's setting and people to the
-   published name, so promotion never changes who can see a dashboard.
+   published name (and adds the author to a private one), so promotion never
+   changes who can see a dashboard. It is ADMIN-ONLY, for anyone's draft: the
+   target name is whatever the caller says, so the copy must not be available
+   to someone who could not change that dashboard's audience directly.
 3. **Viewing as** — `src/lib/view-as.ts`. An admin sees the app as a non-admin
    user. The swap is in `getSessionUser()` (`src/lib/user.ts`), re-decided per
    request from a cookie that grants nothing by itself; `getRealSessionUser()`
    is for the start/stop route only. LOOK-ONLY: while viewing as someone,
-   `getSessionUser()` refuses every non-GET except `/api/dashboards/run`, using
-   the method/path headers `src/proxy.ts` sets. Bearer credentials are
+   `getSession()` refuses every non-GET except the two POSTs that run a query —
+   `/api/dashboards/run` and `/api/run` — using the method/path headers
+   `src/proxy.ts` sets. A route on that list must itself write nothing as the
+   target: `/api/run` reads `viewedBy` off `getSession()` and runs with
+   `record: false` (no history row, no slug, no save). Bearer credentials are
    unaffected.
 
 The dashboards level and private dashboards are **curation, not security** — a

@@ -58,6 +58,17 @@ export async function getRealSessionUser(): Promise<User> {
   return u;
 }
 
+/** Who a request acts as — and, while an admin is viewing as them, who is
+    really there. */
+export interface SessionIdentity {
+  /** The identity every page and route acts as. */
+  user: User;
+  /** Set only while an admin is VIEWING AS `user`: the admin. A route that is
+      allowed to run during a view-as reads this to know it must leave no trace
+      as `user` (src/lib/view-as.ts). */
+  viewedBy?: User;
+}
+
 /**
  * The user this request acts as: whoever is signed in — or, while an admin is
  * VIEWING AS someone, that person.
@@ -65,13 +76,14 @@ export async function getRealSessionUser(): Promise<User> {
  * Viewing as (src/lib/view-as.ts) swaps the identity here, in the one function
  * every page and session route already goes through, so the admin sees exactly
  * what that person sees: their datasets, their dashboards, their rows under
- * row scoping, and no admin pages. It is LOOK-ONLY. Anything that would write
- * as them is refused below, except the one read that is a POST.
+ * row scoping, and no admin pages. It is LOOK-ONLY: a request that would
+ * change something as them is refused below. Running a query is not a change,
+ * and those routes are let through — see `viewAsAllows`.
  */
-export async function getSessionUser(): Promise<User> {
+export async function getSession(): Promise<SessionIdentity> {
   const real = await getRealSessionUser();
   const target = await viewedAs(real);
-  if (!target) return real;
+  if (!target) return { user: real };
 
   const request = await requestLine();
   if (!viewAsAllows(request.method, request.path)) {
@@ -80,14 +92,12 @@ export async function getSessionUser(): Promise<User> {
         "Stop viewing as them to make changes.",
     );
   }
-  return target;
+  return { user: target, viewedBy: real };
 }
 
-/** Who is being viewed as, and by whom — for the banner and for stopping. */
-export async function getViewAs(): Promise<{ real: User; target: User } | null> {
-  const real = await getRealSessionUser();
-  const target = await viewedAs(real);
-  return target ? { real, target } : null;
+/** `getSession()`, for the many callers that only need who to act as. */
+export async function getSessionUser(): Promise<User> {
+  return (await getSession()).user;
 }
 
 /**

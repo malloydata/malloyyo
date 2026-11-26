@@ -16,13 +16,16 @@ test("reads go ahead while viewing as someone", () => {
   }
 });
 
-test("a dashboard's data is a read, though it is asked for with a POST", () => {
+test("running a query goes ahead, though it is asked for with a POST", () => {
+  // Seeing what a person's queries return is how row scoping on a multi-tenant
+  // dataset gets tested. Each of these routes is then responsible for leaving
+  // no trace as that person.
   assert.ok(viewAsAllows("POST", "/api/dashboards/run"));
+  assert.ok(viewAsAllows("POST", "/api/run"));
 });
 
 test("everything that would write as them is refused", () => {
   const writes: [string, string][] = [
-    ["POST", "/api/run"], // records history under their name
     ["POST", "/api/ask"],
     ["POST", "/api/chats"],
     ["POST", "/api/tokens"], // would mint a credential that is theirs
@@ -32,6 +35,8 @@ test("everything that would write as them is refused", () => {
     ["PATCH", "/api/dashboards/sales/overview/sharing"],
     ["POST", "/api/dashboards/run/"], // exact path only: no prefix games
     ["POST", "/api/dashboards/runaway"],
+    ["POST", "/api/run/anything"],
+    ["DELETE", "/api/run"], // the path alone is not the permission; a query run is a POST
   ];
   for (const [method, path] of writes) assert.ok(!viewAsAllows(method, path), `${method} ${path}`);
 });

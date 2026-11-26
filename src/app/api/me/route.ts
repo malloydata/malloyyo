@@ -8,7 +8,7 @@ import { isAdmin } from "@/lib/admin";
 import { getSettings } from "@/lib/settings";
 import { env } from "@/lib/env";
 import { configuredAuthProviders, partialAuthProviders } from "@/lib/auth-providers";
-import { getSessionUser, getViewAs, UnauthorizedError } from "@/lib/user";
+import { getSession, UnauthorizedError } from "@/lib/user";
 import { askConfig, askEnabled } from "@/lib/ask";
 import { hostedSignIn } from "@/lib/hosted-auth-integration";
 import { signInPath, signOutPath } from "@/lib/auth-paths";
@@ -46,8 +46,13 @@ export async function GET() {
   // "disabled" is revoked. getSessionUser throws the reason; the landing page
   // renders it instead of a sign-in button that would loop them straight back.
   let accessState: "pending" | "disabled" | undefined;
+  let viewingAs = false;
   try {
-    u = await getSessionUser();
+    // One lookup for both answers: who this request acts as, and — while an
+    // admin is viewing as them — that it is a view-as, for the banner.
+    const session = await getSession();
+    u = session.user;
+    viewingAs = !!session.viewedBy;
   } catch (err) {
     if (!(err instanceof UnauthorizedError)) throw err;
     if (err.message === "pending" || err.message === "disabled") accessState = err.message;
@@ -80,11 +85,10 @@ export async function GET() {
     });
   }
   const claudeConnected = await hasActiveClaudeConnection(u.id);
-  // An admin viewing as someone: `u` above is already THAT person, so the rest
-  // of this answer is theirs. This says so, for the banner on every page.
-  const viewAs = await getViewAs().catch(() => null);
   return NextResponse.json({
-    ...(viewAs ? { viewingAs: { name: viewAs.target.name, email: viewAs.target.email } } : {}),
+    // An admin viewing as someone: `u` is already THAT person, so the rest of
+    // this answer is theirs. This says so, for the banner on every page.
+    ...(viewingAs ? { viewingAs: { name: u.name, email: u.email } } : {}),
     instanceName: env.INSTANCE_NAME,
     tagline,
     signinNotice,

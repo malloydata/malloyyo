@@ -219,8 +219,9 @@ export async function draftPromote(
       body: JSON.stringify({ name, hash: hash.digest("hex").slice(0, 16) }),
     });
   } catch (e) {
-    // Someone else's draft: the files are still worth having — that is how a
-    // colleague moves a draft into the repo — but its author's row is theirs.
+    // Not an admin: the files are still worth having — writing them into a
+    // checkout is how anyone proposes a draft for the repo — but recording a
+    // promotion is an admin's, because it sets who sees the published dashboard.
     if (e instanceof DraftRequestError && e.status === 403) unrecorded = e.message;
     else throw e;
   }

@@ -23,7 +23,8 @@
 //   • private means admins + its author + the people it is shared with — in
 //     every listing AND at the one lookup every route goes through
 //   • sharing never opens a dataset
-//   • promoting a draft copies its audience to the published dashboard
+//   • an admin records a promotion, for anyone's draft, and it copies the
+//     draft's audience (and its author) to the published dashboard
 //
 // Run via `npm run test:hosted`.
 
@@ -39,6 +40,7 @@ import {
   malloyArtifacts,
   draftDashboards,
   dashboardGrants,
+  history,
   type User,
 } from "@/db";
 import { allDashboardsByDataset, getDashboard, listDashboards, listDashboardsAndDrafts } from "@/lib/dashboards";
@@ -47,7 +49,7 @@ import { getSharing, setDashboardVisibility, shareDashboard, unshareDashboard } 
 import { MALLOYYO_ADMIN, MALLOYYO_USER } from "@/lib/roles";
 import { resolveAccess } from "@/lib/role-access";
 import { buildHostedExploreSurface } from "@/lib/mcp-host";
-import { canQueryDataset, findByDatasetRef, findBySource } from "@/lib/mcp-tools";
+import { canQueryDataset, findByDatasetRef, findBySource, runQueryForWeb } from "@/lib/mcp-tools";
 
 const DS = "audience";
 let admin: User, author: User, member: User, viewer: User, outsider: User;
@@ -392,12 +394,42 @@ test("a draft's author opens it to the dataset, closes it, and shares it with on
   assert.ok((await getSharing(admin, DS, "draft-mine")).ok);
 });
 
-test("promoting a draft copies who can see it to the published dashboard", async () => {
-  // `mine` is private and shared with `member`. Its author records that it was
-  // promoted as `forecast` — the moment its link is pointed at the published
-  // dashboard — and from then `forecast` has the draft's audience, whatever
-  // the promoted file's tag says (here: nothing, i.e. open).
-  assert.equal(await recordPromotion(author.id, DS, "mine", { name: "forecast" }), "recorded");
+test("a query can be run for someone and leave nothing behind as them", async () => {
+  // What the query editor does while an admin is viewing as this person
+  // (src/app/api/run/route.ts): the run is theirs — their datasets, their
+  // identity for row scoping — and nothing is written under their name.
+  const historyOf = async () => (await db.select().from(history).where(eq(history.userId, member.id))).length;
+  const before = await historyOf();
+  const quiet = await runQueryForWeb(member, "s", "run: s -> { select: n }", 10, DS, { record: false });
+  assert.ok(quiet.ok, quiet.ok ? "" : quiet.error);
+  if (!quiet.ok) return;
+  assert.deepEqual(quiet.rows, [{ n: 1 }]);
+  assert.equal(quiet.slug, null, "no share link was minted");
+  assert.equal(await historyOf(), before, "and no history row was written");
+  // A failing run is as quiet as a successful one.
+  const broken = await runQueryForWeb(member, "s", "run: s -> { select: nope }", 10, DS, { record: false });
+  assert.ok(!broken.ok);
+  assert.equal(await historyOf(), before);
+
+  // It is still THEIR run: a dataset they cannot query is not there for it.
+  const refused = await runQueryForWeb(viewer, "s", "run: s -> { select: n }", 10, DS, { record: false });
+  assert.ok(!refused.ok);
+
+  // An ordinary run does record, as it always has.
+  const loud = await runQueryForWeb(member, "s", "run: s -> { select: n }", 10, DS);
+  assert.ok(loud.ok && loud.slug);
+  assert.equal(await historyOf(), before + 1);
+});
+
+test("an admin records the promotion of someone else's draft, and it keeps its audience", async () => {
+  // The ordinary case: a member built `mine` (private, shared with `member`)
+  // and an ADMIN moves it into the repo as `forecast`. Recording that is the
+  // moment the draft's link is pointed at the published dashboard, and from
+  // then `forecast` has the draft's audience — whatever the promoted file's
+  // tag says (here: nothing, i.e. open).
+  assert.equal(await recordPromotion(admin, DS, "mine", { name: "forecast" }), "recorded");
+  const [draft] = await db.select().from(draftDashboards).where(eq(draftDashboards.slug, "mine"));
+  assert.equal(draft.promotedAs, "forecast", "recorded on a draft that is not the admin's own");
   const [ds] = await db.select().from(datasets).where(eq(datasets.id, datasetId));
   assert.equal(ds.dashboardAudience.forecast, "private");
 
@@ -412,21 +444,43 @@ test("promoting a draft copies who can see it to the published dashboard", async
 
   // The same people as before: the person it was shared with…
   assert.ok(await getDashboard(member.id, DS, "forecast"));
-  // …its author, who saw the draft because it was theirs and must not lose the
-  // dashboard the day it ships…
+  // …its ORIGINAL AUTHOR, who saw the draft because it was theirs and must not
+  // lose the dashboard the day it ships — though it was the admin who promoted…
   assert.ok(await getDashboard(author.id, DS, "forecast"));
   // …admins — and nobody else.
   assert.ok(await getDashboard(admin.id, DS, "forecast"));
   assert.equal(await getDashboard(viewer.id, DS, "forecast"), null);
 
   // An OPEN draft promotes to an open dashboard even into a file tagged private.
-  assert.equal(await recordPromotion(author.id, DS, "everyones", { name: "secret" }), "recorded");
+  assert.equal(await recordPromotion(admin, DS, "everyones", { name: "secret" }), "recorded");
   assert.ok(await getDashboard(viewer.id, DS, "secret"), "the draft was open, so the published one is");
   await db.update(datasets).set({ dashboardAudience: {} }).where(eq(datasets.id, datasetId));
   await db
     .update(draftDashboards)
     .set({ promotedAs: null, promotedHash: null, promotedAt: null })
     .where(eq(draftDashboards.datasetId, datasetId));
+});
+
+test("recording a promotion is an admin's, because of what it writes", async () => {
+  // The target name is whatever the caller says. If a draft's author could
+  // record it, they could name a private published dashboard and take its
+  // audience: open it to the dataset with an open draft, or — with a private
+  // one — add themselves to its people.
+  assert.equal(await getDashboard(author.id, DS, "secret"), null, "private, and not theirs");
+  assert.equal(await recordPromotion(author, DS, "everyones", { name: "secret" }), "not-admin");
+  assert.equal(await recordPromotion(author, DS, "mine", { name: "secret" }), "not-admin");
+  assert.equal(await getDashboard(author.id, DS, "secret"), null, "still private, still not theirs");
+  const [ds] = await db.select().from(datasets).where(eq(datasets.id, datasetId));
+  assert.deepEqual(ds.dashboardAudience, {}, "nothing was written");
+  const [draft] = await db.select().from(draftDashboards).where(eq(draftDashboards.slug, "mine"));
+  assert.equal(draft.promotedAs, null);
+  // The same answer whether or not the draft exists.
+  assert.equal(await recordPromotion(author, DS, "no-such-draft", { name: "x" }), "not-admin");
+
+  // And a draft's own address is never a promotion target, even for an admin:
+  // that would be re-audiencing another draft.
+  assert.equal(await recordPromotion(admin, DS, "mine", { name: "draft-everyones" }), "bad-name");
+  assert.equal(await recordPromotion(admin, DS, "mine", { name: "  " }), "bad-name");
 });
 
 test("deleting a draft takes its shares with it", async () => {

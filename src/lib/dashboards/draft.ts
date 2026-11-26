@@ -526,28 +526,49 @@ export async function getDraftFiles(userId: string, datasetRef: string, slug: st
 
 /**
  * Record that a draft was written into a repo as `name`, with a hash of what
- * was written.
+ * was written — and give the published dashboard the draft's audience.
  *
  * NOT a delete and NOT a lock. The draft stays the only usable copy until the
  * model version carrying the promoted dashboard goes live, people hold its
  * URL, and nothing bad happens if it keeps being edited afterwards — the hash
  * is what shows the two have diverged.
  *
- * The draft's OWNER writes this, as with saving one: the record is what a
- * later forward and any divergence check read, so it should say what the
- * author did, not what a passer-by did with a copy. Anyone who can see the
- * dataset may still read the files and write them into a checkout.
+ * AN ADMIN records it, for ANYONE's draft. Promotion is an admin's job — it
+ * ends in a publish, which only an admin can do — and it is usually someone
+ * else's draft they are promoting. This used to be the reverse: only the
+ * draft's own author could record it, so in the ordinary case (a member builds
+ * a draft, an admin moves it into the repo) nothing was recorded at all: the
+ * draft's link never forwarded and the draft stayed listed beside its copy.
+ *
+ * It is also admin-only because of what it now WRITES. Recording copies the
+ * draft's audience onto the published name, and that name is whatever the
+ * caller says — there is no mechanical way to check a hand-written file really
+ * is this draft. Someone who may not change a published dashboard's audience
+ * must not be able to do it by calling this with that dashboard's name. An
+ * admin already may, so for them the copy grants nothing they lacked.
+ *
+ * Anyone who can open the draft may still READ its files (`getDraftFiles`) and
+ * write them into a checkout; that needs no record.
  */
 export async function recordPromotion(
-  userId: string,
+  user: RoleBearing & { id: string },
   datasetRef: string,
   slug: string,
   /** `hash` is of what was written; the CLI knows it. Without one (a chat that
       wrote the files into its clone) the draft's own content is hashed —
       "promoted from this version" — which is what a divergence check compares. */
   promoted: { name: string; hash?: string },
-): Promise<"recorded" | "not-found" | "not-yours"> {
-  const found = await findByDatasetRef(userId, datasetRef, "view");
+): Promise<"recorded" | "not-found" | "not-admin" | "bad-name"> {
+  // Before anything is looked up, so the answer is the same whether or not the
+  // draft exists: a slug is not something to confirm the existence of.
+  if (!hasRole(user, MALLOYYO_ADMIN)) return "not-admin";
+  // A repo publishes `dashboards/<name>.malloy`. A `draft-…` name is a draft's
+  // address, and copying an audience onto one would be re-audiencing someone
+  // else's draft.
+  const name = promoted.name.trim();
+  if (!name || name.startsWith(DRAFT_PREFIX)) return "bad-name";
+
+  const found = await findByDatasetRef(user.id, datasetRef, "view");
   if (!found) return "not-found";
   const [row] = await db
     .select()
@@ -555,13 +576,12 @@ export async function recordPromotion(
     .where(and(eq(draftDashboards.slug, slug), eq(draftDashboards.datasetId, found.ds.id)))
     .limit(1);
   if (!row) return "not-found";
-  if (row.userId !== userId) return "not-yours";
   const draftName = `${DRAFT_PREFIX}${row.slug}`;
   await db.transaction(async (tx) => {
     await tx
       .update(draftDashboards)
       .set({
-        promotedAs: promoted.name,
+        promotedAs: name,
         promotedHash: promoted.hash ?? draftHash(row),
         promotedAt: new Date(),
       })
@@ -575,28 +595,26 @@ export async function recordPromotion(
     // The setting is written even when the draft is open, so it also overrides
     // a `private` tag in the promoted file — the draft's audience is what
     // people were promised, not whatever the file happens to say.
-    //
-    // A name that is itself a draft's is not a published dashboard; nothing to copy to.
-    if (promoted.name === draftName) return;
     await tx
       .update(datasets)
       .set({
-        dashboardAudience: sql`jsonb_set(${datasets.dashboardAudience}, array[${promoted.name}]::text[], to_jsonb(${row.visibility}::text))`,
+        dashboardAudience: sql`jsonb_set(${datasets.dashboardAudience}, array[${name}]::text[], to_jsonb(${row.visibility}::text))`,
       })
       .where(eq(datasets.id, row.datasetId));
     await tx.execute(sql`
       insert into ${dashboardGrants} (dataset_id, dashboard, user_id, granted_by_id)
-      select dataset_id, ${promoted.name}, user_id, granted_by_id
+      select dataset_id, ${name}, user_id, granted_by_id
         from ${dashboardGrants}
        where dataset_id = ${row.datasetId}::uuid and dashboard = ${draftName}
       on conflict do nothing`);
     // A draft's author sees it because it is theirs. A published dashboard has
     // no author, so a private one would vanish from the person who built it the
-    // day it shipped. They are added as one of its people instead.
+    // day it shipped. They are added as one of its people instead, by the
+    // admin recording this.
     if (row.visibility === "private") {
       await tx
         .insert(dashboardGrants)
-        .values({ datasetId: row.datasetId, dashboard: promoted.name, userId: row.userId, grantedById: row.userId })
+        .values({ datasetId: row.datasetId, dashboard: name, userId: row.userId, grantedById: user.id })
         .onConflictDoNothing();
     }
   });

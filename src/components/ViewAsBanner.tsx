@@ -16,7 +16,7 @@ type ViewingAs = { name: string | null; email: string | null };
  * In the root layout, so no page can be the one that forgot it. It asks the
  * server who is being viewed as — the cookie that says so is HttpOnly — but
  * only when a readable marker says there is something to ask, so an ordinary
- * visitor's pages make no extra request.
+ * visitor's pages make no extra request. When the marker is gone, the bar goes.
  */
 export function ViewAsBanner() {
   const pathname = usePathname();
@@ -24,14 +24,21 @@ export function ViewAsBanner() {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (!document.cookie.split("; ").some((c) => c.startsWith(`${VIEW_AS_MARKER_COOKIE}=1`))) return;
     let live = true;
-    fetch("/api/me")
-      .then((res) => (res.ok ? res.json() : null))
-      .then((me: { viewingAs?: ViewingAs } | null) => {
-        if (live) setWho(me?.viewingAs ?? null);
-      })
-      .catch(() => {});
+    // No marker cookie means nobody is being viewed as — including when a
+    // view-as has just EXPIRED underneath this tab. That case must clear the
+    // bar: left up, it would go on saying "look-only" over pages where the
+    // admin is acting as themselves again.
+    const marked = document.cookie.split("; ").some((c) => c.startsWith(`${VIEW_AS_MARKER_COOKIE}=1`));
+    const asked: Promise<ViewingAs | null> = marked
+      ? fetch("/api/me")
+          .then((res) => (res.ok ? res.json() : null))
+          .then((me: { viewingAs?: ViewingAs } | null) => me?.viewingAs ?? null)
+          .catch(() => null)
+      : Promise.resolve(null);
+    void asked.then((viewingAs) => {
+      if (live) setWho(viewingAs);
+    });
     return () => {
       live = false;
     };
@@ -66,7 +73,8 @@ export function ViewAsBanner() {
           {who.name && who.email ? ` (${who.email})` : ""}
         </span>
         <span className="text-xs">
-          You see exactly what they see. Nothing you do here is saved, and it is logged that you looked.
+          You see exactly what they see, and queries run as them. Nothing you do here is saved, and it is
+          logged that you looked.
         </span>
       </span>
       <button

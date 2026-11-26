@@ -121,9 +121,15 @@ Roles opens the app exactly as that person sees it — their datasets, their
 dashboards, their rows under row scoping, and no admin pages. A bar across every
 page says who you are viewing as and how to stop.
 
-It is look-only. Nothing can be saved, changed or created as them while it
-lasts; a dashboard still loads its data. Starting and stopping are logged, and
-it ends by itself after an hour.
+**Queries run as them.** Dashboards load their data and the query editor's Run
+works, both with that person's datasets and their rows under row scoping. That
+is the way to test a multi-tenant dataset: view as one tenant's user, run the
+query, and see exactly the rows they would.
+
+Otherwise it is look-only. Nothing is saved, changed or created as them: a
+query you run is not added to their history and cannot be saved, and chat,
+favourites, tokens, sharing and drafts are refused. Starting, stopping and each
+query run this way are logged against you, and it ends by itself after an hour.
 
 ## Datasets name the roles that may open them
 
@@ -343,9 +349,9 @@ What each kind starts as:
 Who may change it: a draft's author or an admin for a draft; an admin for a
 published dashboard.
 
-**Promoting a draft does not change who can see it.** When a draft is promoted
-into the model, the published dashboard takes the draft's general access and
-its people — whatever the promoted file's tag says — and the draft's author is
+**Promoting a draft does not change who can see it.** When an admin records
+that a draft was promoted into the model (any admin, for anyone's draft), the
+published dashboard takes the draft's general access and its people — whatever the promoted file's tag says — and the draft's author is
 added to its people if it is private, so they do not lose their own dashboard
 the day it ships.
 

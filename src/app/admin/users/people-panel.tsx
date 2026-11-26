@@ -7,10 +7,9 @@
 // ADDS UP TO. A row opens to show why, to edit the roles with the result
 // previewed before anything is saved, and to disable or enable them.
 //
-// People added by address who have not signed in yet are rows in the same
-// list, not a second table: they are people this instance has decided about,
-// and the question the page answers — who can reach what — is the same for
-// them.
+// Someone added who has not signed in yet is a row like any other — they ARE a
+// user from the moment they are added (src/lib/roster.ts) — tagged so, and
+// removable outright, since nothing of theirs exists yet.
 //
 // Nothing here decides access — every write goes to an admin API that
 // re-checks it.
@@ -28,13 +27,12 @@ import {
   personLabel,
   RoleChip,
   type DatasetRow,
-  type InvitedRow,
   type PersonRow,
   type RoleRow,
   type SharedDashboard,
 } from "../access-shared";
 import { BTN, INPUT, useAction } from "../roles/role-controls";
-import { RevokeInviteButton, UserActions } from "./roster-controls";
+import { RemoveAddedButton, UserActions } from "./roster-controls";
 
 // The last column is as wide as its one button. "What they get" has the rest:
 // it is the column the page is for, and its lists are what wrap.
@@ -43,7 +41,6 @@ const TAG = "shrink-0 rounded border border-gray-400 px-1 text-xs text-gray-600 
 
 export function PeoplePanel({
   people,
-  invited,
   roles,
   datasets,
   shared,
@@ -52,9 +49,6 @@ export function PeoplePanel({
   initialRole,
 }: {
   people: PersonRow[];
-  /** Added by address, not signed in yet. Empty where an integration owns
-      sign-in: nobody is added from here there. */
-  invited: InvitedRow[];
   roles: RoleRow[];
   datasets: DatasetRow[];
   /** Private dashboards shared with each person, by user id. */
@@ -74,9 +68,8 @@ export function PeoplePanel({
   const matches = (name: string | null, email: string | null, held: string[]) =>
     (!needle || `${name ?? ""} ${email ?? ""}`.toLowerCase().includes(needle)) && (!role || held.includes(role));
   const shownPeople = people.filter((p) => matches(p.name, p.email, p.roles));
-  const shownInvited = invited.filter((i) => matches(null, i.email, i.roles));
-  const total = people.length + invited.length;
-  const shown = shownPeople.length + shownInvited.length;
+  const total = people.length;
+  const shown = shownPeople.length;
 
   return (
     <section className="flex flex-col gap-3">
@@ -115,30 +108,6 @@ export function PeoplePanel({
           {shown === 0 && (
             <p className={`${MUTED} px-4 py-3`}>{total === 0 ? "Nobody yet." : "Nobody matches."}</p>
           )}
-          {shownInvited.map((i) => (
-            <div key={i.id} className={`${GRID} items-center border-b border-gray-100 px-4 py-2.5 last:border-0 dark:border-gray-800`}>
-              {/* No chevron: there is nothing to open until they have signed
-                  in. The indent keeps the names in one column. */}
-              <span className="min-w-0 pl-5">
-                <span className="block truncate text-sm">{i.email}</span>
-                <span className={`mt-0.5 inline-block ${TAG}`}>not signed in yet</span>
-                <span className={`block ${MUTED}`}>
-                  added {i.addedOn}
-                  {i.addedBy ? ` by ${i.addedBy}` : ""}
-                </span>
-              </span>
-              <div className="flex flex-wrap gap-1">
-                {i.roles.length === 0 && <span className={MUTED}>no roles</span>}
-                {i.roles.map((r) => (
-                  <RoleChip key={r} name={r} />
-                ))}
-              </div>
-              <AccessSummary access={resolveAccess(i.roles, datasets)} datasets={datasets} admin={i.roles.includes(ADMIN)} />
-              <div className="text-right">
-                <RevokeInviteButton id={i.id} />
-              </div>
-            </div>
-          ))}
           {shownPeople.map((p) => {
             const isOpen = open === p.id;
             const access = resolveAccess(p.roles, datasets, { userId: p.id });
@@ -178,6 +147,20 @@ export function PeoplePanel({
                         {p.status === "disabled" && <span className={`ml-1.5 ${TAG}`}>disabled</span>}
                       </span>
                       {p.name && p.email && <span className={`block truncate ${MUTED}`}>{p.email}</span>}
+                      {/* Added, and not arrived: a person all the same — the row
+                          opens, their roles can be changed, they can be
+                          impersonated to see what they will find. */}
+                      {!p.signedIn && (
+                        <>
+                          <span className={`mt-0.5 inline-block ${TAG}`}>not signed in yet</span>
+                          {p.added && (
+                            <span className={`block ${MUTED}`}>
+                              added {p.added.on}
+                              {p.added.by ? ` by ${p.added.by}` : ""}
+                            </span>
+                          )}
+                        </>
+                      )}
                     </span>
                   </button>
                   <div className="flex flex-wrap gap-1">
@@ -423,7 +406,10 @@ function PersonDetail({
         )}
         {/* Whether they may sign in at all — beside the roles, because it is
             the other half of "what can this person reach". */}
-        {manageMembership && !editing && (
+        {manageMembership && !editing && !person.signedIn && (
+          <RemoveAddedButton userId={person.id} label={personLabel(person)} />
+        )}
+        {manageMembership && !editing && person.signedIn && (
           <UserActions
             userId={person.id}
             status={person.status}

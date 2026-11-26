@@ -5,11 +5,15 @@
 
 // Admin → Users → Add user: an address, and the roles that person starts with.
 //
-// It is the one place a person and their roles are decided together. Before
-// this, an address was invited as "member" or "admin", signed in to whatever
-// the instance gave new users, and was found afterwards on another page to be
-// given what they actually needed — so the first thing most people saw was an
-// empty page. Here the roles are ticked up front, with what they add up to
+// It creates the person — a real user, from this moment (src/lib/roster.ts):
+// they are in the list at once, their roles can be changed, a dashboard can be
+// shared with them, and they can be impersonated to see what they will find.
+// Their first sign-in with that address makes the row theirs.
+//
+// It is also the one place a person and their roles are decided together.
+// Before this, an address was invited as "member" or "admin", signed in to
+// whatever the instance gave new users, and was given what they actually needed
+// afterwards — so the first thing most people saw was an empty page. Here the roles are ticked up front, with what they add up to
 // worked out before anything is saved (the same arithmetic as the list behind
 // it, src/lib/role-access.ts).
 //
@@ -41,11 +45,15 @@ export function AddUserButton({
   roles,
   datasets,
   defaults,
+  cannotClaim = [],
 }: {
   roles: RoleRow[];
   datasets: DatasetRow[];
   /** The roles new users are given: ticked to begin with. */
   defaults: string[];
+  /** Sign-in methods whose word for an address is not trusted enough to claim
+      an added person by it (src/lib/claim.ts), named for people to read. */
+  cannotClaim?: string[];
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -82,10 +90,10 @@ export function AddUserButton({
     // One at a time: each address is its own decision on the server, and a
     // refusal for one ("already an active user") says nothing about the next.
     for (const email of addresses) {
-      const res = await fetch("/api/admin/invitations", {
+      const res = await fetch("/api/admin/users", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email, roles: picked }),
+        body: JSON.stringify({ action: "add", email, roles: picked }),
       }).catch(() => null);
       const json = (await res?.json().catch(() => null)) as { kind?: string; error?: string } | null;
       if (!res?.ok) {
@@ -144,6 +152,12 @@ export function AddUserButton({
               className="rounded border border-gray-400 bg-white px-3 py-2 text-sm text-gray-900 disabled:opacity-50 dark:border-gray-600 dark:bg-gray-950 dark:text-gray-100"
             />
             <span>They are let in the first time they sign in with this address. Separate several with commas.</span>
+            {cannotClaim.length > 0 && (
+              <span className="text-amber-800 dark:text-amber-300">
+                Not with {cannotClaim.join(" or ")}: this instance accepts any account there, so an address it
+                reports is not proof of who is signing in. Someone added here must use another sign-in method.
+              </span>
+            )}
           </label>
 
           <fieldset className="flex flex-col gap-1.5">

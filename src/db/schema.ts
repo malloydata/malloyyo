@@ -15,6 +15,7 @@ import {
   uniqueIndex,
   uuid,
   integer,
+  type AnyPgColumn,
 } from "drizzle-orm/pg-core";
 
 // Postgres bytea (binary blob). Used for the gzip-compressed compiled ModelDef.
@@ -82,6 +83,24 @@ export const users = pgTable("users", {
   // reveal no address at all (enterprise SSO commonly does not), and a subject identifier
   // survives the person changing theirs. See docs/authentication.md.
   externalAccountId: text("external_account_id").unique(),
+  /**
+   * When this person first signed in — or NULL for someone an admin ADDED who
+   * has not arrived yet (Admin → Users → Add user, src/lib/roster.ts).
+   *
+   * A person is a row from the moment they are added, not from the moment they
+   * sign in: so they can be given roles, shared a dashboard, and impersonated
+   * (to see what they will see) before they have ever opened the app. There
+   * used to be a separate `invitations` record for that, which was a second
+   * place to keep someone's roles and a second way for them to disagree.
+   *
+   * DEFAULTS TO now(), on purpose: every path that creates a row BECAUSE
+   * someone signed in (the Auth.js adapter, the hosted integration) gets it
+   * without having to know this column exists. Only Add user writes NULL, and
+   * only the first sign-in that claims such a row (src/lib/claim.ts) fills it.
+   */
+  firstSignedInAt: timestamp("first_signed_in_at", { withTimezone: true }).default(sql`now()`),
+  /** The admin who added them, for a row that began as an Add user. */
+  addedById: uuid("added_by_id").references((): AnyPgColumn => users.id, { onDelete: "set null" }),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .default(sql`now()`),
@@ -449,7 +468,7 @@ export const datasets = pgTable(
      * RETIRED. Nothing reads or writes this any more, and it must not be read
      * again: it was a second grant beside the roles — full access for everyone
      * signed in, whatever any role said — so a role set to None went on opening
-     * the dataset. 0033 carried every public dataset across to MALLOYYO_USER at
+     * the dataset. 0032 carried every public dataset across to MALLOYYO_USER at
      * full; "open to every member" is now `openToMembers` (src/lib/role-access.ts).
      *
      * The COLUMN stays for one release, on purpose: the version live during a
@@ -1018,15 +1037,6 @@ export const invitations = pgTable(
     // Stored lowercase; matched case-insensitively at sign-in.
     email: text("email").notNull(),
     role: userRole("role").notNull().default("member"),
-    /**
-     * The roles this person starts with, chosen when they were added (Admin →
-     * Users → Add user). NULL means nobody chose: they get whatever the
-     * instance gives new users at the moment they sign in, which is what every
-     * invitation from before this column does. `role` above is the legacy
-     * member/admin flag and moves with it — MALLOYYO_ADMIN here means `admin`
-     * there (src/lib/roster.ts keeps the two in step).
-     */
-    roles: text("roles").array(),
     invitedById: uuid("invited_by_id").references(() => users.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()

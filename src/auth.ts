@@ -8,6 +8,8 @@ import MicrosoftEntraID from "next-auth/providers/microsoft-entra-id";
 import { DrizzleAdapter } from "@auth/drizzle-adapter";
 import { db, users, accounts, sessions, verificationTokens } from "@/db";
 import { admitNewUser } from "@/lib/admission";
+import { claimAddedUser, emailIsTrusted } from "@/lib/claim";
+import { logger } from "@/lib/logger";
 import { isProviderReady, warnAuthConfig } from "@/lib/auth-providers";
 import { configuredOrigin } from "@/lib/oauth/base-url";
 import { hostedIntegration } from "@/lib/hosted-auth-integration";
@@ -147,11 +149,39 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       else if (token?.sub) session.user.id = token.sub;
       return session;
     },
-    // No signIn callback: authentication always succeeds, and authorization is
-    // answered per-request from the users row (src/lib/authorize.ts). The
-    // EMAIL_ALLOW_LIST check that used to live here was retired when membership
-    // moved into the database — an env-var list keyed on email refused exactly
-    // the sessions that carry no address, and revoking anyone meant a redeploy.
+    // Authentication always succeeds here, and authorization is answered
+    // per-request from the users row (src/lib/authorize.ts). This callback
+    // REFUSES NOTHING — it always returns true. (The EMAIL_ALLOW_LIST check that
+    // once lived here was retired when membership moved into the database: an
+    // env-var list keyed on email refused exactly the sessions that carry no
+    // address, and revoking anyone meant a redeploy.)
+    //
+    // What it does: lets a first sign-in claim the row an admin ADDED for that
+    // address (src/lib/claim.ts). Auth.js calls this before it looks for the
+    // user, so linking the provider account to that row here turns the rest of
+    // the sign-in into the ordinary one for someone who has signed in before.
+    // Left to itself Auth.js would refuse — a row with that e-mail exists and
+    // is not linked — and its own switch for linking by e-mail would attach to
+    // an established account just as readily as to a new one.
+    //
+    // Not where an integration owns sign-in: nobody is added from here there.
+    async signIn({ user, account, profile }) {
+      if (hosted || !account) return true;
+      try {
+        await claimAddedUser({
+          email: user?.email ?? (typeof profile?.email === "string" ? profile.email : null),
+          account,
+          trusted: emailIsTrusted(account.provider, profile as Record<string, unknown> | undefined),
+          name: user?.name,
+          image: user?.image,
+        });
+      } catch (err) {
+        // A failed claim is not a failed sign-in: carry on, and Auth.js gives
+        // the answer it would have given had nobody been added.
+        logger.error("claiming an added user failed", { provider: account.provider, err: String(err) });
+      }
+      return true;
+    },
   },
   events: {
     async signIn({ user, isNewUser }) {

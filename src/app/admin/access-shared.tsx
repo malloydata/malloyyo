@@ -50,18 +50,12 @@ export interface PersonRow {
   /** Whether they may sign in at all. A disabled person keeps their roles —
       enabling them gives back exactly what they had — but reaches nothing. */
   status: "active" | "disabled";
-}
-
-/** Someone added by address who has not signed in yet. */
-export interface InvitedRow {
-  id: string;
-  email: string;
-  /** What they will hold when they arrive. */
-  roles: string[];
-  /** YYYY-MM-DD. */
-  addedOn: string;
-  /** Who added them, when that is still known. */
-  addedBy: string | null;
+  /** False for someone an admin added who has not signed in yet. They are a
+      person like any other here — roles, shares, impersonation — and can be
+      removed outright, since nothing of theirs exists yet. */
+  signedIn: boolean;
+  /** For a row that began as an Add user: when (YYYY-MM-DD), and by whom. */
+  added?: { on: string; by: string | null };
 }
 
 /** A private dashboard shared with one person by email. */

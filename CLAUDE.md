@@ -284,6 +284,23 @@ dataset push (`/api/datasets/:id/model/push`) is retired — it answers 410. The
 ownership exceptions — dataset ownership is only half-built, so it grants no
 publish rights. Full guide: `docs/api-tokens.md`.
 
+## People: a user is a row from the moment they are added
+
+Admin → Users → **Add user** creates the `users` row (active, the ticked roles,
+`first_signed_in_at` NULL; `src/lib/roster.ts` `addUser`). There are **no
+invitations** — nothing writes that table; it is dropped in the release after
+this one, and `admission.ts` reads it only for a straggler made by the previous
+version mid-deploy. A first sign-in CLAIMS the added row in the Auth.js
+`signIn` callback (`src/lib/claim.ts`), before Auth.js looks the account up,
+so it then proceeds as a returning user and admission never runs for someone
+an admin already decided about. Two limits that are the whole safety of it:
+only a row that has **never signed in**, and only a provider whose email is
+trusted (`emailIsTrusted`: Google verified, Okta, Microsoft only when
+single-tenant). Do not switch on `allowDangerousEmailAccountLinking` instead —
+it attaches to established accounts too. `first_signed_in_at` DEFAULTS TO
+`now()` so every sign-in-driven insert path gets it for free; only Add user
+writes NULL.
+
 ## Who sees what: three layers, and only the first is a boundary
 
 1. **Dataset access, with a level.** A role has a level per dataset — none,
@@ -294,7 +311,7 @@ publish rights. Full guide: `docs/api-tokens.md`.
    any of their roles gives them. **There is no public flag**: `datasets.is_public`
    was a second grant (full, for everyone signed in, over whatever the roles
    said), so a role at None went on opening the dataset. It is retired — nothing
-   reads it, 0033 carried public datasets to `MALLOYYO_USER` at full, and "open
+   reads it, 0032 carried public datasets to `MALLOYYO_USER` at full, and "open
    to every member" is `openToMembers`, and `openToMember` / `openToMemberSql`
    wherever it decides what to show a PERSON (they must hold the members role;
    signed-out callers are told nothing at all). The column is

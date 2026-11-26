@@ -102,15 +102,25 @@ const REVIEWED_AFTER_REWRITE = [
   // published dashboard keeps the audience its model gives it, so nobody's
   // access changes when this lands.
   "0031_dashboard_permissions",
-  // One nullable column the live version never reads or writes. An invitation
-  // the live version creates during the deploy leaves it NULL, which means
-  // "the instance default at sign-in": exactly what that version does anyway.
-  "0032_invitation_roles",
   // Data only (two UPDATEs). Gives MALLOYYO_USER full on every dataset flagged
   // `is_public`, which is what the flag already gave everyone: the live
   // version reads the flag, untouched, so nothing changes for it. It is what
   // lets the NEW version stop reading the flag without anyone losing a dataset.
-  "0033_public_is_the_members_role",
+  "0032_public_is_the_members_role",
+  // Two nullable columns on `users` the live version never reads (one with a
+  // default, so rows it inserts are right without it knowing), and data: every
+  // open invitation becomes the user it was for, and members who hold no role
+  // get MALLOYYO_USER.
+  //
+  // ONE THING THE LIVE VERSION DOES DIFFERENTLY while this is applied and the
+  // new code is not yet promoted: someone whose invitation was just converted
+  // cannot complete a first sign-in in that window. The live version finds a
+  // row with their address and no linked account and refuses, where it would
+  // have consumed the invitation. Nothing is lost — the row waits, and the new
+  // code claims it on their next attempt — and nobody gains anything. No
+  // column is dropped that the live version selects (`invitations.roles` was
+  // never in a merged build).
+  "0033_added_users",
 ];
 
 /** What the journal should currently end with. */

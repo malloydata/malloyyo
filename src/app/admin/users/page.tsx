@@ -5,7 +5,9 @@
 //
 // One list and one button. A person's row says the roles they hold and what
 // those add up to; it opens to show why, to change the roles, and to disable
-// them. "Add user" takes an address and the roles that person starts with.
+// them. "Add user" takes an address and the roles that person starts with, and
+// CREATES them: they are in this list at once, tagged "not signed in yet",
+// until their first sign-in makes the row theirs.
 // People waiting for approval are a strip above the list that is only there
 // while someone is waiting.
 //
@@ -18,14 +20,16 @@
 // The list stays, because which roles those people hold — and so which
 // datasets they open — is still this instance's to say.
 
-import { asc, desc, eq, isNull } from "drizzle-orm";
-import { dashboardGrants, db, datasets, invitations, roles as rolesTable, users } from "@/db";
+import { asc, desc, eq } from "drizzle-orm";
+import { dashboardGrants, db, datasets, roles as rolesTable, users } from "@/db";
 import { requireAdminPage } from "@/lib/admin";
 import { getAccessPolicy } from "@/lib/access-policy";
 import { hostedSignIn } from "@/lib/hosted-auth-integration";
 import { defaultRoles, MALLOYYO_ADMIN, rolesOf } from "@/lib/roles";
 import { datasetTitle } from "@malloyyo/mcp-engine";
-import { MUTED, type InvitedRow, type SharedDashboard } from "../access-shared";
+import { configuredAuthProviders } from "@/lib/auth-providers";
+import { providersThatCannotClaim } from "@/lib/claim";
+import { MUTED, type SharedDashboard } from "../access-shared";
 import { AddUserButton } from "./add-user";
 import { PeoplePanel } from "./people-panel";
 import { PolicyPicker, UserActions } from "./roster-controls";
@@ -44,7 +48,7 @@ export default async function AdminUsersPage({
   // Whether membership is this application's to manage.
   const ownsSignIn = !hostedSignIn();
 
-  const [catalog, dsRows, people, fallback, grants, openInvites, policy] = await Promise.all([
+  const [catalog, dsRows, people, fallback, grants, policy] = await Promise.all([
     db.select().from(rolesTable).orderBy(asc(rolesTable.builtin), asc(rolesTable.name)),
     // Ready datasets only: a failed or half-built row cannot be opened by
     // anyone, so it is not part of what anyone gets.
@@ -71,9 +75,6 @@ export default async function AdminUsersPage({
         dashboard: dashboardGrants.dashboard,
       })
       .from(dashboardGrants),
-    ownsSignIn
-      ? db.select().from(invitations).where(isNull(invitations.acceptedAt)).orderBy(desc(invitations.createdAt))
-      : Promise.resolve([]),
     ownsSignIn ? getAccessPolicy() : Promise.resolve(null),
   ]);
 
@@ -87,12 +88,16 @@ export default async function AdminUsersPage({
     viewOnlyRoles: d.viewOnlyRoles ?? [],
     ownerId: d.ownerId,
   }));
+  const nameOf = new Map(people.map((u) => [u.id, u.id === me.id ? "you" : (u.name ?? u.email)]));
   const members = people
     .filter((u) => u.status !== "pending")
     .map((u) => {
       // `rolesOf`, not the bare column: it folds in the older ways of being an
       // admin, so this page and every access check name the same people.
       const held = rolesOf(u);
+      // Added by an admin and not arrived yet. A person all the same: a row
+      // with roles, shareable-with, impersonatable (src/lib/roster.ts).
+      const signedIn = u.firstSignedInAt !== null;
       return {
         id: u.id,
         name: u.name,
@@ -102,27 +107,23 @@ export default async function AdminUsersPage({
         isOwner: u.role === "owner",
         isSelf: u.id === me.id,
         status: u.status === "disabled" ? ("disabled" as const) : ("active" as const),
+        signedIn,
+        ...(signedIn
+          ? {}
+          : { added: { on: u.createdAt.toISOString().slice(0, 10), by: (u.addedById && nameOf.get(u.addedById)) || null } }),
       };
     });
-  const nameOf = new Map(people.map((u) => [u.id, u.id === me.id ? "you" : (u.name ?? u.email)]));
-  const invited: InvitedRow[] = openInvites.map((i) => {
-    // What they will hold on arrival, worked out the way admission does it
-    // (src/lib/admission.ts): the roles ticked when they were added, or the
-    // instance default where nobody ticked any; plus the admin role when the
-    // older member/admin flag says so.
-    const held = i.roles ?? fallback;
-    return {
-      id: i.id,
-      email: i.email,
-      roles: i.role === "member" || held.includes(MALLOYYO_ADMIN) ? held : [...held, MALLOYYO_ADMIN],
-      addedOn: i.createdAt.toISOString().slice(0, 10),
-      addedBy: (i.invitedById && nameOf.get(i.invitedById)) || null,
-    };
-  });
   const shared: Record<string, SharedDashboard[]> = {};
   for (const g of grants) (shared[g.userId] ??= []).push({ datasetId: g.datasetId, dashboard: g.dashboard });
 
-  const count = members.length + invited.length;
+  const count = members.length;
+  // Sign-in methods that cannot be used to claim an added person here, by the
+  // name on their button — so the dialog says it before someone finds out.
+  const cannotClaim = ownsSignIn
+    ? providersThatCannotClaim(configuredAuthProviders().map((p) => p.id)).map(
+        (id) => configuredAuthProviders().find((p) => p.id === id)?.name ?? id,
+      )
+    : [];
 
   return (
     <div className="flex flex-col gap-6">
@@ -133,7 +134,9 @@ export default async function AdminUsersPage({
             {count} {count === 1 ? "person" : "people"}
           </span>
         </div>
-        {ownsSignIn && <AddUserButton roles={roleRows} datasets={allDatasets} defaults={fallback} />}
+        {ownsSignIn && (
+          <AddUserButton roles={roleRows} datasets={allDatasets} defaults={fallback} cannotClaim={cannotClaim} />
+        )}
       </div>
 
       {pending.length > 0 && (
@@ -166,7 +169,6 @@ export default async function AdminUsersPage({
 
       <PeoplePanel
         people={members}
-        invited={invited}
         roles={roleRows}
         datasets={allDatasets}
         shared={shared}

@@ -53,13 +53,29 @@ configured.
     admin, no configuration needed.
   - **Everyone after that is admitted by the instance's access policy**
     (an admin setting, not an env var): `invite` (the default) leaves newcomers
-    `pending` until an admin approves them, and admits invited addresses
-    immediately; `open` admits anyone who can authenticate — with Google that is
+    `pending` until an admin approves them, and lets in the people an admin has
+    added (below) the first time they sign in; `open` admits anyone who can authenticate — with Google that is
     **every Google account on earth**, so the server logs a loud warning at
     startup when the policy is `open` and sign-in is enabled.
+  - **An admin adds people ahead of time at Admin → Users → Add user**: an
+    address, and the roles they start with. That creates the user at once — they
+    are in the list, can be given roles and shared dashboards, and can be
+    impersonated to see what they will find — marked "not signed in yet". Their
+    first sign-in with that address makes the account theirs. There are no
+    invitations.
+    - **It rests on the provider's word for the address.** Google must say the
+      address is verified; Okta is your own directory; **Microsoft counts only
+      when sign-in is restricted to one tenant** (`AUTH_MICROSOFT_ENTRA_ID_ISSUER`).
+      With the "common" authority any Microsoft tenant can sign in, and the
+      admin of one can set a user's mail to anything — so on such an instance a
+      Microsoft sign-in never claims an added person, and the Add user dialog
+      says so.
+    - **Only a row that has never signed in can be claimed.** An account that
+      already exists is never attached to by address.
   - **`EMAIL_ALLOW_LIST` is retired.** An existing database's list is migrated
     once on upgrade — listed users stay active, listed addresses that never
-    arrived become open invitations, and every other existing user is
+    arrived are added as people who have not signed in yet, and every other
+    existing user is
     `disabled`, exactly the set the list was already refusing. After that the
     variable is never read; leaving it set logs a startup warning naming any
     disagreement with the database.

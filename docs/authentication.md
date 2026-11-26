@@ -53,36 +53,13 @@ configured.
     admin, no configuration needed.
   - **Everyone after that is admitted by the instance's access policy**
     (an admin setting, not an env var): `invite` (the default) leaves newcomers
-    `pending` until an admin approves them, and lets in the people an admin has
-    added (below) the first time they sign in; `open` admits anyone who can authenticate — with Google that is
+    `pending` until an admin approves them, and admits invited addresses
+    immediately; `open` admits anyone who can authenticate — with Google that is
     **every Google account on earth**, so the server logs a loud warning at
     startup when the policy is `open` and sign-in is enabled.
-  - **An admin adds people ahead of time at Admin → Users → Add user**: an
-    address, and the roles they start with. That creates the user at once — they
-    are in the list, can be given roles and shared dashboards, and can be
-    impersonated to see what they will find — marked "not signed in yet". Their
-    first sign-in with that address makes the account theirs. There are no
-    invitations.
-    - **It rests on the provider's word for the address.** Google must say the
-      address is verified; Okta is your own directory; **Microsoft counts only
-      when sign-in is restricted to one tenant by its ID**
-      (`AUTH_MICROSOFT_ENTRA_ID_ISSUER=https://login.microsoftonline.com/<tenant-id>/v2.0/`).
-      Unset, or set to the `organizations` authority, any Microsoft tenant can
-      sign in, and the admin of one can set a user's mail to anything — so on
-      such an instance a Microsoft sign-in never claims an added person, the Add
-      user dialog says so, and someone waiting for approval who came in that
-      way is marked as an address nobody has proved.
-    - **Google's "verified" means verified once.** A personal Google account
-      made on a work address keeps saying that address after the person has
-      lost it. Add people by an address they hold now.
-    - **Someone added who never signs in stays added.** A mistyped address is
-      claimable by whoever owns it; remove the row.
-    - **Only a row that has never signed in can be claimed.** An account that
-      already exists is never attached to by address.
   - **`EMAIL_ALLOW_LIST` is retired.** An existing database's list is migrated
     once on upgrade — listed users stay active, listed addresses that never
-    arrived are added as people who have not signed in yet, and every other
-    existing user is
+    arrived become open invitations, and every other existing user is
     `disabled`, exactly the set the list was already refusing. After that the
     variable is never read; leaving it set logs a startup warning naming any
     disagreement with the database.

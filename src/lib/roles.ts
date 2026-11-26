@@ -23,7 +23,7 @@
  */
 
 import { and, eq, or, sql } from "drizzle-orm";
-import { datasets, db, instanceSettings, roles as rolesTable, users } from "@/db";
+import { datasets, db, instanceSettings, invitations, roles as rolesTable, users } from "@/db";
 import { env } from "./env";
 import type { RoleLevel } from "./role-access";
 
@@ -216,7 +216,7 @@ function isAdminSql(userId: string) {
  * too: it opened a dataset in full to everyone signed in, whatever any role
  * said — so a role set to None on Admin → Roles went on opening the dataset,
  * and that page disagreed with the one listing what each person gets. It is not
- * read here or anywhere else now (0032 carried every public dataset across to
+ * read here or anywhere else now (0033 carried every public dataset across to
  * MALLOYYO_USER at full first, so nobody lost one). "Open to every member" is
  * `openToMembers`: the members role at full — and `openToMember` /
  * `openToMemberSql` where the question is about a particular person.
@@ -265,19 +265,20 @@ export function roleLevelUpdate(name: string, level: RoleLevel) {
  * Delete a role, and revoke it everywhere it lives, in the same breath.
  *
  * A role left behind after its definition is gone is a grant nobody can see in
- * the UI and nobody thinks to audit. There are four places it lives:
+ * the UI and nobody thinks to audit. There are FIVE places it lives:
  *
  *   - the catalog row;
  *   - `users.roles`;
  *   - `datasets.roles` and `datasets.view_only_roles`;
  *   - `instance_settings.default_roles` — left there, a deleted role keeps
  *     being written onto every new arrival, where no checkbox can show it and
- *     `set-user-roles` would refuse the same name as unknown.
- *
- * Someone an admin ADDED who has not signed in yet is covered by the second:
- * they are a `users` row from the moment they are added (src/lib/roster.ts).
- * When their starting roles lived on an invitation instead, that was a fifth
- * place, and the one this sweep forgot.
+ *     `set-user-roles` would refuse the same name as unknown;
+ *   - `invitations.roles` — someone added by address who has not signed in yet
+ *     carries the roles ticked for them, and admission copies those onto the
+ *     user as they stand. Left there, the deleted role would arrive with them:
+ *     on a person whose roles could then not be edited (the page sends the list
+ *     back and the unknown name is refused), and granted again silently if a
+ *     role by that name is ever re-created.
  *
  * Each UPDATE is scoped to the rows that actually hold it, so deleting a role
  * nobody holds does not row-lock every user and every dataset. The caller has
@@ -296,6 +297,9 @@ export async function deleteRole(name: string): Promise<void> {
     await tx.execute(
       sql`update ${instanceSettings} set default_roles = array_remove(default_roles, ${name})
           where ${name} = any(default_roles)`,
+    );
+    await tx.execute(
+      sql`update ${invitations} set roles = array_remove(roles, ${name}) where ${name} = any(roles)`,
     );
   });
 }

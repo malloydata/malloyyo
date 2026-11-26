@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: MIT
 
 // Admin actions on the roster: approve/deny the queue, disable/enable members,
-// grant and revoke admin, and adding people ahead of their first sign-in. The rules live here rather than in the routes so they are one thing
+// grant and revoke admin, and standing invitations for addresses that have not
+// arrived. The rules live here rather than in the routes so they are one thing
 // to test and the routes stay thin.
 //
 // Guardrails, all server-side:
@@ -15,9 +16,8 @@
 // - Transitions are checked against the CURRENT row, so a stale page cannot
 //   e.g. re-approve someone an admin just disabled.
 
-import { and, eq, inArray, isNull, sql } from "drizzle-orm";
-import { accounts, db, roles as rolesTable, users, type User } from "@/db";
-import { providerVouchesForEmail } from "./claim";
+import { and, eq, inArray, isNull } from "drizzle-orm";
+import { db, invitations, roles as rolesTable, users, type Invitation, type User, type UserRole } from "@/db";
 import { defaultRoles, isBuiltinRole, MALLOYYO_ADMIN } from "./roles";
 import { logger } from "./logger";
 
@@ -90,112 +90,125 @@ export async function applyUserAction(actor: User, targetId: string, action: Use
   return updated;
 }
 
-export type AddOutcome =
-  | { kind: "added"; user: User }
+export type InviteOutcome =
+  | { kind: "invited"; invitation: Invitation }
   | { kind: "approved"; user: User };
 
 /**
- * Add a person: an address, and the roles they start with.
+ * Admit an address ahead of arrival. If the person already arrived and is
+ * waiting in the queue, adding them IS approving them; re-adding an address
+ * that is already open just updates what it carries.
  *
- * It creates the USER — active, holding exactly `roles`, not yet signed in
- * (`first_signed_in_at` NULL). From that moment they are a row like anyone
- * else: their roles can be edited, a dashboard can be shared with them, and an
- * admin can impersonate them to see what they will see. Their first sign-in
- * with that address claims the row (src/lib/claim.ts).
- *
- * This replaces the invitation, which was an address and "member" or "admin"
- * in a table of its own: a second record of a person, a second place a role
- * name could be left behind, and nothing an admin could do anything with until
- * the person arrived.
- *
- * If the address is already waiting in the queue, adding them IS approving
- * them, with the roles just ticked — those were chosen for this person, a
- * moment ago, by someone looking at what they add up to. Only where the
- * provider they came through vouches for the address, though: see below.
- *
- * MALLOYYO_ADMIN in `roles` and the two legacy admin columns are one fact, and
- * are written together, as everywhere else roles are written.
+ * `roles` is what Admin → Users → Add user ticked: the roles the person starts
+ * with, exactly. Left out, nobody chose, and they get the instance default at
+ * the moment they sign in (what an invitation meant before roles could be
+ * chosen). The legacy `role` flag and MALLOYYO_ADMIN are one fact said twice,
+ * so whichever the caller gives, both are stored in step.
  */
-export async function addUser(actor: User, rawEmail: string, roles: readonly string[]): Promise<AddOutcome> {
+export async function createInvitation(
+  actor: User,
+  rawEmail: string,
+  role: UserRole,
+  roles?: readonly string[],
+): Promise<InviteOutcome> {
   const email = rawEmail.trim().toLowerCase();
   // Deliberately loose: providers own address validity. This only rejects
   // things that cannot be an address at all.
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new RosterError("not an email address");
+  if (role !== "member" && role !== "admin") throw new RosterError("role must be member or admin");
 
-  const wanted = [...new Set(roles)];
-  if (wanted.length > 0) {
-    // Only names from the catalog, as everywhere else roles are written: a
-    // typo here would be a role on a person that no checkbox can show.
-    const known = await db.select({ name: rolesTable.name }).from(rolesTable).where(inArray(rolesTable.name, wanted));
-    const unknown = wanted.filter((r) => !isBuiltinRole(r) && !known.some((k) => k.name === r));
-    if (unknown.length) throw new RosterError(`unknown role(s): ${unknown.join(", ")}`);
+  let chosen: string[] | null = null;
+  if (roles) {
+    const wanted = [...new Set(roles)];
+    if (role === "admin" && !wanted.includes(MALLOYYO_ADMIN)) wanted.push(MALLOYYO_ADMIN);
+    if (wanted.length > 0) {
+      // Only names from the catalog, as everywhere else roles are written: a
+      // typo here would be a role on a person that no checkbox can show.
+      const known = await db.select({ name: rolesTable.name }).from(rolesTable).where(inArray(rolesTable.name, wanted));
+      const unknown = wanted.filter((r) => !isBuiltinRole(r) && !known.some((k) => k.name === r));
+      if (unknown.length) throw new RosterError(`unknown role(s): ${unknown.join(", ")}`);
+    }
+    chosen = wanted;
+    if (wanted.includes(MALLOYYO_ADMIN)) role = "admin";
   }
-  const admin = wanted.includes(MALLOYYO_ADMIN);
-  const legacy = admin ? { role: "admin" as const, isAdmin: true } : { role: "member" as const, isAdmin: false };
 
-  const [existing] = await db
-    .select()
-    .from(users)
-    .where(sql`lower(${users.email}) = ${email}`)
-    .limit(1);
+  const [existing] = await db.select().from(users).where(eq(users.email, email)).limit(1);
   if (existing) {
     switch (existing.status) {
       case "pending": {
-        // Typing an address here means "the person who owns this address". A
-        // row in the queue means only "someone signed in SAYING this address" —
-        // the same thing where the provider vouches for it, and not otherwise:
-        // on an instance open to every Microsoft tenant, anyone can sign in
-        // first under an address they expect to be added, and wait. So the
-        // shortcut is for rows a vouching provider made; any other is approved
-        // from the queue, by someone looking at that row and what it says.
-        const via = await db.select({ provider: accounts.provider }).from(accounts).where(eq(accounts.userId, existing.id));
-        if (via.some((a) => !providerVouchesForEmail(a.provider))) {
-          throw new RosterError(
-            "someone is waiting for approval under this address, through a sign-in method that does not prove it is theirs — approve them from the waiting list if you know it is them, then set their roles",
-          );
-        }
+        // Roles too, and for the same reason `applyUserAction('approve')` does
+        // it: admission is where the instance default lands. Setting only the
+        // legacy columns left the row with `roles = '{}'`, which the SQL access
+        // predicate reads as holding nothing while the admin page listed them as
+        // holding the default — a grant the UI asserted and every query denied.
+        //
+        // Roles the admin just ticked win over both: they were chosen for this
+        // person, a moment ago, by someone looking at what they add up to.
+        const granted =
+          chosen ?? ((existing.roles ?? []).length > 0 ? existing.roles! : await defaultRoles());
         const [approved] = await db
           .update(users)
-          .set({ status: "active", roles: wanted, ...(existing.role === "owner" ? {} : legacy) })
+          .set({
+            status: "active",
+            role: existing.role === "owner" ? existing.role : role,
+            isAdmin: role === "admin",
+            roles:
+              role === "admin" ? [...new Set([...granted, MALLOYYO_ADMIN])] : granted,
+          })
           .where(eq(users.id, existing.id))
           .returning();
-        logger.info("adding a waiting user approved them", { userId: existing.id, actorId: actor.id });
+        logger.info("invitation approved a waiting user", { userId: existing.id, actorId: actor.id });
         return { kind: "approved", user: approved };
       }
       case "active":
-        throw new RosterError(
-          existing.firstSignedInAt === null
-            ? "already added — change their roles in the list, or remove them and add them again"
-            : "already an active user",
-        );
+        throw new RosterError("already an active user");
       case "disabled":
         throw new RosterError("this address belongs to a disabled user — enable them instead");
     }
   }
 
+  const [open] = await db
+    .select()
+    .from(invitations)
+    .where(and(eq(invitations.email, email), isNull(invitations.acceptedAt)))
+    .limit(1);
+  if (open) {
+    // Re-adding without choosing roles leaves whatever was chosen before.
+    if (open.role === role && chosen === null) return { kind: "invited", invitation: open };
+    // ...except for the one role the flag IS. A caller that sends only the
+    // older `role` is changing admin-or-not, and the stored roles have to move
+    // with it: left alone, "make this invitation a member" kept MALLOYYO_ADMIN
+    // in the list admission copies onto the user, and they arrived an admin.
+    const kept = open.roles;
+    const inStep =
+      chosen ??
+      (kept === null
+        ? null
+        : role === "admin"
+          ? [...new Set([...kept, MALLOYYO_ADMIN])]
+          : kept.filter((r) => r !== MALLOYYO_ADMIN));
+    const [updated] = await db
+      .update(invitations)
+      .set({ role, ...(inStep ? { roles: inStep } : {}) })
+      .where(eq(invitations.id, open.id))
+      .returning();
+    return { kind: "invited", invitation: updated };
+  }
+
   const [created] = await db
-    .insert(users)
-    .values({ email, status: "active", roles: wanted, ...legacy, firstSignedInAt: null, addedById: actor.id })
+    .insert(invitations)
+    .values({ email, role, roles: chosen, invitedById: actor.id })
     .returning();
-  logger.info("user added", { userId: created.id, roles: wanted, actorId: actor.id });
-  return { kind: "added", user: created };
+  logger.info("invitation created", { email, role, roles: chosen, actorId: actor.id });
+  return { kind: "invited", invitation: created };
 }
 
-/**
- * Take back someone who was added and has not signed in yet.
- *
- * Only that: once a person has signed in they have history, drafts and chats
- * hanging off the row, and the way to end their access is Disable, which keeps
- * all of it. Before then there is nothing of theirs to keep — only what admins
- * attached (roles, dashboard shares), which goes with the row.
- */
-export async function removeAddedUser(actor: User, userId: string): Promise<void> {
-  const removed = await db
-    .delete(users)
-    .where(and(eq(users.id, userId), isNull(users.firstSignedInAt), isNull(users.externalAccountId)))
-    .returning({ id: users.id });
-  if (removed.length === 0) {
-    throw new RosterError("no such added user — someone who has signed in is disabled, not removed", 404);
-  }
-  logger.info("added user removed", { userId, actorId: actor.id });
+/** Withdraw a standing invitation. Accepted ones are history and stay. */
+export async function revokeInvitation(actor: User, id: string): Promise<void> {
+  const deleted = await db
+    .delete(invitations)
+    .where(and(eq(invitations.id, id), isNull(invitations.acceptedAt)))
+    .returning();
+  if (deleted.length === 0) throw new RosterError("no such open invitation", 404);
+  logger.info("invitation revoked", { invitationId: id, actorId: actor.id });
 }

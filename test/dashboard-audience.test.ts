@@ -320,10 +320,10 @@ test("the retired public flag opens nothing: a role's level is the only grant", 
     assert.equal(await canQueryDataset(outsider.id, flagged.id), false);
     assert.equal(openToMembers(flagged), false);
 
-    // What 0032 does to every such row, so that nobody loses a dataset when the
+    // What 0033 does to every such row, so that nobody loses a dataset when the
     // flag stops being read: the members role at full. Run from the file, so
     // this is the migration and not a paraphrase of it.
-    const migration = readFileSync(new URL("../drizzle/0032_public_is_the_members_role.sql", import.meta.url), "utf8");
+    const migration = readFileSync(new URL("../drizzle/0033_public_is_the_members_role.sql", import.meta.url), "utf8");
     for (const statement of migration.split("--> statement-breakpoint")) await db.execute(sql.raw(statement));
     const [after] = await db.select().from(datasets).where(eq(datasets.id, flagged.id));
     assert.deepEqual(after.roles, [MALLOYYO_USER]);

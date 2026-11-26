@@ -69,7 +69,6 @@ export default async function AdminRolesPage() {
       isOwner: u.role === "owner",
       isSelf: u.id === me.id,
       status: "active" as const,
-      signedIn: u.firstSignedInAt !== null,
     };
   });
 

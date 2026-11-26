@@ -75,16 +75,11 @@ export async function seedAccessControl(
       await tx`
         UPDATE users SET status = 'disabled'
         WHERE email IS NULL OR NOT (lower(email) = ANY (string_to_array(${listCsv}, ',')))`;
-      // A listed address with no row yet is someone who was allowed in and has
-      // not arrived. They become a person — active, holding what a member
-      // holds, not yet signed in — the same row Admin → Users → Add user makes
-      // (src/lib/roster.ts), so they are in the list and their first sign-in
-      // claims it. This used to write an invitation; nothing does any more.
       await tx`
-        INSERT INTO users (email, status, roles, first_signed_in_at)
-        SELECT t.e, 'active', ARRAY['MALLOYYO_USER']::text[], NULL
-        FROM unnest(string_to_array(${listCsv}, ',')) AS t(e)
-        WHERE NOT EXISTS (SELECT 1 FROM users u WHERE lower(u.email) = t.e)`;
+        INSERT INTO invitations (email)
+        SELECT t.e FROM unnest(string_to_array(${listCsv}, ',')) AS t(e)
+        WHERE NOT EXISTS (SELECT 1 FROM users u WHERE lower(u.email) = t.e)
+          AND NOT EXISTS (SELECT 1 FROM invitations i WHERE i.email = t.e AND i.accepted_at IS NULL)`;
     } else {
       await tx`UPDATE users SET status = 'active'`;
     }

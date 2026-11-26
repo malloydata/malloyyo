@@ -15,8 +15,8 @@
 //   * every existing row NOT on the list lands `disabled` — those people are
 //     refused on every request today, and marking them active would grant
 //     access to exactly the population the list was excluding;
-//   * listed addresses with no row yet become PEOPLE — active, not yet signed
-//     in — so those admitted but not yet arrived are not silently dropped;
+//   * listed addresses with no row yet become open invitations, so people
+//     admitted but not yet arrived are not silently dropped;
 //   * seeding runs once per database — data-guarded, so neither a second boot
 //     nor a hand re-run can re-decide anything.
 //
@@ -25,9 +25,8 @@
 
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import postgres from "postgres";
-import { eq } from "drizzle-orm";
+import { asc, eq } from "drizzle-orm";
 import { db, instanceSettings, invitations, users } from "@/db";
 import { seedAccessControl } from "@/lib/access-upgrade";
 import { admitNewUser } from "@/lib/admission";
@@ -81,14 +80,9 @@ test("upgrade with a list: listed→active, unlisted→disabled, missing→invit
   const noEmail = (await db.select().from(users)).find((u) => u.email === null);
   assert.equal(noEmail?.status, "disabled");
 
-  // The not-yet-arrived are added as people: active, holding what a member
-  // holds, and marked as not having signed in — never an invitation.
-  const eve = await userByEmail("eve@example.com");
-  assert.equal(eve.status, "active");
-  assert.deepEqual(eve.roles, ["MALLOYYO_USER"]);
-  assert.equal(eve.firstSignedInAt, null, "added, not arrived");
-  assert.ok((await userByEmail("alice@example.com")).firstSignedInAt, "the ones already here have signed in");
-  assert.equal((await db.select().from(invitations)).length, 0, "nothing writes invitations any more");
+  const invites = await db.select().from(invitations).orderBy(asc(invitations.email));
+  assert.deepEqual(invites.map((i) => i.email), ["eve@example.com"], "only the not-yet-arrived get invitations");
+  assert.equal(invites[0].acceptedAt, null);
 
   const [policy] = await db.select().from(instanceSettings).where(eq(instanceSettings.instanceCode, "main"));
   assert.equal(policy.accessPolicy, "invite");
@@ -188,6 +182,28 @@ test("an open invitation admits on arrival and is consumed, carrying its role", 
   assert.equal(inv.acceptedById, id);
 });
 
+test("someone added with roles starts with exactly those; one added without starts on the default", async () => {
+  await resetData();
+  await db.insert(users).values({ email: "owner@example.com", status: "active", role: "owner" });
+  await db.insert(invitations).values([
+    { email: "picked@example.com", role: "member", roles: ["analysts"] },
+    { email: "boss@example.com", role: "admin", roles: ["analysts", "MALLOYYO_ADMIN"] },
+    { email: "legacy@example.com", role: "member" },
+  ]);
+
+  await admitNewUser(await insertNewUser("picked@example.com"), "picked@example.com");
+  assert.deepEqual((await userByEmail("picked@example.com")).roles, ["analysts"]);
+
+  await admitNewUser(await insertNewUser("boss@example.com"), "boss@example.com");
+  const boss = await userByEmail("boss@example.com");
+  assert.deepEqual(boss.roles, ["analysts", "MALLOYYO_ADMIN"]);
+  assert.equal(boss.role, "admin");
+
+  // No roles on the invitation: whatever the instance gives new users now.
+  await admitNewUser(await insertNewUser("legacy@example.com"), "legacy@example.com");
+  assert.deepEqual((await userByEmail("legacy@example.com")).roles, ["MALLOYYO_USER"]);
+});
+
 test("policy open admits a stranger as an ordinary member; policy invite leaves them pending", async () => {
   await resetData();
   await db.insert(users).values({ email: "owner@example.com", status: "active", role: "owner" });
@@ -202,77 +218,4 @@ test("policy open admits a stranger as an ordinary member; policy invite leaves 
   const inviteId = await insertNewUser("uninvited@example.com");
   await admitNewUser(inviteId, "uninvited@example.com");
   assert.equal((await userByEmail("uninvited@example.com")).status, "pending");
-});
-
-// --- 0033_added_users: what it does to the people already in a database ------
-//
-// Run from the file, so this is the migration and not a paraphrase of it. The
-// three statements that add columns to `users` are skipped: this database was
-// built from the current schema and already has them.
-test("0033: open invitations become people, and people an integration made with no role get the members role", async () => {
-  await resetData();
-  const [inviter] = await db
-    .insert(users)
-    .values({ email: "owner@example.com", status: "active", role: "owner", roles: ["MALLOYYO_USER", "MALLOYYO_ADMIN"] })
-    .returning();
-  // As a hosted integration made them: active, holding nothing.
-  await db.insert(users).values({ email: "hosted@example.com", status: "active", roles: [], externalAccountId: "ext-1" });
-  // Every box unticked by an admin, on an instance that owns its own sign-in:
-  // holding nothing is what was chosen.
-  await db.insert(users).values({ email: "unticked@example.com", status: "active", roles: [] });
-  // Chosen for them by an admin: left exactly as chosen.
-  await db.insert(users).values({ email: "chosen@example.com", status: "active", roles: ["finance"] });
-  // Waiting for approval holds nothing, and still does.
-  await db.insert(users).values({ email: "waiting@example.com", status: "pending", roles: [] });
-  await db.insert(invitations).values([
-    { email: "new@example.com", role: "member", invitedById: inviter.id },
-    { email: "boss@example.com", role: "admin", invitedById: inviter.id },
-    // Stale: the address already has a row. Closed, and no second person made.
-    { email: "Chosen@Example.com", role: "member" },
-    // History: consumed long ago. Untouched.
-    { email: "past@example.com", role: "member", acceptedAt: new Date("2026-01-01T00:00:00Z") },
-  ]);
-
-  const migration = readFileSync(new URL("../drizzle/0033_added_users.sql", import.meta.url), "utf8");
-  const statements = migration.split("--> statement-breakpoint").slice(3);
-  for (const statement of statements) await sql.unsafe(statement);
-
-  const added = await userByEmail("new@example.com");
-  assert.equal(added.status, "active");
-  assert.deepEqual(added.roles, ["MALLOYYO_USER"]);
-  assert.equal(added.firstSignedInAt, null, "added, not arrived");
-  assert.equal(added.addedById, inviter.id);
-  const boss = await userByEmail("boss@example.com");
-  assert.deepEqual(boss.roles, ["MALLOYYO_USER", "MALLOYYO_ADMIN"], "an admin invitation carries the admin role");
-  assert.equal(boss.role, "admin");
-  assert.equal(boss.isAdmin, true);
-
-  // One row per address, however it was spelled.
-  const all = await db.select().from(users);
-  assert.equal(all.filter((u) => u.email?.toLowerCase() === "chosen@example.com").length, 1);
-  // Every invitation is spent; none is left to be consumed a second time.
-  const open = (await db.select().from(invitations)).filter((i) => i.acceptedAt === null);
-  assert.equal(open.length, 0);
-
-  assert.deepEqual((await userByEmail("hosted@example.com")).roles, ["MALLOYYO_USER"], "holds nothing → the members role");
-  assert.deepEqual((await userByEmail("unticked@example.com")).roles, [], "nothing, chosen by an admin, stays nothing");
-  assert.deepEqual((await userByEmail("chosen@example.com")).roles, ["finance"], "chosen roles are left alone");
-  assert.deepEqual((await userByEmail("waiting@example.com")).roles, [], "someone not yet let in still holds nothing");
-  // Everyone who was already here has, by definition, signed in.
-  assert.ok((await userByEmail("hosted@example.com")).firstSignedInAt);
-
-  // The scratch column the migration reads through is gone again.
-  const cols = await sql<{ column_name: string }[]>`
-    SELECT column_name FROM information_schema.columns WHERE table_name = 'invitations'`;
-  assert.ok(!cols.some((c) => c.column_name === "roles"));
-
-  // And the person added this way arrives as themselves.
-  await db.insert(instanceSettings).values({ instanceCode: "main", accessPolicy: "invite" }).onConflictDoNothing();
-  const { claimAddedUser } = await import("@/lib/claim");
-  const claimed = await claimAddedUser({
-    email: "new@example.com",
-    account: { provider: "google", providerAccountId: "g-new", type: "oidc" },
-    trusted: true,
-  });
-  assert.equal(claimed, added.id);
 });

@@ -4,8 +4,8 @@
 "use client";
 
 // The membership controls on Admin → Users: approve and deny the queue,
-// disable and enable a person, remove someone added who has not signed in, and
-// the admission policy. Buttons posting to the admin APIs and refreshing the
+// disable and enable a person, take back an address that was added, and the
+// admission policy. Buttons posting to the admin APIs and refreshing the
 // server-rendered page. The two actions that take someone's access away —
 // Disable and Deny — confirm first through the house dialog
 // (src/components/ui/dialog.tsx); everything else is reversible from the same
@@ -103,27 +103,19 @@ export function UserActions({
   );
 }
 
-/** Take back someone who was added and has not signed in yet. Confirmed,
-    because their roles and any dashboards shared with them go with the row —
-    though nothing of their own does: they have never been here. */
-export function RemoveAddedButton({ userId, label }: { userId: string; label: string }) {
+/** Take back an address that was added and has not signed in yet. Nothing to
+    confirm: they have nothing here to lose, and adding them again is one form. */
+export function RevokeInviteButton({ id }: { id: string }) {
   const { run, busy, error } = useAction();
-  const remove = () =>
-    run("/api/admin/users", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "remove", userId }),
-    });
   return (
     <span className="inline-flex items-center gap-1.5">
-      <ConfirmDialog
-        trigger={<button className={BUTTON} disabled={busy}>Remove</button>}
-        title={`Remove ${label}?`}
-        description="They have not signed in yet, so nothing of theirs is lost. Their roles and any dashboards shared with them go; you can add them again."
-        confirmLabel="Remove"
-        destructive
-        onConfirm={remove}
-      />
+      <button
+        className={BUTTON}
+        disabled={busy}
+        onClick={() => void run(`/api/admin/invitations?id=${encodeURIComponent(id)}`, { method: "DELETE" })}
+      >
+        Remove
+      </button>
       {error && <span className="text-red-600 dark:text-red-400">{error}</span>}
     </span>
   );

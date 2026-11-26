@@ -92,11 +92,8 @@ dataset.** Hold `clients` and you read the dashboards on Client reports. Hold
 beside each person is what their roles add up to, a row opens to show which
 role is why, and *Edit roles* previews the result of a change before you save
 it. *Add user* takes an email address and the roles that person starts with,
-with the same preview. It creates them there and then: they are in the list,
-tagged "not signed in yet", and you can change their roles, share a dashboard
-with them, or impersonate them to check what they will find. Their first
-sign-in with that address makes the account theirs (see
-[authentication](authentication.md) for which sign-in methods that works with).
+with the same preview; they are let in the first time they sign in with that
+address.
 
 There is no "dashboard-only user" to configure. Someone is dashboard-only
 exactly when no role gives them Full on anything; their home page is then the

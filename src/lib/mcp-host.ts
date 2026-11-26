@@ -451,7 +451,7 @@ async function openShareLink(
   if (!viewer.admin) {
     if (!res.datasetId) return errText("share link not found");
     const [ds] = await db
-      .select({ isPublic: datasets.isPublic, userId: datasets.userId })
+      .select({ roles: datasets.roles, viewOnlyRoles: datasets.viewOnlyRoles, userId: datasets.userId })
       .from(datasets)
       .where(eq(datasets.id, res.datasetId));
     if (!ds || !canReadDataset(ds, viewer.id, false)) return errText("share link not found");

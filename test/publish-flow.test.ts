@@ -293,7 +293,12 @@ async function datasetRows(name: string) {
 
 /** An ordinary admitted user — no admin role, which is the point. */
 async function seedMember(email: string): Promise<User> {
-  const [u] = await db.insert(users).values({ email, status: "active", role: "member" }).returning();
+  // Holding what a new member is given (src/lib/roles.ts, DEFAULT_ROLES) — which
+  // opens a dataset only where that dataset grants it.
+  const [u] = await db
+    .insert(users)
+    .values({ email, status: "active", role: "member", roles: ["MALLOYYO_USER"] })
+    .returning();
   seededUsers.push(u.id);
   return u;
 }
@@ -1103,8 +1108,8 @@ test("a draft's own files are refused when they reach past the model", async () 
 test("a draft can only be overwritten by the person who made it", async () => {
   const { slug } = await makeDraft({ name: "by_state", title: "By state", source: DRAFT_COMPONENT });
 
-  // Someone who can see the dataset (it's public) but didn't make the draft.
-  await db.update(datasets).set({ isPublic: true }).where(eq(datasets.name, DS_DRAFT));
+  // Someone who can see the dataset (every member can) but didn't make the draft.
+  await db.update(datasets).set({ roles: ["MALLOYYO_USER"] }).where(eq(datasets.name, DS_DRAFT));
   const other = await seedMember(`other-${RUN}@test.local`);
   const res = await fetch(`${serverUrl}/api/datasets/${DS_DRAFT}/drafts`, {
     method: "POST",
@@ -1128,7 +1133,7 @@ test("draft promote validates --name instead of writing outside dashboards/", as
 test("an admin records the promotion of someone else's draft; a non-admin gets the files and a note", async () => {
   const { dir, env } = await draftFixture();
   const { slug } = await makeDraft({ name: "by_state", title: "By state", source: DRAFT_COMPONENT });
-  await db.update(datasets).set({ isPublic: true }).where(eq(datasets.name, DS_DRAFT));
+  await db.update(datasets).set({ roles: ["MALLOYYO_USER"] }).where(eq(datasets.name, DS_DRAFT));
   const colleague = await seedMember(`promoter-${RUN}@test.local`);
   const theirToken = await mintFor(colleague.id, ["mcp"]);
   const promote = () => runCli(["draft", "promote", slug, ".", "--name", "theirs", "--token", theirToken], dir, env);

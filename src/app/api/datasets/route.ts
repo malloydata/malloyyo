@@ -22,7 +22,7 @@ import { nameToSlug as engineSlug } from "@malloyyo/mcp-engine";
 import { db, datasets, malloyModels, repoRevisions, repos, users } from "@/db";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
-import { canAuthor, datasetVisibleWhere } from "@/lib/roles";
+import { canAuthor, datasetVisibleWhere, openToMembersSql } from "@/lib/roles";
 import { nameToSlug } from "@/lib/slug";
 import { parseGitHubRepo } from "@/lib/github";
 import { fetchRepo } from "@/lib/github-refresh";
@@ -300,12 +300,11 @@ export async function GET() {
           status: datasets.status,
           createdAt: datasets.createdAt,
           readyAt: datasets.readyAt,
-          isPublic: datasets.isPublic,
           repo: repos.slug,
         })
         .from(datasets)
         .leftJoin(repos, eq(datasets.repoId, repos.id))
-        .where(and(eq(datasets.isPublic, true), ne(datasets.status, "failed")))
+        .where(and(openToMembersSql(), ne(datasets.status, "failed")))
         .orderBy(desc(datasets.createdAt))
         .limit(50);
       return NextResponse.json(rows);
@@ -321,7 +320,6 @@ export async function GET() {
         status: datasets.status,
         createdAt: datasets.createdAt,
         readyAt: datasets.readyAt,
-        isPublic: datasets.isPublic,
         repo: repos.slug,
         ownerEmail: users.email,
         ownerName: users.name,
@@ -336,7 +334,7 @@ export async function GET() {
     return NextResponse.json(rows);
   }
 
-  // Owned, public, or opened by one of their roles — the same predicate the run
+  // Owned, or opened by one of their roles — the same predicate the run
   // paths use, so a dataset someone can query is a dataset they can see listed.
   const rows = await db
     .select({
@@ -345,7 +343,6 @@ export async function GET() {
       status: datasets.status,
       createdAt: datasets.createdAt,
       readyAt: datasets.readyAt,
-      isPublic: datasets.isPublic,
       repo: repos.slug,
     })
     .from(datasets)

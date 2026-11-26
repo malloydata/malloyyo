@@ -16,6 +16,7 @@ import {
   isEnvAdmin,
   MALLOYYO_ADMIN,
   NEVER_A_DEFAULT,
+  roleLevelUpdate,
   roleNameError,
   rolesOf,
 } from "@/lib/roles";
@@ -90,10 +91,7 @@ export async function POST(req: Request) {
       //
       // Stored as two arrays on the dataset — `roles` (any access) and
       // `view_only_roles` (the subset that may only view); see `DatasetAccess`
-      // in src/lib/roles.ts. Both move in ONE statement, built from the row as
-      // it is when the statement runs, so two admins setting two roles on the
-      // same dataset cannot write over each other, and no reader ever sees a
-      // role half-moved (listed as view-only but not listed at all).
+      // and `roleLevelUpdate` in src/lib/roles.ts, which is the one writer.
       const datasetId = typeof body?.datasetId === "string" ? body.datasetId : "";
       const level = body?.level;
       if (!UUID_RE.test(datasetId)) return bad("datasetId is required");
@@ -106,16 +104,9 @@ export async function POST(req: Request) {
       const [known] = await db.select({ name: roles.name }).from(roles).where(eq(roles.name, name));
       if (!known) return bad(`unknown role: ${name || "(none)"}`);
 
-      type RoleArray = typeof datasets.roles | typeof datasets.viewOnlyRoles;
-      const without = (col: RoleArray) => sql`array_remove(${col}, ${name})`;
-      const withIt = (col: RoleArray) =>
-        sql`case when ${name} = any(${col}) then ${col} else array_append(${col}, ${name}) end`;
       const changed = await db
         .update(datasets)
-        .set({
-          roles: level === "none" ? without(datasets.roles) : withIt(datasets.roles),
-          viewOnlyRoles: level === "view" ? withIt(datasets.viewOnlyRoles) : without(datasets.viewOnlyRoles),
-        })
+        .set(roleLevelUpdate(name, level))
         // Ready datasets only, because that is what the page offers — the same
         // rule the list it replaced had.
         .where(and(eq(datasets.id, datasetId), eq(datasets.status, "ready")))

@@ -291,7 +291,13 @@ publish rights. Full guide: `docs/api-tokens.md`.
    row: `roles` (every role with any access) and `view_only_roles` (the subset
    that may only view); a role in the first and not the second is full, so
    every grant from before levels existed is full. Someone's level is the best
-   any of their roles gives them. `MALLOYYO_ADMIN` opens every dataset in full,
+   any of their roles gives them. **There is no public flag**: `datasets.is_public`
+   was a second grant (full, for everyone signed in, over whatever the roles
+   said), so a role at None went on opening the dataset. It is retired — nothing
+   reads it, 0033 carried public datasets to `MALLOYYO_USER` at full, and "open
+   to every member" is `openToMembers` / `openToMembersSql`. The column is
+   still there only so the version live during a deploy can select it; drop it
+   in the release after. `MALLOYYO_ADMIN` opens every dataset in full,
    decided INSIDE the predicate (`isAdminSql`), not by a flag callers pass.
    - `datasetAccessWhere(userId, need)` in `src/lib/roles.ts` is the rule.
      `visibleDatasetWhere` = may open; `queryableDatasetWhere` = may query.

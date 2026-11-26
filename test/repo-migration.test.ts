@@ -106,6 +106,11 @@ const REVIEWED_AFTER_REWRITE = [
   // the live version creates during the deploy leaves it NULL, which means
   // "the instance default at sign-in": exactly what that version does anyway.
   "0032_invitation_roles",
+  // Data only (two UPDATEs). Gives MALLOYYO_USER full on every dataset flagged
+  // `is_public`, which is what the flag already gave everyone: the live
+  // version reads the flag, untouched, so nothing changes for it. It is what
+  // lets the NEW version stop reading the flag without anyone losing a dataset.
+  "0033_public_is_the_members_role",
 ];
 
 /** What the journal should currently end with. */

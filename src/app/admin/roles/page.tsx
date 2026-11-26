@@ -34,7 +34,6 @@ export default async function AdminRolesPage() {
         title: datasets.title,
         roles: datasets.roles,
         viewOnlyRoles: datasets.viewOnlyRoles,
-        isPublic: datasets.isPublic,
         ownerId: datasets.userId,
         repoSlug: repos.slug,
       })
@@ -55,7 +54,6 @@ export default async function AdminRolesPage() {
     title: datasetTitle(d.name, d.title),
     roles: d.roles ?? [],
     viewOnlyRoles: d.viewOnlyRoles ?? [],
-    isPublic: d.isPublic,
     ownerId: d.ownerId,
   }));
   const members = people.map((u) => {

@@ -69,7 +69,6 @@ export default async function AdminDatasetsPage() {
         description: datasets.description,
         roles: datasets.roles,
         viewOnlyRoles: datasets.viewOnlyRoles,
-        isPublic: datasets.isPublic,
         ownerId: datasets.userId,
         requiredGivens: datasets.requiredGivens,
         repoId: datasets.repoId,
@@ -207,12 +206,6 @@ export default async function AdminDatasetsPage() {
                           required={d.requiredGivens ?? []}
                         />
                         <div className="flex flex-col gap-1">
-                          {d.isPublic && (
-                            <div className="flex flex-wrap items-center gap-1.5">
-                              <LevelBadge level="query" />
-                              <span className="text-xs">everyone signed in</span>
-                            </div>
-                          )}
                           {full.length > 0 && (
                             <div className="flex flex-wrap items-center gap-1.5">
                               <LevelBadge level="query" />
@@ -226,11 +219,9 @@ export default async function AdminDatasetsPage() {
                             </div>
                           )}
                           <span className={MUTED}>
-                            {d.isPublic
-                              ? "Everyone."
-                              : reach === 0
-                                ? "Nobody but admins yet."
-                                : `${reach} ${reach === 1 ? "person" : "people"}, and admins.`}
+                            {reach === 0
+                              ? "Nobody but admins yet."
+                              : `${reach} ${reach === 1 ? "person" : "people"}, and admins.`}
                           </span>
                         </div>
                       </div>

@@ -445,6 +445,18 @@ export const datasets = pgTable(
     /** The model's own doc string (`##"`) — what this dataset is, for someone
         deciding whether they want it or who should see it. */
     description: text("description"),
+    /**
+     * RETIRED. Nothing reads or writes this any more, and it must not be read
+     * again: it was a second grant beside the roles — full access for everyone
+     * signed in, whatever any role said — so a role set to None went on opening
+     * the dataset. 0033 carried every public dataset across to MALLOYYO_USER at
+     * full; "open to every member" is now `openToMembers` (src/lib/role-access.ts).
+     *
+     * The COLUMN stays for one release, on purpose: the version live during a
+     * deploy still selects it, and a migration that drops it would take that
+     * version down for the length of the deploy (CLAUDE.md, "Ordering
+     * matters"). Drop it in the release after this one.
+     */
     isPublic: boolean("is_public").notNull().default(false),
     status: datasetStatus("status").notNull().default("pending"),
     statusError: text("status_error"),

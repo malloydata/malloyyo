@@ -843,7 +843,6 @@ async function activate(
               name: plan.create!.name,
               // Private by default: visibility is a deliberate act in the UI,
               // never config-driven, and a publish never changes it.
-              isPublic: false,
               // Honest, because the row and its first model version commit
               // together — there is no instant at which this dataset exists
               // without one.

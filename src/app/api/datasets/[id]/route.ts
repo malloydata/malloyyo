@@ -10,6 +10,7 @@ import { latestModel, modelFileMap } from "@/lib/mcp-tools";
 import { qualifiedName, resolveDatasetRef } from "@/lib/repos";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
+import { openToMembers, resolveAccess, rolesOf } from "@/lib/roles";
 import { captureTelemetry } from "@/lib/telemetry";
 
 export const runtime = "nodejs";
@@ -35,12 +36,17 @@ export async function GET(
   let me;
   try { me = await getSessionUser(); } catch (err) {
     if (err instanceof UnauthorizedError) {
-      if (!ds.isPublic) return NextResponse.json({ error: "not found" }, { status: 404 });
+      // Signed out: only what every member could open anyway.
+      if (!openToMembers(ds)) return NextResponse.json({ error: "not found" }, { status: 404 });
       me = null;
     } else throw err;
   }
 
-  if (me && !ds.isPublic && !isAdmin(me) && ds.userId !== me.id) {
+  // Signed in: what your roles open, at any level — the same arithmetic the
+  // admin pages show (src/lib/role-access.ts). This used to ask the `is_public`
+  // flag instead, so someone whose role opened a dataset that was not "public"
+  // could query it and still be told here that it did not exist.
+  if (me && resolveAccess(rolesOf(me), [{ ...ds, ownerId: ds.userId }], { userId: me.id })[0].level === "none") {
     return NextResponse.json({ error: "not found" }, { status: 404 });
   }
 
@@ -105,7 +111,6 @@ export async function GET(
     id: ds.id, name: ds.name,
     status: ds.status, statusError: ds.statusError,
     createdAt: ds.createdAt, readyAt: ds.readyAt,
-    isPublic: ds.isPublic,
     // The label. `name` stays the identity — URLs, grants and publishes use it.
     title: datasetTitle(ds.name, ds.title),
     // The public identity. `name` stays the local one, which is what the repo's
@@ -178,7 +183,6 @@ export async function PATCH(
 
   const { id } = await ctx.params;
   const body = (await req.json()) as {
-    isPublic?: boolean;
     githubRepo?: string | null;
     githubBranch?: string | null;
     githubUseToken?: boolean;
@@ -186,10 +190,6 @@ export async function PATCH(
 
   const [ds] = await db.select().from(datasets).where(eq(datasets.id, id)).limit(1);
   if (!ds) return NextResponse.json({ error: "not found" }, { status: 404 });
-
-  if (body.isPublic !== undefined) {
-    await db.update(datasets).set({ isPublic: body.isPublic }).where(eq(datasets.id, id));
-  }
 
   // THE GITHUB ATTACHMENT IS THE REPO'S. Writing it here per dataset is what
   // made one repo in production carry three rows with two different credential
@@ -253,7 +253,6 @@ export async function PATCH(
   const [updated] = await db.select().from(datasets).where(eq(datasets.id, id)).limit(1);
   return NextResponse.json({
     id: updated.id,
-    isPublic: updated.isPublic,
     repo: repo?.slug ?? null,
     githubRepo: repo?.githubRepo ?? null,
     githubBranch: repo?.githubBranch ?? null,

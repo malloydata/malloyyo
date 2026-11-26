@@ -153,7 +153,6 @@ function standInDataset(p: ResolvedPreview): Partial<Dataset> {
     id: STAND_IN_DATASET_ID,
     userId: p.repo.ownerId,
     name: p.entry.name,
-    isPublic: false,
     status: "ready",
     statusError: null,
     githubRepo: p.repo.githubRepo,

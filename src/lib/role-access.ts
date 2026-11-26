@@ -35,8 +35,6 @@ export interface DatasetGrants {
   roles?: readonly string[] | null;
   /** The subset of `roles` that may only view. */
   viewOnlyRoles?: readonly string[] | null;
-  /** The legacy public flag: full access for everyone signed in. */
-  isPublic?: boolean | null;
   /** Its owner, who has full access whatever roles they hold. */
   ownerId?: string | null;
 }
@@ -48,6 +46,26 @@ export function roleLevelOn(ds: Pick<DatasetGrants, "roles" | "viewOnlyRoles">, 
   return (ds.viewOnlyRoles ?? []).includes(role) ? "view" : "query";
 }
 
+/** The built-in role every member is given, by name — repeated here for the
+    same reason as the admin role above. */
+const MEMBERS_ROLE = "MALLOYYO_USER";
+
+/**
+ * "Every member can query this": the members role at full.
+ *
+ * This is what the retired `datasets.is_public` flag used to claim, and the
+ * only thing that claim ever meant on a server with no anonymous read path. The
+ * flag was a second grant beside the roles — it opened a dataset in full to
+ * everyone signed in whatever any role said, so a role set to None went on
+ * opening it. Nothing reads the flag now; the places that need to know whether
+ * a dataset is open to everybody (may a chat about it be shared, may its
+ * question history be read by someone who did not ask) ask this instead, so
+ * there is one fact and one place to change it: Admin → Roles.
+ */
+export function openToMembers(ds: Pick<DatasetGrants, "roles" | "viewOnlyRoles">): boolean {
+  return roleLevelOn(ds, MEMBERS_ROLE) === "query";
+}
+
 /** The best of several levels — how the roles one person holds combine. */
 export function bestLevel(levels: readonly RoleLevel[]): RoleLevel {
   return levels.reduce<RoleLevel>((best, l) => (RANK[l] > RANK[best] ? l : best), "none");
@@ -57,7 +75,7 @@ export interface ResolvedAccess {
   datasetId: string;
   level: RoleLevel;
   /** What gives them that level: role names, or a reason that is not a role
-      ("owner", "public dataset"). Empty when the level is none. */
+      ("owner"). Empty when the level is none. */
   because: string[];
 }
 
@@ -80,7 +98,6 @@ export function resolveAccess(
       level: roleLevelOn(ds, role),
       why: role,
     }));
-    if (ds.isPublic) reasons.push({ level: "query", why: "public dataset" });
     if (who.userId && ds.ownerId === who.userId) reasons.push({ level: "query", why: "owner" });
     const level = bestLevel(reasons.map((r) => r.level));
     return {

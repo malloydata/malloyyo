@@ -9,7 +9,7 @@ import { qualifiedName } from "@/lib/repos";
 import { datasetTitle } from "@malloyyo/mcp-engine";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
-import { datasetAccessWhere } from "@/lib/roles";
+import { datasetAccessWhere, openToMembersSql } from "@/lib/roles";
 
 export const runtime = "nodejs";
 
@@ -25,7 +25,7 @@ export async function GET() {
   // Signed in: everything your roles open — which is what makes a grant on
   // /admin/roles visible here rather than only over MCP. Same predicate the run
   // paths use, so this list and what you may actually query cannot drift.
-  // Signed out: public datasets only. An admin still sees the whole catalogue,
+  // Signed out: only datasets open to every member (the members role at full). An admin still sees the whole catalogue,
   // MALLOYYO_ADMIN opens every dataset, so listing and reading now give the same
   // answer and this needs no special case of its own. It used to have one, under
   // a comment saying the predicate had no admin branch — it does now.
@@ -34,7 +34,7 @@ export async function GET() {
       // against, and what ltool and chat offer. A dataset someone can only view
       // reaches them through its dashboards (/api/dashboards), not through here.
       datasetAccessWhere(me.id, "query")
-    : and(eq(datasets.isPublic, true), ne(datasets.status, "failed"));
+    : and(openToMembersSql(), ne(datasets.status, "failed"));
 
   const dsList = await db
     .select({
@@ -42,7 +42,6 @@ export async function GET() {
       name: datasets.name,
       title: datasets.title,
       status: datasets.status,
-      isPublic: datasets.isPublic,
       repoDir: datasets.repoDir,
       // The GitHub attachment is the REPO's, which is the whole point of the
       // rewrite: it used to be two nullable text columns on every dataset row,
@@ -96,7 +95,6 @@ export async function GET() {
     /** The dataset's display title, already defaulted from its name. */
     title: string;
     status: string;
-    isPublic: boolean;
     qualified: string;
     repo: string | null;
     githubRepo: string | null;
@@ -173,7 +171,6 @@ export async function GET() {
       repo: ds.repoSlug,
       needsUpdate: ds.liveRevisionId === null,
       status: ds.status,
-      isPublic: ds.isPublic,
       // "owner/repo" the model came from: the dataset's configured GitHub repo,
       // or the git remote recorded by a CLI publish.
       githubRepo: ds.githubRepo ?? latestModel?.gitRepo ?? null,

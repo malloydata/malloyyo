@@ -259,11 +259,12 @@ client-side `--dry-run`, which never hits the server.)
     ref is refused — creating under a slugified variant would leave later publishes 404ing;
   - on an existing dataset the flag is a no-op (just the next version), so it's safe to leave
     in a CI command.
-- **Public/private — orthogonal to publish.** `datasets.isPublic` governs who can see/query
-  the dataset, not who can publish to it. **Publish never changes visibility**, and visibility
-  is **not** config-driven: a committed repo file must not be able to expose data (same
-  instinct as keeping tokens out of the config). Set `isPublic` deliberately at dataset
-  creation / in the UI; a model push is a no-op on it.
+- **Who opens a dataset — orthogonal to publish.** A role's level on the dataset (Admin →
+  Roles) governs who can see/query it, not who can publish to it. **Publish never changes
+  it**, and it is **not** config-driven: a committed repo file must not be able to expose
+  data (same instinct as keeping tokens out of the config). There is no public/private
+  setting any more — the old `datasets.isPublic` flag is retired; "everyone" is the
+  `MALLOYYO_USER` role at Full.
 
 ### 4.6 What this buys
 

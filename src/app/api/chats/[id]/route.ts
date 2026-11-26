@@ -35,7 +35,7 @@ function shareRefusal(dataset: string, reason: "unresolvable" | "not-public" | "
         `yours to everyone who opens it. Share the query instead — each reader runs it as themselves.`
       );
     case "not-public":
-      return `'${dataset}' is a private dataset — a chat on it cannot be shared.`;
+      return `'${dataset}' is not open to every member — a chat on it cannot be shared.`;
     case "unresolvable":
       return `'${dataset}' is no longer a dataset on this server, so a chat on it cannot be shared.`;
   }

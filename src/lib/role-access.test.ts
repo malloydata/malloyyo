@@ -8,7 +8,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { bestLevel, resolveAccess, roleLevelOn, type DatasetGrants } from "./role-access";
+import { bestLevel, openToMembers, resolveAccess, roleLevelOn, type DatasetGrants } from "./role-access";
 
 const sales: DatasetGrants = { id: "sales", roles: ["analysts", "executives"], viewOnlyRoles: ["executives"] };
 const support: DatasetGrants = { id: "support", roles: ["analysts"], viewOnlyRoles: ["analysts"] };
@@ -53,15 +53,30 @@ test("an admin has full on everything, whatever else they hold", () => {
   assert.deepEqual(resolveAccess(["executives", "MALLOYYO_ADMIN"], [sales])[0]!.because, ["MALLOYYO_ADMIN"]);
 });
 
-test("owning a dataset, and the public flag, are full access that is not a role", () => {
+test("owning a dataset is full access that is not a role; nothing else is", () => {
   const mine: DatasetGrants = { id: "mine", roles: [], viewOnlyRoles: [], ownerId: "u1" };
-  const open: DatasetGrants = { id: "open", roles: ["readers"], viewOnlyRoles: ["readers"], isPublic: true };
   assert.deepEqual(resolveAccess([], [mine], { userId: "u1" })[0], { datasetId: "mine", level: "query", because: ["owner"] });
   assert.equal(resolveAccess([], [mine], { userId: "u2" })[0]!.level, "none");
-  // Public beats a dashboards-only role on the same dataset: the higher wins.
-  assert.deepEqual(resolveAccess(["readers"], [open])[0], {
-    datasetId: "open",
+});
+
+// The legacy `is_public` flag used to be a second full grant here, for
+// everyone, over whatever the roles said. It is not read any more: a dataset
+// whose only claim is that flag opens for nobody, and "public" is the members
+// role at full like any other grant.
+test("a role's level is the only grant: the public flag is not one", () => {
+  const flagged = { id: "open", roles: ["readers"], viewOnlyRoles: ["readers"], isPublic: true } as DatasetGrants;
+  assert.equal(resolveAccess([], [flagged])[0]!.level, "none");
+  assert.deepEqual(resolveAccess(["readers"], [flagged])[0], { datasetId: "open", level: "view", because: ["readers"] });
+  const members: DatasetGrants = { id: "all", roles: ["MALLOYYO_USER"], viewOnlyRoles: [] };
+  assert.deepEqual(resolveAccess(["MALLOYYO_USER"], [members])[0], {
+    datasetId: "all",
     level: "query",
-    because: ["public dataset"],
+    because: ["MALLOYYO_USER"],
   });
+  // "Open to every member" is that same fact, read back: the members role at
+  // full. Dashboards-only is not it, and neither is any other role.
+  assert.equal(openToMembers(members), true);
+  assert.equal(openToMembers({ roles: ["MALLOYYO_USER"], viewOnlyRoles: ["MALLOYYO_USER"] }), false);
+  assert.equal(openToMembers({ roles: ["readers"], viewOnlyRoles: [] }), false);
+  assert.equal(openToMembers({ roles: null, viewOnlyRoles: null }), false);
 });

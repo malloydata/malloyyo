@@ -44,7 +44,7 @@ export async function GET(req: Request, ctx: { params: Promise<{ id: string }> }
 
   return NextResponse.json({
     ok: true,
-    dataset: { name: ds.name, isPublic: ds.isPublic, status: ds.status },
+    dataset: { name: ds.name, status: ds.status },
     version: model?.version ?? null,
     sources: model?.sources ?? [],
     compiledAt: model?.compiledAt ?? null,

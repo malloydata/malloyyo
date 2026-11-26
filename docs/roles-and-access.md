@@ -76,7 +76,10 @@ A role is a list of datasets, and for each one, what its people get there:
 | **Full** | open its dashboards, and query it — the query editor, chat, AI Q&A, the MCP connector, draft dashboards |
 
 Set them at **Admin → Roles**: pick a role, and each dataset has one three-way
-switch. The same page says whether new users are given the role.
+switch. That switch is the only thing that opens a dataset. There is no separate
+"public" setting: a dataset every member should have is `MALLOYYO_USER` at Full
+(which is what datasets that used to be marked public were converted to), and
+setting it to None takes it away. The same page says whether new users are given the role.
 
 ```
 clients      Client reports: Dashboards

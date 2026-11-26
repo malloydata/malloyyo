@@ -128,7 +128,6 @@ async function stateOf(m: Managed, name: string): Promise<SharingState> {
       id: m.ds.id,
       roles: m.ds.roles,
       viewOnlyRoles: m.ds.viewOnlyRoles,
-      isPublic: m.ds.isPublic,
       ownerId: m.ds.userId,
     },
     name,

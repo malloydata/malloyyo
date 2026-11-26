@@ -25,6 +25,7 @@
 import { and, eq, or, sql } from "drizzle-orm";
 import { datasets, db, instanceSettings, users } from "@/db";
 import { env } from "./env";
+import type { RoleLevel } from "./role-access";
 
 export const MALLOYYO_USER = "MALLOYYO_USER";
 export const MALLOYYO_ADMIN = "MALLOYYO_ADMIN";
@@ -159,7 +160,7 @@ export type DatasetAccess = "view" | "query";
 
 // The same rule as arithmetic, for the admin page to show its working — and
 // the level type both share. See src/lib/role-access.ts.
-export { bestLevel, resolveAccess, roleLevelOn, type RoleLevel } from "./role-access";
+export { bestLevel, openToMembers, resolveAccess, roleLevelOn, type RoleLevel } from "./role-access";
 
 /**
  * The roles this person holds, as a SQL array. Read from the user row in a
@@ -208,8 +209,16 @@ function isAdminSql(userId: string) {
 /**
  * Which datasets this person may open (`view`) or query (`query`).
  *
- * Owning a dataset, and the legacy public flag, both give full access: neither
- * comes from a role, so neither can be view-only.
+ * Owning a dataset gives full access: it does not come from a role, so it
+ * cannot be view-only.
+ *
+ * A role's level is the ONLY other grant. `datasets.is_public` used to be one
+ * too: it opened a dataset in full to everyone signed in, whatever any role
+ * said — so a role set to None on Admin → Roles went on opening the dataset,
+ * and that page disagreed with the one listing what each person gets. It is not
+ * read here or anywhere else now (0033 carried every public dataset across to
+ * MALLOYYO_USER at full first, so nobody lost one). "Open to every member" is
+ * `openToMembers` / `openToMembersSql`: the members role at full.
  *
  * MALLOYYO_ADMIN opens every dataset, in full. This file once argued that
  * administering an instance is not a reason to read its data, and the reversal
@@ -224,12 +233,41 @@ export function datasetAccessWhere(userId: string, need: DatasetAccess) {
   return and(
     or(
       eq(datasets.userId, userId),
-      eq(datasets.isPublic, true),
       datasetRoleOverlap(userId, need),
       isAdminSql(userId),
     ),
     eq(datasets.status, "ready"),
   );
+}
+
+/**
+ * The column values that put ONE role at ONE level on a dataset, for a
+ * `db.update(datasets).set(...)`.
+ *
+ * Both arrays move in one statement, built from the row as it is when the
+ * statement runs, so two admins setting two roles on the same dataset cannot
+ * write over each other, and no reader ever sees a role half-moved (listed as
+ * view-only but not listed at all).
+ */
+export function roleLevelUpdate(name: string, level: RoleLevel) {
+  type RoleArray = typeof datasets.roles | typeof datasets.viewOnlyRoles;
+  const without = (col: RoleArray) => sql`array_remove(${col}, ${name})`;
+  const withIt = (col: RoleArray) =>
+    sql`case when ${name} = any(${col}) then ${col} else array_append(${col}, ${name}) end`;
+  return {
+    roles: level === "none" ? without(datasets.roles) : withIt(datasets.roles),
+    viewOnlyRoles: level === "view" ? withIt(datasets.viewOnlyRoles) : without(datasets.viewOnlyRoles),
+  };
+}
+
+/**
+ * `openToMembers` (src/lib/role-access.ts) as a SQL predicate on the datasets
+ * row: every member can query this. What replaced `is_public = true` wherever
+ * that was a WHERE clause — what a signed-out visitor is told exists, whose
+ * question history someone who did not ask may read.
+ */
+export function openToMembersSql() {
+  return sql`(${MALLOYYO_USER} = any(${datasets.roles}) and not (${MALLOYYO_USER} = any(${datasets.viewOnlyRoles})))`;
 }
 
 /** Datasets this person may OPEN. The name every read path already uses. */

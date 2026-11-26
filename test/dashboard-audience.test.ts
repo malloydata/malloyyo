@@ -30,7 +30,8 @@
 
 import test, { before } from "node:test";
 import assert from "node:assert/strict";
-import { and, eq } from "drizzle-orm";
+import { readFileSync } from "node:fs";
+import { and, eq, sql } from "drizzle-orm";
 import {
   db,
   users,
@@ -46,8 +47,8 @@ import {
 import { allDashboardsByDataset, getDashboard, listDashboards, listDashboardsAndDrafts } from "@/lib/dashboards";
 import { deleteDraft, getDraftFiles, recordPromotion, saveDraftDashboard } from "@/lib/dashboards/draft";
 import { getSharing, setDashboardVisibility, shareDashboard, unshareDashboard } from "@/lib/dashboards/sharing";
-import { MALLOYYO_ADMIN, MALLOYYO_USER } from "@/lib/roles";
-import { resolveAccess } from "@/lib/role-access";
+import { datasetAccessWhere, MALLOYYO_ADMIN, MALLOYYO_USER, roleLevelUpdate } from "@/lib/roles";
+import { openToMembers, resolveAccess } from "@/lib/role-access";
 import { buildHostedExploreSurface } from "@/lib/mcp-host";
 import { canQueryDataset, findByDatasetRef, findBySource, runQueryForWeb } from "@/lib/mcp-tools";
 
@@ -281,11 +282,60 @@ test("an admin opens every dataset in full, holding no role on it", async () => 
   assert.equal(await canQueryDataset(legacy.id, datasetId), true);
 });
 
+// `datasets.is_public` used to open a dataset in full to everyone signed in,
+// over whatever the roles said — so a role set to None went on opening it, and
+// Admin → Roles disagreed with what people could actually reach. Nothing reads
+// the flag any more; this is the test that would have caught it.
+test("the retired public flag opens nothing: a role's level is the only grant", async () => {
+  const [flagged] = await db
+    .insert(datasets)
+    .values({ userId: admin.id, name: "aud_flagged", status: "ready", isPublic: true, roles: [], viewOnlyRoles: [] })
+    .returning();
+  // The rule itself, at each level. (Not `findByDatasetRef`: that also wants a
+  // published model, so on this bare row it would say "no" for the wrong reason.)
+  const opens = async (need: "view" | "query") =>
+    (
+      await db
+        .select({ id: datasets.id })
+        .from(datasets)
+        .where(and(eq(datasets.id, flagged.id), datasetAccessWhere(outsider.id, need)))
+    ).length === 1;
+  try {
+    assert.equal(await opens("view"), false, "the flag alone must not open it");
+    assert.equal(await opens("query"), false);
+    assert.equal(await canQueryDataset(outsider.id, flagged.id), false);
+    assert.equal(openToMembers(flagged), false);
+
+    // What 0033 does to every such row, so that nobody loses a dataset when the
+    // flag stops being read: the members role at full. Run from the file, so
+    // this is the migration and not a paraphrase of it.
+    const migration = readFileSync(new URL("../drizzle/0033_public_is_the_members_role.sql", import.meta.url), "utf8");
+    for (const statement of migration.split("--> statement-breakpoint")) await db.execute(sql.raw(statement));
+    const [after] = await db.select().from(datasets).where(eq(datasets.id, flagged.id));
+    assert.deepEqual(after.roles, [MALLOYYO_USER]);
+    assert.equal(openToMembers(after), true);
+    assert.equal(await opens("query"), true, "every member has it, through the role");
+    assert.equal(await canQueryDataset(outsider.id, flagged.id), true);
+
+    // And now the switch on Admin → Roles means what it says.
+    await db.update(datasets).set(roleLevelUpdate(MALLOYYO_USER, "view")).where(eq(datasets.id, flagged.id));
+    assert.deepEqual([await opens("view"), await opens("query")], [true, false], "dashboards only");
+    await db.update(datasets).set(roleLevelUpdate(MALLOYYO_USER, "none")).where(eq(datasets.id, flagged.id));
+    assert.deepEqual([await opens("view"), await opens("query")], [false, false], "None is none");
+
+    // The migration left the dataset under test alone: it was never public.
+    const [untouched] = await db.select().from(datasets).where(eq(datasets.id, datasetId));
+    assert.deepEqual(untouched.roles, ["staff", "readers"]);
+  } finally {
+    await db.delete(datasets).where(eq(datasets.id, flagged.id));
+  }
+});
+
 test("the admin page's arithmetic gives the answer the server enforces", async () => {
   // src/lib/role-access.ts is what the admin pages show; datasetAccessWhere is
   // what decides. If these ever disagree the page is lying about access.
   const [ds] = await db.select().from(datasets).where(eq(datasets.id, datasetId));
-  const grants = [{ id: ds.id, roles: ds.roles, viewOnlyRoles: ds.viewOnlyRoles, isPublic: ds.isPublic, ownerId: ds.userId }];
+  const grants = [{ id: ds.id, roles: ds.roles, viewOnlyRoles: ds.viewOnlyRoles, ownerId: ds.userId }];
   for (const who of [admin, author, member, viewer, outsider]) {
     const [fresh] = await db.select().from(users).where(eq(users.id, who.id));
     const held = [...(fresh.roles ?? []), ...(fresh.role === "admin" ? [MALLOYYO_ADMIN] : [])];

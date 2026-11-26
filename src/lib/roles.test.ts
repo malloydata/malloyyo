@@ -122,7 +122,7 @@ test("roleNameError: lowercase, because models compare against these", () => {
 // way they are meant to be. Replacing the body with `true` passes no test that
 // does not look at this.
 
-test("datasetVisibleWhere: owner OR public OR role overlap OR admin, AND ready", () => {
+test("datasetVisibleWhere: owner OR role overlap OR admin, AND ready — and not the public flag", () => {
   const { sql: text, params } = db
     .select()
     .from(datasets)
@@ -134,8 +134,12 @@ test("datasetVisibleWhere: owner OR public OR role overlap OR admin, AND ready",
   const any = "[\\s\\S]*";
   assert.match(
     text,
-    new RegExp(`\\(${any}user_id${any}\\sor\\s${any}is_public${any}\\sor\\s${any}&&${any}\\)\\sand\\s${any}status`, "i"),
+    new RegExp(`\\(${any}user_id${any}\\sor\\s${any}&&${any}\\)\\sand\\s${any}status`, "i"),
   );
+  // `is_public` opens nothing. It used to be a clause here, which let a role
+  // set to None go on opening the dataset; a level is the only grant now.
+  // (Only the WHERE: `select()` lists every column, the retired one included.)
+  assert.ok(!/is_public/i.test(text.slice(text.indexOf(" where "))), "the public flag must not be part of the access rule");
   // The overlap reads the asker's own row rather than a list passed in, so no
   // caller can widen it by supplying one.
   assert.match(text, /&&\s*\(select coalesce\(/i);
@@ -185,8 +189,10 @@ test("datasetAccessWhere: query level subtracts the dataset's view-only roles", 
   // subtraction, so a role that is merely absent from `view_only_roles` is
   // full. Nothing changes for anyone until an admin sets a level to dashboards.
   assert.match(query, /array\(select unnest\("datasets"\."roles"\) except select unnest\("datasets"\."view_only_roles"\)\) &&/i);
-  // Owning a dataset, and the legacy public flag, are not roles: both stay full.
-  assert.match(query, /user_id[\s\S]*\sor\s[\s\S]*is_public[\s\S]*\sor\s[\s\S]*&&/i);
+  // Owning a dataset is not a role, so it stays full. The public flag is no
+  // longer read at either level.
+  assert.match(query, /user_id[\s\S]*\sor\s[\s\S]*&&/i);
+  assert.ok(!/is_public/i.test(query) && !/is_public/i.test(view));
   // Still a parameter, still nowhere in the text.
   assert.ok(!query.includes("33333333"));
 });

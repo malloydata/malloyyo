@@ -23,7 +23,7 @@ async function mayRead(
   if (isAdmin(user) || authoredByMe) return true;
   if (!datasetId) return false;
   const [ds] = await db
-    .select({ isPublic: datasets.isPublic, userId: datasets.userId })
+    .select({ roles: datasets.roles, viewOnlyRoles: datasets.viewOnlyRoles, userId: datasets.userId })
     .from(datasets)
     .where(eq(datasets.id, datasetId));
   return !!ds && canReadDataset(ds, user.id, false);

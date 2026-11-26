@@ -3,6 +3,7 @@
 
 import { NextResponse } from "next/server";
 import { eq, and, ne, or, inArray, sql, desc } from "drizzle-orm";
+import { openToMembersSql } from "@/lib/roles";
 import { db, datasets, savedQueries, favorites, users } from "@/db";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
@@ -25,7 +26,7 @@ export async function GET() {
   const admin = me ? isAdmin(me) : false;
   const visible = admin
     ? ne(datasets.status, "failed")
-    : and(eq(datasets.isPublic, true), ne(datasets.status, "failed"));
+    : and(openToMembersSql(), ne(datasets.status, "failed"));
 
   // Whose favorites count: mine + every admin's (admin = role column, the
   // legacy is_admin column, OR the APP_ADMIN_EMAILS list, which isn't stored

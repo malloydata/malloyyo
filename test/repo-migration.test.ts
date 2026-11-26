@@ -102,6 +102,10 @@ const REVIEWED_AFTER_REWRITE = [
   // published dashboard keeps the audience its model gives it, so nobody's
   // access changes when this lands.
   "0031_dashboard_permissions",
+  // One nullable column the live version never reads or writes. An invitation
+  // the live version creates during the deploy leaves it NULL, which means
+  // "the instance default at sign-in": exactly what that version does anyway.
+  "0032_invitation_roles",
 ];
 
 /** What the journal should currently end with. */

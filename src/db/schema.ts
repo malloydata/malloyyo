@@ -532,7 +532,7 @@ export const datasets = pgTable(
      * access — dashboards plus the query editor, chat and the MCP connector.
      *
      * So one role holds a level per dataset (none / dashboards / full), which is
-     * what Admin → Users & roles edits. Someone's level on a dataset is the best any of
+     * what Admin → Roles edits. Someone's level on a dataset is the best any of
      * their roles gives them there. A second array rather than a table of
      * (role, dataset, level) because `roles` is what every read path already
      * tests, and a role listed there with nothing here is exactly the full
@@ -1006,6 +1006,15 @@ export const invitations = pgTable(
     // Stored lowercase; matched case-insensitively at sign-in.
     email: text("email").notNull(),
     role: userRole("role").notNull().default("member"),
+    /**
+     * The roles this person starts with, chosen when they were added (Admin →
+     * Users → Add user). NULL means nobody chose: they get whatever the
+     * instance gives new users at the moment they sign in, which is what every
+     * invitation from before this column does. `role` above is the legacy
+     * member/admin flag and moves with it — MALLOYYO_ADMIN here means `admin`
+     * there (src/lib/roster.ts keeps the two in step).
+     */
+    roles: text("roles").array(),
     invitedById: uuid("invited_by_id").references(() => users.id, { onDelete: "set null" }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()

@@ -182,6 +182,28 @@ test("an open invitation admits on arrival and is consumed, carrying its role", 
   assert.equal(inv.acceptedById, id);
 });
 
+test("someone added with roles starts with exactly those; one added without starts on the default", async () => {
+  await resetData();
+  await db.insert(users).values({ email: "owner@example.com", status: "active", role: "owner" });
+  await db.insert(invitations).values([
+    { email: "picked@example.com", role: "member", roles: ["analysts"] },
+    { email: "boss@example.com", role: "admin", roles: ["analysts", "MALLOYYO_ADMIN"] },
+    { email: "legacy@example.com", role: "member" },
+  ]);
+
+  await admitNewUser(await insertNewUser("picked@example.com"), "picked@example.com");
+  assert.deepEqual((await userByEmail("picked@example.com")).roles, ["analysts"]);
+
+  await admitNewUser(await insertNewUser("boss@example.com"), "boss@example.com");
+  const boss = await userByEmail("boss@example.com");
+  assert.deepEqual(boss.roles, ["analysts", "MALLOYYO_ADMIN"]);
+  assert.equal(boss.role, "admin");
+
+  // No roles on the invitation: whatever the instance gives new users now.
+  await admitNewUser(await insertNewUser("legacy@example.com"), "legacy@example.com");
+  assert.deepEqual((await userByEmail("legacy@example.com")).roles, ["MALLOYYO_USER"]);
+});
+
 test("policy open admits a stranger as an ordinary member; policy invite leaves them pending", async () => {
   await resetData();
   await db.insert(users).values({ email: "owner@example.com", status: "active", role: "owner" });

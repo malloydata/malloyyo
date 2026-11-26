@@ -17,6 +17,10 @@ import { getAccessPolicy } from "./access-policy";
 import { defaultRoles, MALLOYYO_ADMIN, MALLOYYO_USER } from "./roles";
 import { logger } from "./logger";
 
+function admittedRoles(roles: readonly string[], admin: boolean): string[] {
+  return admin ? [...new Set([...roles, MALLOYYO_ADMIN])] : [...roles];
+}
+
 /**
  * Decide the new user's status and role.
  *
@@ -66,13 +70,12 @@ export async function admitNewUser(userId: string, email: string | null | undefi
           // An invitation may carry admin; it never mints an owner.
           role: invitation.role === "owner" ? "admin" : invitation.role,
           isAdmin: invitation.role !== "member",
-          // An invitation carrying admin grants the admin role too; everyone
-          // else starts on the instance default (src/lib/roles.ts), which opens
-          // no dataset until someone grants one deliberately.
-          roles:
-            invitation.role === "member"
-              ? await defaultRoles()
-              : [...new Set([...(await defaultRoles()), MALLOYYO_ADMIN])],
+          // The roles ticked when they were added, exactly. An invitation
+          // nobody chose roles for (every one from before they could be chosen)
+          // starts on the instance default (src/lib/roles.ts), which opens no
+          // dataset until someone grants one deliberately. Either way one
+          // carrying admin grants the admin role too.
+          roles: admittedRoles(invitation.roles ?? (await defaultRoles()), invitation.role !== "member"),
         })
         .where(and(eq(users.id, userId), ne(users.status, "disabled")));
       logger.info("invitation consumed on first sign-in", { userId });

@@ -225,6 +225,13 @@
       "when": 1795648119576,
       "tag": "0031_dashboard_permissions",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1795657894203,
+      "tag": "0032_invitation_roles",
+      "breakpoints": true
     }
   ]
 }

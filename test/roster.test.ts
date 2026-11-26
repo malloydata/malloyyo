@@ -12,7 +12,7 @@
 import test, { beforeEach } from "node:test";
 import assert from "node:assert/strict";
 import { eq, isNull, and } from "drizzle-orm";
-import { db, invitations, users, type User } from "@/db";
+import { db, invitations, roles, users, type User } from "@/db";
 import { applyUserAction, createInvitation, revokeInvitation, RosterError } from "@/lib/roster";
 
 async function resetData() {
@@ -90,6 +90,46 @@ test("inviting someone already waiting approves them with the invited role", asy
   assert.equal(row.status, "active");
   assert.equal(row.role, "admin");
   assert.equal((await db.select().from(invitations)).length, 0, "no invitation row minted");
+});
+
+// Admin → Users → Add user: the roles ticked there are what the person starts
+// with. An invitation that carries none still means "the instance default".
+test("adding someone with roles stores exactly those; the admin role and the admin flag move together", async () => {
+  await db.insert(roles).values({ name: "analysts" }).onConflictDoNothing();
+
+  const plain = await createInvitation(admin, "plain@example.com", "member");
+  assert.ok(plain.kind === "invited" && plain.invitation.roles === null, "nobody chose roles");
+
+  const chosen = await createInvitation(admin, "pick@example.com", "member", ["MALLOYYO_USER", "analysts"]);
+  assert.ok(chosen.kind === "invited");
+  assert.deepEqual(chosen.kind === "invited" && chosen.invitation.roles, ["MALLOYYO_USER", "analysts"]);
+  assert.equal(chosen.kind === "invited" && chosen.invitation.role, "member");
+
+  // Ticking MALLOYYO_ADMIN is the same fact as the legacy flag, said once.
+  const boss = await createInvitation(admin, "boss@example.com", "member", ["MALLOYYO_ADMIN"]);
+  assert.equal(boss.kind === "invited" && boss.invitation.role, "admin");
+  const flagged = await createInvitation(admin, "flag@example.com", "admin", ["analysts"]);
+  assert.deepEqual(flagged.kind === "invited" && flagged.invitation.roles, ["analysts", "MALLOYYO_ADMIN"]);
+
+  // Re-adding with different ticks replaces them; without any, leaves them.
+  const again = await createInvitation(admin, "pick@example.com", "member", ["MALLOYYO_USER"]);
+  assert.deepEqual(again.kind === "invited" && again.invitation.roles, ["MALLOYYO_USER"]);
+  const untouched = await createInvitation(admin, "pick@example.com", "member");
+  assert.deepEqual(untouched.kind === "invited" && untouched.invitation.roles, ["MALLOYYO_USER"]);
+
+  await assert.rejects(createInvitation(admin, "typo@example.com", "member", ["analists"]), /unknown role/);
+  await db.delete(roles).where(eq(roles.name, "analysts"));
+});
+
+test("adding someone who is already waiting approves them with the ticked roles", async () => {
+  await db.insert(roles).values({ name: "analysts" }).onConflictDoNothing();
+  const waiting = await seedUser({ email: "queue@example.com", status: "pending", roles: ["MALLOYYO_USER"] });
+  const outcome = await createInvitation(admin, "queue@example.com", "member", ["analysts"]);
+  assert.equal(outcome.kind, "approved");
+  const [row] = await db.select().from(users).where(eq(users.id, waiting.id));
+  assert.equal(row.status, "active");
+  assert.deepEqual(row.roles, ["analysts"], "what was ticked, not what the row happened to hold");
+  await db.delete(roles).where(eq(roles.name, "analysts"));
 });
 
 test("inviting an active or disabled address is refused with a pointer to the right action", async () => {

@@ -160,7 +160,7 @@ export default async function AdminUsersPage({
           </h3>
           {pending.map((u) => (
             <div key={u.id} className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-2">
-              <span className="min-w-0">
+              <span className="min-w-[14rem] flex-1">
                 <span className="text-sm">{u.name ?? u.email ?? "someone with no name or address"}</span>{" "}
                 <span className={MUTED}>
                   {u.name && u.email ? `${u.email} · ` : ""}asked {u.createdAt.toISOString().slice(0, 10)}

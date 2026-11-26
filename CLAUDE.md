@@ -125,6 +125,37 @@ git commit --author="<name> <email>" -F -   # message ends with:
 Fixing it after the fact: `git commit --amend --author=… -F -` with the
 trailer appended, then `git push --force-with-lease`.
 
+## Security findings NEVER go in the repo
+
+**This repo is public.** Never write a security finding anywhere that is pushed
+or posted to it. No exceptions, and "it is already fixed on this branch" is not
+one: production runs the old code until someone deploys.
+
+"Anywhere" means all of it:
+
+- commit messages, branch names, PR titles and descriptions (GitHub keeps a
+  description's edit history, so a later edit does not take it back);
+- PR, review and issue comments;
+- code comments, test names and test comments, docs, this file;
+- "not in this PR" / "known issues" / "left for later" lists.
+
+A finding is: a hole that exists (fixed here or not), how it was or could be
+used, what a review turned up, which inputs got through. Anything that tells a
+reader what is wrong with a running instance.
+
+What to write instead: **the rule the code now enforces, and what changes for a
+user** — "caller-written Malloy on a scoped dataset may not define joins",
+never "a caller-written join reached the unscoped table". A commit that closes
+a hole gets a plain message about the behaviour ("Hold caller-written Malloy to
+the scope rule"), not the story of the hole.
+
+Where findings DO go: tell the person running the session, in the
+conversation, and put anything longer in a private document of theirs. If a
+finding seems to need a public home (an advisory, an issue), ask first — that
+is their call, never yours.
+
+Before any commit, push, PR edit or comment: reread it for the above.
+
 ## Database & migrations
 
 **The `drizzle/` journal is the schema path** (since 2026-08-07; before that,
@@ -350,8 +381,7 @@ references no required given. That is only sound for text the PUBLISHER wrote,
 so text anyone else wrote on a scoped dataset — an ad-hoc query, a panel's
 inline Malloy, a run-expression, a draft's `.malloy` file — also goes through
 `scopeEscape` (`packages/mcp-engine/src/host-givens.ts`): no `$MALLOYYO_…`
-reference, no `join_*`, no `# image` / `# link` tags. Each of those returned or
-carried off other tenants' rows before the rule existed. A new path that runs
+reference, no `join_*`, no `# image` / `# link` tags. A new path that runs
 caller-written Malloy must call it; `runRestricted`, `runRestrictedMalloyFiles`
 and `runNamedMalloyFiles` already do. Other people's question history and share
 links are likewise unreadable on a scoped dataset (`canReadDataset`,

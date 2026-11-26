@@ -295,8 +295,11 @@ version mid-deploy. A first sign-in CLAIMS the added row in the Auth.js
 so it then proceeds as a returning user and admission never runs for someone
 an admin already decided about. Two limits that are the whole safety of it:
 only a row that has **never signed in**, and only a provider whose email is
-trusted (`emailIsTrusted`: Google verified, Okta, Microsoft only when
-single-tenant). Do not switch on `allowDangerousEmailAccountLinking` instead —
+trusted (`emailIsTrusted`: Google verified, Okta, Microsoft only when the
+issuer names ONE tenant by its ID and the token is from it — an issuer that is
+merely set, like `organizations`, is every tenant). The same question decides
+whether adding an address may approve someone already waiting under it
+(`providerVouchesForEmail`). Do not switch on `allowDangerousEmailAccountLinking` instead —
 it attaches to established accounts too. `first_signed_in_at` DEFAULTS TO
 `now()` so every sign-in-driven insert path gets it for free; only Add user
 writes NULL.

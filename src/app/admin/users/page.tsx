@@ -20,15 +20,15 @@
 // The list stays, because which roles those people hold — and so which
 // datasets they open — is still this instance's to say.
 
-import { asc, desc, eq } from "drizzle-orm";
-import { dashboardGrants, db, datasets, roles as rolesTable, users } from "@/db";
+import { asc, desc, eq, inArray } from "drizzle-orm";
+import { accounts, dashboardGrants, db, datasets, roles as rolesTable, users } from "@/db";
 import { requireAdminPage } from "@/lib/admin";
 import { getAccessPolicy } from "@/lib/access-policy";
 import { hostedSignIn } from "@/lib/hosted-auth-integration";
 import { defaultRoles, MALLOYYO_ADMIN, rolesOf } from "@/lib/roles";
 import { datasetTitle } from "@malloyyo/mcp-engine";
 import { configuredAuthProviders } from "@/lib/auth-providers";
-import { providersThatCannotClaim } from "@/lib/claim";
+import { providersThatCannotClaim, providerVouchesForEmail } from "@/lib/claim";
 import { MUTED, type SharedDashboard } from "../access-shared";
 import { AddUserButton } from "./add-user";
 import { PeoplePanel } from "./people-panel";
@@ -79,6 +79,19 @@ export default async function AdminUsersPage({
   ]);
 
   const pending = ownsSignIn ? people.filter((u) => u.status === "pending") : [];
+  // Someone waiting is "someone who signed in SAYING this address". Where the
+  // sign-in method does not vouch for addresses (src/lib/claim.ts), the row
+  // says so: approving is a decision about a person, and the address is the
+  // only thing on the row that says who.
+  const providerName = (id: string) => configuredAuthProviders().find((p) => p.id === id)?.name ?? id;
+  const unproven = new Map<string, string>();
+  if (pending.length > 0) {
+    const via = await db
+      .select({ userId: accounts.userId, provider: accounts.provider })
+      .from(accounts)
+      .where(inArray(accounts.userId, pending.map((u) => u.id)));
+    for (const a of via) if (!providerVouchesForEmail(a.provider)) unproven.set(a.userId, providerName(a.provider));
+  }
   const roleRows = catalog.map((r) => ({ name: r.name, description: r.description, builtin: r.builtin }));
   const allDatasets = dsRows.map((d) => ({
     id: d.id,
@@ -120,9 +133,7 @@ export default async function AdminUsersPage({
   // Sign-in methods that cannot be used to claim an added person here, by the
   // name on their button — so the dialog says it before someone finds out.
   const cannotClaim = ownsSignIn
-    ? providersThatCannotClaim(configuredAuthProviders().map((p) => p.id)).map(
-        (id) => configuredAuthProviders().find((p) => p.id === id)?.name ?? id,
-      )
+    ? providersThatCannotClaim(configuredAuthProviders().map((p) => p.id)).map(providerName)
     : [];
 
   return (
@@ -154,6 +165,12 @@ export default async function AdminUsersPage({
                 <span className={MUTED}>
                   {u.name && u.email ? `${u.email} · ` : ""}asked {u.createdAt.toISOString().slice(0, 10)}
                 </span>
+                {unproven.has(u.id) && (
+                  <span className="block text-xs text-amber-800 dark:text-amber-300">
+                    Signed in with {unproven.get(u.id)}, which accepts any account here: the address is what they
+                    said, not proof of who they are.
+                  </span>
+                )}
               </span>
               <UserActions
                 userId={u.id}

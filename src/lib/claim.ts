@@ -33,16 +33,57 @@ import { and, eq, isNull, sql } from "drizzle-orm";
 import { accounts, db, users } from "@/db";
 import { logger } from "./logger";
 
+/** Microsoft's own tenant for personal accounts: "one tenant" in form only. */
+const MICROSOFT_CONSUMER_TENANT = "9188040d-6c67-4c5b-b112-36a304b66dad";
+
+/**
+ * The ONE Microsoft tenant sign-in is restricted to, or null when it is not
+ * restricted to one.
+ *
+ * Only a tenant ID counts. `AUTH_MICROSOFT_ENTRA_ID_ISSUER` being SET is not
+ * the test: `.../organizations/v2.0/` and `.../consumers/v2.0/` are set, and
+ * are every tenant there is — Auth.js rewrites a word in that position to the
+ * token's own tenant before validating it (@auth/core
+ * lib/actions/callback/oauth/callback.js), which is what lets all of them in.
+ * A tenant ID is not rewritten, so the token must come from that tenant.
+ */
+export function microsoftSingleTenant(): string | null {
+  const issuer = process.env.AUTH_MICROSOFT_ENTRA_ID_ISSUER?.trim().toLowerCase() ?? "";
+  const id = issuer.match(/\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\/v2\.0\/?$/)?.[1];
+  return id && id !== MICROSOFT_CONSUMER_TENANT ? id : null;
+}
+
+/**
+ * Does this provider, AS CONFIGURED HERE, vouch for the addresses it reports?
+ * The part of the answer that does not depend on one sign-in — for the admin
+ * pages to say which sign-in methods prove an address and which do not.
+ */
+export function providerVouchesForEmail(provider: string): boolean {
+  switch (provider) {
+    case "google":
+    case "okta":
+      return true;
+    case "microsoft-entra-id":
+      return microsoftSingleTenant() !== null;
+    default:
+      return false;
+  }
+}
+
 /**
  * May a sign-in through this provider claim a row by the email it asserts?
  *
  *   google              yes, when Google says the address is verified.
- *   okta                yes: the organization's own directory. (Refused only if
- *                       it explicitly says the address is unverified.)
- *   microsoft-entra-id  ONLY when sign-in is restricted to one tenant
- *                       (AUTH_MICROSOFT_ENTRA_ID_ISSUER). With the "common"
- *                       authority any Microsoft tenant can sign in, and the
- *                       admin of one can set a user's mail to anything.
+ *   okta                yes: the organization's own directory. Refused only if
+ *                       it explicitly says the address is unverified — Okta
+ *                       leaves `email_verified` OUT of the ID token it returns
+ *                       beside an access token, which is the one Auth.js reads,
+ *                       so requiring `true` would refuse every Okta sign-in.
+ *   microsoft-entra-id  ONLY when sign-in is restricted to one tenant by its
+ *                       ID (`microsoftSingleTenant`), and the token says it is
+ *                       from that tenant. Otherwise any Microsoft tenant can
+ *                       sign in, and the admin of one can set a user's mail to
+ *                       anything.
  *   anything else       no. A provider is trusted here by being named here.
  */
 export function emailIsTrusted(provider: string, profile: Record<string, unknown> | null | undefined): boolean {
@@ -51,8 +92,10 @@ export function emailIsTrusted(provider: string, profile: Record<string, unknown
       return profile?.email_verified === true;
     case "okta":
       return profile?.email_verified !== false;
-    case "microsoft-entra-id":
-      return !!process.env.AUTH_MICROSOFT_ENTRA_ID_ISSUER?.trim();
+    case "microsoft-entra-id": {
+      const tenant = microsoftSingleTenant();
+      return tenant !== null && typeof profile?.tid === "string" && profile.tid.toLowerCase() === tenant;
+    }
     default:
       return false;
   }
@@ -62,7 +105,7 @@ export function emailIsTrusted(provider: string, profile: Record<string, unknown
     instance as configured — for the Add user dialog to say so, instead of
     someone discovering it when their sign-in is refused. */
 export function providersThatCannotClaim(ready: readonly string[]): string[] {
-  return ready.filter((p) => p === "microsoft-entra-id" && !process.env.AUTH_MICROSOFT_ENTRA_ID_ISSUER?.trim());
+  return ready.filter((p) => !providerVouchesForEmail(p));
 }
 
 export interface ClaimAccount {

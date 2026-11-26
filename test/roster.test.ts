@@ -116,6 +116,29 @@ test("adding someone who is already waiting approves them with the ticked roles"
   await db.delete(roles).where(eq(roles.name, "analysts"));
 });
 
+test("adding does not approve someone waiting under an address their sign-in method does not prove", async () => {
+  // An instance open to every Microsoft tenant: anyone can sign in first under
+  // an address they expect to be added, and wait in the queue for it.
+  const saved = process.env.AUTH_MICROSOFT_ENTRA_ID_ISSUER;
+  delete process.env.AUTH_MICROSOFT_ENTRA_ID_ISSUER;
+  try {
+    const squatter = await seedUser({ email: "cfo@example.com", status: "pending" });
+    await db.insert(accounts).values({ userId: squatter.id, type: "oidc", provider: "microsoft-entra-id", providerAccountId: "ms-1" });
+    await assert.rejects(addUser(admin, "cfo@example.com", ["MALLOYYO_ADMIN"]), /does not prove/);
+    const [row] = await db.select().from(users).where(eq(users.id, squatter.id));
+    assert.equal(row.status, "pending", "still waiting");
+    assert.deepEqual(row.roles, [], "and holding nothing");
+
+    // Through a provider that vouches for the address, adding is approving.
+    const waiting = await seedUser({ email: "real@example.com", status: "pending" });
+    await db.insert(accounts).values({ userId: waiting.id, type: "oidc", provider: "google", providerAccountId: "g-real" });
+    assert.equal((await addUser(admin, "real@example.com", ["MALLOYYO_USER"])).kind, "approved");
+  } finally {
+    if (saved === undefined) delete process.env.AUTH_MICROSOFT_ENTRA_ID_ISSUER;
+    else process.env.AUTH_MICROSOFT_ENTRA_ID_ISSUER = saved;
+  }
+});
+
 test("adding an active or disabled address is refused with a pointer to the right action", async () => {
   await assert.rejects(addUser(admin, "admin@example.com", []), /already an active user/);
   await seedUser({ email: "off@example.com", status: "disabled" });
@@ -216,15 +239,28 @@ test("which providers are trusted for an address", () => {
     assert.equal(emailIsTrusted("google", {}), false, "Google has to say so");
     assert.equal(emailIsTrusted("okta", {}), true, "the organization's own directory");
     assert.equal(emailIsTrusted("okta", { email_verified: false }), false);
-    // Microsoft: only when sign-in is restricted to one tenant. With the common
-    // authority any tenant's admin can set a user's mail to anything.
+    // Microsoft: one tenant, named by its ID, and the token from that tenant.
+    const tenant = "11111111-2222-3333-4444-555555555555";
+    const from = (tid: string) => ({ email: "x@y.com", tid });
     delete process.env.AUTH_MICROSOFT_ENTRA_ID_ISSUER;
-    assert.equal(emailIsTrusted("microsoft-entra-id", { email: "x@y.com" }), false);
+    assert.equal(emailIsTrusted("microsoft-entra-id", from(tenant)), false, "unset is every Microsoft account");
     assert.deepEqual(providersThatCannotClaim(["google", "microsoft-entra-id"]), ["microsoft-entra-id"]);
-    process.env.AUTH_MICROSOFT_ENTRA_ID_ISSUER = "https://login.microsoftonline.com/tenant/v2.0/";
-    assert.equal(emailIsTrusted("microsoft-entra-id", {}), true);
+    // SET is not the test. These are set, and are every tenant there is: Auth.js
+    // rewrites a word in that position to whatever tenant the token names.
+    for (const many of ["organizations", "common", "consumers", "tenant"]) {
+      process.env.AUTH_MICROSOFT_ENTRA_ID_ISSUER = `https://login.microsoftonline.com/${many}/v2.0/`;
+      assert.equal(emailIsTrusted("microsoft-entra-id", from(tenant)), false, many);
+      assert.deepEqual(providersThatCannotClaim(["microsoft-entra-id"]), ["microsoft-entra-id"], many);
+    }
+    // Microsoft's own tenant for personal accounts is one tenant in form only.
+    process.env.AUTH_MICROSOFT_ENTRA_ID_ISSUER = "https://login.microsoftonline.com/9188040d-6c67-4c5b-b112-36a304b66dad/v2.0/";
+    assert.equal(emailIsTrusted("microsoft-entra-id", from("9188040d-6c67-4c5b-b112-36a304b66dad")), false);
+    process.env.AUTH_MICROSOFT_ENTRA_ID_ISSUER = `https://login.microsoftonline.com/${tenant.toUpperCase()}/v2.0/`;
+    assert.equal(emailIsTrusted("microsoft-entra-id", from(tenant)), true);
+    assert.equal(emailIsTrusted("microsoft-entra-id", from("99999999-2222-3333-4444-555555555555")), false, "another tenant's token");
+    assert.equal(emailIsTrusted("microsoft-entra-id", { email: "x@y.com" }), false, "a token that names no tenant");
     assert.deepEqual(providersThatCannotClaim(["google", "microsoft-entra-id"]), []);
-    // A provider is trusted by being named, never by default.
+    // Anything not named is not trusted, whatever it claims.
     assert.equal(emailIsTrusted("github", { email_verified: true }), false);
   } finally {
     if (saved === undefined) delete process.env.AUTH_MICROSOFT_ENTRA_ID_ISSUER;

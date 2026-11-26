@@ -16,7 +16,8 @@
 //   e.g. re-approve someone an admin just disabled.
 
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
-import { db, roles as rolesTable, users, type User } from "@/db";
+import { accounts, db, roles as rolesTable, users, type User } from "@/db";
+import { providerVouchesForEmail } from "./claim";
 import { defaultRoles, isBuiltinRole, MALLOYYO_ADMIN } from "./roles";
 import { logger } from "./logger";
 
@@ -109,7 +110,8 @@ export type AddOutcome =
  *
  * If the address is already waiting in the queue, adding them IS approving
  * them, with the roles just ticked — those were chosen for this person, a
- * moment ago, by someone looking at what they add up to.
+ * moment ago, by someone looking at what they add up to. Only where the
+ * provider they came through vouches for the address, though: see below.
  *
  * MALLOYYO_ADMIN in `roles` and the two legacy admin columns are one fact, and
  * are written together, as everywhere else roles are written.
@@ -139,6 +141,19 @@ export async function addUser(actor: User, rawEmail: string, roles: readonly str
   if (existing) {
     switch (existing.status) {
       case "pending": {
+        // Typing an address here means "the person who owns this address". A
+        // row in the queue means only "someone signed in SAYING this address" —
+        // the same thing where the provider vouches for it, and not otherwise:
+        // on an instance open to every Microsoft tenant, anyone can sign in
+        // first under an address they expect to be added, and wait. So the
+        // shortcut is for rows a vouching provider made; any other is approved
+        // from the queue, by someone looking at that row and what it says.
+        const via = await db.select({ provider: accounts.provider }).from(accounts).where(eq(accounts.userId, existing.id));
+        if (via.some((a) => !providerVouchesForEmail(a.provider))) {
+          throw new RosterError(
+            "someone is waiting for approval under this address, through a sign-in method that does not prove it is theirs — approve them from the waiting list if you know it is them, then set their roles",
+          );
+        }
         const [approved] = await db
           .update(users)
           .set({ status: "active", roles: wanted, ...(existing.role === "owner" ? {} : legacy) })

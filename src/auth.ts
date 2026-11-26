@@ -157,9 +157,11 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     // address, and revoking anyone meant a redeploy.)
     //
     // What it does: lets a first sign-in claim the row an admin ADDED for that
-    // address (src/lib/claim.ts). Auth.js calls this before it looks for the
-    // user, so linking the provider account to that row here turns the rest of
-    // the sign-in into the ordinary one for someone who has signed in before.
+    // address (src/lib/claim.ts). Auth.js calls this before the lookup that
+    // decides the sign-in (handle-login's getUserByAccount; the one it makes
+    // earlier only fills in `user` for this callback), so linking the provider
+    // account to that row here turns the rest of the sign-in into the ordinary
+    // one for someone who has signed in before.
     // Left to itself Auth.js would refuse — a row with that e-mail exists and
     // is not linked — and its own switch for linking by e-mail would attach to
     // an established account just as readily as to a new one.

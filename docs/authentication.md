@@ -65,11 +65,18 @@ configured.
     invitations.
     - **It rests on the provider's word for the address.** Google must say the
       address is verified; Okta is your own directory; **Microsoft counts only
-      when sign-in is restricted to one tenant** (`AUTH_MICROSOFT_ENTRA_ID_ISSUER`).
-      With the "common" authority any Microsoft tenant can sign in, and the
-      admin of one can set a user's mail to anything — so on such an instance a
-      Microsoft sign-in never claims an added person, and the Add user dialog
-      says so.
+      when sign-in is restricted to one tenant by its ID**
+      (`AUTH_MICROSOFT_ENTRA_ID_ISSUER=https://login.microsoftonline.com/<tenant-id>/v2.0/`).
+      Unset, or set to the `organizations` authority, any Microsoft tenant can
+      sign in, and the admin of one can set a user's mail to anything — so on
+      such an instance a Microsoft sign-in never claims an added person, the Add
+      user dialog says so, and someone waiting for approval who came in that
+      way is marked as an address nobody has proved.
+    - **Google's "verified" means verified once.** A personal Google account
+      made on a work address keeps saying that address after the person has
+      lost it. Add people by an address they hold now.
+    - **Someone added who never signs in stays added.** A mistyped address is
+      claimable by whoever owns it; remove the row.
     - **Only a row that has never signed in can be claimed.** An account that
       already exists is never attached to by address.
   - **`EMAIL_ALLOW_LIST` is retired.** An existing database's list is migrated

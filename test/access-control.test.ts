@@ -209,14 +209,17 @@ test("policy open admits a stranger as an ordinary member; policy invite leaves 
 // Run from the file, so this is the migration and not a paraphrase of it. The
 // three statements that add columns to `users` are skipped: this database was
 // built from the current schema and already has them.
-test("0033: open invitations become people, and members who hold nothing get the members role", async () => {
+test("0033: open invitations become people, and people an integration made with no role get the members role", async () => {
   await resetData();
   const [inviter] = await db
     .insert(users)
     .values({ email: "owner@example.com", status: "active", role: "owner", roles: ["MALLOYYO_USER", "MALLOYYO_ADMIN"] })
     .returning();
   // As a hosted integration made them: active, holding nothing.
-  await db.insert(users).values({ email: "hosted@example.com", status: "active", roles: [] });
+  await db.insert(users).values({ email: "hosted@example.com", status: "active", roles: [], externalAccountId: "ext-1" });
+  // Every box unticked by an admin, on an instance that owns its own sign-in:
+  // holding nothing is what was chosen.
+  await db.insert(users).values({ email: "unticked@example.com", status: "active", roles: [] });
   // Chosen for them by an admin: left exactly as chosen.
   await db.insert(users).values({ email: "chosen@example.com", status: "active", roles: ["finance"] });
   // Waiting for approval holds nothing, and still does.
@@ -252,6 +255,7 @@ test("0033: open invitations become people, and members who hold nothing get the
   assert.equal(open.length, 0);
 
   assert.deepEqual((await userByEmail("hosted@example.com")).roles, ["MALLOYYO_USER"], "holds nothing → the members role");
+  assert.deepEqual((await userByEmail("unticked@example.com")).roles, [], "nothing, chosen by an admin, stays nothing");
   assert.deepEqual((await userByEmail("chosen@example.com")).roles, ["finance"], "chosen roles are left alone");
   assert.deepEqual((await userByEmail("waiting@example.com")).roles, [], "someone not yet let in still holds nothing");
   // Everyone who was already here has, by definition, signed in.

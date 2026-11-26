@@ -1024,12 +1024,16 @@ export const apiTokens = pgTable(
   (t) => [index("api_tokens_user_idx").on(t.userId)],
 );
 
-// A standing invitation: an address an admin admitted before the person ever
-// arrived. Consumed on first sign-in (acceptedAt set, the new row lands
-// `active`). A separate table rather than a placeholder `users` row on purpose:
-// Auth.js refuses an OAuth sign-in whose email matches an existing unlinked
-// user (OAuthAccountNotLinked), so a placeholder would block the very sign-in
-// it meant to permit.
+// RETIRED — nothing writes this table. An invitation was an address an admin
+// admitted before the person arrived, kept apart from `users` because Auth.js
+// refuses an OAuth sign-in whose email matches an existing unlinked user
+// (OAuthAccountNotLinked). Admin → Users → Add user now creates the `users` row
+// itself, and the first sign-in links to it before Auth.js looks
+// (src/lib/claim.ts), so the person exists — roles, shares, impersonation —
+// from the moment they are added. 0033 turned every open invitation into such
+// a row. The table is still here, and src/lib/admission.ts still reads it, only
+// for one written by the previous version during a deploy; drop both in the
+// release after.
 export const invitations = pgTable(
   "invitations",
   {

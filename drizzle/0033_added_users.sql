@@ -71,7 +71,7 @@ UPDATE "invitations" i
  WHERE i."accepted_at" IS NULL
    AND lower(u."email") = lower(i."email");--> statement-breakpoint
 ALTER TABLE "invitations" DROP COLUMN "roles";--> statement-breakpoint
--- Members who hold NOTHING get the members role.
+-- People an INTEGRATION created, who hold nothing, get the members role.
 --
 -- 0032 turned "public" into "MALLOYYO_USER has full", on the understanding that
 -- every member holds MALLOYYO_USER. Where an integration owns sign-in that was
@@ -79,13 +79,14 @@ ALTER TABLE "invitations" DROP COLUMN "roles";--> statement-breakpoint
 -- datasets only because the flag opened to everyone signed in. Without this
 -- they would lose every one of those datasets when the flag stops being read.
 --
--- Only rows holding nothing, and only people who can sign in. Someone an admin
--- gave particular roles keeps exactly those — what they open is what was
--- chosen for them. What this can add beyond what "public" gave: a dataset
--- granted to MALLOYYO_USER that was never public. Granting to that role means
--- "every member", and someone holding nothing is a member no one has said
--- otherwise about.
+-- Only those rows (`external_account_id`), only ones holding nothing, and only
+-- people who can sign in. Anywhere else, someone holding no role is someone an
+-- admin unticked every box for, and what they open is what was chosen for
+-- them: nothing. What this can add beyond what "public" gave: a dataset granted
+-- to MALLOYYO_USER that was never public. Granting to that role means "every
+-- member", and these are members nobody was ever asked about.
 UPDATE "users"
    SET "roles" = ARRAY['MALLOYYO_USER']::text[]
  WHERE "roles" = '{}'::text[]
-   AND "status" = 'active';
+   AND "status" = 'active'
+   AND "external_account_id" IS NOT NULL;

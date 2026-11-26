@@ -23,7 +23,7 @@
  */
 
 import { and, eq, or, sql } from "drizzle-orm";
-import { datasets, db, instanceSettings, users } from "@/db";
+import { datasets, db, instanceSettings, invitations, roles as rolesTable, users } from "@/db";
 import { env } from "./env";
 import type { RoleLevel } from "./role-access";
 
@@ -160,7 +160,7 @@ export type DatasetAccess = "view" | "query";
 
 // The same rule as arithmetic, for the admin page to show its working — and
 // the level type both share. See src/lib/role-access.ts.
-export { bestLevel, openToMembers, resolveAccess, roleLevelOn, type RoleLevel } from "./role-access";
+export { bestLevel, openToMember, openToMembers, resolveAccess, roleLevelOn, type RoleLevel } from "./role-access";
 
 /**
  * The roles this person holds, as a SQL array. Read from the user row in a
@@ -218,7 +218,8 @@ function isAdminSql(userId: string) {
  * and that page disagreed with the one listing what each person gets. It is not
  * read here or anywhere else now (0033 carried every public dataset across to
  * MALLOYYO_USER at full first, so nobody lost one). "Open to every member" is
- * `openToMembers` / `openToMembersSql`: the members role at full.
+ * `openToMembers`: the members role at full — and `openToMember` /
+ * `openToMemberSql` where the question is about a particular person.
  *
  * MALLOYYO_ADMIN opens every dataset, in full. This file once argued that
  * administering an instance is not a reason to read its data, and the reversal
@@ -261,13 +262,62 @@ export function roleLevelUpdate(name: string, level: RoleLevel) {
 }
 
 /**
- * `openToMembers` (src/lib/role-access.ts) as a SQL predicate on the datasets
- * row: every member can query this. What replaced `is_public = true` wherever
- * that was a WHERE clause — what a signed-out visitor is told exists, whose
- * question history someone who did not ask may read.
+ * Delete a role, and revoke it everywhere it lives, in the same breath.
+ *
+ * A role left behind after its definition is gone is a grant nobody can see in
+ * the UI and nobody thinks to audit. There are FIVE places it lives:
+ *
+ *   - the catalog row;
+ *   - `users.roles`;
+ *   - `datasets.roles` and `datasets.view_only_roles`;
+ *   - `instance_settings.default_roles` — left there, a deleted role keeps
+ *     being written onto every new arrival, where no checkbox can show it and
+ *     `set-user-roles` would refuse the same name as unknown;
+ *   - `invitations.roles` — someone added by address who has not signed in yet
+ *     carries the roles ticked for them, and admission copies those onto the
+ *     user as they stand. Left there, the deleted role would arrive with them:
+ *     on a person whose roles could then not be edited (the page sends the list
+ *     back and the unknown name is refused), and granted again silently if a
+ *     role by that name is ever re-created.
+ *
+ * Each UPDATE is scoped to the rows that actually hold it, so deleting a role
+ * nobody holds does not row-lock every user and every dataset. The caller has
+ * already refused a built-in name.
  */
-export function openToMembersSql() {
-  return sql`(${MALLOYYO_USER} = any(${datasets.roles}) and not (${MALLOYYO_USER} = any(${datasets.viewOnlyRoles})))`;
+export async function deleteRole(name: string): Promise<void> {
+  await db.transaction(async (tx) => {
+    await tx.delete(rolesTable).where(eq(rolesTable.name, name));
+    await tx.execute(sql`update ${users} set roles = array_remove(roles, ${name}) where ${name} = any(roles)`);
+    await tx.execute(
+      sql`update ${datasets}
+             set roles = array_remove(roles, ${name}),
+                 view_only_roles = array_remove(view_only_roles, ${name})
+           where ${name} = any(roles) or ${name} = any(view_only_roles)`,
+    );
+    await tx.execute(
+      sql`update ${instanceSettings} set default_roles = array_remove(default_roles, ${name})
+          where ${name} = any(default_roles)`,
+    );
+    await tx.execute(
+      sql`update ${invitations} set roles = array_remove(roles, ${name}) where ${name} = any(roles)`,
+    );
+  });
+}
+
+/**
+ * `openToMember` (src/lib/role-access.ts) as a SQL predicate on the datasets
+ * row: every member can query this, AND this person is one of them. What
+ * replaced `is_public = true` where that was a WHERE clause deciding whose
+ * question history someone who did not ask may read.
+ *
+ * The second half is not optional. The dataset being open to the members role
+ * says nothing about a caller who does not hold it, and there is no such thing
+ * as a signed-out member: nothing here is ever true of nobody.
+ */
+export function openToMemberSql(userId: string) {
+  // `&&` against the subquery, as `datasetRoleOverlap` does — `= any(<subquery>)`
+  // would read the subquery as a set of rows and compare a text to a text[].
+  return sql`(${MALLOYYO_USER} = any(${datasets.roles}) and not (${MALLOYYO_USER} = any(${datasets.viewOnlyRoles})) and array[${MALLOYYO_USER}]::text[] && ${heldRoles(userId)})`;
 }
 
 /** Datasets this person may OPEN. The name every read path already uses. */

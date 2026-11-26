@@ -8,7 +8,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { bestLevel, openToMembers, resolveAccess, roleLevelOn, type DatasetGrants } from "./role-access";
+import { bestLevel, openToMember, openToMembers, resolveAccess, roleLevelOn, type DatasetGrants } from "./role-access";
 
 const sales: DatasetGrants = { id: "sales", roles: ["analysts", "executives"], viewOnlyRoles: ["executives"] };
 const support: DatasetGrants = { id: "support", roles: ["analysts"], viewOnlyRoles: ["analysts"] };
@@ -79,4 +79,20 @@ test("a role's level is the only grant: the public flag is not one", () => {
   assert.equal(openToMembers({ roles: ["MALLOYYO_USER"], viewOnlyRoles: ["MALLOYYO_USER"] }), false);
   assert.equal(openToMembers({ roles: ["readers"], viewOnlyRoles: [] }), false);
   assert.equal(openToMembers({ roles: null, viewOnlyRoles: null }), false);
+});
+
+// "Open to every member" is about the dataset. Whether to show a PERSON
+// something because of it is about them too: someone can be on the instance
+// without the members role (added with only another role ticked), and the
+// access rule refuses them the dataset. Asking the dataset alone would hand
+// them its question history and published chats anyway.
+test("open to every member is not open to someone who is not one", () => {
+  const all = { roles: ["MALLOYYO_USER"], viewOnlyRoles: [] as string[] };
+  assert.equal(openToMember(all, ["MALLOYYO_USER"]), true);
+  assert.equal(openToMember(all, ["MALLOYYO_USER", "finance"]), true);
+  assert.equal(openToMember(all, ["finance"]), false, "on the instance, but not a holder of the members role");
+  assert.equal(openToMember(all, []), false, "and never of nobody: there is no signed-out member");
+  assert.equal(openToMember({ roles: ["finance"], viewOnlyRoles: [] }, ["MALLOYYO_USER", "finance"]), false);
+  // The arithmetic the access rule runs agrees: that person gets None.
+  assert.equal(resolveAccess(["finance"], [{ id: "d", ...all }])[0]!.level, "none");
 });

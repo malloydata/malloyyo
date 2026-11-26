@@ -3,7 +3,7 @@
 
 import { NextResponse } from "next/server";
 import { eq, and, ne, or, inArray, sql, desc } from "drizzle-orm";
-import { openToMembersSql } from "@/lib/roles";
+import { datasetAccessWhere } from "@/lib/roles";
 import { db, datasets, savedQueries, favorites, users } from "@/db";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
@@ -23,10 +23,15 @@ export async function GET() {
     else throw err;
   }
 
-  const admin = me ? isAdmin(me) : false;
-  const visible = admin
-    ? ne(datasets.status, "failed")
-    : and(openToMembersSql(), ne(datasets.status, "failed"));
+  // Signed out (or pending, or disabled): nothing. Which datasets every member
+  // can open is not something to tell someone who is not a member.
+  if (!me) return NextResponse.json([]);
+
+  const admin = isAdmin(me);
+  // The datasets the caller can query — the same rule /api/sources lists by,
+  // which is what the comment above always claimed. It used to be "public
+  // ones", so a favourite on a dataset a role opened for you never showed.
+  const visible = admin ? ne(datasets.status, "failed") : datasetAccessWhere(me.id, "query");
 
   // Whose favorites count: mine + every admin's (admin = role column, the
   // legacy is_admin column, OR the APP_ADMIN_EMAILS list, which isn't stored

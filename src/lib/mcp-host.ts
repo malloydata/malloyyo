@@ -437,7 +437,7 @@ function resultError(result: Record<string, unknown>): string | undefined {
 async function openShareLink(
   args: Record<string, unknown>,
   baseUrl: string,
-  viewer: { id: string; admin: boolean },
+  viewer: { id: string; admin: boolean; roles: readonly string[] },
 ): Promise<ToolResult> {
   const slug = String(args.slug ?? "").trim().replace(/^.*\/ltool\//, "");
   if (!slug) return errText("slug is required");
@@ -454,7 +454,7 @@ async function openShareLink(
       .select({ roles: datasets.roles, viewOnlyRoles: datasets.viewOnlyRoles, userId: datasets.userId })
       .from(datasets)
       .where(eq(datasets.id, res.datasetId));
-    if (!ds || !canReadDataset(ds, viewer.id, false)) return errText("share link not found");
+    if (!ds || !canReadDataset(ds, viewer, false)) return errText("share link not found");
   }
   return text({
     instance: res.instance,
@@ -641,6 +641,7 @@ export function buildHostedExploreSurface(
         const result = await openShareLink(toolArgs, baseUrl, {
           id: user.id,
           admin: isAdmin(user),
+          roles: rolesOf(user),
         });
         await record({ error: resultError(result as unknown as Record<string, unknown>) });
         return withTiming(result, start);

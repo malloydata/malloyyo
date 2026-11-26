@@ -6,7 +6,7 @@
 // this route stays a thin shell over them.
 
 import { NextResponse } from "next/server";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { db, datasets, givens, instanceSettings, roles, users } from "@/db";
 import { requireAdmin } from "@/lib/admin";
 import { UnauthorizedError } from "@/lib/user";
@@ -15,6 +15,7 @@ import {
   isBuiltinRole,
   isEnvAdmin,
   MALLOYYO_ADMIN,
+  deleteRole,
   NEVER_A_DEFAULT,
   roleLevelUpdate,
   roleNameError,
@@ -56,31 +57,8 @@ export async function POST(req: Request) {
 
     case "delete": {
       if (isBuiltinRole(name)) return bad("built-in roles cannot be deleted");
-      // Revoke it everywhere in the same breath. A role left on a user or a
-      // dataset after its definition is gone is a grant nobody can see in the
-      // UI and nobody thinks to audit — and `default_roles` is the fourth place
-      // it lives, not the third: a deleted role left there keeps being written
-      // onto every new arrival, where no checkbox can show it and
-      // `set-user-roles` would refuse the same name as unknown.
-      //
-      // Each UPDATE is scoped to the rows that actually hold it, so deleting a
-      // role nobody holds does not row-lock every user and every dataset.
-      await db.transaction(async (tx) => {
-        await tx.delete(roles).where(eq(roles.name, name));
-        await tx.execute(
-          sql`update ${users} set roles = array_remove(roles, ${name}) where ${name} = any(roles)`,
-        );
-        await tx.execute(
-          sql`update ${datasets}
-                 set roles = array_remove(roles, ${name}),
-                     view_only_roles = array_remove(view_only_roles, ${name})
-               where ${name} = any(roles) or ${name} = any(view_only_roles)`,
-        );
-        await tx.execute(
-          sql`update ${instanceSettings} set default_roles = array_remove(default_roles, ${name})
-              where ${name} = any(default_roles)`,
-        );
-      });
+      // Revoked everywhere it lives, in one transaction: `deleteRole`.
+      await deleteRole(name);
       logger.info("role deleted", { name, actorId: actor.id });
       break;
     }

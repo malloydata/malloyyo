@@ -15,6 +15,7 @@ import { and, asc, desc, eq, inArray } from "drizzle-orm";
 import type Anthropic from "@anthropic-ai/sdk";
 import { db, chats, chatMessages, chatResults, type Chat } from "@/db";
 import { resolveDatasetRef } from "@/lib/repos";
+import { MALLOYYO_ADMIN, MALLOYYO_USER } from "@/lib/roles";
 import { shareabilityOf, type ChatShareability } from "./shareability";
 
 /** How `chats.dataset` is resolved, and why it is not a name match.
@@ -64,12 +65,17 @@ export async function ownedChat(id: string, userId: string): Promise<Chat | null
  *  a reader gets no composer and no controls. */
 export async function readableChat(
   id: string,
-  userId: string,
+  reader: { id: string; roles: readonly string[] },
 ): Promise<{ chat: Chat; mine: boolean } | null> {
   const [row] = await db.select().from(chats).where(eq(chats.id, id)).limit(1);
   if (!row) return null;
-  if (row.userId === userId) return { chat: row, mine: true };
+  if (row.userId === reader.id) return { chat: row, mine: true };
   if (!row.isPublic) return null;
+  // A published chat is for the people its dataset is open to: every member.
+  // Someone on the instance who does not hold the members role is not one, and
+  // the access rule refuses them the dataset — so its stored rows are not
+  // theirs to read through a chat either. (An admin opens every dataset.)
+  if (!reader.roles.includes(MALLOYYO_USER) && !reader.roles.includes(MALLOYYO_ADMIN)) return null;
   // Re-checked on every read, not just when it was published. `is_public` is a
   // claim made at one moment, and the dataset can be made private afterwards —
   // at which point this chat's stored ROWS would go on being served to everyone

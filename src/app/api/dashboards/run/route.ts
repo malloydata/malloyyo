@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: MIT
 
 import { NextResponse } from "next/server";
-import { getSessionUser, UnauthorizedError } from "@/lib/user";
+import { getSession, UnauthorizedError } from "@/lib/user";
+import { logger } from "@/lib/logger";
 import { runDashboard } from "@/lib/dashboards/engine";
 import { captureTelemetry } from "@/lib/telemetry";
 
@@ -14,8 +15,9 @@ export const runtime = "nodejs";
 // core's restricted mode is the gate (suggestion queries, ad-hoc panels).
 export async function POST(req: Request) {
   let user;
+  let viewedBy;
   try {
-    user = await getSessionUser();
+    ({ user, viewedBy } = await getSession());
   } catch (err) {
     if (err instanceof UnauthorizedError) return NextResponse.json({ ok: false, error: "sign in required" }, { status: 401 });
     throw err;
@@ -38,6 +40,16 @@ export async function POST(req: Request) {
   }
   const startedAt = Date.now();
   const result = await runDashboard(user, datasetId, name, { query, malloy }, givens ?? {});
+  // An admin IMPERSONATING this user (src/lib/view-as.ts). The query ran as
+  // them, which is the point; what must not happen is that it is then counted
+  // as something they did. This route is one of the two a write-refusing
+  // impersonation lets through, and the rule for both is that nothing is left
+  // behind as the person — a usage event keyed to them is exactly that. What
+  // is written down is that the admin did it, as /api/run does.
+  if (viewedBy) {
+    logger.info("view-as dashboard query", { actorId: viewedBy.id, targetId: user.id, datasetId, name });
+    return NextResponse.json(result);
+  }
   void captureTelemetry(
     {
       event: "query ran",

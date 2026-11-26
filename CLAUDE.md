@@ -295,7 +295,9 @@ publish rights. Full guide: `docs/api-tokens.md`.
    was a second grant (full, for everyone signed in, over whatever the roles
    said), so a role at None went on opening the dataset. It is retired — nothing
    reads it, 0033 carried public datasets to `MALLOYYO_USER` at full, and "open
-   to every member" is `openToMembers` / `openToMembersSql`. The column is
+   to every member" is `openToMembers`, and `openToMember` / `openToMemberSql`
+   wherever it decides what to show a PERSON (they must hold the members role;
+   signed-out callers are told nothing at all). The column is
    still there only so the version live during a deploy can select it; drop it
    in the release after. `MALLOYYO_ADMIN` opens every dataset in full,
    decided INSIDE the predicate (`isAdminSql`), not by a flag callers pass.

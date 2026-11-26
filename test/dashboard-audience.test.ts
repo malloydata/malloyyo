@@ -47,10 +47,10 @@ import {
 import { allDashboardsByDataset, getDashboard, listDashboards, listDashboardsAndDrafts } from "@/lib/dashboards";
 import { deleteDraft, getDraftFiles, recordPromotion, saveDraftDashboard } from "@/lib/dashboards/draft";
 import { getSharing, setDashboardVisibility, shareDashboard, unshareDashboard } from "@/lib/dashboards/sharing";
-import { datasetAccessWhere, MALLOYYO_ADMIN, MALLOYYO_USER, roleLevelUpdate } from "@/lib/roles";
+import { datasetAccessWhere, MALLOYYO_ADMIN, MALLOYYO_USER, openToMemberSql, roleLevelUpdate } from "@/lib/roles";
 import { openToMembers, resolveAccess } from "@/lib/role-access";
 import { buildHostedExploreSurface } from "@/lib/mcp-host";
-import { canQueryDataset, findByDatasetRef, findBySource, runQueryForWeb } from "@/lib/mcp-tools";
+import { canQueryDataset, canReadDataset, findByDatasetRef, findBySource, runQueryForWeb } from "@/lib/mcp-tools";
 
 const DS = "audience";
 let admin: User, author: User, member: User, viewer: User, outsider: User;
@@ -323,6 +323,23 @@ test("the retired public flag opens nothing: a role's level is the only grant", 
     await db.update(datasets).set(roleLevelUpdate(MALLOYYO_USER, "none")).where(eq(datasets.id, flagged.id));
     assert.deepEqual([await opens("view"), await opens("query")], [false, false], "None is none");
 
+    // "Open to every member" does not reach someone who is not one. They are
+    // refused the dataset, so they are refused what is ABOUT it too — the
+    // question history, a shared query — and the SQL form says the same.
+    await db.update(datasets).set(roleLevelUpdate(MALLOYYO_USER, "query")).where(eq(datasets.id, flagged.id));
+    const [open] = await db.select().from(datasets).where(eq(datasets.id, flagged.id));
+    const nonMember = await person("finance-only@aud.test", ["finance"]);
+    assert.equal(canReadDataset(open, { id: outsider.id, roles: [MALLOYYO_USER] }, false), true);
+    assert.equal(canReadDataset(open, { id: nonMember.id, roles: ["finance"] }, false), false);
+    const readableBy = async (userId: string) =>
+      (
+        await db
+          .select({ id: datasets.id })
+          .from(datasets)
+          .where(and(eq(datasets.id, flagged.id), openToMemberSql(userId)))
+      ).length === 1;
+    assert.deepEqual([await readableBy(outsider.id), await readableBy(nonMember.id)], [true, false]);
+
     // The migration left the dataset under test alone: it was never public.
     const [untouched] = await db.select().from(datasets).where(eq(datasets.id, datasetId));
     assert.deepEqual(untouched.roles, ["staff", "readers"]);
@@ -501,10 +518,51 @@ test("an admin records the promotion of someone else's draft, and it keeps its a
   assert.ok(await getDashboard(admin.id, DS, "forecast"));
   assert.equal(await getDashboard(viewer.id, DS, "forecast"), null);
 
-  // An OPEN draft promotes to an open dashboard even into a file tagged private.
-  assert.equal(await recordPromotion(admin, DS, "everyones", { name: "secret" }), "recorded");
-  assert.ok(await getDashboard(viewer.id, DS, "secret"), "the draft was open, so the published one is");
+  // Recording it again changes nothing — in particular not what an admin has
+  // set in the Share dialog since. (Running `draft promote` twice is ordinary.)
+  assert.ok((await setDashboardVisibility(admin, DS, "forecast", "dataset")).ok);
+  assert.equal(await recordPromotion(admin, DS, "mine", { name: "forecast" }), "recorded");
+  const [again] = await db.select().from(datasets).where(eq(datasets.id, datasetId));
+  assert.equal(again.dashboardAudience.forecast, "dataset", "the stored setting stands");
+  assert.ok(await getDashboard(viewer.id, DS, "forecast"));
+
+  // An OPEN draft promotes to an open dashboard even into a file tagged
+  // private: the draft's audience is what people were promised.
+  assert.equal(await recordPromotion(admin, DS, "everyones", { name: "tagged" }), "recorded");
+  await db.insert(malloyArtifacts).values({
+    modelId: model.id,
+    name: "tagged",
+    title: "Tagged",
+    manifest: { title: "Tagged", query: "q", private: true },
+    source: "",
+  });
+  assert.ok(await getDashboard(viewer.id, DS, "tagged"), "the draft was open, so the published one is");
+
+  await db.delete(malloyArtifacts).where(and(eq(malloyArtifacts.modelId, model.id), eq(malloyArtifacts.name, "tagged")));
   await db.update(datasets).set({ dashboardAudience: {} }).where(eq(datasets.id, datasetId));
+  await db
+    .update(draftDashboards)
+    .set({ promotedAs: null, promotedHash: null, promotedAt: null })
+    .where(eq(draftDashboards.datasetId, datasetId));
+});
+
+// "Promotion does not change who can see a dashboard" has to hold for the one
+// that is ALREADY LIVE under that name. A draft that revises it is private by
+// default; recording its promotion used to stamp that onto the live dashboard,
+// hiding it from everyone before the revision had even merged.
+test("promoting onto a dashboard that is already live leaves its audience alone", async () => {
+  // `open` is live and open to the dataset; `secret` is live and private.
+  assert.ok(await getDashboard(viewer.id, DS, "open"));
+  assert.equal(await recordPromotion(admin, DS, "mine", { name: "open" }), "recorded");
+  const [ds] = await db.select().from(datasets).where(eq(datasets.id, datasetId));
+  assert.equal(ds.dashboardAudience.open, undefined, "nothing was stored over the live dashboard");
+  assert.ok(await getDashboard(viewer.id, DS, "open"), "still open to everyone on the dataset");
+
+  // And the other way: an open draft does not open a private live dashboard,
+  // nor add its people to it.
+  assert.equal(await recordPromotion(admin, DS, "everyones", { name: "secret" }), "recorded");
+  assert.equal(await getDashboard(viewer.id, DS, "secret"), null, "still private");
+
   await db
     .update(draftDashboards)
     .set({ promotedAs: null, promotedHash: null, promotedAt: null })

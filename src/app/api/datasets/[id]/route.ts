@@ -10,7 +10,8 @@ import { latestModel, modelFileMap } from "@/lib/mcp-tools";
 import { qualifiedName, resolveDatasetRef } from "@/lib/repos";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
-import { openToMembers, resolveAccess, rolesOf } from "@/lib/roles";
+import { resolveAccess, rolesOf } from "@/lib/roles";
+import { publishedIsPrivate, visibleDashboards } from "@/lib/dashboards/audience";
 import { captureTelemetry } from "@/lib/telemetry";
 
 export const runtime = "nodejs";
@@ -35,23 +36,24 @@ export async function GET(
 
   let me;
   try { me = await getSessionUser(); } catch (err) {
-    if (err instanceof UnauthorizedError) {
-      // Signed out: only what every member could open anyway.
-      if (!openToMembers(ds)) return NextResponse.json({ error: "not found" }, { status: 404 });
-      me = null;
-    } else throw err;
+    // Signed out (or pending, or disabled): not found, whatever the dataset.
+    // A dataset flagged public used to answer here with its sources and its
+    // dashboards' source; there is no such flag now, and "every member can
+    // open it" is no reason to show it to someone who is not a member.
+    if (err instanceof UnauthorizedError) return NextResponse.json({ error: "not found" }, { status: 404 });
+    throw err;
   }
 
-  // Signed in: what your roles open, at any level — the same arithmetic the
-  // admin pages show (src/lib/role-access.ts). This used to ask the `is_public`
-  // flag instead, so someone whose role opened a dataset that was not "public"
-  // could query it and still be told here that it did not exist.
-  if (me && resolveAccess(rolesOf(me), [{ ...ds, ownerId: ds.userId }], { userId: me.id })[0].level === "none") {
+  // What your roles open, at any level — the same arithmetic the admin pages
+  // show (src/lib/role-access.ts). This used to ask the `is_public` flag
+  // instead, so someone whose role opened a dataset that was not "public" could
+  // query it and still be told here that it did not exist.
+  if (resolveAccess(rolesOf(me), [{ ...ds, ownerId: ds.userId }], { userId: me.id })[0].level === "none") {
     return NextResponse.json({ error: "not found" }, { status: 404 });
   }
 
-  // last-publish detail (incl. failure text) is management-only — don't expose to public viewers.
-  const canManage = me ? isAdmin(me) || ds.userId === me.id : false;
+  // last-publish detail (incl. failure text) is management-only.
+  const canManage = isAdmin(me) || ds.userId === me.id;
 
   // The model the dataset SERVES, and the files it serves with - which for a
   // repo-backed model come out of its revision's zip rather than a per-file
@@ -86,7 +88,13 @@ export async function GET(
       : [];
 
   // Dashboard artifacts (manifest + Dashboard.tsx) shown alongside the model files.
-  const dashboards = model
+  //
+  // Read straight off the table rather than through `./meta`, because this is
+  // the one caller that wants the component SOURCE — so the audience is applied
+  // here, by hand, to what comes back (below). Without it a private dashboard
+  // was "not found" to someone on its own page and listed here, source and all,
+  // to the same person.
+  const allDashboards = model
     ? await db
         .select({
           name: malloyArtifacts.name,
@@ -98,6 +106,14 @@ export async function GET(
         .where(eq(malloyArtifacts.modelId, model.id))
         .orderBy(malloyArtifacts.name)
     : [];
+
+  const dashboards = (
+    await visibleDashboards(
+      me.id,
+      ds.id,
+      allDashboards.map((d) => ({ ...d, isPrivate: publishedIsPrivate(d.name, d.manifest, ds.dashboardAudience) })),
+    )
+  ).map((d) => ({ name: d.name, title: d.title, manifest: d.manifest, source: d.source }));
 
   const [live] = repo
     ? await db

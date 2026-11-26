@@ -22,7 +22,7 @@ import { nameToSlug as engineSlug } from "@malloyyo/mcp-engine";
 import { db, datasets, malloyModels, repoRevisions, repos, users } from "@/db";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
-import { canAuthor, datasetVisibleWhere, openToMembersSql } from "@/lib/roles";
+import { canAuthor, datasetVisibleWhere } from "@/lib/roles";
 import { nameToSlug } from "@/lib/slug";
 import { parseGitHubRepo } from "@/lib/github";
 import { fetchRepo } from "@/lib/github-refresh";
@@ -292,23 +292,10 @@ export async function GET() {
   try {
     user = await getSessionUser();
   } catch (err) {
-    if (err instanceof UnauthorizedError) {
-      const rows = await db
-        .select({
-          id: datasets.id,
-          name: datasets.name,
-          status: datasets.status,
-          createdAt: datasets.createdAt,
-          readyAt: datasets.readyAt,
-          repo: repos.slug,
-        })
-        .from(datasets)
-        .leftJoin(repos, eq(datasets.repoId, repos.id))
-        .where(and(openToMembersSql(), ne(datasets.status, "failed")))
-        .orderBy(desc(datasets.createdAt))
-        .limit(50);
-      return NextResponse.json(rows);
-    }
+    // Signed out (or pending, or disabled): nothing. This used to list the
+    // datasets flagged public; there is no such flag now, and which datasets
+    // every member can open is not something to tell a non-member.
+    if (err instanceof UnauthorizedError) return NextResponse.json([]);
     throw err;
   }
 

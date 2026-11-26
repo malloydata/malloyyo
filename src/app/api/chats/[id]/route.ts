@@ -11,6 +11,7 @@
 
 import { NextResponse } from "next/server";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
+import { rolesOf } from "@/lib/roles";
 import {
   chatIsPublishable,
   deleteChat,
@@ -59,7 +60,7 @@ export async function GET(_req: Request, ctx: Ctx) {
   if (error) return error;
 
   const { id } = await ctx.params;
-  const found = await readableChat(id, user.id);
+  const found = await readableChat(id, { id: user.id, roles: rolesOf(user) });
   // 404 for a chat you may not read as well as a missing one: which it is, is
   // not something a stranger gets to learn.
   if (!found) return NextResponse.json({ error: "not found" }, { status: 404 });
@@ -100,7 +101,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
   // Unpublishing is always allowed: taking something back must never be blocked
   // by the state that made it a problem.
   if (body.isPublic) {
-    const owned = await readableChat(id, user.id);
+    const owned = await readableChat(id, { id: user.id, roles: rolesOf(user) });
     if (!owned?.mine) return NextResponse.json({ error: "not found" }, { status: 404 });
     // `.ok`, not the object: this used to be `if (!(await chatIsPublishable(…)))`
     // against a boolean, and a truthy result object would make that condition

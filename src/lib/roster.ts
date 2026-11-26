@@ -175,9 +175,21 @@ export async function createInvitation(
   if (open) {
     // Re-adding without choosing roles leaves whatever was chosen before.
     if (open.role === role && chosen === null) return { kind: "invited", invitation: open };
+    // ...except for the one role the flag IS. A caller that sends only the
+    // older `role` is changing admin-or-not, and the stored roles have to move
+    // with it: left alone, "make this invitation a member" kept MALLOYYO_ADMIN
+    // in the list admission copies onto the user, and they arrived an admin.
+    const kept = open.roles;
+    const inStep =
+      chosen ??
+      (kept === null
+        ? null
+        : role === "admin"
+          ? [...new Set([...kept, MALLOYYO_ADMIN])]
+          : kept.filter((r) => r !== MALLOYYO_ADMIN));
     const [updated] = await db
       .update(invitations)
-      .set({ role, ...(chosen ? { roles: chosen } : {}) })
+      .set({ role, ...(inStep ? { roles: inStep } : {}) })
       .where(eq(invitations.id, open.id))
       .returning();
     return { kind: "invited", invitation: updated };

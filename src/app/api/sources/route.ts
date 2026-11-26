@@ -2,14 +2,14 @@
 // SPDX-License-Identifier: MIT
 
 import { NextResponse } from "next/server";
-import { eq, desc, and, inArray, ne } from "drizzle-orm";
+import { eq, desc, and, inArray } from "drizzle-orm";
 import { db, datasets, malloyModelFiles, malloyModels, repoRevisions, repos, users } from "@/db";
 import { DEVCONTAINER_PATH } from "@/lib/github-source-link";
 import { qualifiedName } from "@/lib/repos";
 import { datasetTitle } from "@malloyyo/mcp-engine";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
-import { datasetAccessWhere, openToMembersSql } from "@/lib/roles";
+import { datasetAccessWhere } from "@/lib/roles";
 
 export const runtime = "nodejs";
 
@@ -22,19 +22,25 @@ export async function GET() {
 
   const admin = me ? isAdmin(me) : false;
 
+  // SIGNED OUT, THERE IS NOTHING TO LIST. This branch used to answer with the
+  // datasets flagged `is_public`. That flag is retired, and its replacement —
+  // "the members role has full here" — is a fact about MEMBERS: someone who is
+  // signed out, or waiting for approval, or disabled, is not one, and telling
+  // them which datasets every member can open (and what sources those have)
+  // would publish exactly what the roles are there to scope. The landing page
+  // never used this list: signed out, it says "Sign in to view datasets."
+  if (!me) return NextResponse.json([]);
+
   // Signed in: everything your roles open — which is what makes a grant on
   // /admin/roles visible here rather than only over MCP. Same predicate the run
   // paths use, so this list and what you may actually query cannot drift.
-  // Signed out: only datasets open to every member (the members role at full). An admin still sees the whole catalogue,
-  // MALLOYYO_ADMIN opens every dataset, so listing and reading now give the same
-  // answer and this needs no special case of its own. It used to have one, under
-  // a comment saying the predicate had no admin branch — it does now.
-  const where = me
-    ? // At QUERY level: this is the catalogue of sources to run something
-      // against, and what ltool and chat offer. A dataset someone can only view
-      // reaches them through its dashboards (/api/dashboards), not through here.
-      datasetAccessWhere(me.id, "query")
-    : and(openToMembersSql(), ne(datasets.status, "failed"));
+  // MALLOYYO_ADMIN opens every dataset, so listing and reading give the same
+  // answer and this needs no special case for admins.
+  //
+  // At QUERY level: this is the catalogue of sources to run something against,
+  // and what ltool and chat offer. A dataset someone can only view reaches them
+  // through its dashboards (/api/dashboards), not through here.
+  const where = datasetAccessWhere(me.id, "query");
 
   const dsList = await db
     .select({

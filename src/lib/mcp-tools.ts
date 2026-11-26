@@ -10,7 +10,7 @@ import type { SourceInfo } from "./malloy";
 // so modules that only READ the DB — notably loadSharedQuery, used by the
 // /ltool/[slug] page — don't drag DuckDB into their serverless bundle and 500
 // with "libduckdb.so: cannot open shared object file".
-import { datasetAccessWhere, hasRole, MALLOYYO_ADMIN, openToMembers, rolesOf, type DatasetAccess, type RoleBearing } from "./roles";
+import { datasetAccessWhere, hasRole, MALLOYYO_ADMIN, openToMember, rolesOf, type DatasetAccess, type RoleBearing } from "./roles";
 import { env } from "./env";
 import { leaseScope } from "./tenancy";
 import { qualifiedName } from "./repo-names";
@@ -69,14 +69,16 @@ export async function canQueryDataset(userId: string, datasetId: string): Promis
 // Malloy name the private model's fields, its filters, and what someone wanted
 // to know. That is not nothing, and it was visible to every signed-in user.
 //
-// "Open to every member" is the members role at full (`openToMembers`). It used
-// to be the `is_public` flag, which nothing reads any more.
+// "Open to every member" is the members role at full, and the viewer has to BE
+// one (`openToMember`): a dataset open to the members role is not open to
+// someone on the instance who does not hold it. It used to be the `is_public`
+// flag, which nothing reads any more.
 export function canReadDataset(
   ds: { roles: string[] | null; viewOnlyRoles: string[] | null; userId: string | null },
-  viewerId: string,
+  viewer: { id: string; roles: readonly string[] },
   admin: boolean,
 ): boolean {
-  return admin || openToMembers(ds) || ds.userId === viewerId;
+  return admin || openToMember(ds, viewer.roles) || ds.userId === viewer.id;
 }
 
 // Normalize DB sources column — legacy string[] or new {name, description?}[] format.

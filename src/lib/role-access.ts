@@ -66,6 +66,24 @@ export function openToMembers(ds: Pick<DatasetGrants, "roles" | "viewOnlyRoles">
   return roleLevelOn(ds, MEMBERS_ROLE) === "query";
 }
 
+/**
+ * ...and is THIS person one of those members.
+ *
+ * `openToMembers` is a fact about the dataset alone, which is all the old flag
+ * was. It is not, by itself, a reason to show anyone anything: "every member"
+ * means everyone holding the members role, and someone can be on the instance
+ * without it — added with only `finance` ticked, say. Asking the dataset alone
+ * would hand that person the question history, shared queries and published
+ * chats of a dataset the access rule refuses them. So every reader of "is this
+ * open to all" that is deciding what to show a particular person asks this.
+ */
+export function openToMember(
+  ds: Pick<DatasetGrants, "roles" | "viewOnlyRoles">,
+  held: readonly string[],
+): boolean {
+  return openToMembers(ds) && held.includes(MEMBERS_ROLE);
+}
+
 /** The best of several levels — how the roles one person holds combine. */
 export function bestLevel(levels: readonly RoleLevel[]): RoleLevel {
   return levels.reduce<RoleLevel>((best, l) => (RANK[l] > RANK[best] ? l : best), "none");

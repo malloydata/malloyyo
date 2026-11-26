@@ -24,7 +24,15 @@
 import { createHash } from "node:crypto";
 import { and, desc, eq, sql } from "drizzle-orm";
 import { modelArtifact, validateRestricted, type Problem } from "@malloyyo/mcp-engine";
-import { dashboardGrants, datasets, db, draftDashboards, DRAFT_VISIBILITIES, type DraftVisibility } from "@/db";
+import {
+  dashboardGrants,
+  datasets,
+  db,
+  draftDashboards,
+  DRAFT_VISIBILITIES,
+  malloyArtifacts,
+  type DraftVisibility,
+} from "@/db";
 import { hasRole, MALLOYYO_ADMIN, type RoleBearing } from "@/lib/roles";
 import { findByDatasetRef, modelFileMap } from "@/lib/mcp-tools";
 import { fileUrl, runNamedMalloyFiles, withModelRuntime } from "@/lib/malloy";
@@ -541,8 +549,9 @@ export async function getDraftFiles(userId: string, datasetRef: string, slug: st
  * draft's link never forwarded and the draft stayed listed beside its copy.
  *
  * It is also admin-only because of what it now WRITES. Recording copies the
- * draft's audience onto the published name, and that name is whatever the
- * caller says — there is no mechanical way to check a hand-written file really
+ * draft's audience onto the published name when that name has none yet (see
+ * below: a dashboard that is already live keeps its own), and that name is
+ * whatever the caller says — there is no mechanical way to check a hand-written file really
  * is this draft. Someone who may not change a published dashboard's audience
  * must not be able to do it by calling this with that dashboard's name. An
  * admin already may, so for them the copy grants nothing they lacked.
@@ -577,6 +586,27 @@ export async function recordPromotion(
     .limit(1);
   if (!row) return "not-found";
   const draftName = `${DRAFT_PREFIX}${row.slug}`;
+
+  // DOES THAT NAME ALREADY HAVE AN AUDIENCE? It does if a dashboard by that
+  // name is live on the dataset, or if a setting is stored for it (the Share
+  // dialog wrote one, or an earlier recording of this same promotion did).
+  //
+  // Then it keeps it, untouched. "Promotion does not change who can see a
+  // dashboard" has to hold for the dashboard that is already there, too: a
+  // member revising the live, open `sales` in a draft of the same name (private,
+  // as new drafts are) would otherwise turn `sales` private for everyone the
+  // moment an admin recorded the promotion — before the revised file had even
+  // merged — and recording a second time would undo whatever an admin had set
+  // in the Share dialog since the first.
+  const [live] = found.model
+    ? await db
+        .select({ id: malloyArtifacts.id })
+        .from(malloyArtifacts)
+        .where(and(eq(malloyArtifacts.modelId, found.model.id), eq(malloyArtifacts.name, name)))
+        .limit(1)
+    : [];
+  const hasAudience = live !== undefined || found.ds.dashboardAudience?.[name] !== undefined;
+
   await db.transaction(async (tx) => {
     await tx
       .update(draftDashboards)
@@ -586,11 +616,12 @@ export async function recordPromotion(
         promotedAt: new Date(),
       })
       .where(eq(draftDashboards.id, row.id));
+    if (hasAudience) return;
 
-    // PROMOTION DOES NOT CHANGE WHO CAN SEE IT. This is the moment the draft's
-    // link is pointed at the published dashboard, so it is the moment the
-    // published dashboard takes the draft's audience: the same private-or-open
-    // setting, and the same people.
+    // A NEW name takes the draft's audience: the same private-or-open setting,
+    // and the same people. This is the moment the draft's link is pointed at
+    // the published dashboard, so it is the moment that dashboard's audience
+    // is decided.
     //
     // The setting is written even when the draft is open, so it also overrides
     // a `private` tag in the promoted file — the draft's audience is what

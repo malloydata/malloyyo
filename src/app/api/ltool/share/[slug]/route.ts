@@ -4,6 +4,7 @@
 import { NextResponse } from "next/server";
 import { getSessionUser, UnauthorizedError } from "@/lib/user";
 import { isAdmin } from "@/lib/admin";
+import { rolesOf } from "@/lib/roles";
 import { canReadDataset, datasetNameById, loadSharedQuery, sharedQueryListContext } from "@/lib/mcp-tools";
 import { db, datasets } from "@/db";
 import { eq } from "drizzle-orm";
@@ -26,7 +27,7 @@ async function mayRead(
     .select({ roles: datasets.roles, viewOnlyRoles: datasets.viewOnlyRoles, userId: datasets.userId })
     .from(datasets)
     .where(eq(datasets.id, datasetId));
-  return !!ds && canReadDataset(ds, user.id, false);
+  return !!ds && canReadDataset(ds, { id: user.id, roles: rolesOf(user) }, false);
 }
 
 export async function GET(

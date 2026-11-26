@@ -6,7 +6,7 @@
 import { useState } from "react";
 
 /**
- * "View as" beside a person on Admin → Users: start seeing the app exactly as
+ * "Impersonate" beside a person on Admin → Users: start seeing the app exactly as
  * they do, and go to their home page. Stopping is the banner's job
  * (ViewAsBanner), which is on every page from then on.
  *
@@ -45,7 +45,11 @@ export function ViewAsButton({ userId, label }: { userId: string; label: string 
         title={`See the app exactly as ${label} sees it`}
         className="whitespace-nowrap rounded border border-gray-300 px-2 py-1 text-xs hover:bg-gray-50 disabled:opacity-50 dark:border-gray-700 dark:hover:bg-gray-800"
       >
-        {busy ? "Opening…" : "View as"}
+        {/* "Impersonate", not "View as": it is the word people already know for
+            this, so it is the word they search the help for. The code underneath
+            still says view-as (src/lib/view-as.ts) — it names what the feature
+            is allowed to do, which is look. */}
+        {busy ? "Opening…" : "Impersonate"}
       </button>
       {error && <span className="text-xs text-red-600 dark:text-red-400">{error}</span>}
     </span>

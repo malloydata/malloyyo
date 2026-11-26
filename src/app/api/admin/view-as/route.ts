@@ -48,12 +48,12 @@ function setCookies(res: NextResponse, userId: string | null) {
 export async function POST(req: Request) {
   const actor = await realUser();
   if (!actor) return bad("sign in first", 401);
-  if (!hasRole(actor, MALLOYYO_ADMIN)) return bad("only an admin can view as another user", 403);
+  if (!hasRole(actor, MALLOYYO_ADMIN)) return bad("only an admin can impersonate another user", 403);
 
   const body = (await req.json().catch(() => null)) as { userId?: unknown } | null;
   const userId = typeof body?.userId === "string" ? body.userId : "";
   if (!UUID_RE.test(userId)) return bad("userId is required");
-  if (userId === actor.id) return bad("that is you — there is nothing to view as");
+  if (userId === actor.id) return bad("that is you — there is nobody to impersonate");
 
   // The same conditions `getSessionUser()` applies on every request, checked
   // here too so the refusal comes with a reason instead of a view-as that
@@ -61,7 +61,7 @@ export async function POST(req: Request) {
   const [target] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
   if (!target) return bad("no such user", 404);
   if (!authorize(target).allowed) return bad("that person cannot sign in, so there is nothing to see as them");
-  if (hasRole(target, MALLOYYO_ADMIN)) return bad("admins cannot be viewed as");
+  if (hasRole(target, MALLOYYO_ADMIN)) return bad("admins cannot be impersonated");
 
   // Kept: who looked as whom, and when. This is the record the banner promises.
   logger.info("view-as started", { actorId: actor.id, targetId: target.id });

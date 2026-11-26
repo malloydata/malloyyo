@@ -325,8 +325,9 @@ publish rights. Full guide: `docs/api-tokens.md`.
    changes who can see a dashboard. It is ADMIN-ONLY, for anyone's draft: the
    target name is whatever the caller says, so the copy must not be available
    to someone who could not change that dashboard's audience directly.
-3. **Viewing as** — `src/lib/view-as.ts`. An admin sees the app as a non-admin
-   user. The swap is in `getSessionUser()` (`src/lib/user.ts`), re-decided per
+3. **Impersonating** ("view as" in the code) — `src/lib/view-as.ts`. The UI
+   and docs say Impersonate; the code says view-as. An admin sees the app as a
+   non-admin user. The swap is in `getSessionUser()` (`src/lib/user.ts`), re-decided per
    request from a cookie that grants nothing by itself; `getRealSessionUser()`
    is for the start/stop route only. LOOK-ONLY: while viewing as someone,
    `getSession()` refuses every non-GET except the two POSTs that run a query —

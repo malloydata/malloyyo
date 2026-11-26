@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: MIT
 
 /**
- * Viewing as another user — the names and the one rule, with no imports, so the
+ * Viewing as another user — which the UI and the docs call IMPERSONATING, the
+ * word people know it by — the names and the one rule, with no imports, so the
  * proxy, the session code and the browser can all share them.
  *
  * An admin picks a person on Admin → Users and sees the app as that person
@@ -66,8 +67,8 @@ const NEVER_REFUSED = ["/api/admin/view-as", "/api/auth/", "/api/telemetry/"];
 /** What a refused request is told. One sentence, said the same way by the
     proxy and by `getSession()`. */
 export const VIEW_AS_REFUSAL =
-  "You are viewing as another user, which is look-only: this would change something as them. " +
-  'Press "Stop viewing as" at the top of the page to make changes.';
+  "You are impersonating another user, which is look-only: this would change something as them. " +
+  'Press "Stop impersonating" at the top of the page to make changes.';
 
 /**
  * Should the PROXY refuse this request because a view-as is in progress?

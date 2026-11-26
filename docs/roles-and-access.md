@@ -123,16 +123,18 @@ have None on, or behind the model's own row scoping (below) — which applies to
 dashboards the same as to queries. The usual shape is a dataset curated for the
 audience, opened at the Dashboards level.
 
-### Seeing what someone sees
+### Impersonating a user
 
-An admin can **view as** any non-admin: *View as* beside a person on Admin →
-Users opens the app exactly as that person sees it — their datasets, their
-dashboards, their rows under row scoping, and no admin pages. A bar across every
-page says who you are viewing as and how to stop.
+An admin can **impersonate** any non-admin: *Impersonate* beside a person on
+Admin → Users opens the app exactly as that person sees it — their datasets,
+their dashboards, their rows under row scoping, and no admin pages. A bar across
+every page says who you are impersonating and how to stop. It is how you answer
+"what does this look like for them" when someone asks for help, without asking
+them for a screenshot.
 
 **Queries run as them.** Dashboards load their data and the query editor's Run
 works, both with that person's datasets and their rows under row scoping. That
-is the way to test a multi-tenant dataset: view as one tenant's user, run the
+is the way to test a multi-tenant dataset: impersonate one tenant's user, run the
 query, and see exactly the rows they would.
 
 Otherwise it is look-only. Nothing is saved, changed or created as them: a

@@ -69,7 +69,7 @@ export function ViewAsBanner() {
           <circle cx="12" cy="12" r="3" />
         </svg>
         <span>
-          <strong>Viewing as {name}</strong>
+          <strong>Impersonating {name}</strong>
           {who.name && who.email ? ` (${who.email})` : ""}
         </span>
         <span className="text-xs">
@@ -83,7 +83,7 @@ export function ViewAsBanner() {
         onClick={() => void stop()}
         className="rounded bg-amber-950 px-3 py-1.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-60"
       >
-        {busy ? "Stopping…" : `Stop viewing as ${who.name?.split(/\s+/)[0] ?? "them"}`}
+        {busy ? "Stopping…" : `Stop impersonating ${who.name?.split(/\s+/)[0] ?? "them"}`}
       </button>
     </div>
   );

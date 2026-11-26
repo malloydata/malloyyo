@@ -36,7 +36,9 @@ import {
 import { BTN, INPUT, useAction } from "../roles/role-controls";
 import { RevokeInviteButton, UserActions } from "./roster-controls";
 
-const GRID = "grid grid-cols-[11.5rem_10rem_minmax(0,1fr)_5.5rem] gap-4";
+// The last column is as wide as its one button. "What they get" has the rest:
+// it is the column the page is for, and its lists are what wrap.
+const GRID = "grid grid-cols-[11rem_8.75rem_minmax(0,1fr)_6.25rem] gap-4";
 const TAG = "shrink-0 rounded border border-gray-400 px-1 text-xs text-gray-600 dark:border-gray-600 dark:text-gray-400";
 
 export function PeoplePanel({
@@ -194,9 +196,10 @@ export function PeoplePanel({
                     <AccessSummary access={access} datasets={datasets} />
                   )}
                   <div className="text-right">
-                    {p.isAdmin ? (
-                      canViewAs ? <span className={MUTED}>admins cannot be viewed as</span> : null
-                    ) : canViewAs && p.status === "active" ? (
+                    {/* Nothing for an admin: they cannot be impersonated, and the
+                        opened row says so. Three lines of grey here said it on
+                        every admin's row, to someone who had not asked. */}
+                    {canViewAs && !p.isAdmin && p.status === "active" ? (
                       <ViewAsButton userId={p.id} label={personLabel(p)} />
                     ) : null}
                   </div>
@@ -311,7 +314,9 @@ function PersonDetail({
             <span className={MUTED}>When two roles name a dataset, the higher one wins.</span>
           </div>
           {person.isAdmin && !editing ? (
-            <p className={MUTED}>An admin has Full on every dataset, whatever other roles they hold.</p>
+            <p className={MUTED}>
+              An admin has Full on every dataset, whatever other roles they hold. Admins cannot be impersonated.
+            </p>
           ) : rows.length === 0 ? (
             <p className={MUTED}>No role {editing ? "ticked" : "they hold"} opens a dataset.</p>
           ) : (

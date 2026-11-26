@@ -162,12 +162,48 @@ Caught:
 - the `given:` deleted, by publish;
 - a source extracted from a filtered one without the `where:`, by the usage gate;
 - a brand-new unfiltered source, by the usage gate;
-- an ad-hoc MCP query against an unfiltered source, by the usage gate;
+- an ad-hoc query against an unfiltered source, by the usage gate;
+- an ad-hoc query, or a draft dashboard's file, that tries to satisfy the gate
+  ITSELF — by mentioning the given, or by joining a scoped source to an unscoped
+  one — by the caller-text rule (below);
 - anything that slips past all of the above — core throws, dataset goes dark.
+
+### What a caller may not write on scoped data
+
+The usage gate asks whether the compiled query references the given anywhere.
+That is the right test for a query over a source the model defined. It is no
+test at all once the person writing the query can put the reference there, and
+both of these returned every tenant's rows with the gate on, until this rule:
+
+```malloy
+run: raw -> { select: who, _ is $MALLOYYO_EMAIL }                    -- names it
+run: mine extend { join_cross: r is raw } -> { select: r.who }      -- joins past it
+```
+
+So on a dataset scoped per person, text someone other than the model's publisher
+wrote — a query, a dashboard panel's inline Malloy, a draft dashboard's file —
+is refused (`scope-escape`) if it:
+
+- **references a `$MALLOYYO_…` given.** The scope comes from the source the
+  model defines.
+- **defines a join** (`join_one` / `join_many` / `join_cross`). Which rows belong
+  together is the model's to say; a join the caller writes can reach a source the
+  scope does not cover. Put the join in the model.
+- **uses the `# image` or `# link` render tags.** A draft or a shared query is
+  written by one person and run as whoever opens it, so its rows are the
+  reader's — and those two tags make the reader's browser load an address built
+  from them. Put the tag on the field in the model.
+
+The check is on the raw text, comments included, so a query that only mentions
+one of these in a comment is refused too, and says why. None of this applies to
+a dataset that is not scoped: there the author can already read every row a
+reader would.
 
 **Not** caught, and worth saying out loud:
 
-- **cosmetic reference** — `select: e is $MALLOYYO_EMAIL` counts as usage.
+- **cosmetic reference IN THE MODEL** — a published source with
+  `dimension: e is $MALLOYYO_EMAIL` and no `where:` counts as usage. (A caller
+  can no longer write one; a model author still can.)
   Only execution distinguishes it: the same query under two identities gives
   `differs` when filtered and `IDENTICAL` when not. A differential run at
   publish would catch it, at the cost of real query execution and false

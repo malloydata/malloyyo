@@ -9,7 +9,8 @@
 
 import type { Runtime } from '@malloydata/malloy';
 import { MalloyError } from '@malloydata/malloy';
-import { errorProblem, hasError, mapProblems } from './problems';
+import { scopeEscape } from './host-givens';
+import { codeProblem, errorProblem, hasError, mapProblems } from './problems';
 import type { RunOptions } from './run';
 import { executeMaterialized } from './run';
 import { describeGiven } from './walker';
@@ -84,6 +85,11 @@ export async function runRestricted(
   query: string,
   opts: Pick<RunOptions, 'rowLimit' | 'givens' | 'requireGivens' | 'stableResult' | 'retry'> = {},
 ): Promise<RunResult> {
+  // Scoped data: text the caller wrote may not name the scoping given or define
+  // a join — either satisfies the usage gate over rows the scope hides (see
+  // `scopeEscape`). Before anything is compiled, so a refusal costs nothing.
+  const escape = scopeEscape(query, opts.requireGivens ?? []);
+  if (escape) return { ok: false, problems: [codeProblem('scope-escape', escape, entry.href)] };
   let loadProblems: Problem[];
   let materializer;
   try {

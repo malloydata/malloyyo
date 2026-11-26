@@ -113,6 +113,7 @@ export {
 } from './repo-layout';
 export {
   declaredGivenNames,
+  scopeEscape,
   unreferencedGivens,
   unreferencedGivensMessage,
   withoutReservedGivens,

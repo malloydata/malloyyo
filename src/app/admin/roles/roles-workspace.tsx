@@ -19,7 +19,6 @@ import Link from "next/link";
 import { LEVEL_LABEL, roleLevelOn, type RoleLevel } from "@/lib/role-access";
 import {
   ADMIN,
-  BADGE,
   HEADING,
   LEVELS,
   MUTED,
@@ -39,6 +38,16 @@ import { DeleteRoleButton, NewRoleForm, useAction } from "./role-controls";
  * The parent keys this on the stored level, so a refresh that changes it
  * remounts the switch on the new value instead of leaving the old one showing.
  */
+// The chosen segment of a level switch. Position says WHICH level; the fill only
+// says "this one". So Dashboards and Full are chosen in the same ink — one being
+// blue made it look like a different kind of thing — and None, which is the
+// absence of a grant, is chosen quietly.
+const PICKED: Record<RoleLevel, string> = {
+  none: "bg-gray-200 text-gray-900 dark:bg-gray-700 dark:text-gray-100",
+  view: "bg-gray-900 text-white dark:bg-gray-100 dark:text-gray-900",
+  query: "bg-gray-900 text-white dark:bg-gray-100 dark:text-gray-900",
+};
+
 function LevelSwitch({ role, dataset, level }: { role: string; dataset: DatasetRow; level: RoleLevel }) {
   const { run, busy, error } = useAction();
   const [shown, setShown] = useState<RoleLevel>(level);
@@ -64,7 +73,7 @@ function LevelSwitch({ role, dataset, level }: { role: string; dataset: DatasetR
             onClick={() => void set(l)}
             className={`min-h-9 px-3 text-xs disabled:opacity-60 ${i > 0 ? "border-l border-gray-400 dark:border-gray-600" : ""} ${
               shown === l
-                ? `font-semibold ${BADGE[l]}`
+                ? `font-semibold ${PICKED[l]}`
                 : "bg-white text-gray-700 hover:bg-gray-50 dark:bg-gray-950 dark:text-gray-300 dark:hover:bg-gray-900"
             }`}
           >

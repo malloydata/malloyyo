@@ -23,7 +23,7 @@ import { resolveAccess, roleLevelOn } from "@/lib/role-access";
 import { qualifiedName } from "@/lib/repo-names";
 import { MALLOYYO_ADMIN, rolesOf } from "@/lib/roles";
 import { datasetTitle } from "@malloyyo/mcp-engine";
-import { LevelBadge, MUTED, PRIMARY } from "../access-shared";
+import { LevelRows, MUTED, PRIMARY } from "../access-shared";
 import { DatasetGivens } from "../roles/role-controls";
 
 export const runtime = "nodejs";
@@ -205,19 +205,13 @@ export default async function AdminDatasetsPage() {
                           all={givenList}
                           required={d.requiredGivens ?? []}
                         />
-                        <div className="flex flex-col gap-1">
-                          {full.length > 0 && (
-                            <div className="flex flex-wrap items-center gap-1.5">
-                              <LevelBadge level="query" />
-                              <span className="break-all text-xs">{full.join(", ")}</span>
-                            </div>
-                          )}
-                          {dash.length > 0 && (
-                            <div className="flex flex-wrap items-center gap-1.5">
-                              <LevelBadge level="view" />
-                              <span className="break-all text-xs">{dash.join(", ")}</span>
-                            </div>
-                          )}
+                        <div className="flex flex-col gap-1.5">
+                          <LevelRows
+                            rows={[
+                              ...(full.length > 0 ? [{ level: "query" as const, text: full.join(", ") }] : []),
+                              ...(dash.length > 0 ? [{ level: "view" as const, text: dash.join(", ") }] : []),
+                            ]}
+                          />
                           <span className={MUTED}>
                             {reach === 0
                               ? "Nobody but admins yet."

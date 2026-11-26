@@ -239,6 +239,13 @@
       "when": 1795660552960,
       "tag": "0033_public_is_the_members_role",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1795724932053,
+      "tag": "0034_members_without_a_role",
+      "breakpoints": true
     }
   ]
 }

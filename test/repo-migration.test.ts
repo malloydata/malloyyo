@@ -111,6 +111,11 @@ const REVIEWED_AFTER_REWRITE = [
   // version reads the flag, untouched, so nothing changes for it. It is what
   // lets the NEW version stop reading the flag without anyone losing a dataset.
   "0033_public_is_the_members_role",
+  // Data only (one UPDATE). Gives MALLOYYO_USER to active people an integration
+  // created who hold no role, so they keep the datasets that 0033 moved from
+  // the public flag to that role. The live version reads `users.roles` the same
+  // way, and for it the role opens only what the flag already opens.
+  "0034_members_without_a_role",
 ];
 
 /** What the journal should currently end with. */

@@ -25,6 +25,7 @@
 
 import test, { after } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import postgres from "postgres";
 import { asc, eq } from "drizzle-orm";
 import { db, instanceSettings, invitations, users } from "@/db";
@@ -218,4 +219,28 @@ test("policy open admits a stranger as an ordinary member; policy invite leaves 
   const inviteId = await insertNewUser("uninvited@example.com");
   await admitNewUser(inviteId, "uninvited@example.com");
   assert.equal((await userByEmail("uninvited@example.com")).status, "pending");
+});
+
+// --- 0034_members_without_a_role ----------------------------------------------
+//
+// Run from the file, so this is the migration and not a paraphrase of it.
+test("0034: people an integration made with no role get the members role, and nobody else is touched", async () => {
+  await resetData();
+  // As a hosted integration made them: active, holding nothing.
+  await db.insert(users).values({ email: "hosted@example.com", status: "active", roles: [], externalAccountId: "ext-1" });
+  // Every box unticked by an admin, on an instance that owns its own sign-in:
+  // holding nothing is what was chosen.
+  await db.insert(users).values({ email: "unticked@example.com", status: "active", roles: [] });
+  // Chosen for them by an admin: left exactly as chosen.
+  await db.insert(users).values({ email: "chosen@example.com", status: "active", roles: ["finance"], externalAccountId: "ext-2" });
+  // Not let in: still holds nothing.
+  await db.insert(users).values({ email: "off@example.com", status: "disabled", roles: [], externalAccountId: "ext-3" });
+
+  const migration = readFileSync(new URL("../drizzle/0034_members_without_a_role.sql", import.meta.url), "utf8");
+  for (const statement of migration.split("--> statement-breakpoint")) await sql.unsafe(statement);
+
+  assert.deepEqual((await userByEmail("hosted@example.com")).roles, ["MALLOYYO_USER"], "holds nothing → the members role");
+  assert.deepEqual((await userByEmail("unticked@example.com")).roles, [], "nothing, chosen by an admin, stays nothing");
+  assert.deepEqual((await userByEmail("chosen@example.com")).roles, ["finance"], "chosen roles are left alone");
+  assert.deepEqual((await userByEmail("off@example.com")).roles, [], "someone who cannot sign in is left alone");
 });

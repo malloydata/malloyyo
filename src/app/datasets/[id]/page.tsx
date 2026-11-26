@@ -95,7 +95,10 @@ export default async function DatasetLandingPage({ params }: { params: Promise<{
   const [dashboards, questions, canQuery] = await Promise.all([
     listDashboards(userId, ref),
     hasQuestions(found.ds.id),
-    canQueryDataset(userId, found.ds.id),
+    // A branch preview is an admin's own fetch and always queryable. Asking
+    // the access predicate about it would ask about the stand-in dataset id a
+    // preview of a NEW dataset carries, which nobody has access to.
+    "preview" in found ? true : canQueryDataset(userId, found.ds.id),
   ]);
 
   redirect(

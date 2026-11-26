@@ -5,7 +5,7 @@
  * Viewing as another user — the names and the one rule, with no imports, so the
  * proxy, the session code and the browser can all share them.
  *
- * An admin picks a person on Admin → Roles and sees the app as that person
+ * An admin picks a person on Admin → Users & roles and sees the app as that person
  * does. The swap itself is in `getSessionUser()` (src/lib/user.ts); starting
  * and stopping are /api/admin/view-as.
  *
@@ -54,4 +54,35 @@ export function viewAsAllows(method: string, path: string): boolean {
   const m = method.toUpperCase();
   if (m === "GET" || m === "HEAD" || m === "OPTIONS") return true;
   return m === "POST" && RUNS_A_QUERY.includes(path);
+}
+
+/**
+ * Paths that are never refused while viewing as someone, whatever the method:
+ * the way out (stop), signing out, and the page-view beacon, none of which act
+ * as the person being viewed.
+ */
+const NEVER_REFUSED = ["/api/admin/view-as", "/api/auth/", "/api/telemetry/"];
+
+/** What a refused request is told. One sentence, said the same way by the
+    proxy and by `getSession()`. */
+export const VIEW_AS_REFUSAL =
+  "You are viewing as another user, which is look-only: this would change something as them. " +
+  'Press "Stop viewing as" at the top of the page to make changes.';
+
+/**
+ * Should the PROXY refuse this request because a view-as is in progress?
+ *
+ * The authority is `getSession()`, which re-checks who is really signed in. But
+ * it can only throw, and the routes turn that into "sign in required" — a
+ * sign-in error shown to someone who is signed in. The proxy sees the same
+ * request first and can answer it properly, so it does, on the cookie alone.
+ *
+ * On the cookie ALONE means a stale one (left behind by an admin who has since
+ * signed out, on a shared browser) would refuse someone who is viewing as
+ * nobody. /api/me clears a cookie that names no live view-as, and the banner
+ * calls it on the first page load, so that lasts one request at most.
+ */
+export function proxyRefusesForViewAs(hasCookie: boolean, method: string, path: string): boolean {
+  if (!hasCookie || viewAsAllows(method, path)) return false;
+  return !NEVER_REFUSED.some((p) => (p.endsWith("/") ? path.startsWith(p) : path === p));
 }

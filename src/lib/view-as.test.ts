@@ -7,7 +7,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { viewAsAllows } from "./view-as";
+import { proxyRefusesForViewAs, viewAsAllows } from "./view-as";
 
 test("reads go ahead while viewing as someone", () => {
   for (const method of ["GET", "HEAD", "OPTIONS", "get"]) {
@@ -45,4 +45,30 @@ test("a request the proxy did not describe is refused", () => {
   // No method header means src/proxy.ts never saw the request. Treated as a
   // write to an unknown path rather than waved through.
   assert.ok(!viewAsAllows("", ""));
+});
+
+test("the proxy refuses a write only when a view-as cookie is present", () => {
+  // No cookie: nothing to do with view-as, whatever the request.
+  assert.ok(!proxyRefusesForViewAs(false, "POST", "/api/tokens"));
+  // Cookie present: writes are refused with a sentence that says why, before
+  // a route can turn the same refusal into "sign in required".
+  assert.ok(proxyRefusesForViewAs(true, "POST", "/api/tokens"));
+  assert.ok(proxyRefusesForViewAs(true, "POST", "/api/oauth/authorize/decide"), "no consenting on their behalf");
+  assert.ok(proxyRefusesForViewAs(true, "PATCH", "/api/dashboards/sales/overview/sharing"));
+  // …reads and query runs are not…
+  assert.ok(!proxyRefusesForViewAs(true, "GET", "/api/tokens"));
+  assert.ok(!proxyRefusesForViewAs(true, "POST", "/api/run"));
+  assert.ok(!proxyRefusesForViewAs(true, "POST", "/api/dashboards/run"));
+});
+
+test("the way out is never refused", () => {
+  // Stopping, starting on someone else, signing out, and the page-view beacon:
+  // none of them acts as the person being viewed.
+  assert.ok(!proxyRefusesForViewAs(true, "DELETE", "/api/admin/view-as"));
+  assert.ok(!proxyRefusesForViewAs(true, "POST", "/api/admin/view-as"));
+  assert.ok(!proxyRefusesForViewAs(true, "POST", "/api/auth/signout"));
+  assert.ok(!proxyRefusesForViewAs(true, "POST", "/api/telemetry/page"));
+  // An exact path stays exact: nothing rides in on its name.
+  assert.ok(proxyRefusesForViewAs(true, "POST", "/api/admin/view-as-if"));
+  assert.ok(proxyRefusesForViewAs(true, "POST", "/api/admin/roles"));
 });

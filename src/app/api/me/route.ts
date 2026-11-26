@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: MIT
 
 import { NextResponse } from "next/server";
+import { cookies } from "next/headers";
+import { VIEW_AS_COOKIE, VIEW_AS_MARKER_COOKIE } from "@/lib/view-as";
 import { db, users, oauthAccessTokens, oauthRefreshTokens } from "@/db";
 import { eq, and, isNull, gt } from "drizzle-orm";
 import { isAdmin } from "@/lib/admin";
@@ -34,6 +36,27 @@ async function hasActiveClaudeConnection(userId: string): Promise<boolean> {
   return !!ref;
 }
 
+/**
+ * The answer, with a view-as cookie that names no live view-as cleared.
+ *
+ * The cookie outlives what it stands for whenever a view-as ends without Stop:
+ * the admin signs out, is demoted, or the person they were viewing is disabled.
+ * It grants nothing then (`getSession()` ignores it) — but the proxy refuses
+ * writes on the cookie alone (src/lib/view-as.ts), so one left behind would
+ * lock whoever uses that browser next out of changing anything. The banner
+ * calls this route on the first page load, which is where it is taken away.
+ */
+async function settled(viewingAs: boolean, body: Record<string, unknown>): Promise<NextResponse> {
+  const res = NextResponse.json(body);
+  if (viewingAs) return res;
+  const jar = await cookies();
+  if (jar.has(VIEW_AS_COOKIE) || jar.has(VIEW_AS_MARKER_COOKIE)) {
+    res.cookies.set(VIEW_AS_COOKIE, "", { path: "/", maxAge: 0 });
+    res.cookies.set(VIEW_AS_MARKER_COOKIE, "", { path: "/", maxAge: 0 });
+  }
+  return res;
+}
+
 export async function GET() {
   const { tagline, signinNotice } = await getSettings();
 
@@ -59,6 +82,7 @@ export async function GET() {
   }
 
   if (!u) {
+    // (`settled`: see below — a signed-out browser may still carry the cookie.)
     // What the signed-out UI needs to render a sign-in, and nothing more.
     // `authMisconfigured` is a bare boolean — it never exposes which vars are
     // missing; the specifics go to the server logs (warnAuthConfig()).
@@ -67,7 +91,7 @@ export async function GET() {
     // integration's client configuration, which nothing ever read: the screens that need
     // that configuration are server-rendered and receive it directly. Serving it here only
     // published deployment details to unauthenticated callers for no one's benefit.
-    return NextResponse.json({
+    return settled(false, {
       user: null,
       instanceName: env.INSTANCE_NAME,
       tagline,
@@ -85,7 +109,7 @@ export async function GET() {
     });
   }
   const claudeConnected = await hasActiveClaudeConnection(u.id);
-  return NextResponse.json({
+  return settled(viewingAs, {
     // An admin viewing as someone: `u` is already THAT person, so the rest of
     // this answer is theirs. This says so, for the banner on every page.
     ...(viewingAs ? { viewingAs: { name: u.name, email: u.email } } : {}),

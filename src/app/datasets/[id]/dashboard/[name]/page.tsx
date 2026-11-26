@@ -26,6 +26,7 @@ import { draftForward, draftSlug, getDashboard, isCustomDashboard } from "@/lib/
 import { DashboardShare } from "@/components/DashboardShare";
 import { isAdmin } from "@/lib/admin";
 import { parsePreviewRef } from "@/lib/repo-previews";
+import { sharedCount } from "@/lib/dashboards/sharing";
 import { CustomDashboardFrame } from "./CustomDashboardFrame";
 import { PreviewBanner } from "@/components/PreviewBanner";
 import { TagOnlyDashboard } from "./TagOnlyDashboard";
@@ -72,15 +73,24 @@ export default async function DashboardViewPage({
   const ref = await resolveDatasetRef(id);
   // What to offer beside the dashboard. Someone whose roles on this dataset are
   // view-only gets the dashboards and no ways into the data that aren't one.
-  const canQuery = ref.ok ? await canQueryDataset(user.id, ref.dataset.id) : false;
+  //
+  // A branch preview is not a dataset `resolveDatasetRef` knows — its address
+  // names a repo and a branch — and it is an admin's own fetch, reached only
+  // through `getDashboard` above, which has already refused anyone else. So it
+  // is always queryable; treating "did not resolve" as "may not query" took the
+  // query links off every preview.
+  const isPreview = parsePreviewRef(id) !== null;
+  const canQuery = isPreview || (ref.ok ? await canQueryDataset(user.id, ref.dataset.id) : false);
   const navLabel = ref.ok ? datasetTitle(ref.dataset.name, ref.dataset.title) : undefined;
   const navRef = ref.ok && ref.repo ? qualifiedName(ref.repo.slug, ref.dataset.name) : ref.ok ? ref.dataset.name : undefined;
   // Who may change who sees it: a draft's author or an admin; for a published
   // dashboard, an admin. The same rule the sharing route enforces
   // (src/lib/dashboards/sharing.ts) — this only decides whether to draw the
   // button. A branch preview has no audience to manage.
-  const canManage =
-    !parsePreviewRef(id) && (isAdmin(user) || (dash.draft !== undefined && dash.draft.authorId === user.id));
+  const canManage = !isPreview && (isAdmin(user) || (dash.draft !== undefined && dash.draft.authorId === user.id));
+  // How many people it is shared with, for the label beside Share — so it reads
+  // the same before the dialog has been opened as after.
+  const sharedWith = canManage && dash.isPrivate && ref.ok ? await sharedCount(ref.dataset.id, name) : 0;
 
   return (
     <main className="w-full px-6 py-5">
@@ -100,6 +110,7 @@ export default async function DashboardViewPage({
               title={dash.title}
               kind={dash.draft ? "draft" : "published"}
               visibility={dash.isPrivate ? "private" : "dataset"}
+              sharedCount={sharedWith}
               datasetTitle={navLabel ?? dash.datasetName}
               draftSlug={dash.draft ? (draftSlug(name) ?? name) : undefined}
             />

@@ -77,6 +77,7 @@ export function DashboardShare({
   kind,
   visibility: initialVisibility,
   datasetTitle,
+  sharedCount,
   draftSlug,
 }: {
   datasetRef: string;
@@ -87,6 +88,9 @@ export function DashboardShare({
   kind: "draft" | "published";
   visibility: Visibility;
   datasetTitle: string;
+  /** How many people it is shared with, as the page counted them — what the
+      label shows until the dialog has loaded the list itself. */
+  sharedCount: number;
   /** Set for a draft, whose manager may also delete it. */
   draftSlug?: string;
 }) {
@@ -103,7 +107,7 @@ export function DashboardShare({
   const visibility = sharing?.visibility ?? initialVisibility;
   const isPrivate = visibility === "private";
   const everyone = `Everyone on ${sharing?.datasetTitle ?? datasetTitle}`;
-  const count = sharing?.people.length;
+  const count = sharing?.people.length ?? sharedCount;
 
   // The people list arrives when the dialog is first opened. State is only set
   // from the response callbacks; a failed load is quiet, and the first write

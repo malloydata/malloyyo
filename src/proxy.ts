@@ -8,7 +8,13 @@ import { auth } from "@/auth";
 import { signInPath } from "@/lib/auth-paths";
 import { requestHasCookie, renewAppSessionInPlace } from "@/lib/app-session";
 import { hostedIntegration } from "@/lib/hosted-auth-integration";
-import { REQUEST_METHOD_HEADER, REQUEST_PATH_HEADER } from "@/lib/view-as";
+import {
+  REQUEST_METHOD_HEADER,
+  REQUEST_PATH_HEADER,
+  VIEW_AS_COOKIE,
+  VIEW_AS_REFUSAL,
+  proxyRefusesForViewAs,
+} from "@/lib/view-as";
 import {
   ALWAYS_ALLOW,
   reauthPath,
@@ -65,6 +71,15 @@ const handleAuth = auth(async (req: NextAuthRequest, _event: NextFetchEvent) => 
   headers.set(REQUEST_METHOD_HEADER, req.method);
   headers.set(REQUEST_PATH_HEADER, pathname);
   const next = () => NextResponse.next({ request: { headers } });
+
+  // Viewing as another user is look-only. Refused here, with a sentence that
+  // says so, before the route can turn the same refusal into "sign in
+  // required" (src/lib/view-as.ts). `getSession()` still decides for itself;
+  // this is the readable answer, not the guard.
+  if (proxyRefusesForViewAs(req.cookies.has(VIEW_AS_COOKIE), req.method, pathname)) {
+    logRequest();
+    return NextResponse.json({ ok: false, error: VIEW_AS_REFUSAL }, { status: 403 });
+  }
 
   if (ALWAYS_ALLOW.test(pathname)) {
     logRequest();

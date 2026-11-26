@@ -86,7 +86,7 @@ export async function POST(req: Request) {
 
     case "set-level": {
       // What ONE role gets on ONE dataset: none, view (dashboards only) or
-      // query (full). The unit Admin → Roles edits, one switch at a time.
+      // query (full). The unit Admin → Users & roles edits, one switch at a time.
       //
       // Stored as two arrays on the dataset — `roles` (any access) and
       // `view_only_roles` (the subset that may only view); see `DatasetAccess`
@@ -152,6 +152,16 @@ export async function POST(req: Request) {
           `${target.email} is an admin because APP_ADMIN_EMAILS names them. Remove the address from that variable and redeploy.`,
         );
       }
+
+      // An admin who is one ONLY because APP_ADMIN_EMAILS names them holds
+      // MALLOYYO_ADMIN in `rolesOf()` and nowhere on their row — and the page
+      // sends back the list it was shown, so editing any OTHER role for them
+      // arrived here carrying it. Writing it would make the env-granted admin a
+      // permanent one: taking the address out of the variable later would no
+      // longer remove it. So it is left where it is, in the environment.
+      const heldOnRow =
+        (target.roles ?? []).includes(MALLOYYO_ADMIN) || target.role === "admin" || target.isAdmin === true;
+      if (!heldOnRow && isEnvAdmin(target.email)) next.delete(MALLOYYO_ADMIN);
 
       // The legacy columns move WITH the array. `rolesOf()` still folds
       // `role`/`is_admin` in — every row backfilled by 0021 kept them — so

@@ -23,8 +23,9 @@
 
 import { and, asc, eq, sql } from "drizzle-orm";
 import { dashboardGrants, datasets, db, draftDashboards, users, type DraftVisibility, type User } from "@/db";
-import { hasRole, MALLOYYO_ADMIN } from "@/lib/roles";
-import { findByDatasetRef, visibleDatasetWhere } from "@/lib/mcp-tools";
+import { hasRole, MALLOYYO_ADMIN, rolesOf } from "@/lib/roles";
+import { resolveAccess, type DatasetGrants } from "@/lib/role-access";
+import { findByDatasetRef } from "@/lib/mcp-tools";
 import { logger } from "@/lib/logger";
 import { mayShare, publishedIsPrivate } from "./audience";
 import { draftSlug, getDashboard } from "./meta";
@@ -84,32 +85,54 @@ async function manageable(user: User, datasetRef: string, name: string) {
 
 type Managed = Extract<Awaited<ReturnType<typeof manageable>>, { ok: true }>;
 
-async function canOpenDataset(userId: string, datasetId: string): Promise<boolean> {
+/** How many people a dashboard is shared with — for the label beside Share. */
+export async function sharedCount(datasetId: string, dashboard: string): Promise<number> {
   const [row] = await db
-    .select({ id: datasets.id })
-    .from(datasets)
-    .where(and(visibleDatasetWhere(userId), eq(datasets.id, datasetId)))
-    .limit(1);
-  return !!row;
+    .select({ n: sql<number>`count(*)` })
+    .from(dashboardGrants)
+    .where(and(eq(dashboardGrants.datasetId, datasetId), eq(dashboardGrants.dashboard, dashboard)));
+  return Number(row?.n ?? 0);
 }
 
-async function sharedPeople(datasetId: string, dashboard: string): Promise<SharedWith[]> {
+async function sharedPeople(ds: DatasetGrants, dashboard: string): Promise<SharedWith[]> {
   const rows = await db
-    .select({ id: users.id, email: users.email, name: users.name })
+    .select({
+      id: users.id,
+      email: users.email,
+      name: users.name,
+      roles: users.roles,
+      role: users.role,
+      isAdmin: users.isAdmin,
+    })
     .from(dashboardGrants)
     .innerJoin(users, eq(users.id, dashboardGrants.userId))
-    .where(and(eq(dashboardGrants.datasetId, datasetId), eq(dashboardGrants.dashboard, dashboard)))
+    .where(and(eq(dashboardGrants.datasetId, ds.id), eq(dashboardGrants.dashboard, dashboard)))
     .orderBy(asc(users.email));
-  // One check per person. The list is the people someone typed in by hand, so
-  // it is short, and "can they actually open it" is the thing the dialog most
-  // needs to say about each of them.
-  return Promise.all(rows.map(async (p) => ({ ...p, canOpen: await canOpenDataset(p.id, datasetId) })));
+  // "Can they actually open it" is the thing the dialog most needs to say about
+  // each of them. Worked out from the rows this query already returned, with
+  // the same arithmetic the admin page uses (src/lib/role-access.ts, held to
+  // the SQL rule by test/dashboard-audience.test.ts) — not asked of the
+  // database once per person, which made every open of the dialog and every
+  // change in it cost a query for each name on the list.
+  return rows.map(({ roles, role, isAdmin, ...p }) => ({
+    ...p,
+    canOpen: resolveAccess(rolesOf({ roles, role, isAdmin, email: p.email }), [ds], { userId: p.id })[0]!.level !== "none",
+  }));
 }
 
 /** The dialog's whole state, read fresh — after a write too, so what the
     dialog shows is what is stored, not what the request hoped for. */
 async function stateOf(m: Managed, name: string): Promise<SharingState> {
-  const people = await sharedPeople(m.datasetId, name);
+  const people = await sharedPeople(
+    {
+      id: m.ds.id,
+      roles: m.ds.roles,
+      viewOnlyRoles: m.ds.viewOnlyRoles,
+      isPublic: m.ds.isPublic,
+      ownerId: m.ds.userId,
+    },
+    name,
+  );
   const datasetTitle = m.ds.title?.trim() || m.ds.name;
   if (m.dash.draft) {
     const [draft] = await db
@@ -192,7 +215,7 @@ export async function shareDashboard(
           ...state,
           warning:
             `Shared — but ${target.email ?? email} cannot open this dataset yet, so the dashboard will not appear for them. ` +
-            "An admin needs to give them a role that opens it (Admin → Roles).",
+            "An admin needs to give them a role that opens it (Admin → Users & roles).",
         },
   };
 }

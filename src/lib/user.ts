@@ -6,7 +6,13 @@ import { eq } from "drizzle-orm";
 import { auth } from "@/auth";
 import { authorize } from "./authorize";
 import { hasRole, MALLOYYO_ADMIN } from "./roles";
-import { REQUEST_METHOD_HEADER, REQUEST_PATH_HEADER, VIEW_AS_COOKIE, viewAsAllows } from "./view-as";
+import {
+  REQUEST_METHOD_HEADER,
+  REQUEST_PATH_HEADER,
+  VIEW_AS_COOKIE,
+  VIEW_AS_REFUSAL,
+  viewAsAllows,
+} from "./view-as";
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -87,10 +93,9 @@ export async function getSession(): Promise<SessionIdentity> {
 
   const request = await requestLine();
   if (!viewAsAllows(request.method, request.path)) {
-    throw new UnauthorizedError(
-      `You are viewing as ${target.name ?? target.email ?? "another user"}, which is look-only. ` +
-        "Stop viewing as them to make changes.",
-    );
+    // The proxy answers this first, with the same sentence and a 403; this is
+    // the guard behind it, for a request the proxy did not describe.
+    throw new UnauthorizedError(VIEW_AS_REFUSAL);
   }
   return { user: target, viewedBy: real };
 }

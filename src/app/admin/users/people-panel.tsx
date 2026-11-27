@@ -200,8 +200,8 @@ export function PeoplePanel({
                   <div className="px-4 pb-4">
                     <PersonDetail
                       onClose={() => setOpen(null)}
-                      // Remounted when the stored roles change, so a save lands
-                      // the panel back in its read state on what was saved.
+                      // Remounted when the stored roles change (say, from another
+                      // tab), so the boxes never start from roles no longer held.
                       key={p.roles.join(",")}
                       person={p}
                       roles={roles}

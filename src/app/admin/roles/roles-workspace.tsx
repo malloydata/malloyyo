@@ -235,8 +235,8 @@ function AdminRoleDetail({ holders }: { holders: PersonRow[] }) {
         <h4 className={HEADING}>What this role gets</h4>
         <p className="text-sm">Full on every dataset, including ones published later, and this admin panel.</p>
         <p className={MUTED}>
-          This is fixed. It has no per-dataset levels to set, it cannot be deleted, and it is never given to new users
-          automatically. An admin cannot be impersonated.
+          This is fixed. It has no per-dataset levels to set, it cannot be deleted, and it cannot be one of the roles
+          new users are given. An admin cannot be impersonated.
         </p>
       </div>
       <Holders role={ADMIN} holders={holders} all />

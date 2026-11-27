@@ -116,12 +116,13 @@ export function RolesPanel({
   neverDefault: readonly string[];
 }) {
   // MALLOYYO_ADMIN is not a role to configure: it is full on everything, by
-  // rule. It gets a line saying so instead of a row of switches that would not
-  // do anything.
+  // rule. It can be picked like the others, and opens to say so and to name
+  // who holds it, instead of a row of switches that would not do anything.
   const editable = roles.filter((r) => r.name !== ADMIN);
   const [picked, setPicked] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
-  const role = editable.find((r) => r.name === picked) ?? editable[0];
+  const adminPicked = picked === ADMIN;
+  const role = adminPicked ? undefined : (editable.find((r) => r.name === picked) ?? editable[0]);
   const holdersOf = (name: string) => people.filter((p) => p.roles.includes(name));
   const yours = roles.filter((r) => !r.builtin).length;
 
@@ -151,31 +152,23 @@ export function RolesPanel({
 
       <div className="flex flex-wrap items-start gap-4">
         <div className="flex w-full flex-col gap-1.5 sm:w-56">
-          {editable.map((r) => {
-            const selected = r.name === role?.name;
-            return (
-              <button
-                key={r.name}
-                type="button"
-                aria-pressed={selected}
-                onClick={() => setPicked(r.name)}
-                className={`flex flex-col gap-0.5 rounded-md border px-3 py-2 text-left ${
-                  selected
-                    ? "border-gray-900 bg-gray-900 text-white dark:border-gray-100 dark:bg-gray-100 dark:text-gray-900"
-                    : "border-gray-200 hover:bg-gray-50 dark:border-gray-800 dark:hover:bg-gray-900"
-                }`}
-              >
-                <span className="break-all text-xs font-semibold">{r.name}</span>
-                <span className={`text-xs ${selected ? "opacity-80" : "text-gray-600 dark:text-gray-400"}`}>
-                  {roleSummary(r, datasets, holdersOf(r.name).length, defaults.includes(r.name))}
-                </span>
-              </button>
-            );
-          })}
-          <div className="flex flex-col gap-0.5 rounded-md border border-dashed border-gray-300 px-3 py-2 dark:border-gray-700">
-            <span className="text-xs font-semibold">{ADMIN}</span>
-            <span className={MUTED}>built in · full on every dataset</span>
-          </div>
+          {editable.map((r) => (
+            <RoleButton
+              key={r.name}
+              name={r.name}
+              summary={roleSummary(r, datasets, holdersOf(r.name).length, defaults.includes(r.name))}
+              selected={r.name === role?.name}
+              onPick={() => setPicked(r.name)}
+            />
+          ))}
+          <RoleButton
+            name={ADMIN}
+            summary={`built in · full on every dataset · ${holdersOf(ADMIN).length} ${
+              holdersOf(ADMIN).length === 1 ? "person" : "people"
+            }`}
+            selected={adminPicked}
+            onPick={() => setPicked(ADMIN)}
+          />
         </div>
 
         {role ? (
@@ -188,9 +181,90 @@ export function RolesPanel({
             defaults={defaults}
             mayBeDefault={!neverDefault.includes(role.name)}
           />
+        ) : adminPicked ? (
+          <AdminRoleDetail holders={holdersOf(ADMIN)} />
         ) : null}
       </div>
     </section>
+  );
+}
+
+function RoleButton({
+  name,
+  summary,
+  selected,
+  onPick,
+}: {
+  name: string;
+  summary: string;
+  selected: boolean;
+  onPick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={selected}
+      onClick={onPick}
+      className={`flex flex-col gap-0.5 rounded-md border px-3 py-2 text-left ${
+        selected
+          ? "border-gray-900 bg-gray-900 text-white dark:border-gray-100 dark:bg-gray-100 dark:text-gray-900"
+          : "border-gray-200 hover:bg-gray-50 dark:border-gray-800 dark:hover:bg-gray-900"
+      }`}
+    >
+      <span className="break-all text-xs font-semibold">{name}</span>
+      <span className={`text-xs ${selected ? "opacity-80" : "text-gray-600 dark:text-gray-400"}`}>{summary}</span>
+    </button>
+  );
+}
+
+/**
+ * MALLOYYO_ADMIN, opened. Nothing to set: what it gets is fixed by rule, so
+ * the panel says what that is and who holds it. Who holds it is changed on
+ * Users, like every other role.
+ */
+function AdminRoleDetail({ holders }: { holders: PersonRow[] }) {
+  return (
+    <div className="flex min-w-0 flex-1 basis-80 flex-col gap-5 rounded-lg border border-gray-200 p-5 dark:border-gray-800">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <h3 className="break-all text-base font-bold">{ADMIN}</h3>
+        <span className="rounded-full border border-gray-300 px-2.5 py-0.5 text-xs text-gray-700 dark:border-gray-700 dark:text-gray-300">
+          built in
+        </span>
+      </div>
+      <div className="flex flex-col gap-1.5">
+        <h4 className={HEADING}>What this role gets</h4>
+        <p className="text-sm">Full on every dataset, including ones published later, and this admin panel.</p>
+        <p className={MUTED}>
+          This is fixed. It has no per-dataset levels to set, it cannot be deleted, and it is never given to new users
+          automatically. An admin cannot be impersonated.
+        </p>
+      </div>
+      <Holders role={ADMIN} holders={holders} all />
+    </div>
+  );
+}
+
+/** Who holds a role, and the way to Users to change that. */
+function Holders({ role, holders, all }: { role: string; holders: PersonRow[]; all?: boolean }) {
+  const SHOWN = 6;
+  const shown = all ? holders : holders.slice(0, SHOWN);
+  return (
+    <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+      <span className={MUTED}>
+        {holders.length === 0 ? (
+          "Held by nobody yet."
+        ) : (
+          <>
+            Held by {holders.length} {holders.length === 1 ? "person" : "people"}:{" "}
+            <span className="text-gray-900 dark:text-gray-100">{shown.map(personLabel).join(", ")}</span>
+            {holders.length > shown.length ? ` and ${holders.length - shown.length} more` : ""}
+          </>
+        )}
+      </span>
+      <Link href={`/admin/users?role=${encodeURIComponent(role)}`} className="text-xs underline">
+        {holders.length === 0 ? "Give it to someone on Users" : "Show them on Users"}
+      </Link>
+    </div>
   );
 }
 
@@ -207,7 +281,6 @@ function RoleDetail({
   defaults: string[];
   mayBeDefault: boolean;
 }) {
-  const SHOWN = 6;
   return (
     <div className="flex min-w-0 flex-1 basis-80 flex-col gap-5 rounded-lg border border-gray-200 p-5 dark:border-gray-800">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -259,24 +332,7 @@ function RoleDetail({
         <DefaultToggle key={String(defaults.includes(role.name))} role={role.name} defaults={defaults} />
       )}
 
-      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-        <span className={MUTED}>
-          {holders.length === 0 ? (
-            "Held by nobody yet."
-          ) : (
-            <>
-              Held by {holders.length} {holders.length === 1 ? "person" : "people"}:{" "}
-              <span className="text-gray-900 dark:text-gray-100">
-                {holders.slice(0, SHOWN).map(personLabel).join(", ")}
-              </span>
-              {holders.length > SHOWN ? ` and ${holders.length - SHOWN} more` : ""}
-            </>
-          )}
-        </span>
-        <Link href={`/admin/users?role=${encodeURIComponent(role.name)}`} className="text-xs underline">
-          {holders.length === 0 ? "Give it to someone on Users" : "Show them on Users"}
-        </Link>
-      </div>
+      <Holders role={role.name} holders={holders} />
     </div>
   );
 }

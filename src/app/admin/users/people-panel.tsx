@@ -4,8 +4,10 @@
 "use client";
 
 // Admin → Users: the list. Each person, the roles they hold, and WHAT THAT
-// ADDS UP TO. A row opens to show why, to edit the roles with the result
-// previewed before anything is saved, and to disable or enable them.
+// ADDS UP TO. The whole row is the way in: clicking it opens the role editor
+// at once, with why they get what they get recomputed as roles are ticked,
+// and the way to disable or enable them. A pencil after the roles, shown on
+// hover, says the row is there to be edited.
 //
 // People added by address who have not signed in yet are rows in the same
 // list, not a second table: they are people this instance has decided about,
@@ -117,9 +119,9 @@ export function PeoplePanel({
           )}
           {shownInvited.map((i) => (
             <div key={i.id} className={`${GRID} items-center border-b border-gray-100 px-4 py-2.5 last:border-0 dark:border-gray-800`}>
-              {/* No chevron: there is nothing to open until they have signed
-                  in. The indent keeps the names in one column. */}
-              <span className="min-w-0 pl-5">
+              {/* Not a button: there is nothing to open until they have signed
+                  in. */}
+              <span className="min-w-0">
                 <span className="block truncate text-sm">{i.email}</span>
                 <span className={`mt-0.5 inline-block ${TAG}`}>not signed in yet</span>
                 <span className={`block ${MUTED}`}>
@@ -145,46 +147,36 @@ export function PeoplePanel({
             return (
               <div
                 key={p.id}
-                className={`border-b border-gray-100 last:border-0 dark:border-gray-800 ${isOpen ? "bg-gray-50 dark:bg-gray-900/60" : ""}`}
+                className={`group border-b border-gray-100 last:border-0 dark:border-gray-800 ${
+                  isOpen ? "bg-gray-100 dark:bg-gray-900" : "hover:bg-gray-50 dark:hover:bg-gray-900/40"
+                }`}
               >
-                <div className={`${GRID} items-center px-4 py-2.5`}>
+                {/* The name is the row's one button; its ::after stretches over
+                    the whole row, so a click anywhere on it opens the person.
+                    Anything else clickable in the row sits above it (z-10). */}
+                <div className={`${GRID} relative items-center px-4 py-2.5`}>
                   <button
                     type="button"
                     aria-expanded={isOpen}
                     onClick={() => setOpen(isOpen ? null : p.id)}
-                    className="flex min-w-0 items-start gap-2 text-left"
+                    className="min-w-0 cursor-pointer text-left after:absolute after:inset-0 after:content-['']"
                   >
-                    <svg
-                      width="12"
-                      height="12"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2.5"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      aria-hidden
-                      className={`mt-1 shrink-0 text-gray-500 transition-transform ${isOpen ? "rotate-90" : ""}`}
-                    >
-                      <path d="M9 6l6 6-6 6" />
-                    </svg>
-                    <span className="min-w-0">
-                      {/* The name gives way before the tags do: "disabled" cut
-                          to "disabl…" reads as a broken row, a long name cut
-                          short still reads as a name. */}
-                      <span className="flex min-w-0 items-baseline text-sm">
-                        <span className="truncate">{personLabel(p)}</span>
-                        {p.isSelf && <span className="ml-1 shrink-0 text-xs text-gray-500">(you)</span>}
-                        {p.status === "disabled" && <span className={`ml-1.5 ${TAG}`}>disabled</span>}
-                      </span>
-                      {p.name && p.email && <span className={`block truncate ${MUTED}`}>{p.email}</span>}
+                    {/* The name gives way before the tags do: "disabled" cut
+                        to "disabl…" reads as a broken row, a long name cut
+                        short still reads as a name. */}
+                    <span className="flex min-w-0 items-baseline text-sm">
+                      <span className="truncate">{personLabel(p)}</span>
+                      {p.isSelf && <span className="ml-1 shrink-0 text-xs text-gray-500">(you)</span>}
+                      {p.status === "disabled" && <span className={`ml-1.5 ${TAG}`}>disabled</span>}
                     </span>
+                    {p.name && p.email && <span className={`block truncate ${MUTED}`}>{p.email}</span>}
                   </button>
-                  <div className="flex flex-wrap gap-1">
+                  <div className="flex flex-wrap items-center gap-1">
                     {p.roles.length === 0 && <span className={MUTED}>no roles</span>}
                     {p.roles.map((r) => (
                       <RoleChip key={r} name={r} />
                     ))}
+                    {!p.isOwner && !isOpen && <Pencil />}
                   </div>
                   {p.isAdmin ? (
                     <AccessSummary access={access} datasets={datasets} admin />
@@ -195,7 +187,7 @@ export function PeoplePanel({
                   ) : (
                     <AccessSummary access={access} datasets={datasets} />
                   )}
-                  <div className="text-right">
+                  <div className="relative z-10 text-right">
                     {/* Nothing for an admin: they cannot be impersonated, and the
                         opened row says so. Three lines of grey here said it on
                         every admin's row, to someone who had not asked. */}
@@ -207,8 +199,9 @@ export function PeoplePanel({
                 {isOpen && (
                   <div className="px-4 pb-4">
                     <PersonDetail
-                      // Remounted when the stored roles change, so a save lands
-                      // the panel back in its read state on what was saved.
+                      onClose={() => setOpen(null)}
+                      // Remounted when the stored roles change (say, from another
+                      // tab), so the boxes never start from roles no longer held.
                       key={p.roles.join(",")}
                       person={p}
                       roles={roles}
@@ -224,18 +217,39 @@ export function PeoplePanel({
         </div>
       </div>
       <p className={MUTED}>
-        Open a row to see why someone gets what they get{manageMembership ? ", change their roles, or disable them" : " and change their roles"}.
-        Changes take effect on their next request.
+        Click a person to change their roles{manageMembership ? " or disable them" : ""}. Changes take effect on their
+        next request.
       </p>
     </section>
   );
 }
 
+/** The hover cue after a person's roles: this row opens to edit them. */
+function Pencil() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+      className="ml-0.5 shrink-0 text-gray-500 opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 [@media(hover:none)]:opacity-60 dark:text-gray-400"
+    >
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </svg>
+  );
+}
+
 /**
- * One person, opened: why they get what they get, and — after "Edit roles" —
- * the same table recomputed as roles are ticked, so the effect of a change is
- * read off the page before it is saved rather than worked out in the admin's
- * head.
+ * One person, opened: their roles as boxes to tick, and why they get what
+ * they get, recomputed as roles are ticked, so the effect of a change is read
+ * off the page before it is saved rather than worked out in the admin's head.
+ * The owner's roles cannot be changed here; their row opens to the why alone.
  */
 function PersonDetail({
   person,
@@ -243,15 +257,17 @@ function PersonDetail({
   datasets,
   shared,
   manageMembership,
+  onClose,
 }: {
   person: PersonRow;
   roles: RoleRow[];
   datasets: DatasetRow[];
   shared: SharedDashboard[];
   manageMembership?: boolean;
+  onClose: () => void;
 }) {
   const { run, busy, error } = useAction();
-  const [editing, setEditing] = useState(false);
+  const editing = !person.isOwner;
   const [picked, setPicked] = useState<string[]>(person.roles);
 
   const before = resolveAccess(person.roles, datasets, { userId: person.id });
@@ -310,7 +326,7 @@ function PersonDetail({
 
         <div className="flex min-w-0 flex-col gap-2">
           <div className="flex flex-wrap items-baseline justify-between gap-2">
-            <h4 className={HEADING}>{editing ? `What ${name} will get` : `Why ${name} gets this`}</h4>
+            <h4 className={HEADING}>{changedRoles > 0 ? `What ${name} will get` : `Why ${name} gets this`}</h4>
             <span className={MUTED}>When two roles name a dataset, the higher one wins.</span>
           </div>
           {person.isAdmin && !editing ? (
@@ -390,7 +406,9 @@ function PersonDetail({
             <button
               type="button"
               disabled={busy || changedRoles === 0}
-              onClick={() => void run({ action: "set-user-roles", userId: person.id, roles: picked })}
+              onClick={async () => {
+                if (await run({ action: "set-user-roles", userId: person.id, roles: picked })) onClose();
+              }}
               className="rounded border border-gray-900 bg-gray-900 px-3 py-1 text-xs font-semibold text-white disabled:opacity-50 dark:border-gray-100 dark:bg-gray-100 dark:text-gray-900"
             >
               Save roles
@@ -399,10 +417,7 @@ function PersonDetail({
               type="button"
               disabled={busy}
               className={BTN}
-              onClick={() => {
-                setPicked(person.roles);
-                setEditing(false);
-              }}
+              onClick={onClose}
             >
               Cancel
             </button>
@@ -414,25 +429,24 @@ function PersonDetail({
                   } affected.`}
             </span>
           </>
-        ) : person.isOwner ? (
-          <span className={MUTED}>The owner&rsquo;s roles cannot be changed here.</span>
         ) : (
-          <button type="button" className={BTN} onClick={() => setEditing(true)}>
-            Edit roles
-          </button>
-        )}
-        {/* Whether they may sign in at all — beside the roles, because it is
-            the other half of "what can this person reach". */}
-        {manageMembership && !editing && (
-          <UserActions
-            userId={person.id}
-            status={person.status}
-            role={person.isOwner ? "owner" : person.isAdmin ? "admin" : "member"}
-            isSelf={person.isSelf}
-            label={personLabel(person)}
-          />
+          <span className={MUTED}>The owner&rsquo;s roles cannot be changed here.</span>
         )}
         {error && <span className="text-xs text-red-600 dark:text-red-400">{error}</span>}
+        {/* Whether they may sign in at all — beside the roles, because it is
+            the other half of "what can this person reach". Set apart at the
+            far end, so it is not taken for part of saving the roles. */}
+        {manageMembership && (
+          <span className="ml-auto">
+            <UserActions
+              userId={person.id}
+              status={person.status}
+              role={person.isOwner ? "owner" : person.isAdmin ? "admin" : "member"}
+              isSelf={person.isSelf}
+              label={personLabel(person)}
+            />
+          </span>
+        )}
       </div>
     </div>
   );
